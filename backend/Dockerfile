@@ -41,6 +41,16 @@ COPY alembic.ini ./alembic.ini
 # The CLI release number clients are told about (backend/cli_release.py).
 COPY pyproject.toml ./pyproject.toml
 
+# The `stash` CLI itself, installed from the root pyproject (the same package
+# publish.yml ships to PyPI, so its deps resolve from one source of truth).
+# A sprites box gets the CLI from the sprite seed; in local exec mode the
+# harness runs as a subprocess of THIS image and the curator and agent turns
+# shell out to `stash`, so the image has to carry it.
+COPY cli/ ./cli/
+COPY stashai/ ./stashai/
+COPY README.md ./README.md
+RUN pip install --no-cache-dir .
+
 RUN mkdir -p /app/.secrets && \
     chmod 700 /app/.secrets && \
     chmod +x /app/entrypoint.sh && \

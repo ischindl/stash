@@ -369,6 +369,14 @@ class Settings:
     SPRITES_STASH_API_URL: str | None = parse_required_when_enabled(
         "SPRITES_STASH_API_URL", AGENT_EXEC_MODE == "sprites", "AGENT_EXEC_MODE=sprites"
     )
+    # What the `stash` CLI inside a locally exec'd agent turn calls back to.
+    # The localhost default is right when the backend and the harness share a
+    # machine (the dev-laptop case); a containerized deployment must set this
+    # to the backend service's hostname — localhost in a worker container is
+    # not the backend.
+    LOCAL_STASH_API_URL: str = os.getenv(
+        "LOCAL_STASH_API_URL", f"http://localhost:{os.getenv('PORT', '3456')}"
+    )
     AGENT_TURN_TIMEOUT_SECONDS: int = int(os.getenv("AGENT_TURN_TIMEOUT_SECONDS", "600"))
 
 

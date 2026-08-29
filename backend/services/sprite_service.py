@@ -417,7 +417,7 @@ async def local_agent_env(user_id: UUID) -> dict[str, str]:
 
         key = await create_api_key(user_id, name="local sprite", key_type="machine")
         _LOCAL_KEYS[user_id] = key
-    return {"STASH_API_KEY": key, "STASH_URL": f"http://localhost:{settings.PORT}"}
+    return {"STASH_API_KEY": key, "STASH_URL": settings.LOCAL_STASH_API_URL}
 
 
 def local_box_home() -> Path:

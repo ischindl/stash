@@ -67,6 +67,16 @@ everything before it is captured in git history (`git log`), not here.
   a command works, or during startup, prints one `Aborted.` line on stderr and
   exits 1 — no Python traceback, and no silent exit 130 for Ctrl-C mid-command.
   Genuine bugs still print their traceback.
+- Curators and agents now work in containerized local-exec deployments: the
+  backend image ships the `stash` CLI the harness shells out to, and
+  `LOCAL_STASH_API_URL` points the CLI's callbacks at the backend service
+  (the localhost default still covers the dev-laptop case).
+- The developer console now routes the shared memory per project: the Sessions
+  tab groups every session under its project (folder, cwd fallback), carries a
+  "Feeds shared memory" switch per project beside the per-user one, uploads
+  transcripts GUI-side, and moves sessions between projects. A project's
+  opt-in only widens an opted-in user's material — a user's own opt-out stays
+  the hard floor. Newly created projects start dark.
 - CLI onboarding redesigned (#940). `stash signin` walks a first-run wizard
   that can be re-run anytime with the new `stash setup` — no answer is final.
   Session recording is framed as private-by-default and on by default
