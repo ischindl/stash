@@ -67,9 +67,9 @@ def test_no_tty_without_flags_fails_naming_the_missing_flags(calls, monkeypatch,
     with pytest.raises(typer.Exit):
         _setup()
 
-    out = capsys.readouterr().out
-    assert "--record/--no-record" in out
-    assert "--connect/--no-connect" in out
+    err = capsys.readouterr().err
+    assert "--record/--no-record" in err
+    assert "--connect/--no-connect" in err
     assert calls["wizard_runs"] == 0
 
 
@@ -120,9 +120,9 @@ def test_unknown_agent_fails_and_names_the_detected_ones(calls, monkeypatch, cap
     with pytest.raises(typer.Exit):
         _setup(record=True, agents="cursor", connect=False, import_history=False)
 
-    out = capsys.readouterr().out
-    assert "cursor" in out
-    assert "claude" in out
+    err = capsys.readouterr().err
+    assert "cursor" in err
+    assert "claude" in err
     assert calls["start_streaming"] == 0
 
 
@@ -132,7 +132,7 @@ def test_import_history_without_record_is_an_error(calls, monkeypatch, capsys):
     with pytest.raises(typer.Exit):
         _setup(record=False, connect=False, import_history=True)
 
-    assert "--record" in capsys.readouterr().out
+    assert "--record" in capsys.readouterr().err
 
 
 def test_flags_parse_end_to_end_through_the_cli(calls):

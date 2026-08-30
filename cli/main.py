@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import difflib
 import hashlib
 import json
 import posixpath
@@ -13,13 +14,16 @@ import textwrap
 import time
 from pathlib import Path
 
+import click
 import httpx
 import questionary
 import typer
+import typer.main
 from rich.align import Align
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
+from typer import rich_utils
 
 from stashai.plugin.doctor import shadow_install_warning
 from stashai.plugin.upload_status import read_upload_status
@@ -45,7 +49,22 @@ from .config import (
     stored_base_url,
     streaming_stopped,
 )
-from .formatting import console, echo_stderr, output_json, print_user
+from .exit_codes import (
+    EXIT_INTERNAL_ERROR,
+    EXIT_SUCCESS,
+    EXIT_USER_ERROR,
+    TRANSPORT_ERROR_STATUS,
+    classify_error,
+)
+from .formatting import (
+    console,
+    console_err,
+    echo_error,
+    echo_hint,
+    echo_stderr,
+    output_json,
+    print_user,
+)
 
 app = typer.Typer(
     name="stash",
@@ -110,16 +129,13 @@ def upgrade(
     from stashai import release
 
     if release.is_editable():
-        typer.echo("This is an editable checkout — `git pull` to update it.", err=True)
-        raise typer.Exit(1)
+        _exit_user_error("This is an editable checkout — `git pull` to update it.")
     command = release.upgrade_command()
     if command is None:
-        typer.echo(
-            "This install has no working upgrader (no uv, no pip). "
-            f"Re-run the installer: {release.INSTALLER}",
-            err=True,
+        _exit_user_error(
+            f"This install has no working upgrader (no uv, no pip). "
+            f"Re-run the installer: {release.INSTALLER}"
         )
-        raise typer.Exit(1)
     echo_stderr(f"Upgrading stashai from {__version__}…")
     result = subprocess.run(command)
     if _use_json(as_json):
@@ -154,14 +170,53 @@ def _use_json(flag) -> bool:
     return flag is True or _json_mode()
 
 
-def _err(e: StashError) -> None:
-    if isinstance(e.detail, list):
-        console.print(f"[red]Error [{e.status_code}]:[/red]")
-        for item in e.detail:
-            console.print(f"  [red]• {item}[/red]")
+def _emit_cli_error(status_code: int, detail, is_internal: bool = False) -> None:
+    """Emit one CLI failure on stderr — the single channel for error text.
+
+    JSON mode: a single-line structured envelope on stderr (stdout stays
+    empty, so the data channel never interleaves with diagnostics). Human
+    mode: the plain `Error [N]:` lines. One codepath for every failure that
+    routes through _err or the main() entry boundary, so the envelope can
+    never diverge between the two.
+    """
+    if _json_mode():
+        text = detail if isinstance(detail, str) else "; ".join(str(d) for d in detail)
+        envelope = json.dumps(
+            {
+                "error": {
+                    "status_code": status_code,
+                    "detail": text,
+                    "class": "internal_error" if is_internal else "user_error",
+                }
+            }
+        )
+        # No-wrap: the envelope is data — a wrapped line would break the
+        # single-line JSON a hook runner reads from stderr.
+        console_err.print(envelope, soft_wrap=True, markup=False)
+        return
+    if isinstance(detail, list):
+        echo_error(f"Error [{status_code}]:")
+        for item in detail:
+            echo_error(f"  • {item}")
     else:
-        console.print(f"[red]Error [{e.status_code}]: {e.detail}[/red]")
-    raise typer.Exit(1)
+        echo_error(f"Error [{status_code}]: {detail}")
+
+
+def _err(e: StashError) -> None:
+    _emit_cli_error(e.status_code, e.detail, is_internal=classify_error(e) == EXIT_INTERNAL_ERROR)
+    raise typer.Exit(classify_error(e))
+
+
+def _exit_user_error(message: str) -> None:
+    """Write `message` to stderr and exit with EXIT_USER_ERROR (1)."""
+    _emit_cli_error(0, message)
+    raise typer.Exit(EXIT_USER_ERROR)
+
+
+def _exit_internal_error(message: str) -> None:
+    """Write `message` to stderr and exit with EXIT_INTERNAL_ERROR (2)."""
+    _emit_cli_error(0, message, is_internal=True)
+    raise typer.Exit(EXIT_INTERNAL_ERROR)
 
 
 # ===========================================================================
@@ -885,11 +940,9 @@ def hook_run(agent: str = typer.Argument(...), event: str = typer.Argument(...))
     """
     events = _HOOK_EVENTS.get(agent)
     if events is None:
-        typer.echo(f"Unknown hook agent: {agent}", err=True)
-        raise typer.Exit(1)
+        _exit_user_error(f"Unknown hook agent: {agent}")
     if event not in events:
-        typer.echo(f"Unknown {agent} hook event: {event}", err=True)
-        raise typer.Exit(1)
+        _exit_user_error(f"Unknown {agent} hook event: {event}")
 
     import runpy
 
@@ -902,8 +955,7 @@ def hook_run(agent: str = typer.Argument(...), event: str = typer.Argument(...))
 def hook_auto_update(choice: str = typer.Argument(..., help="'on' or 'off'")) -> None:
     """Record whether Stash may auto-update at Codex session start."""
     if choice not in ("on", "off"):
-        typer.echo("Pass 'on' or 'off'.", err=True)
-        raise typer.Exit(1)
+        _exit_user_error("Pass 'on' or 'off'.")
     set_codex_auto_update(choice == "on")
     console.print(f"Codex auto-update {choice}.")
 
@@ -1264,23 +1316,18 @@ def share_session(
     # Resolve session ID
     sid = _resolve_session(session_id) if session_id else _current_session_id()
     if not sid:
-        console.print(
-            "[red]Could not detect session. Pass --session <id or title> explicitly.[/red]"
-        )
-        raise typer.Exit(1)
+        _exit_user_error("Could not detect session. Pass --session <id or title> explicitly.")
 
     # Find and read the JSONL transcript
     jsonl_path = _find_session_jsonl(sid)
     if not jsonl_path:
-        console.print(f"[red]Transcript file not found for session {sid[:8]}…[/red]")
-        raise typer.Exit(1)
+        _exit_user_error(f"Transcript file not found for session {sid[:8]}…")
 
     raw_jsonl = jsonl_path.read_text(errors="replace")
     ai_title, first_user, last_assistant = _extract_session_bookends(raw_jsonl)
 
     if not last_assistant:
-        console.print("[red]No assistant messages found in this session.[/red]")
-        raise typer.Exit(1)
+        _exit_user_error("No assistant messages found in this session.")
 
     page_title = title or ai_title or f"Session {sid[:8]}"
 
@@ -1502,8 +1549,7 @@ def upload(
     public_link = public_link is True
     target = Path(path)
     if not target.exists():
-        console.print(f"[red]Not found: {path}[/red]")
-        raise typer.Exit(1)
+        _exit_user_error(f"Not found: {path}")
 
     # A single file with no Skill goes straight into Files — no wrapping
     # folder. The server routes Markdown/HTML to pages.
@@ -1535,8 +1581,7 @@ def upload(
 
     files = _upload_file_list(target)
     if not files:
-        console.print(f"[red]No files found in {path}[/red]")
-        raise typer.Exit(1)
+        _exit_user_error(f"No files found in {path}")
 
     root_name = name or (target.stem if target.is_file() else target.name)
     skill_title = skill.strip() or root_name
@@ -1715,12 +1760,10 @@ def skills_add(
     """Upload a local skill folder (must contain a SKILL.md) into your Files."""
     src = Path(folder)
     if not src.is_dir():
-        console.print(f"[red]Not a folder: {folder}[/red]")
-        raise typer.Exit(1)
+        _exit_user_error(f"Not a folder: {folder}")
     skill_md_path = src / "SKILL.md"
     if not skill_md_path.exists():
-        console.print(f"[red]Missing SKILL.md in {folder}[/red]")
-        raise typer.Exit(1)
+        _exit_user_error(f"Missing SKILL.md in {folder}")
 
     folder_name = src.name
     with _client() as c:
@@ -2063,16 +2106,12 @@ def skills_uninstall(
         None,
     )
     if match is None:
-        console.print(f"[red]Error:[/red] '{name}' is not an installed skill in {root}.")
-        raise typer.Exit(1)
+        _exit_user_error(f"'{name}' is not an installed skill in {root}.")
 
     target = root / match
     if target.exists():
         if not (target / "SKILL.md").exists():
-            console.print(
-                f"[red]Error:[/red] {target} doesn't look like a skill folder; not deleting."
-            )
-            raise typer.Exit(1)
+            _exit_user_error(f"{target} doesn't look like a skill folder; not deleting.")
         shutil.rmtree(target)
     del entry["skills"][match]
     _save_installed_manifest(manifest)
@@ -3640,8 +3679,7 @@ def _print_ls_path(c: StashClient, sources: list[dict], path: str, as_json: bool
     dir_name, _, rest = path.strip("/").partition("/")
     source = _source_dir_names(sources).get(dir_name)
     if source is None:
-        console.print(f"[red]No source named '{dir_name}'. Run `stash ls` to see them.[/red]")
-        raise typer.Exit(1)
+        _exit_user_error(f"No source named '{dir_name}'. Run `stash ls` to see them.")
 
     if source["type"] == "provider":
         _print_provider_path(c, source, rest, as_json)
@@ -3669,8 +3707,7 @@ def _print_provider_path(c: StashClient, provider: dict, rest: str, as_json: boo
             return
         member = next((m for m in members if _safe_slug(m["display_name"]) == member_slug), None)
         if member is None:
-            console.print(f"[red]No connection '{member_slug}' under '{provider['source']}'.[/red]")
-            raise typer.Exit(1)
+            _exit_user_error(f"No connection '{member_slug}' under '{provider['source']}'.")
         handle = member["handle"]
 
     entries = c.list_source_entries(handle, path=doc_path)
@@ -3724,8 +3761,7 @@ def _parse_refs(refs: list[str]) -> list[tuple[str, str]]:
     parsed = []
     for ref in refs:
         if ":" not in ref:
-            console.print(f"[red]Invalid item '{ref}' — use type:id, e.g. page:<id>[/red]")
-            raise typer.Exit(1)
+            _exit_user_error(f"Invalid item '{ref}' — use type:id, e.g. page:<id>")
         object_type, object_id = ref.split(":", 1)
         parsed.append((object_type, object_id))
     return parsed
@@ -3773,10 +3809,7 @@ def rm_cmd(
     with _client() as c:
         for object_type, object_id in items:
             if object_type not in trash:
-                console.print(
-                    f"[red]Cannot rm '{object_type}'. Supported: page | file | session[/red]"
-                )
-                raise typer.Exit(1)
+                _exit_user_error(f"Cannot rm '{object_type}'. Supported: page | file | session")
             delete, purge = trash[object_type]
             try:
                 delete(c, object_id)
@@ -3809,10 +3842,9 @@ def restore_cmd(
     with _client() as c:
         for object_type, object_id in items:
             if object_type not in restore:
-                console.print(
-                    f"[red]Cannot restore '{object_type}'. Supported: page | file | session[/red]"
+                _exit_user_error(
+                    f"Cannot restore '{object_type}'. Supported: page | file | session"
                 )
-                raise typer.Exit(1)
             try:
                 restore[object_type](c, object_id)
             except StashError as e:
@@ -3834,8 +3866,7 @@ def mv_cmd(
     Example: stash mv page:<id> file:<id> --to-folder <id>
     """
     if not to_folder and not to_root:
-        console.print("[red]Pass --to-folder <id> or --to-root.[/red]")
-        raise typer.Exit(1)
+        _exit_user_error("Pass --to-folder <id> or --to-root.")
     # Sessions can't be moved — session folders were removed with the
     # developer platform work; sessions live in the flat sessions surface.
     items = _parse_refs(refs)
@@ -3864,8 +3895,7 @@ def cp_cmd(
     }
     for object_type, object_id in _parse_refs(refs):
         if object_type not in copy:
-            console.print(f"[red]Cannot cp '{object_type}'. Supported: page | file | folder[/red]")
-            raise typer.Exit(1)
+            _exit_user_error(f"Cannot cp '{object_type}'. Supported: page | file | folder")
         with _client() as c:
             try:
                 made = copy[object_type](c, object_id)
@@ -4498,7 +4528,7 @@ def files_edit_file(
 
 
 @files_app.command("text")
-def files_text(file_id: str = typer.Argument(...)):
+def files_text(file_id: str = typer.Argument(...), as_json: bool = typer.Option(False, "--json")):
     """Print extracted text for a file (PDFs with embedded text, or plain text)."""
     with _client() as c:
         try:
@@ -4509,18 +4539,23 @@ def files_text(file_id: str = typer.Argument(...)):
     status = data.get("status") if isinstance(data, dict) else None
     error = data.get("error") if isinstance(data, dict) else None
     if text:
+        if _use_json(as_json):
+            output_json({"text": text, "file_id": file_id})
+            return
         sys.stdout.write(text)
         if not text.endswith("\n"):
             sys.stdout.write("\n")
         return
     if status in ("pending", "processing"):
-        console.print("[yellow]Extraction in progress. Try again in a moment.[/yellow]")
-        raise typer.Exit(2)
+        echo_stderr("Extraction in progress. Try again in a moment.")
+        raise typer.Exit(EXIT_INTERNAL_ERROR)
     if status == "failed":
-        console.print(f"[red]Extraction failed:[/red] {error or 'unknown error'}")
-        raise typer.Exit(1)
-    console.print("[dim]No extracted text available for this file.[/dim]")
-    raise typer.Exit(1)
+        _exit_internal_error(f"Extraction failed: {error or 'unknown error'}")
+    if _use_json(as_json):
+        output_json({"text": None, "file_id": file_id})
+        return
+    echo_stderr("No extracted text available for this file.")
+    raise typer.Exit(EXIT_SUCCESS)
 
 
 def _parse_file_ref(ref: str) -> str:
@@ -4856,16 +4891,12 @@ def signin(
     # have established the endpoint.
     if api_key:
         if not api:
-            console.print(
-                "[red]Pass --api <url> with --api-key — the server that minted the key.[/red]"
-            )
-            raise typer.Exit(1)
+            _exit_user_error("Pass --api <url> with --api-key — the server that minted the key.")
         try:
             with StashClient(base_url=api, api_key=api_key) as c:
                 user = c.whoami()
         except StashError as e:
-            console.print(f"[red]Could not authenticate against {api}: {e.detail}[/red]")
-            raise typer.Exit(1)
+            _exit_user_error(f"Could not authenticate against {api}: {e.detail}")
         save_config(base_url=api, api_key=api_key, username=user["name"])
         console.print(f"[green]Authenticated as {user['name']}[/green]")
         return
@@ -5209,14 +5240,12 @@ def setup_cmd(
         if import_history is None:
             missing.append("--import-history/--no-import-history")
     if missing:
-        console.print(
-            "[red]Headless setup needs every decision as an explicit flag. "
-            f"Missing: {', '.join(missing)}[/red]"
+        _exit_user_error(
+            f"Headless setup needs every decision as an explicit flag. "
+            f"Missing: {', '.join(missing)}"
         )
-        raise typer.Exit(1)
     if not record and (agents is not None or import_history):
-        console.print("[red]--agents and --import-history require --record.[/red]")
-        raise typer.Exit(1)
+        _exit_user_error("--agents and --import-history require --record.")
 
     _run_setup_headless(record, agents, connect, import_history)
 
@@ -5236,10 +5265,9 @@ def _run_setup_headless(
         unknown = sorted(set(selected) - set(detected))
         if not selected or unknown:
             what = f"not detected on this machine: {', '.join(unknown)}" if unknown else "empty"
-            console.print(
-                f"[red]--agents is {what}. Detected agents: {', '.join(detected) or 'none'}.[/red]"
+            _exit_user_error(
+                f"--agents is {what}. Detected agents: {', '.join(detected) or 'none'}"
             )
-            raise typer.Exit(1)
         start_streaming()
         # Headless has no folder-scope flag, so `--record` means this machine.
         # Writing that explicitly is what makes the run deterministic: without
@@ -6056,15 +6084,13 @@ def workspace_switch(
             None,
         )
         if pending:
-            console.print(
-                f"[red]Error:[/red] '{pending['name']}' matches your email domain — you'll "
-                "join it as soon as your email is verified. Run [cyan]stash verify-email[/cyan], "
-                "click the link we send, then try again."
+            _exit_user_error(
+                f"'{pending['name']}' matches your email domain — you'll join it as "
+                "soon as your email is verified. Run `stash verify-email`, click the "
+                "link we send, then try again."
             )
-            raise typer.Exit(1)
         known = ", ".join(ws["name"] for ws in workspaces) or "(none)"
-        console.print(f"[red]Error:[/red] no workspace named '{name}'. You belong to: {known}")
-        raise typer.Exit(1)
+        _exit_user_error(f"no workspace named '{name}'. You belong to: {known}")
     save_scope(str(match["scope_user_id"]))
     console.print(
         f"[green]Switched[/green] to [bold]{match['name']}[/bold] — new agent sessions "
@@ -6129,8 +6155,7 @@ def disconnect_cmd():
     """Disconnect this repo from Stash. Removes the .stash file."""
     repo_root = _git_toplevel()
     if not repo_root:
-        console.print("[red]Not inside a git repo.[/red]")
-        raise typer.Exit(1)
+        _exit_user_error("Not inside a git repo.")
 
     manifest_path = repo_root / MANIFEST_FILE
     if not manifest_path.is_file():
@@ -6147,14 +6172,15 @@ def disconnect_cmd():
 def vfs_command(
     ctx: typer.Context,
     cwd: str = typer.Option("/", "--cwd", help="Virtual working directory."),
+    as_json: bool = typer.Option(False, "--json"),
 ):
     """Run bash-shaped commands against Stash sources."""
     from stashvfs import MountError, SkillAppVfsShell, StashVfsModel
 
+    use_json = _use_json(as_json)
     cfg = load_config()
     if not cfg.get("api_key"):
-        console.print("[red]Not signed in. Run [bold]stash signin[/bold] first.[/red]")
-        raise typer.Exit(1)
+        _exit_user_error("Not signed in. Run [bold]stash signin[/bold] first.")
 
     client = StashClient(base_url=cfg["base_url"], api_key=cfg["api_key"])
     try:
@@ -6164,19 +6190,25 @@ def vfs_command(
 
         command = " ".join(ctx.args).strip()
         if not command:
-            console.print(
-                '[red]Usage: stash vfs "<command>" (e.g. [bold]stash vfs "ls /me"[/bold]).[/red]'
-            )
-            raise typer.Exit(2)
+            _exit_user_error('Usage: stash vfs "<command>" (e.g. [bold]stash vfs "ls /me"[/bold]).')
 
         result = shell.run(command)
-        sys.stdout.write(result.stdout)
-        sys.stderr.write(result.stderr)
+        if use_json:
+            output_json(
+                {
+                    "ok": result.exit_code == 0,
+                    "exit_code": result.exit_code,
+                    "stdout": result.stdout,
+                    "stderr": result.stderr,
+                }
+            )
+        else:
+            sys.stdout.write(result.stdout)
+            sys.stderr.write(result.stderr)
         if result.exit_code:
             raise typer.Exit(result.exit_code)
     except MountError as e:
-        console.print(f"[red]{e}[/red]")
-        raise typer.Exit(1)
+        _exit_user_error(str(e))
     finally:
         client.close()
 
@@ -6453,8 +6485,7 @@ def tools_add(
 ):
     """Register an MCP server (--command for stdio, --url for http)."""
     if bool(command) == bool(url):
-        console.print("[red]Pass exactly one of --command (stdio) or --url (http).[/red]")
-        raise typer.Exit(1)
+        _exit_user_error("Pass exactly one of --command (stdio) or --url (http).")
     with _client() as c:
         try:
             server = c.create_mcp_server(
@@ -6517,17 +6548,162 @@ def tools_install(name: str = typer.Argument(...)):
     dest = Path.cwd() / ".mcp.json"
     status = _merge_mcp_server(dest, name, _mcp_json_entry(server))
     if status == "conflict":
-        console.print(
-            f"[red]{dest} already has a user-defined server named {name!r}; "
-            "remove it there first.[/red]"
+        _exit_user_error(
+            f"{dest} already has a user-defined server named {name!r}; remove it there first."
         )
-        raise typer.Exit(1)
     if status == "failed":
-        console.print(f"[red]{dest} is not valid JSON; fix or delete it first.[/red]")
-        raise typer.Exit(1)
+        _exit_user_error(f"{dest} is not valid JSON; fix or delete it first.")
     verb = "Installed" if status == "installed" else "Already up to date:"
     console.print(f"{verb} [bold]{name}[/bold] → {dest}")
 
 
+# --- Contextual usage hints (AXI §8/§9) --------------------------------------
+#
+# Convention: every invocation failure (unknown command, unknown option,
+# missing or invalid argument) raises a click.UsageError subclass — in
+# Click 8.3 there is no separate NoSuchCommand class. main() renders
+# typer's unchanged Rich error panel to stderr, then appends exactly one
+# `Hint:` line via echo_hint. Hints are guidance, not data: they never
+# write to stdout, so they can never enter the --json data channel, and
+# they are never suppressed. The exit code stays Click's usage-error code
+# (2); the panel stays typer's rich_format_error output, unmodified.
+
+
+def _collect_command_vocabulary() -> tuple[set[str], dict[str, set[str]]]:
+    """The user-facing command vocabulary for usage hints.
+
+    Returns (top-level names, group name -> subcommand names) derived from
+    the compiled Click command tree — the authoritative set of what `stash`
+    actually accepts.
+    """
+    tree = typer.main.get_command(app)
+    top_names = set(tree.commands)
+    group_subs = {
+        name: set(sub.commands)
+        for name, sub in tree.commands.items()
+        if isinstance(sub, click.Group)
+    }
+    return top_names, group_subs
+
+
+def _hint_tokens(args: list[str]) -> list[str]:
+    """argv minus a leading global --json flag (the only global option that
+    can precede the command path)."""
+    if args and args[0] == "--json":
+        return args[1:]
+    return list(args)
+
+
+def _derive_command_path(args: list[str]) -> list[str]:
+    """Longest prefix of args that walks the command tree, e.g.
+    ['skills', 'add', 'x.md'] -> ['skills', 'add'], ['browse', '--sort'] ->
+    ['browse'], ['skil', 'list'] -> []. An option or unknown token ends the
+    path; a plain command is a leaf.
+    """
+    top_names, group_subs = _collect_command_vocabulary()
+    path: list[str] = []
+    level_names: set[str] = top_names
+    for token in _hint_tokens(args):
+        if token.startswith("-") or token not in level_names:
+            break
+        path.append(token)
+        if token not in group_subs:
+            break
+        level_names = group_subs[token]
+    return path
+
+
+def _near_miss_suggestion(args: list[str]) -> str | None:
+    """Full runnable suggestion for a `No such command` failure, or None
+    when difflib finds no close match at the failing level.
+
+    ['skills', 'lst'] -> 'stash skills list' (a group's subcommand); ['skil',
+    'list'] -> 'stash skills' (a top-level command). The failing token is
+    args[1] when args[0] is a known group, else args[0] at the top level —
+    exactly the level where Click's group resolution raised.
+    """
+    tokens = _hint_tokens(args)
+    top_names, group_subs = _collect_command_vocabulary()
+    if not tokens or tokens[0].startswith("-"):
+        return None
+    first = tokens[0]
+    if first in group_subs and len(tokens) >= 2 and not tokens[1].startswith("-"):
+        token, names, prefix = tokens[1], group_subs[first], [first]
+    else:
+        token, names, prefix = first, top_names, []
+    matches = difflib.get_close_matches(token, sorted(names), n=1, cutoff=0.6)
+    if not matches:
+        return None
+    return " ".join(["stash", *prefix, matches[0]])
+
+
+def _emit_usage_hint(args: list[str], err: click.UsageError) -> None:
+    """Append the one contextual help hint for a usage failure, on stderr.
+
+    Only called from main()'s click.UsageError handler, so this renders
+    exactly one `Hint:` line per invocation failure: a near-miss command
+    name gets a concrete runnable suggestion (`Did you mean `stash skills
+    list`?`) — the specific fix, per AXI §9 — with the root --help pointer
+    as the no-close-match fallback; any other usage error (missing
+    argument, no such option, option requiring an argument, invalid value)
+    gets the --help pointer for the command being run, or for `stash`
+    itself when the path can't be resolved. Never writes to stdout (the
+    hint can therefore never reach the --json data channel); never raises.
+    """
+    if err.message.startswith("No such command"):
+        suggestion = _near_miss_suggestion(args)
+        if suggestion is not None:
+            echo_hint(f"Did you mean `{suggestion}`?")
+            return
+        echo_hint("Run `stash --help` to see all commands.")
+        return
+    path = _derive_command_path(args)
+    if path:
+        echo_hint(f"Pass `stash {' '.join(path)} --help` to see this command's options.")
+    else:
+        echo_hint("Pass `stash --help` to see all commands and options.")
+
+
+def main() -> None:
+    """Top-level entry boundary for the `stash` console script.
+
+    Invokes the compiled Typer command with ``standalone_mode=False`` so
+    exceptions surface here instead of being rendered by Click's default
+    handler; the returned code (a ``typer.Exit(N)`` value) becomes the
+    process exit code. Error routing — all stderr, none of it ever touches
+    stdout:
+
+    - ``click.UsageError`` (every invocation failure — unknown command,
+      unknown option, missing/invalid argument; there is no separate
+      NoSuchCommand class in Click 8.3) renders typer's unchanged Rich
+      error panel, appends one contextual ``Hint:`` line (see
+      ``_emit_usage_hint``), and exits with Click's usage-error code (2).
+    - ``StashError`` escaping a command body routes through the same
+      classification and stderr emission as ``_err`` (user error 1, internal
+      error 2).
+    - A raw ``httpx.TransportError`` off the request layer exits with the
+      internal-error code (2).
+    - Any other exception re-raises so genuine bugs still show a traceback.
+    """
+    args = sys.argv[1:]
+    command = typer.main.get_command(app)
+    try:
+        code = command.main(args, prog_name="stash", standalone_mode=False)
+    except StashError as e:
+        _emit_cli_error(
+            e.status_code, e.detail, is_internal=classify_error(e) == EXIT_INTERNAL_ERROR
+        )
+        raise SystemExit(classify_error(e))
+    except httpx.TransportError as e:
+        _emit_cli_error(TRANSPORT_ERROR_STATUS, str(e), is_internal=True)
+        raise SystemExit(EXIT_INTERNAL_ERROR)
+    except click.UsageError as e:
+        rich_utils.rich_format_error(e)
+        _emit_usage_hint(args, e)
+        raise SystemExit(e.exit_code)
+    if code is not None:
+        raise SystemExit(code)
+
+
 if __name__ == "__main__":
-    app()
+    main()
