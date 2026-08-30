@@ -15,7 +15,10 @@ from backend.config import settings  # noqa: E402
 config = context.config
 
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # disable_existing_loggers=False: the web service runs `upgrade head` in-process at
+    # boot, and the stdlib default switches off every logger alembic.ini does not name —
+    # i.e. every application logger — for the remaining life of that process.
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 # Build asyncpg URL from DATABASE_URL (handles both postgres:// and postgresql:// schemes).
 _db_url = settings.DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://", 1).replace(

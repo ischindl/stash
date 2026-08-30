@@ -21,7 +21,9 @@ from backend.config import settings  # noqa: E402
 config = context.config
 
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # Mirror the OSS env: an Auth0-enabled deployment (hosted prod) boots through this
+    # file, where the same default would switch off every application logger.
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 # Mirror the OSS env: build an asyncpg URL and strip Neon-style libpq query
 # params (sslmode, channel_binding) that asyncpg rejects, translating
