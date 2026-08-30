@@ -317,6 +317,11 @@ class Settings:
     INTERNAL_DOMAINS_FREE_PRO: bool = (
         os.getenv("INTERNAL_DOMAINS_FREE_PRO", "true").lower() == "true"
     )
+    # Comma-separated domains granted free Pro (and internal analytics
+    # classification). Self-hosters point this at their own domain.
+    INTERNAL_EMAIL_DOMAINS: str = os.getenv(
+        "INTERNAL_EMAIL_DOMAINS", "ferganalabs.com,joinstash.ai"
+    )
 
     # ScrapeCreators (public social-content scraping, product-level key —
     # hydrates Instagram saves server-side; users never bring their own).
@@ -381,3 +386,9 @@ class Settings:
 
 
 settings = Settings()
+
+
+def internal_email_domains() -> set[str]:
+    """The parsed INTERNAL_EMAIL_DOMAINS list — one config source for the
+    billing pro gate and the admin analytics internal filter."""
+    return {d.strip().lower() for d in settings.INTERNAL_EMAIL_DOMAINS.split(",") if d.strip()}

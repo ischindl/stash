@@ -17,7 +17,7 @@ from uuid import UUID
 import stripe
 from fastapi import HTTPException
 
-from ..config import settings
+from ..config import internal_email_domains, settings
 from ..database import get_pool
 
 # Stripe statuses that grant Pro. Everything else (past_due, canceled,
@@ -26,13 +26,13 @@ ACTIVE_STATUSES = {"active", "trialing"}
 FREE_CONNECTION_LIMIT = 2
 
 # Internal team accounts get Pro without a subscription — no card, no Stripe row.
-INTERNAL_EMAIL_DOMAINS = {"ferganalabs.com", "joinstash.ai"}
+# The domain list is operator config: INTERNAL_EMAIL_DOMAINS (see config.py).
 
 
 def is_internal_email(email: str | None) -> bool:
     if not settings.INTERNAL_DOMAINS_FREE_PRO:
         return False
-    return bool(email) and email.rsplit("@", 1)[-1].lower() in INTERNAL_EMAIL_DOMAINS
+    return bool(email) and email.rsplit("@", 1)[-1].lower() in internal_email_domains()
 
 
 def billing_enabled() -> bool:

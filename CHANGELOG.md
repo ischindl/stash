@@ -67,6 +67,10 @@ everything before it is captured in git history (`git log`), not here.
   a command works, or during startup, prints one `Aborted.` line on stderr and
   exits 1 — no Python traceback, and no silent exit 130 for Ctrl-C mid-command.
   Genuine bugs still print their traceback.
+- The internal-email domain list is now self-host config: `INTERNAL_EMAIL_DOMAINS`
+  (comma-separated) decides which email domains get free Pro and internal
+  analytics classification — no source edit needed. Defaults unchanged
+  (`ferganalabs.com`, `joinstash.ai`).
 - Curators and agents now work in containerized local-exec deployments: the
   backend image ships the `stash` CLI the harness shells out to, and
   `LOCAL_STASH_API_URL` points the CLI's callbacks at the backend service
