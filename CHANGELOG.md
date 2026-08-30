@@ -21,6 +21,11 @@ everything before it is captured in git history (`git log`), not here.
   `skills follow`) exit 0 honestly as `{"ok": true, "changed": false}` instead
   of reporting ad-hoc prose or an error. The CLI's own test suite gained a
   coverage gate so this contract cannot silently rot again.
+- Cancelling a `stash` command is now a clean exit instead of a crash report.
+  Answering `n` to a confirmation prompt, or pressing Ctrl-C at a prompt, while
+  a command works, or during startup, prints one `Aborted.` line on stderr and
+  exits 1 — no Python traceback, and no silent exit 130 for Ctrl-C mid-command.
+  Genuine bugs still print their traceback.
 - CLI onboarding redesigned (#940). `stash signin` walks a first-run wizard
   that can be re-run anytime with the new `stash setup` — no answer is final.
   Session recording is framed as private-by-default and on by default
