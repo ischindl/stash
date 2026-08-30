@@ -1,4 +1,5 @@
 import logging
+import sys
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -63,6 +64,19 @@ from .services.row_validation import RowValidationError
 
 logger = logging.getLogger("stash")
 
+
+def configure_logging() -> None:
+    # Alembic's boot-time fileConfig leaves its own root handler behind and
+    # forces root to WARNING, so the app's sink replaces the root handlers
+    # instead of appending — one handler, one codepath, no duplicate lines.
+    handler = logging.StreamHandler(sys.stderr)
+    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+    root = logging.getLogger()
+    root.handlers.clear()
+    root.addHandler(handler)
+    root.setLevel(logging.INFO)
+
+
 SECURITY_HEADERS = {
     "Strict-Transport-Security": "max-age=31536000; includeSubDomains",
     "X-Content-Type-Options": "nosniff",
@@ -77,6 +91,8 @@ async def lifespan(app: FastAPI):
     # precompute, session summarizer) now run in the Celery `worker` and
     # `beat` services — see backend/celery_app.py.
     await init_db()
+    # Must follow init_db(), whose in-process Alembic run reconfigures logging.
+    configure_logging()
     try:
         await demo_service.seed_demo()
     except Exception:
