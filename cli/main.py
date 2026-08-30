@@ -7017,14 +7017,40 @@ def _emit_usage_hint(args: list[str], err: click.UsageError) -> None:
         echo_hint("Pass `stash --help` to see all commands and options.")
 
 
+# typer's own standalone renderer prints this text on cancel
+# (typer/rich_utils.ABORTED_TEXT); click's legacy line is "Aborted!". Kept at
+# the emission site rather than in cli/exit_codes.py, which is the verbatim
+# port of the stranded tag's 0/1/2/20 contract.
+_ABORTED_LINE = "Aborted."
+
+# Typer converts a mid-command Ctrl-C into click.exceptions.Exit(130)
+# (typer/core.py:202-203); the boundary normalizes that returned code to 1.
+_TYPER_INTERRUPT_EXIT_CODE = 130
+
+
+def _emit_abort() -> None:
+    """Emit the one cancellation line on stderr — the single channel for it.
+
+    ``console_err`` is used instead of ``click``/``typer.echo`` because rich
+    resolves ``sys.stderr`` at write time while click's ``echo`` writes through
+    a cached default-stream wrapper, so the line stays visible to anything
+    capturing the stream. Markup and wrapping are off because the line is
+    literal text, and it is not routed through ``echo_stderr`` (which
+    ``--json`` suppresses) nor ``echo_error`` (which would paint a routine
+    cancel red).
+    """
+    console_err.print(_ABORTED_LINE, markup=False, soft_wrap=True)
+
+
 def main() -> None:
     """Top-level entry boundary for the `stash` console script.
 
     Invokes the compiled Typer command with ``standalone_mode=False`` so
     exceptions surface here instead of being rendered by Click's default
     handler; the returned code (a ``typer.Exit(N)`` value) becomes the
-    process exit code. Error routing — all stderr, none of it ever touches
-    stdout:
+    process exit code. That flag also switches off Click's own cancellation
+    handling, so this boundary owns it. Error routing — all stderr, none of it
+    ever touches stdout:
 
     - ``click.UsageError`` (every invocation failure — unknown command,
       unknown option, missing/invalid argument; there is no separate
@@ -7036,11 +7062,16 @@ def main() -> None:
       error 2).
     - A raw ``httpx.TransportError`` off the request layer exits with the
       internal-error code (2).
+    - User cancellation — a declined confirmation, a prompt closed by EOF or
+      Ctrl-C, or a Ctrl-C during startup or command execution — is intent,
+      not a fault: it exits with the user-error code (1) after one
+      ``Aborted.`` line on stderr. That line stays plain in ``--json`` mode
+      too, because a cancel carries no status code or detail to envelope.
     - Any other exception re-raises so genuine bugs still show a traceback.
     """
     args = sys.argv[1:]
-    command = typer.main.get_command(app)
     try:
+        command = typer.main.get_command(app)
         code = command.main(args, prog_name="stash", standalone_mode=False)
     except StashError as e:
         _emit_cli_error(
@@ -7054,6 +7085,20 @@ def main() -> None:
         rich_utils.rich_format_error(e)
         _emit_usage_hint(args, e)
         raise SystemExit(e.exit_code)
+    except click.exceptions.Abort:
+        _emit_abort()
+        raise SystemExit(EXIT_USER_ERROR)
+    except KeyboardInterrupt:
+        # Catches the interrupts typer's own conversion cannot reach: one
+        # raised before a command body exists (app compilation), one during
+        # prompt teardown, or a second one while another error is rendering.
+        _emit_abort()
+        raise SystemExit(EXIT_USER_ERROR)
+    if code == _TYPER_INTERRUPT_EXIT_CODE:
+        # typer turned a mid-command Ctrl-C into Exit(130), which a
+        # non-standalone invocation returns instead of raising.
+        _emit_abort()
+        raise SystemExit(EXIT_USER_ERROR)
     if code is not None:
         raise SystemExit(code)
 
