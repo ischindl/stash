@@ -33,6 +33,7 @@ TEST_DATABASE_URL=postgresql://stash:stash@localhost:5432/stash_test \
 | `test_webhooks.py` | SSRF URL validation, secret hashing, delivery logic |
 | `test_sleep_agent.py` | Curation tool lifecycle, advisory locks, watermark advancement |
 | `test_migrations.py` | Alembic upgrade/history smoke tests |
+| `test_startup_logging.py` | Application records reach container stderr; boot migrations must not switch app loggers off |
 | `test_collab.py` | Sharing, copy, and collaboration on user-scoped objects |
 | `test_websocket.py` | ConnectionManager delivery, dead-socket cleanup, pg_notify, oversized fallback |
 

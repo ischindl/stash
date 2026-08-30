@@ -5,6 +5,12 @@ everything before it is captured in git history (`git log`), not here.
 
 ## Unreleased
 
+- Backend application logs and crash traces now reach `docker logs`. The web
+  service installs one stderr log handler at startup (INFO and above, each line
+  stamped with a time, a level, and the code that produced it), and its
+  boot-time database migrations no longer switch the application's own loggers
+  off. A self-hosted or containerised backend now shows its startup chatter and
+  the full traceback of any crash instead of silence.
 - CLI onboarding redesigned (#940). `stash signin` walks a first-run wizard
   that can be re-run anytime with the new `stash setup` — no answer is final.
   Session recording is framed as private-by-default and on by default
