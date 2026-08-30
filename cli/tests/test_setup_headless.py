@@ -42,10 +42,14 @@ def calls(monkeypatch):
     monkeypatch.setattr(main, "stop_streaming", lambda: calls.__setitem__("stop_streaming", 1))
     monkeypatch.setattr(main, "save_enabled_agents", lambda a: calls.__setitem__("saved_agents", a))
     monkeypatch.setattr(
-        main, "_install_all_hooks", lambda a: calls.__setitem__("hooks_installed", a)
+        main,
+        "_install_all_hooks",
+        lambda a, use_json=False: calls.__setitem__("hooks_installed", a),
     )
     monkeypatch.setattr(
-        main, "_auto_connect_repo", lambda root, cfg: calls.__setitem__("connected", 1)
+        main,
+        "_auto_connect_repo",
+        lambda root, cfg, use_json=False: calls.__setitem__("connected", 1),
     )
     monkeypatch.setattr(
         main, "_spawn_history_import", lambda n: calls.__setitem__("import_spawned", n)

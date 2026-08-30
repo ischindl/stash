@@ -63,6 +63,7 @@ from .formatting import (
     echo_hint,
     echo_stderr,
     output_json,
+    print_empty_state,
     print_user,
 )
 
@@ -535,11 +536,11 @@ def _merge_json_hooks(
     return "installed"
 
 
-def _install_claude(force: bool) -> tuple[str, str]:
+def _install_claude(force: bool, use_json: bool = False) -> tuple[str, str]:
     # Delegates to the canonical helper used by `stash connect`. Both
     # `claude plugin marketplace add` and `claude plugin install` are idempotent
     # so --force doesn't need to change behavior.
-    ok = _install_claude_plugin()
+    ok = _install_claude_plugin(use_json)
     if ok:
         return ("installed", "claude plugin installed via marketplace")
     if _claude_binary() is None:
@@ -547,7 +548,7 @@ def _install_claude(force: bool) -> tuple[str, str]:
     return ("failed", "claude plugin install; see inline output")
 
 
-def _install_cursor(force: bool) -> tuple[str, str]:
+def _install_cursor(force: bool, use_json: bool = False) -> tuple[str, str]:
     root = _assets_dir("cursor")
     dest = Path.home() / ".cursor" / "hooks.json"
     template = (root / "hooks.json").read_text()
@@ -694,7 +695,7 @@ def _merge_snippet_into_toml(existing: str, snippet: str) -> tuple[str, str]:
     return merged_existing, cleaned_snippet
 
 
-def _install_codex(force: bool) -> tuple[str, str]:
+def _install_codex(force: bool, use_json: bool = False) -> tuple[str, str]:
     root = _assets_dir("codex")
     hooks_dest = Path.home() / ".codex" / "hooks.json"
     template = (root / "hooks.json").read_text()
@@ -750,7 +751,7 @@ def _install_codex(force: bool) -> tuple[str, str]:
     return (status_, f"{hooks_dest} + merged {cfg_path} + {agents_dest}")
 
 
-def _install_opencode(force: bool) -> tuple[str, str]:
+def _install_opencode(force: bool, use_json: bool = False) -> tuple[str, str]:
     root = _assets_dir("opencode")
     plugin_path = str(root / "plugin.ts")
     cfg_path = Path.home() / ".config" / "opencode" / "opencode.json"
@@ -780,7 +781,7 @@ def _install_opencode(force: bool) -> tuple[str, str]:
     return ("installed", f"{cfg_path} (plugin entry added) + {agents_dest}")
 
 
-def _install_gemini(force: bool) -> tuple[str, str]:
+def _install_gemini(force: bool, use_json: bool = False) -> tuple[str, str]:
     root = _assets_dir("gemini")
     dest = Path.home() / ".gemini" / "settings.json"
     template = (root / "settings.snippet.json").read_text()
@@ -806,7 +807,7 @@ _HERMES_APPROVAL_NOTE = (
 )
 
 
-def _install_hermes(force: bool) -> tuple[str, str]:
+def _install_hermes(force: bool, use_json: bool = False) -> tuple[str, str]:
     """Wire the stash shell hooks into ~/.hermes/config.yaml.
 
     The hooks block lives inside a stash-owned marker-comment block so re-runs
@@ -865,7 +866,7 @@ def _dir_content_matches(src: Path, dest: Path) -> bool:
 _OPENCLAW_MIN_VERSION = (2026, 4, 0)
 
 
-def _install_openclaw(force: bool) -> tuple[str, str]:
+def _install_openclaw(force: bool, use_json: bool = False) -> tuple[str, str]:
     import subprocess
 
     root = _assets_dir("openclaw")
@@ -976,11 +977,17 @@ def hook_run(agent: str = typer.Argument(...), event: str = typer.Argument(...))
 
 
 @hook_app.command("auto-update")
-def hook_auto_update(choice: str = typer.Argument(..., help="'on' or 'off'")) -> None:
+def hook_auto_update(
+    choice: str = typer.Argument(..., help="'on' or 'off'"),
+    as_json: bool = typer.Option(False, "--json"),
+) -> None:
     """Record whether Stash may auto-update at Codex session start."""
     if choice not in ("on", "off"):
         _exit_user_error("Pass 'on' or 'off'.")
     set_codex_auto_update(choice == "on")
+    if _use_json(as_json):
+        output_json({"ok": True, "autoupdate": choice == "on", "choice": choice})
+        return
     console.print(f"Codex auto-update {choice}.")
 
 
@@ -1086,12 +1093,13 @@ def browse(
             _err(e)
 
     skills = data.get("skills", [])
+    if not skills:
+        print_empty_state("public skills matching your filters")
     if _use_json(as_json):
         output_json(skills)
         return
 
     if not skills:
-        console.print("[yellow]No public Skills match your filters.[/yellow]")
         return
 
     if not pick:
@@ -1571,6 +1579,16 @@ def upload(
     # someone's upload to anyone-with-the-link is not a mistake we can make by
     # accident, so nothing short of a literal True counts.
     public_link = public_link is True
+    use_json = _use_json(as_json)
+    if use_json:
+
+        def status(markup: str, plain: str) -> None:
+            echo_stderr(plain)
+    else:
+
+        def status(markup: str, plain: str) -> None:
+            console.print(markup)
+
     target = Path(path)
     if not target.exists():
         _exit_user_error(f"Not found: {path}")
@@ -1610,7 +1628,10 @@ def upload(
     root_name = name or (target.stem if target.is_file() else target.name)
     skill_title = skill.strip() or root_name
     create_skill = bool(skill)
-    console.print(f"[dim]Uploading {len(files)} file(s) as '{root_name}'...[/dim]")
+    status(
+        f"[dim]Uploading {len(files)} file(s) as '{root_name}'...[/dim]",
+        f"Uploading {len(files)} file(s) as '{root_name}'...",
+    )
 
     with _client() as c:
         root_folder = c.create_folder(root_name)
@@ -1639,13 +1660,13 @@ def upload(
             # correctly, and that inconsistency is the bug.
             if file_path in html_files:
                 _upload_html_with_assets(c, file_path, folder_id, asset_urls)
-                console.print(f"  [dim]Page: {relative_path}[/dim]")
+                status(f"  [dim]Page: {relative_path}[/dim]", f"  Page: {relative_path}")
                 continue
 
             if _is_upload_text_file(file_path):
                 content = file_path.read_text(errors="replace")
                 c.create_page(file_path.name, content=content, folder_id=folder_id)
-                console.print(f"  [dim]Page: {relative_path}[/dim]")
+                status(f"  [dim]Page: {relative_path}[/dim]", f"  Page: {relative_path}")
                 continue
 
             # Creating the stub page embeds the binary: the server claims any
@@ -1657,7 +1678,7 @@ def upload(
                 content=_markdown_snippet(uploaded),
                 folder_id=folder_id,
             )
-            console.print(f"  [dim]File: {relative_path}[/dim]")
+            status(f"  [dim]File: {relative_path}[/dim]", f"  File: {relative_path}")
 
         folder_url = f"{_web_app_url()}/folders/{root_folder['id']}"
         result: dict = {"folder": root_folder, "app_url": folder_url}
@@ -1780,6 +1801,7 @@ app.add_typer(skills_app, name="skills")
 @skills_app.command("add")
 def skills_add(
     folder: str = typer.Argument(..., help="Local folder containing a SKILL.md file."),
+    as_json: bool = typer.Option(False, "--json"),
 ):
     """Upload a local skill folder (must contain a SKILL.md) into your Files."""
     src = Path(folder)
@@ -1806,6 +1828,9 @@ def skills_add(
             c.convert_folder_to_skill(folder_id)
         except StashError as e:
             _err(e)
+    if _use_json(as_json):
+        output_json({"ok": True, "folder_id": folder_id, "name": folder_name})
+        return
     console.print(f"[green]Added skill '{folder_name}' to your Files.[/green]")
 
 
@@ -1922,13 +1947,18 @@ def skills_update(
 
 
 @skills_app.command("unpublish")
-def skills_unpublish(skill_id: str = typer.Argument(...)):
+def skills_unpublish(
+    skill_id: str = typer.Argument(...), as_json: bool = typer.Option(False, "--json")
+):
     """Stop sharing a skill: delete its publish record. The folder stays."""
     with _client() as c:
         try:
             c.unpublish_skill(skill_id)
         except StashError as e:
             _err(e)
+    if _use_json(as_json):
+        output_json({"ok": True, "skill_id": skill_id})
+        return
     console.print(f"[green]Unpublished Skill[/green] {skill_id}")
 
 
@@ -2162,11 +2192,10 @@ def skills_list(
             for root, entry in manifest.items()
             for skill_name, rec in entry["skills"].items()
         ]
+        if not rows:
+            print_empty_state("installed skills")
         if _use_json(as_json):
             output_json({"installed": rows})
-            return
-        if not rows:
-            console.print("[dim]No installed skills. `stash skills install <slug>` adds one.[/dim]")
             return
         for r in rows:
             source = r["slug"] or "(shared with you)"
@@ -2178,11 +2207,10 @@ def skills_list(
             skills = c.list_skills()
         except StashError as e:
             _err(e)
+    if not skills:
+        print_empty_state("skills")
     if _use_json(as_json):
         output_json({"skills": skills})
-        return
-    if not skills:
-        console.print('[dim]No skills yet. `stash skills create "<name>"` starts one.[/dim]')
         return
     for s in skills:
         flags = []
@@ -2721,7 +2749,9 @@ def files_add_page(
 
 
 @files_app.command("read-page")
-def files_read_page(page_id: str = typer.Argument(...)):
+def files_read_page(
+    page_id: str = typer.Argument(...), as_json: bool = typer.Option(False, "--json")
+):
     """Print a page as JSON. Its content_hash is what a later edit-page
     --expected-content-hash must carry."""
     with _client() as c:
@@ -2864,6 +2894,8 @@ def hist_default(
             data = c.query_events(limit=limit)
         except StashError as e:
             _err(e)
+    if not data:
+        print_empty_state("sessions")
     if _use_json(as_json):
         output_json(data)
     else:
@@ -2882,14 +2914,13 @@ def hist_agents(as_json: bool = typer.Option(False, "--json")):
             data = c.list_agent_names()
         except StashError as e:
             _err(e)
+    if not data:
+        print_empty_state("agents")
     if _use_json(as_json):
         output_json(data)
     else:
-        if not data:
-            console.print("[dim]No agents have logged events yet.[/dim]")
-        else:
-            for name in data:
-                console.print(f"  {name}")
+        for name in data:
+            console.print(f"  {name}")
 
 
 @hist_app.command("push")
@@ -3116,25 +3147,38 @@ def _render_tool_event(event: dict) -> str:
     return f"⚙ {name}"
 
 
-def _stream_turn(events) -> str | None:
-    """Render a turn's SSE events live; returns the session id (chat streams
-    open with a session event; run streams don't carry one)."""
+def _stream_turn(events, collect: bool = False) -> tuple[str | None, str]:
+    """Render a turn's SSE events live; returns (session id, turn text).
+
+    Chat streams open with a session event; run streams don't carry one. In
+    collect mode nothing is printed to stdout — deltas accumulate, status and
+    tool lines are dropped, and errors still reach stderr."""
     session_id: str | None = None
+    text_parts: list[str] = []
     for event in events:
         kind = event.get("type")
         if kind == "session":
             session_id = event["session_id"]
         elif kind == "status":
-            console.print(f"[dim]{event.get('stage', 'working')}…[/dim]")
+            if not collect:
+                console.print(f"[dim]{event.get('stage', 'working')}…[/dim]")
         elif kind == "text":
-            print(event.get("delta", ""), end="", flush=True)
+            delta = event.get("delta", "")
+            text_parts.append(delta)
+            if not collect:
+                print(delta, end="", flush=True)
         elif kind == "tool":
-            console.print(f"\n[dim]{_render_tool_event(event)}[/dim]")
+            if not collect:
+                console.print(f"\n[dim]{_render_tool_event(event)}[/dim]")
         elif kind == "error":
-            console.print(f"\n[red]Error: {event.get('message')}[/red]")
+            if collect:
+                echo_error(f"Error: {event.get('message')}")
+            else:
+                console.print(f"\n[red]Error: {event.get('message')}[/red]")
         elif kind == "end":
-            print()
-    return session_id
+            if not collect:
+                print()
+    return session_id, "".join(text_parts)
 
 
 @agent_app.command("list")
@@ -3145,6 +3189,8 @@ def agent_list(as_json: bool = typer.Option(False, "--json")):
             agents = c.list_agents()
         except StashError as e:
             _err(e)
+    if not agents:
+        print_empty_state("agents")
     if _use_json(as_json):
         output_json(agents)
         return
@@ -3165,19 +3211,25 @@ def agent_chat(
     agent: str = typer.Option(
         None, "--agent", "-a", help="Agent name or id. Default agent if omitted."
     ),
+    as_json: bool = typer.Option(False, "--json"),
 ):
     """Start (or continue) a cloud agent chat and stream the turn live.
 
     Ctrl-C disconnects the stream, which stops the turn on the box."""
+    use_json = _use_json(as_json)
     session = _resolve_session(session) if session else None
     with _client() as c:
         try:
             agent_id = _resolve_agent_id(c, agent) if agent else None
-            session_id = _stream_turn(
-                c.agent_chat_events(message, session_id=session, agent_id=agent_id)
+            session_id, text = _stream_turn(
+                c.agent_chat_events(message, session_id=session, agent_id=agent_id),
+                collect=use_json,
             )
         except StashError as e:
             _err(e)
+    if use_json:
+        output_json({"session_id": session_id, "text": text})
+        return
     if session_id:
         console.print(
             f"[dim]session {session_id} — continue with "
@@ -3188,14 +3240,18 @@ def agent_chat(
 @agent_app.command("run")
 def agent_run(
     agent: str = typer.Argument(..., help="Scheduled agent name or id."),
+    as_json: bool = typer.Option(False, "--json"),
 ):
     """Run a prompt-scheduled agent now and stream the run live."""
+    use_json = _use_json(as_json)
     with _client() as c:
         try:
             agent_id = _resolve_agent_id(c, agent)
-            _stream_turn(c.agent_run_events(agent_id))
+            session_id, text = _stream_turn(c.agent_run_events(agent_id), collect=use_json)
         except StashError as e:
             _err(e)
+    if use_json:
+        output_json({"session_id": session_id, "text": text})
 
 
 @agent_app.command("status")
@@ -3221,13 +3277,16 @@ def agent_status(
 def agent_watch(
     session_id: str = typer.Argument(..., help="The chat session (id or title) to follow."),
     poll_seconds: float = typer.Option(2.0, "--poll", help="Poll interval in seconds."),
+    as_json: bool = typer.Option(False, "--json"),
 ):
     """Follow a chat session live — works for turns started anywhere
     (web, Slack, a schedule, or another terminal). Exits when the turn ends."""
+    use_json = _use_json(as_json)
     session_id = _resolve_session(session_id)
     role_style = {"user": "[bold]you:[/bold] ", "assistant": "", "tool": "[dim]", "": ""}
     with _client() as c:
         seen = 0
+        messages: list[dict] = []
         while True:
             try:
                 # Status before messages: a turn that ends between the two
@@ -3236,14 +3295,18 @@ def agent_watch(
                 messages = c.get_agent_chat(session_id)["messages"]
             except StashError as e:
                 _err(e)
-            for m in messages[seen:]:
-                prefix = role_style.get(m["role"], "")
-                suffix = "[/dim]" if m["role"] == "tool" else ""
-                console.print(f"{prefix}{m['content']}{suffix}\n")
+            if not use_json:
+                for m in messages[seen:]:
+                    prefix = role_style.get(m["role"], "")
+                    suffix = "[/dim]" if m["role"] == "tool" else ""
+                    console.print(f"{prefix}{m['content']}{suffix}\n")
             seen = len(messages)
             if not status["running"]:
                 break
             time.sleep(poll_seconds)
+    if use_json:
+        output_json({"session_id": session_id, "messages": messages})
+        return
     console.print("[dim]Turn finished — chat is idle.[/dim]")
 
 
@@ -3252,6 +3315,7 @@ def agent_stop(
     session_id: str = typer.Argument(
         ..., help="The chat session (id or title) whose turn to stop."
     ),
+    as_json: bool = typer.Option(False, "--json"),
 ):
     """Stop the turn running in a chat session (kills the run on the box)."""
     session_id = _resolve_session(session_id)
@@ -3260,6 +3324,9 @@ def agent_stop(
             c.stop_agent_turn(session_id)
         except StashError as e:
             _err(e)
+    if _use_json(as_json):
+        output_json({"ok": True, "session_id": session_id})
+        return
     console.print("⏹ Stop requested — the turn will end shortly.")
 
 
@@ -3299,12 +3366,11 @@ def _print_search(
             )
         except StashError as e:
             _err(e)
-    if _use_json(as_json):
-        output_json(data)
-        return
     hits = data["results"]
     if not hits:
-        console.print("[dim]No matches.[/dim]")
+        print_empty_state("matches")
+    if _use_json(as_json):
+        output_json(data)
         return
     for hit in hits:
         label = hit.get("source_name") or hit.get("source")
@@ -3565,6 +3631,8 @@ def memory_ls(as_json: bool = typer.Option(False, "--json")):
             tree = c.get_memory_tree()
         except StashError as e:
             _err(e)
+    if not tree.get("folders") and not tree.get("pages"):
+        print_empty_state("pages or folders")
     if _use_json(as_json):
         output_json({"id": folder["id"], "name": folder["name"], **tree})
         return
@@ -3634,13 +3702,16 @@ def sources_sync(
 
 
 @sources_app.command("rm")
-def sources_rm(source_id: str = typer.Argument(...)):
+def sources_rm(source_id: str = typer.Argument(...), as_json: bool = typer.Option(False, "--json")):
     """Disconnect a source you own (its indexed documents cascade away)."""
     with _client() as c:
         try:
             c.delete_source(source_id)
         except StashError as e:
             _err(e)
+    if _use_json(as_json):
+        output_json({"ok": True, "source_id": source_id})
+        return
     console.print("[green]Source removed.[/green]")
 
 
@@ -3714,6 +3785,8 @@ def ls_cmd(
 
 
 def _print_ls_overview(sources: list[dict], as_json: bool) -> None:
+    if not sources:
+        print_empty_state("sources")
     if _use_json(as_json):
         output_json({"sources": sources})
         return
@@ -3737,6 +3810,8 @@ def _print_ls_path(c: StashClient, sources: list[dict], path: str, as_json: bool
         return
 
     entries = c.list_source_entries(source["source"], path=rest)
+    if not entries:
+        print_empty_state("files or folders")
     if _use_json(as_json):
         output_json({"entries": entries})
         return
@@ -3762,10 +3837,13 @@ def _print_provider_path(c: StashClient, provider: dict, rest: str, as_json: boo
         handle = member["handle"]
 
     entries = c.list_source_entries(handle, path=doc_path)
+    if not entries:
+        print_empty_state("files or folders")
     if _use_json(as_json):
         output_json({"entries": entries})
         return
-    _print_dir_children(entries, doc_path)
+    if entries:
+        _print_dir_children(entries, doc_path)
 
 
 def _print_connection_dirs(members: list[dict], as_json: bool) -> None:
@@ -3957,6 +4035,7 @@ def mv_cmd(
     ),
     to_folder: str = typer.Option(None, "--to-folder", help="Target folder id."),
     to_root: bool = typer.Option(False, "--to-root", help="Move to the root."),
+    as_json: bool = typer.Option(False, "--json"),
 ):
     """Move objects into a folder (or to the root with --to-root).
 
@@ -3973,6 +4052,9 @@ def mv_cmd(
             c.batch_move(moves, target_folder_id=to_folder, move_to_root=to_root)
         except StashError as e:
             _err(e)
+    if _use_json(as_json):
+        output_json({"ok": True, "items": len(items)})
+        return
     console.print(f"[green]{len(items)} item(s) moved.[/green]")
 
 
@@ -3980,6 +4062,7 @@ def mv_cmd(
 def cp_cmd(
     refs: list[str] = typer.Argument(..., help="Items as type:id. Types: page | file | folder"),
     to_folder: str = typer.Option(None, "--to-folder", help="Target folder id."),
+    as_json: bool = typer.Option(False, "--json"),
 ):
     """Duplicate pages, files, or folders as 'Copy of <name>'.
 
@@ -3990,6 +4073,7 @@ def cp_cmd(
         "file": lambda c, i: c.copy_file(i, target_folder_id=to_folder or None),
         "folder": lambda c, i: c.copy_folder(i, target_folder_id=to_folder or None),
     }
+    copies = []
     for object_type, object_id in _parse_refs(refs):
         if object_type not in copy:
             _exit_user_error(f"Cannot cp '{object_type}'. Supported: page | file | folder")
@@ -3998,6 +4082,11 @@ def cp_cmd(
                 made = copy[object_type](c, object_id)
             except StashError as e:
                 _err(e)
+        copies.append({"id": made["id"], "name": made["name"]})
+    if _use_json(as_json):
+        output_json({"ok": True, "copies": copies})
+        return
+    for made in copies:
         console.print(f"[green]Copied to[/green] {made['name']} ({made['id']})")
 
 
@@ -4023,11 +4112,10 @@ def shares_ls(
             data = c.list_object_shares(object_type, object_id)
         except StashError as e:
             _err(e)
+    if not data:
+        print_empty_state("shares")
     if _use_json(as_json):
         output_json(data)
-        return
-    if not data:
-        console.print("[dim]Not shared with anyone.[/dim]")
         return
     for s in data:
         who = s.get("display_name") or s.get("name") or s.get("email") or s.get("principal_id")
@@ -4070,6 +4158,7 @@ def shares_rm(
     object_id: str = typer.Argument(...),
     principal_id: str = typer.Argument(..., help="The user id to revoke (from `shares ls`)."),
     principal_type: str = typer.Option("user", "--principal-type"),
+    as_json: bool = typer.Option(False, "--json"),
 ):
     """Revoke a person's access to an object."""
     if object_type == "session":
@@ -4079,6 +4168,9 @@ def shares_rm(
             c.unshare_object(object_type, object_id, principal_type, principal_id)
         except StashError as e:
             _err(e)
+    if _use_json(as_json):
+        output_json({"ok": True, "object_id": object_id})
+        return
     console.print("[green]Access revoked.[/green]")
 
 
@@ -4098,8 +4190,13 @@ def trash_list(as_json: bool = typer.Option(False, "--json")):
             data = c.get_trash()
         except StashError as e:
             _err(e)
+    all_empty = all(not data.get(kind) for kind in ("pages", "files", "sessions"))
+    if all_empty:
+        print_empty_state("trash")
     if _use_json(as_json):
         output_json(data)
+        return
+    if all_empty:
         return
     for kind in ("pages", "files", "sessions"):
         items = data.get(kind, [])
@@ -4379,6 +4476,7 @@ def tables_update_row(
 def tables_delete_row(
     table_id: str = typer.Argument(...),
     row_id: str = typer.Argument(...),
+    as_json: bool = typer.Option(False, "--json"),
 ):
     """Delete a row from a table."""
     with _client() as c:
@@ -4386,6 +4484,9 @@ def tables_delete_row(
             c.delete_table_row(table_id, row_id)
         except StashError as e:
             _err(e)
+    if _use_json(as_json):
+        output_json({"ok": True, "row_id": row_id})
+        return
     console.print("[green]Row deleted.[/green]")
 
 
@@ -4467,6 +4568,7 @@ def tables_export(
     filters: str = typer.Option("", "--filter"),
     sort_by: str = typer.Option("", "--sort"),
     sort_order: str = typer.Option("asc", "--order"),
+    as_json: bool = typer.Option(False, "--json"),
 ):
     """Export table as CSV."""
     with _client() as c:
@@ -4483,6 +4585,9 @@ def tables_export(
             csv_content = resp.text
         except StashError as e:
             _err(e)
+    if _use_json(as_json):
+        output_json({"table_id": table_id, "csv": csv_content})
+        return
     if file:
         with open(file, "w") as f:
             f.write(csv_content)
@@ -4495,15 +4600,19 @@ def tables_export(
 def tables_delete(
     table_id: str = typer.Argument(...),
     yes: bool = typer.Option(False, "--yes", "-y"),
+    as_json: bool = typer.Option(False, "--json"),
 ):
     """Delete a table and all its data."""
-    if not yes:
+    if not yes and not _use_json(as_json):
         typer.confirm("Delete this table and all its data?", abort=True)
     with _client() as c:
         try:
             c.delete_table(table_id)
         except StashError as e:
             _err(e)
+    if _use_json(as_json):
+        output_json({"ok": True, "table_id": table_id})
+        return
     console.print("[green]Table deleted.[/green]")
 
 
@@ -4669,6 +4778,7 @@ def files_download(
     output: str = typer.Option(
         None, "--output", "-o", help="Destination path. Defaults to the file's name in cwd."
     ),
+    as_json: bool = typer.Option(False, "--json"),
 ):
     """Download a file's bytes to a local path.
 
@@ -4684,6 +4794,9 @@ def files_download(
             _err(e)
     dest = Path(output) if output else Path(meta["name"])
     dest.write_bytes(data)
+    if _use_json(as_json):
+        output_json({"ok": True, "bytes": len(data), "name": meta["name"]})
+        return
     console.print(f"[green]Downloaded[/green] {meta['name']} → {dest} [dim]{len(data)} bytes[/dim]")
 
 
@@ -4930,39 +5043,63 @@ def _pick_agents(message: str, agents: list[str], checked: list[str]) -> list[st
     return result
 
 
-def _install_all_hooks(agents: list[str] | None = None) -> None:
-    """Install/upgrade hooks for the given agents (defaults to all detected)."""
+def _install_all_hooks(agents: list[str] | None = None, use_json: bool = False) -> None:
+    """Install/upgrade hooks for the given agents (defaults to all detected).
+
+    In JSON mode the per-agent ✓/✗ lines and the Codex trust notice go to
+    stderr; stdout stays reserved for the caller's single JSON document."""
     detected = _detected_agents()
     if not detected:
         return
 
     to_install = [a for a in detected if a in agents] if agents is not None else detected
 
+    def status(markup: str, plain: str) -> None:
+        if use_json:
+            echo_stderr(plain)
+        else:
+            console.print(markup)
+
     codex_needs_trust = False
     for agent in to_install:
         try:
-            status_, detail = _INSTALLERS[agent](False)
+            status_, detail = _INSTALLERS[agent](False, use_json)
         except Exception as e:
             status_, detail = ("failed", f"{type(e).__name__}: {e}")
         if status_ == "installed":
-            console.print(f"  [green]✓[/green] {_AGENT_LABEL[agent]} hook installed  {detail}")
+            status(
+                f"  [green]✓[/green] {_AGENT_LABEL[agent]} hook installed  {detail}",
+                f"  ✓ {_AGENT_LABEL[agent]} hook installed  {detail}",
+            )
         elif status_ == "skipped":
-            console.print(f"  [green]✓[/green] {_AGENT_LABEL[agent]} hook up to date")
+            status(
+                f"  [green]✓[/green] {_AGENT_LABEL[agent]} hook up to date",
+                f"  ✓ {_AGENT_LABEL[agent]} hook up to date",
+            )
         elif status_ == "failed":
-            console.print(f"  [red]✗[/red] {_AGENT_LABEL[agent]} hook failed  {detail}")
+            status(
+                f"  [red]✗[/red] {_AGENT_LABEL[agent]} hook failed  {detail}",
+                f"  ✗ {_AGENT_LABEL[agent]} hook failed  {detail}",
+            )
         if agent == "codex" and status_ == "installed":
             codex_needs_trust = True
 
     # Codex only runs new or changed command hooks after the user approves
     # them, so streaming is not live until that happens.
     if codex_needs_trust:
-        console.print(
+        status(
             "\n  [yellow]Codex hooks were installed or changed — Codex will not run them"
             " until you trust them:[/yellow]\n"
             "    1. Restart Codex.\n"
             "    2. When Codex prompts to review new hooks (or via its /hooks review),"
             " approve the Stash hooks.\n"
-            "  Codex sessions start streaming to Stash only after the hooks are trusted."
+            "  Codex sessions start streaming to Stash only after the hooks are trusted.",
+            "\n  Codex hooks were installed or changed — Codex will not run them"
+            " until you trust them:\n"
+            "    1. Restart Codex.\n"
+            "    2. When Codex prompts to review new hooks (or via its /hooks review),"
+            " approve the Stash hooks.\n"
+            "  Codex sessions start streaming to Stash only after the hooks are trusted.",
         )
 
 
@@ -5322,6 +5459,7 @@ def setup_cmd(
         "--import-history/--no-import-history",
         help="Import historical conversations in the background. Requires --record.",
     ),
+    as_json: bool = typer.Option(False, "--json"),
 ):
     """Run the setup wizard: session recording, agent hooks, folder context.
 
@@ -5336,6 +5474,7 @@ def setup_cmd(
     headless = (
         any(v is not None for v in (record, agents, connect, import_history))
         or not sys.stdin.isatty()
+        or _use_json(as_json)
     )
     if not headless:
         _run_setup_wizard()
@@ -5359,16 +5498,30 @@ def setup_cmd(
     if not record and (agents is not None or import_history):
         _exit_user_error("--agents and --import-history require --record.")
 
-    _run_setup_headless(record, agents, connect, import_history)
+    _run_setup_headless(record, agents, connect, import_history, use_json=_use_json(as_json))
 
 
 def _run_setup_headless(
-    record: bool, agents_csv: str | None, connect: bool, import_history: bool | None
+    record: bool,
+    agents_csv: str | None,
+    connect: bool,
+    import_history: bool | None,
+    use_json: bool = False,
 ) -> None:
     """Non-interactive setup: every wizard decision arrives pre-answered.
 
     Terse ✓-per-step output and no splash — the caller is a coding agent
-    relaying to a user, not a person at a terminal."""
+    relaying to a user, not a person at a terminal. In JSON mode the per-step
+    ✓ lines go to stderr and a single result object goes to stdout."""
+    if use_json:
+
+        def status(markup: str, plain: str) -> None:
+            echo_stderr(plain)
+    else:
+
+        def status(markup: str, plain: str) -> None:
+            console.print(markup)
+
     cfg = load_config()
 
     if record:
@@ -5388,29 +5541,33 @@ def _run_setup_headless(
         # happening outside that folder.
         save_recorded_paths([])
         save_enabled_agents(selected)
-        _install_all_hooks(selected)
-        console.print(
-            f"  [green]✓[/green] Recording on everywhere on this machine for: {', '.join(selected)}"
+        _install_all_hooks(selected, use_json=use_json)
+        status(
+            f"  [green]✓[/green] Recording on everywhere on this machine for: {', '.join(selected)}",
+            f"  ✓ Recording on everywhere on this machine for: {', '.join(selected)}",
         )
     else:
         stop_streaming()
-        console.print("  [green]✓[/green] Recording off")
+        status("  [green]✓[/green] Recording off", "  ✓ Recording off")
 
     if connect:
-        _auto_connect_repo(_git_toplevel() or Path.cwd(), cfg)
+        _auto_connect_repo(_git_toplevel() or Path.cwd(), cfg, use_json=use_json)
     else:
-        console.print("  [green]✓[/green] Folder context skipped")
+        status("  [green]✓[/green] Folder context skipped", "  ✓ Folder context skipped")
 
     if import_history:
         conversations = _conversations_to_import(selected)
         if conversations:
             _spawn_history_import(len(conversations))
         else:
-            console.print("  No historical conversations found.")
+            status("  No historical conversations found.", "  No historical conversations found.")
+
+    if use_json:
+        output_json({"ok": True, "record": record, "connect": connect})
 
 
 @app.command("verify-email")
-def verify_email_cmd():
+def verify_email_cmd(as_json: bool = typer.Option(False, "--json")):
     """Email yourself a verification link. Verifying your email is what joins
     you to your company's workspace, if one exists for your email domain."""
     _require_auth()
@@ -5419,6 +5576,9 @@ def verify_email_cmd():
             result = c.resend_verification_email()
         except StashError as e:
             _err(e)
+    if _use_json(as_json):
+        output_json({"ok": True, "sent_to": result["sent_to"]})
+        return
     console.print(
         f"  [green]✓[/green] Verification link sent to [bold]{result['sent_to']}[/bold] — "
         "click it and you're done."
@@ -5448,18 +5608,24 @@ def connect_cmd(as_json: bool = typer.Option(False, "--json")):
 
 
 @app.command("start")
-def start_cmd():
+def start_cmd(as_json: bool = typer.Option(False, "--json")):
     """Resume streaming transcripts globally (undoes `stash stop`)."""
     _require_auth()
     start_streaming()
+    if _use_json(as_json):
+        output_json({"ok": True, "streaming": True})
+        return
     console.print("  [green]✓[/green] Streaming enabled.")
 
 
 @app.command("stop")
-def stop_cmd():
+def stop_cmd(as_json: bool = typer.Option(False, "--json")):
     """Stop streaming transcripts globally."""
     _require_auth()
     stop_streaming()
+    if _use_json(as_json):
+        output_json({"ok": True, "streaming": False})
+        return
     console.print("  [green]✓[/green] Streaming stopped.")
 
 
@@ -5522,7 +5688,7 @@ def _frontend_base_url() -> str:
     return base_url
 
 
-def _install_claude_plugin() -> bool:
+def _install_claude_plugin(use_json: bool = False) -> bool:
     """Install the stash plugin for Claude Code via the official marketplace.
 
     Both subcommands are idempotent — re-running prints a "already added /
@@ -5532,14 +5698,28 @@ def _install_claude_plugin() -> bool:
     """
     import subprocess as _sp
 
+    def status(markup: str, plain: str) -> None:
+        if use_json:
+            echo_stderr(plain)
+        else:
+            console.print(markup)
+
     binary = _claude_binary()
     if binary is None:
-        console.print(
-            "  [yellow]Found your Claude Code folder, but no `claude` executable to "
-            "install the live-recording plugin with. Past sessions still import; new "
-            "ones won't stream until you re-run [bold]stash setup[/bold] from a shell "
-            "where `claude --version` works.[/yellow]"
-        )
+        if use_json:
+            echo_stderr(
+                "  Found your Claude Code folder, but no `claude` executable to install "
+                "the live-recording plugin with. Past sessions still import; new ones "
+                "won't stream until you re-run `stash setup` from a shell where "
+                "`claude --version` works."
+            )
+        else:
+            console.print(
+                "  [yellow]Found your Claude Code folder, but no `claude` executable to "
+                "install the live-recording plugin with. Past sessions still import; new "
+                "ones won't stream until you re-run [bold]stash setup[/bold] from a shell "
+                "where `claude --version` works.[/yellow]"
+            )
         return False
 
     for cmd in (
@@ -5549,27 +5729,42 @@ def _install_claude_plugin() -> bool:
         try:
             result = _sp.run(cmd, check=True, capture_output=True, text=True, timeout=60)
         except _sp.CalledProcessError as e:
-            console.print(f"  [yellow]`{' '.join(cmd)}` exited {e.returncode}.[/yellow]")
+            status(
+                f"  [yellow]`{' '.join(cmd)}` exited {e.returncode}.[/yellow]",
+                f"  `{' '.join(cmd)}` exited {e.returncode}.",
+            )
             if e.stderr:
-                console.print(f"  [dim]{e.stderr.strip().splitlines()[-1]}[/dim]")
+                status(
+                    f"  [dim]{e.stderr.strip().splitlines()[-1]}[/dim]",
+                    f"  {e.stderr.strip().splitlines()[-1]}",
+                )
             return False
         except (FileNotFoundError, _sp.TimeoutExpired) as e:
-            console.print(f"  [yellow]Could not run `{' '.join(cmd)}`: {e}[/yellow]")
+            status(
+                f"  [yellow]Could not run `{' '.join(cmd)}`: {e}[/yellow]",
+                f"  Could not run `{' '.join(cmd)}`: {e}",
+            )
             return False
         # Surface the success line (last line of stdout, e.g. "Successfully
         # installed plugin: stash@stash-plugins (scope: user)") so the user
         # sees what happened.
         last = (result.stdout or "").strip().splitlines()
         if last:
-            console.print(f"  [green]✓[/green] {last[-1]}")
+            status(f"  [green]✓[/green] {last[-1]}", f"  ✓ {last[-1]}")
 
     if _enable_marketplace_autoupdate(Path.home() / ".claude" / "settings.json"):
-        console.print("  [green]✓[/green] auto-update enabled for the stash-plugins marketplace")
+        status(
+            "  [green]✓[/green] auto-update enabled for the stash-plugins marketplace",
+            "  ✓ auto-update enabled for the stash-plugins marketplace",
+        )
     else:
-        console.print(
+        status(
             "  [yellow]Could not update ~/.claude/settings.json — enable auto-update "
             "manually: /plugin → Marketplaces → stash-plugins → Enable auto-update. "
-            "Without it the plugin never updates itself.[/yellow]"
+            "Without it the plugin never updates itself.[/yellow]",
+            "  Could not update ~/.claude/settings.json — enable auto-update manually: "
+            "/plugin → Marketplaces → stash-plugins → Enable auto-update. "
+            "Without it the plugin never updates itself.",
         )
 
     # Freshen right now regardless: until this run set autoUpdate (or on Claude
@@ -5584,10 +5779,16 @@ def _install_claude_plugin() -> bool:
         try:
             _sp.run(cmd, check=True, capture_output=True, text=True, timeout=120)
         except (_sp.CalledProcessError, FileNotFoundError, _sp.TimeoutExpired) as e:
-            console.print(f"  [yellow]`{' '.join(cmd)}` failed: {e}[/yellow]")
+            status(
+                f"  [yellow]`{' '.join(cmd)}` failed: {e}[/yellow]",
+                f"  `{' '.join(cmd)}` failed: {e}",
+            )
             break
     else:
-        console.print("  [green]✓[/green] marketplace and plugin updated to latest")
+        status(
+            "  [green]✓[/green] marketplace and plugin updated to latest",
+            "  ✓ marketplace and plugin updated to latest",
+        )
     return True
 
 
@@ -5994,15 +6195,16 @@ def _upload_health_label(snapshot: list[dict]) -> str:
 def status_cmd(as_json: bool = typer.Option(False, "--json")):
     """Show local Stash upload health."""
     snapshot = _upload_health_snapshot()
+    if not snapshot:
+        print_empty_state("local agent plugins")
+        if _use_json(as_json):
+            output_json({"upload_health": snapshot})
+        return
     if _use_json(as_json):
         output_json({"upload_health": snapshot})
         return
 
     console.print("[bold]Stash upload status[/bold]\n")
-    if not snapshot:
-        console.print("[dim]No installed Stash agent plugins found on this machine.[/dim]")
-        return
-
     table = Table(show_header=True, header_style="bold")
     table.add_column("Agent")
     table.add_column("Health")
@@ -6146,6 +6348,8 @@ def workspace_list(as_json: bool = typer.Option(False, "--json")):
             _err(e)
     workspaces = data["workspaces"]
     pending = data.get("pending_domain_workspaces", [])
+    if not workspaces and not pending:
+        print_empty_state("workspaces")
     if _use_json(as_json):
         output_json(
             {
@@ -6166,24 +6370,24 @@ def workspace_list(as_json: bool = typer.Option(False, "--json")):
             "[yellow]— joins once your email is verified: run "
             "[cyan]stash verify-email[/cyan] and click the link we send[/yellow]"
         )
-    if not workspaces and not pending:
-        console.print(
-            "[dim]Team workspaces are set up for you — email sam@joinstash.ai "
-            "and we'll get your team going.[/dim]"
-        )
 
 
 @workspace_app.command("switch")
 def workspace_switch(
     name: str = typer.Argument(..., help="Workspace name or domain, or 'personal'."),
+    as_json: bool = typer.Option(False, "--json"),
 ):
     """Route sessions, events, transcripts, and searches to this scope.
 
     Applies everywhere the CLI and agent plugins write — the next agent
     session lands in the chosen scope, and `stash search` reads from it.
     """
+    use_json = _use_json(as_json)
     if name == "personal":
         save_scope(None)
+        if use_json:
+            output_json({"ok": True, "workspace": "personal"})
+            return
         console.print("[green]Switched[/green] to your personal scope.")
         return
 
@@ -6215,6 +6419,9 @@ def workspace_switch(
         known = ", ".join(ws["name"] for ws in workspaces) or "(none)"
         _exit_user_error(f"no workspace named '{name}'. You belong to: {known}")
     save_scope(str(match["scope_user_id"]))
+    if use_json:
+        output_json({"ok": True, "workspace": match["name"]})
+        return
     console.print(
         f"[green]Switched[/green] to [bold]{match['name']}[/bold] — new agent sessions "
         "and searches use this workspace. `stash workspace switch personal` to go back."
@@ -6233,11 +6440,10 @@ def keys_list(as_json: bool = typer.Option(False, "--json")):
             keys = c.list_api_keys()
         except StashError as e:
             _err(e)
+    if not keys:
+        print_empty_state("API keys")
     if _use_json(as_json):
         output_json(keys)
-        return
-    if not keys:
-        console.print("[dim]No active API keys.[/dim]")
         return
     for k in keys:
         last = k.get("last_used_at") or "never"
@@ -6249,13 +6455,19 @@ def keys_list(as_json: bool = typer.Option(False, "--json")):
 
 
 @keys_app.command("revoke")
-def keys_revoke(key_id: str = typer.Argument(..., help="Key id to revoke.")):
+def keys_revoke(
+    key_id: str = typer.Argument(..., help="Key id to revoke."),
+    as_json: bool = typer.Option(False, "--json"),
+):
     """Revoke an API key by id. Any device using it will 401 on next call."""
     with _client() as c:
         try:
             c.revoke_api_key(key_id)
         except StashError as e:
             _err(e)
+    if _use_json(as_json):
+        output_json({"ok": True, "key_id": key_id})
+        return
     console.print(f"[green]Revoked key {key_id}.[/green]")
 
 
@@ -6516,11 +6728,14 @@ clutters Discover.
 
 
 @prompts_app.command("agent-guidance")
-def prompts_agent_guidance():
+def prompts_agent_guidance(as_json: bool = typer.Option(False, "--json")):
     """Print the canonical 'what is a Skill + when to create one' prompt.
 
     Intended for coding agents (Claude Code, Codex, Cursor, etc.) to
     re-inject when they want to remember the model mid-session."""
+    if _use_json(as_json):
+        output_json({"prompt": AGENT_GUIDANCE_PROMPT})
+        return
     console.print(AGENT_GUIDANCE_PROMPT)
 
 
@@ -6647,11 +6862,10 @@ def tools_list(as_json: bool = typer.Option(False, "--json")):
             servers = c.list_mcp_servers()
         except StashError as e:
             _err(e)
+    if not servers:
+        print_empty_state("MCP servers")
     if _use_json(as_json):
         output_json({"servers": servers})
-        return
-    if not servers:
-        console.print("[dim]No MCP servers yet. `stash tools add <name> --url ...` adds one.[/dim]")
         return
     for s in servers:
         target = s["command"] or s["url"]
@@ -6659,7 +6873,7 @@ def tools_list(as_json: bool = typer.Option(False, "--json")):
 
 
 @tools_app.command("remove")
-def tools_remove(name: str = typer.Argument(...)):
+def tools_remove(name: str = typer.Argument(...), as_json: bool = typer.Option(False, "--json")):
     """Remove a registered MCP server."""
     with _client() as c:
         try:
@@ -6667,11 +6881,14 @@ def tools_remove(name: str = typer.Argument(...)):
             c.delete_mcp_server(server["id"])
         except StashError as e:
             _err(e)
+    if _use_json(as_json):
+        output_json({"ok": True, "name": name})
+        return
     console.print(f"Removed [bold]{name}[/bold]")
 
 
 @tools_app.command("install")
-def tools_install(name: str = typer.Argument(...)):
+def tools_install(name: str = typer.Argument(...), as_json: bool = typer.Option(False, "--json")):
     """Write a registered server into this project's .mcp.json for Claude Code."""
     with _client() as c:
         try:
@@ -6686,6 +6903,9 @@ def tools_install(name: str = typer.Argument(...)):
         )
     if status == "failed":
         _exit_user_error(f"{dest} is not valid JSON; fix or delete it first.")
+    if _use_json(as_json):
+        output_json({"ok": True, "name": name, "status": status})
+        return
     verb = "Installed" if status == "installed" else "Already up to date:"
     console.print(f"{verb} [bold]{name}[/bold] → {dest}")
 
