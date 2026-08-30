@@ -13,8 +13,10 @@ raw traceback.
 
 from __future__ import annotations
 
+import io
 from pathlib import Path
 
+import click
 import httpx
 import pytest
 import typer
@@ -250,3 +252,141 @@ def test_share_reraises_4xx_through_entry_exits_user_error(monkeypatch, capsys, 
     assert code == EXIT_USER_ERROR
     assert "not found" in err
     assert "not found" not in out
+
+
+# --- User cancellation at the boundary (STAS-153) ----------------------------
+#
+# `standalone_mode=False` switches off Click's own cancellation handling, and
+# `click.exceptions.Abort` subclasses `RuntimeError` — not `UsageError` — so it
+# is covered by none of the three error clauses above. Uncaught, a cancellation
+# the user asked for re-raises and Python prints a traceback, which is the
+# regression against trunk this boundary owns. The invariant: cancel intent ->
+# one `Aborted.` line on stderr, nothing added to stdout, exit 1, no traceback.
+
+
+class _NeverOpenedClient:
+    """Client stub that fails loudly if a cancelled command opens a connection.
+
+    `tables delete` confirms *before* `with _client()`, so a decline that is
+    genuinely terminal must never build a client. Returning from the abort path
+    instead of exiting would fall through to this stub and raise.
+    """
+
+    def __enter__(self):
+        raise AssertionError("client opened after the user cancelled")
+
+    def __exit__(self, *_args):
+        return None
+
+
+def _run_cancel_command(monkeypatch, capsys, *, stdin_text=None, interrupt_prompt=False) -> tuple:
+    """Drive the real `stash tables delete` into its confirmation prompt.
+
+    `stdin_text` replaces stdin with the typed answer (or EOF when empty);
+    `interrupt_prompt` makes the prompt's own input function raise
+    `KeyboardInterrupt`, which is how Click receives a typed Ctrl-C. Both shapes
+    end as `click.exceptions.Abort`.
+    """
+    if stdin_text is not None:
+        monkeypatch.setattr("sys.stdin", io.StringIO(stdin_text))
+    if interrupt_prompt:
+
+        def _ctrl_c(_prompt=""):
+            raise KeyboardInterrupt
+
+        monkeypatch.setattr("click.termui.visible_prompt_func", _ctrl_c)
+    return _run_main(
+        monkeypatch,
+        capsys,
+        ["stash", "tables", "delete", "tbl-1"],
+        client=_NeverOpenedClient(),
+    )
+
+
+def _assert_clean_abort(code: int, out: str, err: str) -> None:
+    """The one cancel contract: exit 1, a single `Aborted.` on stderr, no traceback.
+
+    `err` is compared after stripping and counted rather than compared bare:
+    Click's prompt teardown can prepend its own blank line to stderr, and that
+    blank line is not part of the contract. The prompt itself is written to
+    stdout by Click, so stdout is asserted to carry no abort text or traceback
+    rather than to be empty.
+    """
+    assert code == EXIT_USER_ERROR
+    assert err.strip() == "Aborted."
+    assert err.count("Aborted.") == 1
+    assert "Traceback" not in err
+    assert "click.exceptions" not in err
+    assert "Aborted." not in out
+    assert "Traceback" not in out
+
+
+def test_raw_abort_at_boundary_exits_1(monkeypatch, capsys) -> None:
+    """A raw `Abort` reaching the boundary is cancel intent, not a bug.
+
+    Before this catch existed the exception re-raised and the user watched a
+    `click.exceptions.Abort` traceback for a cancellation they triggered.
+    """
+    app_override = _making_app(click.exceptions.Abort())
+    code, out, err = _run_main(monkeypatch, capsys, ["stash"], app_override=app_override)
+
+    assert code == EXIT_USER_ERROR
+    assert err == "Aborted.\n"
+    assert out == ""
+
+
+def test_declined_confirmation_exits_1_without_traceback(monkeypatch, capsys) -> None:
+    """The reported symptom: answering `n` to `stash tables delete` printed a raw
+    `click.exceptions.Abort` traceback where trunk printed one abort line.
+
+    Drives the real compiled command, so it covers the production chain —
+    `typer.confirm(abort=True)` -> `click.Abort` -> boundary — and proves the
+    cancel is terminal: the client stub raises if a delete is attempted.
+    """
+    code, out, err = _run_cancel_command(monkeypatch, capsys, stdin_text="n\n")
+
+    _assert_clean_abort(code, out, err)
+
+
+def test_ctrl_c_at_prompt_exits_1_without_traceback(monkeypatch, capsys) -> None:
+    """Ctrl-C typed at a confirmation prompt aborts the same clean way.
+
+    Click converts the interrupt at the prompt into `Abort` (click.termui
+    `confirm`), so this is the same boundary arrival as a declined answer and
+    must not diverge in wording or exit code.
+    """
+    code, out, err = _run_cancel_command(monkeypatch, capsys, interrupt_prompt=True)
+
+    _assert_clean_abort(code, out, err)
+
+
+def test_keyboard_interrupt_mid_command_exits_1(monkeypatch, capsys) -> None:
+    """Ctrl-C while a command is working exits 1 on the same abort line.
+
+    Typer turns a `KeyboardInterrupt` raised inside a command body into
+    `click.exceptions.Exit(130)` (typer/core.py:202-203), which a
+    non-standalone invocation *returns* instead of raising — so without
+    normalizing the returned code the user got a silent exit 130 with no line.
+    """
+    app_override = _making_app(KeyboardInterrupt())
+    code, out, err = _run_main(monkeypatch, capsys, ["stash"], app_override=app_override)
+
+    _assert_clean_abort(code, out, err)
+
+
+def test_keyboard_interrupt_during_startup_exits_1(monkeypatch, capsys) -> None:
+    """Ctrl-C while the Typer app is being compiled aborts like any other.
+
+    Typer's interrupt conversion lives inside command invocation, so an
+    interrupt raised before a command body exists has no converter and escapes
+    raw. The boundary's catch is what keeps startup cancellations off the
+    traceback path.
+    """
+
+    def _interrupt_during_compile(_app):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr("typer.main.get_command", _interrupt_during_compile)
+    code, out, err = _run_main(monkeypatch, capsys, ["stash"])
+
+    _assert_clean_abort(code, out, err)
