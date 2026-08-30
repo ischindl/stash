@@ -45,7 +45,7 @@ from .config import (
     stored_base_url,
     streaming_stopped,
 )
-from .formatting import console, output_json, print_user
+from .formatting import console, echo_stderr, output_json, print_user
 
 app = typer.Typer(
     name="stash",
@@ -59,6 +59,18 @@ def _version_callback(value: bool) -> None:
         raise typer.Exit()
 
 
+# Runtime flag for the global `stash --json` option, set eagerly by the root
+# callback before the subcommand runs. Commands resolve their mode with
+# _use_json(flag): the per-command --json flag ORs with this global flag.
+_JSON_MODE: bool = False
+
+
+def _json_callback(value: bool) -> None:
+    global _JSON_MODE
+    if value:
+        _JSON_MODE = True
+
+
 @app.callback(invoke_without_command=True)
 def root(
     ctx: typer.Context,
@@ -70,6 +82,16 @@ def root(
         callback=_version_callback,
         help="Print the installed stash CLI version and exit.",
     ),
+    json: bool = typer.Option(
+        False,
+        "--json",
+        is_eager=True,
+        callback=_json_callback,
+        help=(
+            "Emit machine-parseable JSON on stdout for the invoked command. "
+            "All progress, status, warnings, and errors go to stderr."
+        ),
+    ),
 ) -> None:
     if ctx.invoked_subcommand is not None:
         return
@@ -79,7 +101,9 @@ def root(
 
 
 @app.command()
-def upgrade() -> None:
+def upgrade(
+    as_json: bool = typer.Option(False, "--json"),
+) -> None:
     """Upgrade the stash CLI to the latest version on PyPI."""
     import subprocess
 
@@ -96,8 +120,11 @@ def upgrade() -> None:
             err=True,
         )
         raise typer.Exit(1)
-    typer.echo(f"Upgrading stashai from {__version__}…")
-    raise typer.Exit(subprocess.run(command).returncode)
+    echo_stderr(f"Upgrading stashai from {__version__}…")
+    result = subprocess.run(command)
+    if _use_json(as_json):
+        output_json({"ok": result.returncode == 0, "exit_code": result.returncode})
+    raise typer.Exit(result.returncode)
 
 
 def _client(auto: bool = False) -> StashClient:
@@ -112,8 +139,19 @@ def _client(auto: bool = False) -> StashClient:
     )
 
 
-def _use_json(flag: bool) -> bool:
-    return flag
+def _json_mode() -> bool:
+    """True when ``stash --json`` was given before the subcommand name."""
+    return _JSON_MODE
+
+
+def _use_json(flag) -> bool:
+    """Resolve JSON mode for a command: the per-command ``--json`` flag ORs
+    with the global ``stash --json`` runtime flag (STAS-060).
+
+    ``flag is True`` (not ``bool(flag)``): a caller that invokes the command
+    function directly bypasses Typer, so an unset flag arrives as a (truthy)
+    OptionInfo — the same hazard the upload command guards against inline."""
+    return flag is True or _json_mode()
 
 
 def _err(e: StashError) -> None:
@@ -972,7 +1010,7 @@ def browse(
             _err(e)
 
     skills = data.get("skills", [])
-    if as_json:
+    if _use_json(as_json):
         output_json(skills)
         return
 
@@ -5879,7 +5917,7 @@ def settings_cmd(as_json: bool = typer.Option(False, "--json")):
     if display_cfg.get("api_key"):
         display_cfg["api_key"] = display_cfg["api_key"][:10] + "..."
 
-    if as_json:
+    if _use_json(as_json):
         output_json(
             {
                 "config": display_cfg,
