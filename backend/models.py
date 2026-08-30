@@ -45,6 +45,9 @@ class UserProfile(BaseModel):
     use_case: str | None = None
     plan: str = "free"
     plan_intent: str | None = None
+    # Server-decided Tools + Chat visibility (TOOLS_AND_CHAT_DOMAINS); the
+    # frontend must not re-derive it from the email.
+    show_tools_and_chat: bool
 
 
 class UserUpdateRequest(BaseModel):

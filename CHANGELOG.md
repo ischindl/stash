@@ -67,6 +67,10 @@ everything before it is captured in git history (`git log`), not here.
   a command works, or during startup, prints one `Aborted.` line on stderr and
   exits 1 — no Python traceback, and no silent exit 130 for Ctrl-C mid-command.
   Genuine bugs still print their traceback.
+- Tools + Chat (the Agents chat rail) is opened per email domain via the
+  backend's `TOOLS_AND_CHAT_DOMAINS` env — `/users/me` now returns
+  `show_tools_and_chat` and the frontend reads that flag instead of a
+  hardcoded domain list. Defaults unchanged (`heaviai.com`, `ferganalabs.com`).
 - The internal-email domain list is now self-host config: `INTERNAL_EMAIL_DOMAINS`
   (comma-separated) decides which email domains get free Pro and internal
   analytics classification — no source edit needed. Defaults unchanged

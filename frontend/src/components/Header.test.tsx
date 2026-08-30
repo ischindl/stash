@@ -26,6 +26,7 @@ const user = {
   description: "",
   created_at: "2026-05-11T00:00:00Z",
   last_seen: "2026-05-11T00:00:00Z",
+  show_tools_and_chat: false,
 };
 
 afterEach(() => {

@@ -322,6 +322,10 @@ class Settings:
     INTERNAL_EMAIL_DOMAINS: str = os.getenv(
         "INTERNAL_EMAIL_DOMAINS", "ferganalabs.com,joinstash.ai"
     )
+    # Comma-separated email domains that keep the Tools + Chat surface (the
+    # rail entry and the /agents chat). Default keeps only the deployments
+    # that still depend on it; self-hosters add their own domain here.
+    TOOLS_AND_CHAT_DOMAINS: str = os.getenv("TOOLS_AND_CHAT_DOMAINS", "heaviai.com,ferganalabs.com")
 
     # ScrapeCreators (public social-content scraping, product-level key —
     # hydrates Instagram saves server-side; users never bring their own).
@@ -392,3 +396,9 @@ def internal_email_domains() -> set[str]:
     """The parsed INTERNAL_EMAIL_DOMAINS list — one config source for the
     billing pro gate and the admin analytics internal filter."""
     return {d.strip().lower() for d in settings.INTERNAL_EMAIL_DOMAINS.split(",") if d.strip()}
+
+
+def tools_and_chat_domains() -> set[str]:
+    """The parsed TOOLS_AND_CHAT_DOMAINS list — /users/me turns it into the
+    show_tools_and_chat flag the frontend rail and gates read."""
+    return {d.strip().lower() for d in settings.TOOLS_AND_CHAT_DOMAINS.split(",") if d.strip()}
