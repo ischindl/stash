@@ -280,12 +280,13 @@ def test_every_installer_accepts_the_call_site_positional_args() -> None:
         inspect.signature(installer).bind(False, True)
 
 
-def test_setup_path_installs_pi(pi_home: Path, monkeypatch) -> None:
+def test_setup_path_installs_pi(pi_home: Path, monkeypatch, capsys) -> None:
     """Exercise the real setup call site (``_install_all_hooks``), not just
     ``_install_pi`` directly: the installer must land its runtime on disk when
     invoked the way the wizard invokes it. A TypeError swallowed inside that
-    loop leaves ``~/.pi/`` empty, so this test fails on exactly the failure
-    mode that previously looked like a green suite with a broken install.
+    loop leaves ``~/.pi/`` empty and prints "failed", so this test fails on
+    exactly the failure mode that previously looked like a green suite with a
+    broken install.
     """
     assets = _make_assets(pi_home)
     monkeypatch.setattr("cli.main._assets_dir", lambda agent: assets)
@@ -293,6 +294,10 @@ def test_setup_path_installs_pi(pi_home: Path, monkeypatch) -> None:
 
     _install_all_hooks(["pi"])
 
+    assert "✓ Pi hook installed" in capsys.readouterr().out
     pi = pi_home / ".pi"
     assert (pi / "_run.sh").is_file()
     assert sorted(p.name for p in (pi / "hooks").iterdir()) == sorted(HOOK_EVENTS)
+    assert (pi / "on_prompt.py").is_file()
+    assert (pi / "AGENTS.md").is_file()
+    assert _plugin_installed("pi") is True
