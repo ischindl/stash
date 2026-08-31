@@ -12,7 +12,9 @@ still reach — so these tests pin the properties that make it work.
 from __future__ import annotations
 
 import json
+import os
 import re
+import shutil
 import subprocess
 import time
 from pathlib import Path
@@ -21,6 +23,22 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 PLUGIN_DIR = REPO_ROOT / "plugins" / "claude-plugin"
 ENSURE_CLI = PLUGIN_DIR / "scripts" / "ensure_cli.sh"
 HOOKS_JSON = PLUGIN_DIR / "hooks" / "hooks.json"
+
+# Everything ensure_cli.sh resolves through PATH, derived by dropping each entry and
+# watching which scenario breaks. Everything else it uses is a bash builtin (`command
+# -v`, `[ -x ]`, `echo`). `bash` is here because the child's own program name is
+# resolved against the supplied env, so without it subprocess.run raises
+# FileNotFoundError. `awk` serves version_below() and the `--version` parse. `touch`
+# writes the uv stub's upgrade marker. `sleep` looks disposable — the stub would just
+# exit sooner — but that is exactly how both "must not block session start" tests
+# would start passing vacuously. `sh` and `env` are deliberately absent: the stub
+# shebangs name /usr/bin/env by absolute path, which the kernel resolves without PATH.
+SANDBOX_UTILITIES = ("bash", "awk", "sleep", "touch")
+
+# find_uv() in plugins/claude-plugin/scripts/ensure_cli.sh also stats uv at these
+# absolute paths, which no PATH sandbox can neutralise: the child finds them without
+# looking at PATH at all. Keep this list in step with that candidate list.
+UNSANDBOXABLE_UV_CANDIDATES = (Path("/opt/homebrew/bin/uv"), Path("/usr/local/bin/uv"))
 
 
 def _min_version() -> str:
@@ -33,6 +51,29 @@ def _as_tuple(version: str) -> tuple[int, ...]:
     return tuple(int(part) for part in version.split("."))
 
 
+def _hermetic_bin_dir(bin_dir: Path) -> Path:
+    """Populate the sandbox with exactly the allowlisted utilities.
+
+    Each one is symlinked in by resolved absolute path so the child's PATH can stay
+    equal to this single directory. An unresolvable utility aborts the run naming it:
+    quietly dropping an entry is how a timing test turns into a no-op.
+    """
+    for name in SANDBOX_UTILITIES:
+        source = shutil.which(name)
+        if source is None:
+            raise AssertionError(f"cannot build the test sandbox: {name} is not installed")
+        os.symlink(source, bin_dir / name)
+    return bin_dir
+
+
+def _child_env(bin_dir: Path, home: Path) -> dict[str, str]:
+    """The child's entire environment: the sandbox directory and a redirected HOME.
+
+    Nothing else is on PATH, so no host binary can reach the script.
+    """
+    return {"PATH": str(bin_dir), "HOME": str(home)}
+
+
 def _run(
     tmp_path: Path,
     *,
@@ -40,9 +81,25 @@ def _run(
     uv_present: bool,
     uv_seconds: int = 0,
 ) -> subprocess.CompletedProcess:
-    """Run ensure_cli.sh against stub `stash`/`uv` binaries on a minimal PATH."""
+    """Run ensure_cli.sh with the sandbox as the child's only PATH entry.
+
+    The child sees SANDBOX_UTILITIES plus the scenario's `stash`/`uv` stubs and nothing
+    else, so host binaries — above all the machine's own `uv`, which `find_uv()` would
+    happily find — cannot reach it. A `uv_present=False` scenario is therefore a true
+    negative on any host, including one that has uv installed.
+    """
+    for candidate in UNSANDBOXABLE_UV_CANDIDATES:
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            raise AssertionError(
+                f"{candidate} is executable, and the sandbox cannot express 'absent' for a "
+                "candidate find_uv() stats by absolute path. This scenario would silently "
+                "take the uv-present branch. Fix find_uv()'s candidate list; do not weaken "
+                "the assertion that depends on uv being absent."
+            )
+
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
+    _hermetic_bin_dir(bin_dir)
     marker = tmp_path / "upgraded"
 
     if stash_version is not None:
@@ -61,7 +118,7 @@ def _run(
 
     return subprocess.run(
         ["bash", str(ENSURE_CLI)],
-        env={"PATH": f"{bin_dir}:/usr/bin:/bin", "HOME": str(tmp_path)},
+        env=_child_env(bin_dir, tmp_path),
         capture_output=True,
         text=True,
     )
@@ -120,8 +177,59 @@ def test_stale_cli_without_uv_fails_loudly(tmp_path):
     outage stays invisible the way the original one did."""
     result = _run(tmp_path, stash_version="0.1.314", uv_present=False)
     assert result.returncode == 1
-    assert "not being recorded" in result.stderr
+    # Branch-unique phrase: the uv-present message also says a session is not
+    # recorded, so a looser substring would match whichever branch ran.
+    assert "Session activity is not being recorded" in result.stderr
+    assert "next one will be" not in result.stderr
     assert result.stdout == ""
+
+
+def test_no_host_binary_leaks_into_the_sandbox(tmp_path, monkeypatch):
+    """A uv installed on the machine running these tests must stay unreachable.
+
+    This is the regression itself: as long as the child could see a host directory,
+    `find_uv()` preferred the real uv and the fail-loudly branch above was never
+    executed here — it also forked a genuine upgrade on the developer's machine.
+    """
+    host_dir = tmp_path / "host-visible"
+    host_dir.mkdir()
+    hit = tmp_path / "host-uv-ran"
+    sentinel = host_dir / "uv"
+    sentinel.write_text(f'#!/usr/bin/env bash\n: > "{hit}"\n')
+    sentinel.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{host_dir}{os.pathsep}{os.environ['PATH']}")
+
+    # Positive control: prove the sentinel really is reachable when the ambient
+    # environment is inherited. Without it, a broken fixture would make the
+    # assertions below pass for the wrong reason — the failure mode this guards.
+    control = subprocess.run(["bash", "-c", "command -v uv"], capture_output=True, text=True)
+    assert control.stdout.strip() == str(sentinel), (
+        "the sentinel uv is not visible to an inherited environment, so the "
+        "negative assertions below would pass vacuously"
+    )
+
+    result = _run(tmp_path, stash_version="0.1.314", uv_present=False)
+
+    assert not hit.exists(), "ensure_cli.sh reached the uv installed on this machine"
+    assert "Session activity is not being recorded" in result.stderr
+
+
+def test_the_sandbox_is_the_whole_child_environment(tmp_path):
+    """PATH names the sandbox and nothing else, and the sandbox holds every
+    allowlisted utility.
+
+    `sleep` is the entry no scenario outcome depends on, so pin it here: drop it and
+    the uv stub's `sleep 5` turns into "command not found", which makes both "must not
+    block session start" tests green without exercising anything.
+    """
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    _hermetic_bin_dir(bin_dir)
+
+    assert _child_env(bin_dir, tmp_path)["PATH"] == str(bin_dir)
+    assert sorted(entry.name for entry in bin_dir.iterdir()) == sorted(SANDBOX_UTILITIES)
+    for name in SANDBOX_UTILITIES:
+        assert (bin_dir / name).is_file(), f"{name} is missing from the sandbox"
 
 
 def test_missing_cli_is_treated_as_stale(tmp_path):
