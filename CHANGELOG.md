@@ -110,6 +110,13 @@ everything before it is captured in git history (`git log`), not here.
   a project stops informing it until you clear that project. Unfiled sessions
   and Default-folder sessions keep routing exactly as before, and a user who
   opted out stays out whatever a project says.
+- Pi is a supported coding agent again. A stray merge had silently dropped it
+  from the installer registry, so `stash setup` never offered Pi and Pi
+  sessions went unrecorded with no error to read. `stash setup` again detects
+  a `pi` CLI or `~/.pi`, installs the hook runtime into `~/.pi`, and
+  `stash status` / `stash settings --json` report Pi upload health like every
+  other agent. The restore is guarded by merge-revert and installer
+  call-shape tests so a future careless merge fails the suite loudly.
 
 ## v0
 

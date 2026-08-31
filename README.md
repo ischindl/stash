@@ -154,6 +154,7 @@ Stash supports the following coding agents:
 - **Gemini CLI**
 - **Openclaw** 
 - **Hermes**
+- **Pi**
 
 Stash supports opt in per-coding agent. `stash signin` detects every agent on your machine and auto-installs its hooks — pick which ones during signin. Mix and match — different teammates can use different agents against the same shared brain. (Openclaw's code scanner requires its unsafe-install flag, which the installer passes; Hermes asks you to approve the hooks once via `hermes hooks list`.)
 
