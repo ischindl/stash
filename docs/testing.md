@@ -34,6 +34,7 @@ TEST_DATABASE_URL=postgresql://stash:stash@localhost:5432/stash_test \
 | `test_sleep_agent.py` | Curation tool lifecycle, advisory locks, watermark advancement |
 | `test_migrations.py` | Alembic upgrade/history smoke tests |
 | `test_collab.py` | Sharing, copy, and collaboration on user-scoped objects |
+| `test_session_folder_share_wiki.py` | Per-project shared-wiki opt-in: starts off, only the switch flips it |
 | `test_websocket.py` | ConnectionManager delivery, dead-socket cleanup, pg_notify, oversized fallback |
 
 ### Conventions

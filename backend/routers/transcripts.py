@@ -23,6 +23,7 @@ from ..database import get_pool
 from ..services import (
     memory_service,
     security_audit_service,
+    session_folder_service,
     session_service,
     transcript_import,
     user_scope_service,
@@ -52,7 +53,9 @@ async def upload_transcript(
     session_id: str = Form(...),
     agent_name: str = Form(...),
     cwd: str | None = Form(None),
-    # LEGACY filing lane for installed clients: honored when sent.
+    # Filing lane: when sent, the session is filed under that project and the
+    # folder must be one this caller may file into (the console upload always
+    # sends it; an installed client that omits it leaves the session unfiled).
     session_folder_id: UUID | None = Form(None),
     replace: bool = Form(False),
     current_user: dict = Depends(get_current_user),
@@ -67,6 +70,13 @@ async def upload_transcript(
     # events were pushed (X-Stash-Scope header, personal when absent).
     owner_user_id = scope_user_id
     await _check_write(owner_user_id, current_user["id"])
+    if session_folder_id is not None and not await session_folder_service.can_add_session_to_folder(
+        owner_user_id=owner_user_id, user_id=current_user["id"], folder_id=session_folder_id
+    ):
+        # Fail before the first write: an upload that cannot be filed where it
+        # was asked must not leave a session row behind for someone else to
+        # find in the wrong project.
+        raise HTTPException(status_code=404, detail="Session folder not found")
     if not _is_jsonl(file.filename):
         raise HTTPException(status_code=400, detail="Session uploads must be .JSONL files")
     if not session_id.strip():

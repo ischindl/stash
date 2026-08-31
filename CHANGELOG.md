@@ -82,6 +82,13 @@ everything before it is captured in git history (`git log`), not here.
   Stash with bash-shaped commands and editing existing writable pages.
 - Kept `stash mount` hidden as experimental spike code; the supported
   production path is `stash vfs`.
+- The developer console now routes the shared wiki per project. Sessions are
+  grouped by the project they are filed under and each project carries a
+  shared-wiki switch that starts OFF. A project that is off contributes nothing
+  to the shared wiki, not even from users who opted in, so material filed under
+  a project stops informing it until you clear that project. Unfiled sessions
+  and Default-folder sessions keep routing exactly as before, and a user who
+  opted out stays out whatever a project says.
 
 ## v0
 

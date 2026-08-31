@@ -318,7 +318,7 @@ Begin now.
 
 
 def render_external_curator_prompt(
-    wiki_folder_id: str, end_users: list[dict], since: str | None
+    wiki_folder_id: str, end_users: list[dict], since: str | None, sharing_projects: list[str]
 ) -> str:
     """The curation instruction for a developer workspace's curator.
 
@@ -328,7 +328,10 @@ def render_external_curator_prompt(
     rules: a per-user wiki (non-anonymized, one folder per user) and the
     shared external wiki (cross-user, anonymized — user identities never
     appear). Users opt out of the shared wiki with share_wiki=false; their
-    material still feeds their own wiki.
+    material still feeds their own wiki. On top of that per-user floor, the
+    developer clears history project by project: only `sharing_projects` are
+    listed as feeding the shared wiki, and every event carries its own
+    project's clearance so the rule below can be applied event by event.
     """
     window = (
         f"the changes since {since}"
@@ -341,6 +344,7 @@ def render_external_curator_prompt(
         + ("" if end_user["share_wiki"] else " — **opted out of the shared wiki**")
         for end_user in end_users
     )
+    project_lines = "\n".join(f"- `{name}`" for name in sharing_projects) or "- none"
     return f"""# Sleep Time Compute — External Multiplayer Curation
 
 This Stash is a developer workspace: its owner ships an agent product, and
@@ -361,10 +365,15 @@ artifacts with opposite privacy rules:
 ## The users
 {user_lines}
 
+## Projects that feed the shared wiki
+{project_lines}
+
 ## Read the inputs
 - `{changes_cmd}` — the delta. Each history event carries its session's
-  `user` (name) and `user_share_wiki`. Events with no user are the developer's
-  own activity — eligible for the shared wiki, never for any user's own wiki.
+  `user` (name) and `user_share_wiki`, plus `session_folder` (the project the
+  session is filed under) and `session_folder_share_wiki` (the developer's
+  clearance for that project). Events with no user are the developer's own
+  activity — eligible for the shared wiki, never for any user's own wiki.
 - `history_has_more: true` means the feed overflowed this run's cap; curate
   what's present, the remainder is queued for your next run.
 - `stash ls /files --json` and `stash files read-page <page_id>` to inspect
@@ -374,6 +383,13 @@ artifacts with opposite privacy rules:
 - Every user's material feeds THAT user's wiki, never another user's.
 - Only events from users WITHOUT the opt-out marker may inform the shared
   wiki. Opted-out users' material goes in their own wiki and stops there.
+- `session_folder_share_wiki` is the developer's per-project clearance, and it
+  gates the shared wiki alone: `false` means the developer has not cleared this
+  project, so the event contributes nothing there — not even from a user who
+  opted in, and not even from the developer's own session when it has no user;
+  `true` clears it, but never past that user's own opt-out; `null` means the
+  session is unfiled or sits in the Default folder, and it routes as if there
+  were no project.
 - The shared wiki gets the anonymized general lesson; the user's own wiki
   gets the specifics. One event routinely produces both: "User X's Cascadia
   needed part P for fault F" → a line in user X's wiki verbatim; shared-wiki

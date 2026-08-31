@@ -28,6 +28,7 @@ _FOLDER_COLS = (
     "CASE WHEN sf.public_permission != 'none' THEN 'public' ELSE 'private' END AS access, "
     "sf.public_permission, "
     "sf.discoverable, sf.cover_image_url, sf.view_count, sf.is_default, "
+    "sf.share_wiki, "
     "sf.created_at, sf.updated_at, "
     "(SELECT COUNT(*) FROM sessions s "
     " WHERE s.session_folder_id = sf.id AND s.deleted_at IS NULL) AS session_count, "
@@ -71,6 +72,7 @@ def _row(r) -> dict:
         "cover_image_url": r["cover_image_url"],
         "view_count": int(r["view_count"]),
         "is_default": r["is_default"],
+        "share_wiki": r["share_wiki"],
         "session_count": int(r["session_count"] or 0),
         "share_count": int(r["share_count"] or 0),
         "created_at": r["created_at"],
@@ -280,6 +282,48 @@ async def update_folder(folder_id: UUID, user_id: UUID, updates: dict) -> dict |
     return await get_folder(folder_id)
 
 
+async def set_folder_share_wiki(
+    *, scope_user_id: UUID, folder_id: UUID, share_wiki: bool
+) -> dict | None:
+    """Clear a project (folder) for the shared wiki, or withdraw that clearance.
+
+    Scope-scoped rather than owner-gated the way `update_folder` is: the wiki
+    routing switch is a workspace policy the console exposes to members, the same
+    way the per-user `share_wiki` toggle already is. Scope membership is checked
+    by the route's scope dependency.
+
+    The Default folder is excluded: it is the catch-all for unfiled sessions, so
+    it carries no routing decision (see the routing table) — a toggle there
+    would silently retag everything a scope never deliberately filed.
+    """
+    pool = get_pool()
+    row = await pool.fetchrow(
+        "UPDATE session_folders SET share_wiki = $1, updated_at = now() "
+        " WHERE id = $2 AND owner_user_id = $3 AND NOT is_default "
+        "RETURNING id",
+        share_wiki,
+        folder_id,
+        scope_user_id,
+    )
+    if row is None:
+        return None
+    return await get_folder(folder_id)
+
+
+async def sharing_project_names(owner_user_id: UUID) -> list[str]:
+    """Names of the projects whose history is cleared for the shared wiki.
+
+    The external curator prompt lists these so the developer can see, in the run
+    they are about to send, exactly which projects may contribute."""
+    rows = await get_pool().fetch(
+        "SELECT name FROM session_folders "
+        "WHERE owner_user_id = $1 AND share_wiki AND NOT is_default "
+        "ORDER BY name",
+        owner_user_id,
+    )
+    return [r["name"] for r in rows]
+
+
 async def delete_folder(folder_id: UUID, user_id: UUID) -> bool:
     """Delete a folder. The Default folder can't be deleted; sessions inside a
     deleted folder fall back to unfiled (ON DELETE SET NULL)."""
@@ -301,7 +345,7 @@ async def can_add_session_to_folder(
     folder_id: UUID,
 ) -> bool:
     """Owner-only for public folders (adding a session there publishes it);
-    non-public folders accept sessions from any scope writer."""
+    a private folder accepts sessions from whoever owns the scope."""
     folder = await get_pool().fetchrow(
         "SELECT id, owner_user_id, public_permission, discoverable, is_default "
         "FROM session_folders WHERE id = $1",
@@ -312,7 +356,16 @@ async def can_add_session_to_folder(
     is_public = _is_public(folder["public_permission"], bool(folder["discoverable"]))
     if is_public and not folder["is_default"]:
         return await user_scope_service.is_owner(owner_user_id, user_id)
-    return await user_can_manage(folder_id, user_id)
+    if await user_can_manage(folder_id, user_id):
+        return True
+    # A workspace's scope user is login-less, so strict ownership never matches
+    # the human who runs the workspace. Filing a session into a private project
+    # folder is that human's own control (the console's per-project filing), so
+    # the workspace's owner identity here is the creator — `can_manage_scope`,
+    # which is already this codebase's name for it. Plain members stay out, and
+    # the public branch above is untouched: only the scope user can ever file
+    # into a folder that is anonymously viewed.
+    return await user_scope_service.can_manage_scope(owner_user_id, user_id)
 
 
 async def assign_sessions(

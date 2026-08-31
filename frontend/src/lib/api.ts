@@ -265,19 +265,65 @@ export async function listUsers(): Promise<{
 // The whole workspace's sessions, newest first, labelled by user. Rows with
 // no user are the workspace's own agents — the curator's runs, mostly.
 export interface DeveloperSession {
+  id: string;
   session_id: string;
   agent_name: string | null;
   title: string | null;
+  cwd: string | null;
   event_count: number;
   started_at: string | null;
   last_event_at: string | null;
   user_id: string | null;
   user_name: string | null;
   user_external_id: string | null;
+  session_folder_id: string | null;
+  session_folder_name: string | null;
+  session_folder_is_default: boolean | null;
+  session_folder_share_wiki: boolean | null;
 }
 
 export async function listDeveloperSessions(): Promise<{ sessions: DeveloperSession[] }> {
   return apiFetch(`${ME}/developer/sessions`);
+}
+
+/** A session folder — a "project" in the console's wording. `share_wiki` is the
+ *  developer's clearance for that project to feed the shared wiki. */
+export interface SessionFolder {
+  id: string;
+  name: string;
+  is_default: boolean;
+  share_wiki: boolean;
+}
+
+export async function listSessionFolders(): Promise<{ folders: SessionFolder[] }> {
+  return apiFetch(`${ME}/session-folders`);
+}
+
+/** Clear (or withdraw clearance for) one project's shared-wiki contribution. The
+ *  Default folder is not a project and answers 404, as does a folder from
+ *  another workspace. */
+export async function setDeveloperProjectWiki(
+  folderId: string,
+  shareWiki: boolean
+): Promise<SessionFolder> {
+  return apiFetch(`${ME}/developer/session-folders/${folderId}`, {
+    method: "PATCH",
+    body: JSON.stringify({ share_wiki: shareWiki }),
+  });
+}
+
+/** File sessions under a project from the console. Row ids, not the developer's
+ *  own session ids — those may contain slashes. Only whoever runs the workspace
+ *  may file, so a plain member's attempt comes back as a 404 and nothing moves;
+ *  the page surfaces that as an error rather than pretending it worked. */
+export async function assignDeveloperSessions(
+  rowIds: string[],
+  folderId: string
+): Promise<{ ok: boolean; moved: number }> {
+  return apiFetch(`${ME}/developer/session-folders/assign`, {
+    method: "POST",
+    body: JSON.stringify({ session_row_ids: rowIds, folder_id: folderId }),
+  });
 }
 
 export interface DeveloperPageRow {
@@ -1454,8 +1500,11 @@ export interface SessionSummary {
   owner_user_id: string | null;
   user_name: string;
   agent_name: string | null;
-  // LEGACY filing lane: folders are written by installed clients' API calls
-  // only (no UI creates them); shown read-only when present.
+  // Where this session is filed, when it is. Folders are made by API calls (no
+  // UI creates one); a session reaches one through `stash mv`, an upload that
+  // names a folder, or a developer-console filing — and since this list spans
+  // every accessible scope, a workspace filing shows up here too. Rendered
+  // read-only: filing from this screen is not offered, only from the console.
   session_folder_name: string | null;
   event_count: number;
   started_at: string;
@@ -2051,7 +2100,8 @@ export async function uploadTranscript(
   file: File,
   sessionId: string,
   agentName: string,
-  cwd?: string
+  cwd?: string,
+  folderId?: string
 ): Promise<UploadedTranscript> {
   const token = await getAuthToken();
   const formData = new FormData();
@@ -2059,6 +2109,9 @@ export async function uploadTranscript(
   formData.append("session_id", sessionId);
   formData.append("agent_name", agentName);
   if (cwd) formData.append("cwd", cwd);
+  // An omitted folderId keeps the key out of the form data entirely, so a caller
+  // that does not file sends exactly the request it sent before.
+  if (folderId) formData.append("session_folder_id", folderId);
 
   // Hand-rolled fetch (FormData); the scope header must ride along or the
   // server files the transcript under the personal scope.
@@ -2381,6 +2434,19 @@ export async function connectAgentKey(provider: string, apiKey: string): Promise
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ provider, api_key: apiKey }),
+  });
+  return data.connected;
+}
+
+export async function connectLocalEndpoint(
+  baseUrl: string,
+  model: string,
+  apiKey?: string | null,
+): Promise<string[]> {
+  const data = await apiFetch<{ connected: string[] }>("/api/v1/me/agent-credentials", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ provider: "local", base_url: baseUrl, model, api_key: apiKey ?? null }),
   });
   return data.connected;
 }

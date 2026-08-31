@@ -16,7 +16,13 @@ from pydantic import BaseModel, Field
 
 from ..auth import API_KEY_ACCESS_LEVELS, create_api_key, get_current_user, get_scope
 from ..database import get_pool
-from ..services import agent_service, end_user_service, permission_service, workspace_service
+from ..services import (
+    agent_service,
+    end_user_service,
+    permission_service,
+    session_folder_service,
+    workspace_service,
+)
 from .curator_log import curator_runs
 
 router = APIRouter(prefix="/api/v1/me/developer", tags=["developer"])
@@ -49,6 +55,19 @@ class CuratorUpdateRequest(BaseModel):
     # Required: a PATCH that omits the field must 422, not silently clear.
     # The empty string is how instructions are cleared on purpose.
     instructions: str = Field(..., max_length=20_000)
+
+
+class ProjectShareWikiRequest(BaseModel):
+    # Required, like the curator instructions: the toggle is never cleared by
+    # omission, only set.
+    share_wiki: bool
+
+
+class ProjectAssignRequest(BaseModel):
+    # Row ids, not the developer's own session ids: those may contain slashes
+    # and are only unique per scope. `assign_sessions` validates the row ids.
+    session_row_ids: list[UUID] = Field(..., min_length=1)
+    folder_id: UUID
 
 
 async def _require_member_workspace(workspace_id: UUID, user_id: UUID) -> dict:
@@ -169,6 +188,55 @@ async def list_developer_sessions(scope_user_id: UUID = Depends(get_scope)):
     curator's runs, mostly."""
     workspace = await _require_active_workspace(scope_user_id)
     return {"sessions": await end_user_service.workspace_sessions(workspace)}
+
+
+@router.patch("/session-folders/{folder_id}")
+async def set_project_wiki_routing(
+    folder_id: UUID,
+    req: ProjectShareWikiRequest,
+    scope_user_id: UUID = Depends(get_scope),
+):
+    """Clear one project's history for the shared wiki, or withdraw that
+    clearance.
+
+    Scope-based rather than owner-gated, the same way the per-user `share_wiki`
+    toggle below is: this is workspace policy, and the scope dependency has
+    already established the caller is a member of the workspace. A project is a
+    session folder; the Default folder is not one and has no toggle, so it lands
+    in the same 404 as a folder from another workspace."""
+    await _require_active_workspace(scope_user_id)
+    folder = await session_folder_service.set_folder_share_wiki(
+        scope_user_id=scope_user_id, folder_id=folder_id, share_wiki=req.share_wiki
+    )
+    if folder is None:
+        raise HTTPException(status_code=404, detail="Project not found in this workspace")
+    return folder
+
+
+@router.post("/session-folders/assign")
+async def assign_sessions_to_project(
+    req: ProjectAssignRequest,
+    current_user: dict = Depends(get_current_user),
+    scope_user_id: UUID = Depends(get_scope),
+):
+    """File sessions under a project from the console.
+
+    This is the generic filing route under the developer prefix, not a second
+    lane: the same service call runs the same publishing and per-session write
+    checks, so filing still needs whoever runs the workspace — the scope user, or,
+    since a workspace's scope user is login-less, the human who created it. A
+    plain member gets the same 404 the service's all-or-nothing contract
+    reports."""
+    await _require_active_workspace(scope_user_id)
+    assigned = await session_folder_service.assign_sessions(
+        scope_user_id,
+        current_user["id"],
+        req.session_row_ids,
+        req.folder_id,
+    )
+    if not assigned:
+        raise HTTPException(status_code=404, detail="Session or folder not found")
+    return {"ok": True, "moved": len(req.session_row_ids)}
 
 
 @router.get("/files")

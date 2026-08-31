@@ -1,12 +1,17 @@
 "use client";
 
 import { useRef, useState, type DragEvent } from "react";
-import { uploadTranscript } from "../lib/api";
+import CustomSelect from "./CustomSelect";
+import { uploadTranscript, type SessionFolder } from "../lib/api";
 
 type Status = "idle" | "uploading" | "done" | "error";
 
 interface SessionUploadProps {
   onUploaded?: () => void;
+  /** Offer a project to file the uploaded session under. Absent (the personal
+   *  page) leaves the picker out entirely, so that surface uploads exactly as it
+   *  always did. */
+  projects?: SessionFolder[];
 }
 
 function isJsonl(file: File): boolean {
@@ -17,11 +22,12 @@ function defaultSessionId(file: File): string {
   return file.name.replace(/\.jsonl$/i, "").trim();
 }
 
-export default function SessionUpload({ onUploaded }: SessionUploadProps) {
+export default function SessionUpload({ onUploaded, projects }: SessionUploadProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [dragActive, setDragActive] = useState(false);
   const [status, setStatus] = useState<Status>("idle");
   const [message, setMessage] = useState("");
+  const [folderId, setFolderId] = useState("");
 
   async function handleFile(file: File) {
     if (!isJsonl(file)) {
@@ -40,7 +46,13 @@ export default function SessionUpload({ onUploaded }: SessionUploadProps) {
     setStatus("uploading");
     setMessage(`Uploading ${file.name}...`);
     try {
-      const result = await uploadTranscript(file, sessionId, "manual-upload");
+      const result = await uploadTranscript(
+        file,
+        sessionId,
+        "manual-upload",
+        undefined,
+        folderId || undefined
+      );
       setStatus("done");
       setMessage(
         result.skipped
@@ -103,6 +115,20 @@ export default function SessionUpload({ onUploaded }: SessionUploadProps) {
           {status === "uploading" ? "Uploading..." : "+ Add session"}
         </button>
         <span className="text-[12px] text-muted-foreground">Drop a .jsonl transcript</span>
+        {projects && (
+          <label className="ml-auto flex items-center gap-1.5 text-[12px] text-muted-foreground">
+            File under
+            <CustomSelect
+              ariaLabel="Project to file this upload under"
+              value={folderId}
+              onChange={setFolderId}
+              options={[
+                { value: "", label: "Unsorted" },
+                ...projects.map((project) => ({ value: project.id, label: project.name })),
+              ]}
+            />
+          </label>
+        )}
         <input
           ref={inputRef}
           type="file"

@@ -585,6 +585,21 @@ async def test_curator_instructions_roundtrip(client: AsyncClient):
     assert resp.status_code == 200
     assert resp.json()["instructions"] is None
 
+    # The same read also proves the prompt's project section is live: clearing a
+    # project must name it in the preview the developer is shown, because that
+    # preview is built by the one builder the run itself uses.
+    folder = await _project_folder(client, api_key, workspace, "acme-diesel")
+    cleared = await client.patch(
+        f"/api/v1/me/developer/session-folders/{folder['id']}",
+        json={"share_wiki": True},
+        headers=scope,
+    )
+    assert cleared.status_code == 200
+
+    preview = await client.get("/api/v1/me/developer/curator", headers=scope)
+    assert "`acme-diesel`" in preview.json()["prompt"]
+    assert "- none" not in preview.json()["prompt"]
+
 
 @pytest.mark.asyncio
 async def test_backfill_dispatches_full_history_without_touching_watermark(
@@ -728,3 +743,384 @@ async def test_key_list_and_revoke(client: AsyncClient, pool):
     # Revoking an already-revoked key is a 404, not a silent success.
     again = await client.delete(f"/api/v1/me/developer/keys/{keys[0]['id']}", headers=scope)
     assert again.status_code == 404
+
+
+# --- Per-project shared-wiki routing (console) ---
+
+
+async def _project_folder(client: AsyncClient, api_key: str, workspace: dict, name: str) -> dict:
+    """A project (session folder) in the workspace's own scope."""
+    resp = await client.post(
+        "/api/v1/me/session-folders",
+        json={"name": name},
+        headers={**_auth(api_key), "X-Stash-Scope": workspace["scope_user_id"]},
+    )
+    assert resp.status_code == 200, resp.text
+    return resp.json()
+
+
+async def _add_member(client: AsyncClient, workspace: dict) -> tuple[str, str]:
+    """A second account explicitly added to the workspace: a member, not its
+    owner. Returns (api_key, user_id)."""
+    from backend.services import workspace_service
+
+    email = f"{unique_name('member')}@example.com"
+    api_key, body = await _register_with_email(client, email)
+    await workspace_service.add_member(uuid.UUID(workspace["id"]), uuid.UUID(body["id"]))
+    return api_key, body["id"]
+
+
+@pytest.mark.asyncio
+async def test_console_project_toggle_round_trips(client: AsyncClient):
+    """The per-project switch is the console's only way to clear one project's
+    history for the shared wiki, and it is workspace policy — a member sets it
+    too, the same way they set a user's own wiki opt-out."""
+    api_key, _, workspace = await _developer(client)
+    scope = {**_auth(api_key), "X-Stash-Scope": workspace["scope_user_id"]}
+    folder = await _project_folder(client, api_key, workspace, "acme-diesel")
+
+    resp = await client.patch(
+        f"/api/v1/me/developer/session-folders/{folder['id']}",
+        json={"share_wiki": True},
+        headers=scope,
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["share_wiki"] is True
+    listed = {
+        f["name"]: f
+        for f in (await client.get("/api/v1/me/session-folders", headers=scope)).json()["folders"]
+    }
+    assert listed["acme-diesel"]["share_wiki"] is True
+
+    off = await client.patch(
+        f"/api/v1/me/developer/session-folders/{folder['id']}",
+        json={"share_wiki": False},
+        headers=scope,
+    )
+    assert off.status_code == 200 and off.json()["share_wiki"] is False
+
+    # A member toggles it too: this is a workspace setting, not an owner power.
+    member_key, _member = await _add_member(client, workspace=workspace)
+    member_scope = {**_auth(member_key), "X-Stash-Scope": workspace["scope_user_id"]}
+    resp = await client.patch(
+        f"/api/v1/me/developer/session-folders/{folder['id']}",
+        json={"share_wiki": True},
+        headers=member_scope,
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["share_wiki"] is True
+
+
+@pytest.mark.asyncio
+async def test_console_default_folder_has_no_toggle(client: AsyncClient, pool):
+    """D5: Default is the unfiled catch-all, so it answers no routing decision —
+    and the refusal leaves the row exactly as the migration created it."""
+    api_key, _, workspace = await _developer(client)
+    scope = {**_auth(api_key), "X-Stash-Scope": workspace["scope_user_id"]}
+    default = next(
+        f
+        for f in (await client.get("/api/v1/me/session-folders", headers=scope)).json()["folders"]
+        if f["is_default"]
+    )
+
+    resp = await client.patch(
+        f"/api/v1/me/developer/session-folders/{default['id']}",
+        json={"share_wiki": True},
+        headers=scope,
+    )
+    assert resp.status_code == 404
+    assert (
+        await pool.fetchval(
+            "SELECT share_wiki FROM session_folders WHERE id = $1", uuid.UUID(default["id"])
+        )
+        is False
+    )
+
+
+@pytest.mark.asyncio
+async def test_console_cannot_toggle_another_workspaces_project(client: AsyncClient, pool):
+    """The toggle is keyed on the caller's scope, so another workspace's project
+    is not addressable from here — and it is not written to."""
+    api_key, _, workspace = await _developer(client)
+    other_key, _, other_ws = await _developer(client)
+    folder = await _project_folder(client, other_key, other_ws, "rival-project")
+
+    resp = await client.patch(
+        f"/api/v1/me/developer/session-folders/{folder['id']}",
+        json={"share_wiki": True},
+        headers={**_auth(api_key), "X-Stash-Scope": workspace["scope_user_id"]},
+    )
+    assert resp.status_code == 404
+    assert (
+        await pool.fetchval(
+            "SELECT share_wiki FROM session_folders WHERE id = $1", uuid.UUID(folder["id"])
+        )
+        is False
+    )
+
+
+@pytest.mark.asyncio
+async def test_console_files_a_session_into_a_project(client: AsyncClient, pool):
+    """The founder's flow: a session the workspace recorded gets filed under a
+    project from the console, and the console's own sessions read model reports
+    the filing — the group it lands in and that group's switch."""
+    api_key, _, workspace = await _developer(client)
+    machine_key = await _mint_workspace_key(client, api_key, workspace)
+    scope = {**_auth(api_key), "X-Stash-Scope": workspace["scope_user_id"]}
+    folder = await _project_folder(client, api_key, workspace, "beta-repair")
+    await _push(client, machine_key, [_event("s-file-me")])
+    row_id = await pool.fetchval(
+        "SELECT id FROM sessions WHERE owner_user_id = $1 AND session_id = $2",
+        uuid.UUID(workspace["scope_user_id"]),
+        "s-file-me",
+    )
+
+    resp = await client.post(
+        "/api/v1/me/developer/session-folders/assign",
+        json={"session_row_ids": [str(row_id)], "folder_id": folder["id"]},
+        headers=scope,
+    )
+    assert resp.status_code == 200, resp.text
+
+    rows = {
+        r["session_id"]: r
+        for r in (await client.get("/api/v1/me/developer/sessions", headers=scope)).json()[
+            "sessions"
+        ]
+    }
+    assert rows["s-file-me"]["session_folder_name"] == "beta-repair"
+    assert rows["s-file-me"]["session_folder_share_wiki"] is False
+    assert rows["s-file-me"]["session_folder_is_default"] is False
+    assert rows["s-file-me"]["id"] == str(row_id)
+
+
+@pytest.mark.asyncio
+async def test_console_member_cannot_file_sessions(client: AsyncClient, pool):
+    """Filing moves material between projects, so it stays with the workspace's
+    owner: a member's attempt reports not-found and moves nothing."""
+    api_key, _, workspace = await _developer(client)
+    machine_key = await _mint_workspace_key(client, api_key, workspace)
+    folder = await _project_folder(client, api_key, workspace, "acme-diesel")
+    await _push(client, machine_key, [_event("s-untouchable")])
+    row_id = await pool.fetchval(
+        "SELECT id FROM sessions WHERE owner_user_id = $1 AND session_id = $2",
+        uuid.UUID(workspace["scope_user_id"]),
+        "s-untouchable",
+    )
+    member_key, _member = await _add_member(client, workspace=workspace)
+
+    resp = await client.post(
+        "/api/v1/me/developer/session-folders/assign",
+        json={"session_row_ids": [str(row_id)], "folder_id": folder["id"]},
+        headers={**_auth(member_key), "X-Stash-Scope": workspace["scope_user_id"]},
+    )
+    assert resp.status_code == 404
+    assert (
+        await pool.fetchval("SELECT session_folder_id FROM sessions WHERE id = $1", row_id) is None
+    )
+
+
+# --- The curator prompt routes on the project signal ---
+
+
+def _external_prompt(since: str | None, sharing_projects: list[str]) -> str:
+    from backend.services import prompts
+
+    return prompts.render_external_curator_prompt(
+        "wiki-folder-id",
+        [
+            {"name": "Acme Diesel", "wiki_folder_id": "f-one", "share_wiki": True},
+            {"name": "Beta Repair", "wiki_folder_id": "f-two", "share_wiki": False},
+        ],
+        since,
+        sharing_projects,
+    )
+
+
+def test_external_prompt_states_the_project_clearance_fields():
+    """The curator applies the routing rules event by event, so the prompt has
+    to name the fields it reads them from and say what a false one means: the
+    developer's own inaction, not an absence of data. Prose is asserted with
+    whitespace collapsed — the prompt wraps for readability."""
+    prompt = _external_prompt(None, ["Acme Parts"])
+    prose = " ".join(prompt.split())
+
+    assert "session_folder_share_wiki" in prompt
+    assert "`session_folder`" in prompt
+    assert "the developer has not cleared this project" in prose
+    # A project that is off stops even the developer's own sessions, which is
+    # the case the founder asked to control.
+    assert "not even from the developer's own session when it has no user" in prose
+
+
+def test_external_prompt_lists_cleared_projects_and_says_none():
+    """The heading is the developer's confirmation, in the run they are about to
+    send, of which projects may contribute — an empty list must read as none,
+    not as a silent omission."""
+    assert "- `Acme Parts`" in _external_prompt(None, ["Acme Parts"])
+    empty = _external_prompt("2026-01-01T00:00:00+00:00", [])
+    assert "## Projects that feed the shared wiki" in empty
+    assert "- none" in empty
+
+
+@pytest.mark.asyncio
+async def test_project_toggle_moves_the_feed_and_the_preview_together(client: AsyncClient, pool):
+    """The delivery proof for the per-project control. One switch, and the two
+    things a developer can actually look at agree on it in the same breath: the
+    feed a curator run reads, and the console's preview of that run.
+
+    Asserting the stored column would let a routing rule that ignores it ship
+    green, so the pair is walked through the HTTP routes the GUI calls: a fresh
+    project contributes nothing, clearing it moves both surfaces, and closing it
+    again moves both back."""
+    api_key, _, workspace = await _developer(client)
+    scope = {**_auth(api_key), "X-Stash-Scope": workspace["scope_user_id"]}
+    machine_key = await _mint_workspace_key(client, api_key, workspace)
+    folder = await _project_folder(client, api_key, workspace, "acme-diesel")
+    await _push(client, machine_key, [_event("s-routing")])
+    row_id = await pool.fetchval(
+        "SELECT id FROM sessions WHERE owner_user_id = $1 AND session_id = $2",
+        uuid.UUID(workspace["scope_user_id"]),
+        "s-routing",
+    )
+    filed = await client.post(
+        "/api/v1/me/developer/session-folders/assign",
+        json={"session_row_ids": [str(row_id)], "folder_id": folder["id"]},
+        headers=scope,
+    )
+    assert filed.status_code == 200, filed.text
+
+    async def feed_clearance() -> object:
+        feed = await client.get(
+            "/api/v1/me/changes", params={"since": "2020-01-01T00:00:00+00:00"}, headers=scope
+        )
+        assert feed.status_code == 200, feed.text
+        entry = next(h for h in feed.json()["history"] if h["session_id"] == "s-routing")
+        return entry["session_folder_share_wiki"]
+
+    async def preview() -> str:
+        resp = await client.get("/api/v1/me/developer/curator", headers=scope)
+        assert resp.status_code == 200, resp.text
+        return resp.json()["prompt"]
+
+    async def toggle(share_wiki: bool) -> None:
+        resp = await client.patch(
+            f"/api/v1/me/developer/session-folders/{folder['id']}",
+            json={"share_wiki": share_wiki},
+            headers=scope,
+        )
+        assert resp.status_code == 200, resp.text
+
+    # Filed under a project that was never opened: the event says so, and the
+    # preview says no project is cleared.
+    assert await feed_clearance() is False
+    closed = await preview()
+    assert "`acme-diesel`" not in closed
+    assert "- none" in closed
+
+    await toggle(True)
+    assert await feed_clearance() is True
+    opened = await preview()
+    assert "`acme-diesel`" in opened
+    assert "- none" not in opened
+
+    await toggle(False)
+    assert await feed_clearance() is False
+    reclosed = await preview()
+    assert "`acme-diesel`" not in reclosed
+    assert "- none" in reclosed
+
+
+@pytest.mark.asyncio
+async def test_opted_out_end_user_stays_out_whatever_the_project_says(client: AsyncClient, pool):
+    """Row 4 is the floor the whole design stands on: a user's own "no" outranks
+    the developer clearing a project, so the feed must never present a cleared
+    project as a reason to include an opted-out user's history. Asserted as the
+    two fields side by side, for a real opted-out end user, because that pair of
+    values is exactly what a curator run reads and decides on."""
+    api_key, _, workspace = await _developer(client)
+    scope = {**_auth(api_key), "X-Stash-Scope": workspace["scope_user_id"]}
+    machine_key = await _mint_workspace_key(client, api_key, workspace)
+    folder = await _project_folder(client, api_key, workspace, "acme-diesel")
+    await _push(
+        client,
+        machine_key,
+        [
+            _event("s-floor", user_id="u-floor", user_name="Flo"),
+            _event("s-open", user_id="u-floor", user_name="Flo"),
+        ],
+    )
+
+    async def feed_entry(session_id: str) -> dict:
+        feed = await client.get(
+            "/api/v1/me/changes",
+            params={"since": "2020-01-01T00:00:00+00:00"},
+            headers=scope,
+        )
+        assert feed.status_code == 200, feed.text
+        return next(h for h in feed.json()["history"] if h["session_id"] == session_id)
+
+    # Row 5 is the unchanged ground this whole feature must not disturb: an
+    # opted-in user's unfiled session feeds the shared wiki exactly as before, so
+    # the new field reads null there instead of a fabricated decision.
+    unfiled = await feed_entry("s-open")
+    assert unfiled["session_folder"] is None
+    assert unfiled["session_folder_share_wiki"] is None
+    assert unfiled["user_share_wiki"] is True
+
+    row_id = await pool.fetchval(
+        "SELECT id FROM sessions WHERE owner_user_id = $1 AND session_id = $2",
+        uuid.UUID(workspace["scope_user_id"]),
+        "s-floor",
+    )
+    filed = await client.post(
+        "/api/v1/me/developer/session-folders/assign",
+        json={"session_row_ids": [str(row_id)], "folder_id": folder["id"]},
+        headers=scope,
+    )
+    assert filed.status_code == 200, filed.text
+
+    listed = await client.get("/api/v1/me/users", headers=scope)
+    assert listed.status_code == 200, listed.text
+    end_user = next(u for u in listed.json()["users"] if u["external_id"] == "u-floor")
+
+    async def opt_user(share_wiki: bool) -> None:
+        resp = await client.patch(
+            f"/api/v1/me/users/{end_user['id']}",
+            json={"share_wiki": share_wiki},
+            headers=scope,
+        )
+        assert resp.status_code == 200, resp.text
+
+    async def clear_project(share_wiki: bool) -> None:
+        resp = await client.patch(
+            f"/api/v1/me/developer/session-folders/{folder['id']}",
+            json={"share_wiki": share_wiki},
+            headers=scope,
+        )
+        assert resp.status_code == 200, resp.text
+
+    await opt_user(False)
+    opted_out = await feed_entry("s-floor")
+    assert opted_out["user"] == "Flo"
+    assert opted_out["user_share_wiki"] is False
+    assert opted_out["session_folder_share_wiki"] is False
+
+    # The developer clears the project anyway. The user's own no is still
+    # reported unchanged — nothing here may read as an override.
+    await clear_project(True)
+    overridden = await feed_entry("s-floor")
+    assert overridden["user_share_wiki"] is False
+    assert overridden["session_folder_share_wiki"] is True
+
+    # And the two remaining end-user rows: opted in with a cleared project both
+    # read yes, opted in with the project closed the project says no.
+    await opt_user(True)
+    agreed = await feed_entry("s-floor")
+    assert agreed["user_share_wiki"] is True
+    assert agreed["session_folder_share_wiki"] is True
+
+    await clear_project(False)
+    project_closed = await feed_entry("s-floor")
+    assert project_closed["user_share_wiki"] is True
+    assert project_closed["session_folder_share_wiki"] is False
