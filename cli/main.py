@@ -952,7 +952,7 @@ def _copy_pi_runtime(scripts_src: Path, dest: Path, force: bool) -> bool:
     return changed
 
 
-def _install_pi(force: bool) -> tuple[str, str]:
+def _install_pi(force: bool, use_json: bool = False) -> tuple[str, str]:
     root = _assets_dir("pi")
     dest = Path.home() / ".pi"
     agents_dest = dest / "AGENTS.md"
