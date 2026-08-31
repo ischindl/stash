@@ -11,13 +11,14 @@ installed files.
 
 from __future__ import annotations
 
+import inspect
 import os
 import stat
 from pathlib import Path
 
 import pytest
 
-from cli.main import _install_pi, _plugin_installed
+from cli.main import _INSTALLERS, _install_all_hooks, _install_pi, _plugin_installed
 
 # event name in the hook wrapper -> handler script it execs via _run.sh
 HOOK_EVENTS = {
@@ -264,3 +265,34 @@ def test_shipped_wrappers_exec_handlers_that_resolve(scripts_dir: Path) -> None:
         assert (scripts_dir / f"{handler}.py").is_file(), (
             f"{handler}.py must ship next to _run.sh for {event}'s wrapper to resolve"
         )
+
+
+def test_every_installer_accepts_the_call_site_positional_args() -> None:
+    """The setup path calls ``_INSTALLERS[agent](False, use_json)`` with two
+    positional args, and its ``except Exception`` swallows any mismatch into a
+    "failed" status line instead of crashing. When pi was restored with the
+    pre-convention ``_install_pi(force)`` signature, a naive replay left the
+    suite green while silently shipping a broken ``stash connect pi``. Bind the
+    call site's arity against every registered installer so the next signature
+    drift blows up here, not in a swallowed status line.
+    """
+    for agent, installer in _INSTALLERS.items():
+        inspect.signature(installer).bind(False, True)
+
+
+def test_setup_path_installs_pi(pi_home: Path, monkeypatch) -> None:
+    """Exercise the real setup call site (``_install_all_hooks``), not just
+    ``_install_pi`` directly: the installer must land its runtime on disk when
+    invoked the way the wizard invokes it. A TypeError swallowed inside that
+    loop leaves ``~/.pi/`` empty, so this test fails on exactly the failure
+    mode that previously looked like a green suite with a broken install.
+    """
+    assets = _make_assets(pi_home)
+    monkeypatch.setattr("cli.main._assets_dir", lambda agent: assets)
+    monkeypatch.setattr("cli.main._detected_agents", lambda: ["pi"])
+
+    _install_all_hooks(["pi"])
+
+    pi = pi_home / ".pi"
+    assert (pi / "_run.sh").is_file()
+    assert sorted(p.name for p in (pi / "hooks").iterdir()) == sorted(HOOK_EVENTS)
