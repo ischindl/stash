@@ -5,6 +5,22 @@ everything before it is captured in git history (`git log`), not here.
 
 ## Unreleased
 
+- The `stash` CLI restores its machine-readable output contract for AI agent
+  consumers. `stash --json <command>` now works globally on any command (OR'd
+  with each command's own `--json`) and stdout carries only parseable data; all
+  human-facing errors, progress, and empty-state notices print on stderr.
+  Errors are classified instead of flattened: 0 = success, 1 = user/auth-style
+  error (bad input, 4xx), 2 = usage or internal error (missing/unknown
+  arguments, transport failure, 5xx), with 20 reserved for future agent
+  signals; under `--json` a failure emits a single-line
+  `{"error": {"status_code", "detail", "class"}}` envelope on stderr and never
+  a traceback. A misspelled command or wrong argument now appends a one-line
+  `Hint:` on stderr with a Did-you-mean suggestion or a pointer to that
+  command's `--help`; stdout and `--json` output are never affected. Mutating
+  commands that change nothing (`connect`, `disconnect`, `rm`, `restore`,
+  `skills follow`) exit 0 honestly as `{"ok": true, "changed": false}` instead
+  of reporting ad-hoc prose or an error. The CLI's own test suite gained a
+  coverage gate so this contract cannot silently rot again.
 - CLI onboarding redesigned (#940). `stash signin` walks a first-run wizard
   that can be re-run anytime with the new `stash setup` — no answer is final.
   Session recording is framed as private-by-default and on by default
