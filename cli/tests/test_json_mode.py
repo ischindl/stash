@@ -164,9 +164,6 @@ class ActionClient:
     def batch_move(self, others, target_folder_id=None, move_to_root=False):
         return None
 
-    def assign_session_folder(self, session_id, folder_id=None):
-        return None
-
     def copy_page(self, i, target_folder_id=None):
         return {"id": f"copy-{i}", "name": f"Copy of {i}"}
 
@@ -360,14 +357,6 @@ class SubAppClient:
     def download_file(self, file_id):
         self.calls.append(("download_file", file_id))
         return b"pdf-bytes"
-
-    # hist_app
-    def list_session_folders(self):
-        return [{"name": "Launch", "id": "f1"}]
-
-    def create_session_folder(self, name):
-        self.calls.append(("create_session_folder", name))
-        return {"id": "f-new", "name": name}
 
     # agent_app (SSE streams)
     def resolve_session(self, ref, trashed=False):

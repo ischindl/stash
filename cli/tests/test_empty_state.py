@@ -36,9 +36,6 @@ class EmptyClient:
     def list_agent_names(self):
         return []
 
-    def list_session_folders(self):
-        return []
-
     def list_agents(self):
         return []
 
@@ -561,9 +558,6 @@ class PopulatedClient(EmptyClient):
 
     def list_agent_names(self):
         return ["planner"]
-
-    def list_session_folders(self):
-        return [{"name": "Q3", "id": "f1"}]
 
     def query_events(self, limit=20):
         return [
