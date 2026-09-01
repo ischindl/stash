@@ -21,7 +21,9 @@ from backend.config import settings  # noqa: E402
 config = context.config
 
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # disable_existing_loggers defaults to True, which switches off the app's own
+    # loggers whenever this runs in-process (init_db) instead of via the CLI.
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 # Mirror the OSS env: build an asyncpg URL and strip Neon-style libpq query
 # params (sslmode, channel_binding) that asyncpg rejects, translating

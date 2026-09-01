@@ -113,10 +113,13 @@ def test_turn_crash_traceback_reaches_stderr(app_startup):
     assert "'claude'" in written
 
 
-def test_startup_enables_app_loggers_and_owns_the_root_handler(app_startup):
+def test_startup_enables_app_loggers_and_owns_the_root_handler(app_startup, monkeypatch):
     assert not logging.getLogger("stash").disabled
     assert not logging.getLogger(SPRITE_LOGGER).disabled
 
+    # Re-point stderr: pytest swaps its own stream in between the fixture's setup
+    # phase and the test body, so the configure call below must name this stream.
+    monkeypatch.setattr(sys, "stderr", app_startup)
     foreign = logging.StreamHandler(io.StringIO())
     logging.root.addHandler(foreign)
 
