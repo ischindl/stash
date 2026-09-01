@@ -31,8 +31,7 @@ def _handlers_on(stream):
     return [
         handler
         for handler in logging.root.handlers
-        if isinstance(handler, logging.StreamHandler)
-        and getattr(handler, "stream", None) is stream
+        if isinstance(handler, logging.StreamHandler) and getattr(handler, "stream", None) is stream
     ]
 
 
