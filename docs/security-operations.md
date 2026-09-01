@@ -126,6 +126,15 @@ provider-side revocation errors.
 
 ## Observability And Logs
 
+The web service's log sink is its own standard error: application startup installs
+exactly one root stream handler writing there at INFO, and every application
+logger propagates to it. So container stderr — `docker logs` for the Docker image,
+the Render log stream for hosted production — is where application records and
+exception tracebacks land. uvicorn configures its own request loggers separately.
+Celery workers and the standalone export CLI are separate processes that never run
+the web app's startup, so they keep their own logging and are not covered by that
+sink.
+
 Evidence to collect:
 
 - Production log sinks and retention windows.
