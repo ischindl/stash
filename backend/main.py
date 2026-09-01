@@ -1,4 +1,5 @@
 import logging
+import sys
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -63,6 +64,23 @@ from .services.row_validation import RowValidationError
 
 logger = logging.getLogger("stash")
 
+
+def _configure_logging() -> None:
+    """Make one stderr handler the authoritative sink for application records.
+
+    Root handlers are removed rather than skipped so this stays correct when
+    something else has already configured logging — the Alembic run inside
+    ``init_db`` installs its own console handler and raises the root level.
+    Removing and reinstalling is also what makes a repeated call idempotent.
+    """
+    for handler in list(logging.root.handlers):
+        logging.root.removeHandler(handler)
+    handler = logging.StreamHandler(sys.stderr)
+    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+    logging.root.addHandler(handler)
+    logging.root.setLevel(logging.INFO)
+
+
 SECURITY_HEADERS = {
     "Strict-Transport-Security": "max-age=31536000; includeSubDomains",
     "X-Content-Type-Options": "nosniff",
@@ -77,6 +95,9 @@ async def lifespan(app: FastAPI):
     # precompute, session summarizer) now run in the Celery `worker` and
     # `beat` services — see backend/celery_app.py.
     await init_db()
+    # Must follow init_db(): the in-process Alembic run calls fileConfig(), which
+    # replaces the root handlers, so a handler installed earlier would be discarded.
+    _configure_logging()
     try:
         await demo_service.seed_demo()
     except Exception:
