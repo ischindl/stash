@@ -24,6 +24,10 @@ RUN groupadd --gid 1000 stash && \
 WORKDIR /app
 
 COPY backend/requirements.txt .
+# Dogfood-box constraint: local embedding inference runs on CPU, and the CUDA
+# torch wheel costs 5GB on a disk that already runs Redis bgsave. Pin the CPU
+# build so `pip install -r` cannot pull the nvidia metapackage.
+RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu torch==2.13.0+cpu
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Playwright browser binary. Installs into /root/.cache by default; we
