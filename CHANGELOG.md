@@ -5,6 +5,27 @@ everything before it is captured in git history (`git log`), not here.
 
 ## Unreleased
 
+- The `stash` CLI restores its machine-readable output contract for AI agent
+  consumers. `stash --json <command>` now works globally on any command (OR'd
+  with each command's own `--json`) and stdout carries only parseable data; all
+  human-facing errors, progress, and empty-state notices print on stderr.
+  Errors are classified instead of flattened: 0 = success, 1 = user/auth-style
+  error (bad input, 4xx), 2 = usage or internal error (missing/unknown
+  arguments, transport failure, 5xx), with 20 reserved for future agent
+  signals; under `--json` a failure emits a single-line
+  `{"error": {"status_code", "detail", "class"}}` envelope on stderr and never
+  a traceback. A misspelled command or wrong argument now appends a one-line
+  `Hint:` on stderr with a Did-you-mean suggestion or a pointer to that
+  command's `--help`; stdout and `--json` output are never affected. Mutating
+  commands that change nothing (`connect`, `disconnect`, `rm`, `restore`,
+  `skills follow`) exit 0 honestly as `{"ok": true, "changed": false}` instead
+  of reporting ad-hoc prose or an error. The CLI's own test suite gained a
+  coverage gate so this contract cannot silently rot again.
+- Cancelling a `stash` command is now a clean exit instead of a crash report.
+  Answering `n` to a confirmation prompt, or pressing Ctrl-C at a prompt, while
+  a command works, or during startup, prints one `Aborted.` line on stderr and
+  exits 1 — no Python traceback, and no silent exit 130 for Ctrl-C mid-command.
+  Genuine bugs still print their traceback.
 - CLI onboarding redesigned (#940). `stash signin` walks a first-run wizard
   that can be re-run anytime with the new `stash setup` — no answer is final.
   Session recording is framed as private-by-default and on by default
@@ -82,6 +103,20 @@ everything before it is captured in git history (`git log`), not here.
   Stash with bash-shaped commands and editing existing writable pages.
 - Kept `stash mount` hidden as experimental spike code; the supported
   production path is `stash vfs`.
+- The developer console now routes the shared wiki per project. Sessions are
+  grouped by the project they are filed under and each project carries a
+  shared-wiki switch that starts OFF. A project that is off contributes nothing
+  to the shared wiki, not even from users who opted in, so material filed under
+  a project stops informing it until you clear that project. Unfiled sessions
+  and Default-folder sessions keep routing exactly as before, and a user who
+  opted out stays out whatever a project says.
+- Pi is a supported coding agent again. A stray merge had silently dropped it
+  from the installer registry, so `stash setup` never offered Pi and Pi
+  sessions went unrecorded with no error to read. `stash setup` again detects
+  a `pi` CLI or `~/.pi`, installs the hook runtime into `~/.pi`, and
+  `stash status` / `stash settings --json` report Pi upload health like every
+  other agent. The restore is guarded by merge-revert and installer
+  call-shape tests so a future careless merge fails the suite loudly.
 
 ## v0
 

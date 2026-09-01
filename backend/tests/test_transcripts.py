@@ -968,3 +968,93 @@ async def test_legacy_path_shapes_still_serve(client: AsyncClient):
         headers=headers,
     )
     assert renamed.status_code == 200
+
+
+# --- Filing an upload under a project ---
+
+
+@pytest.mark.asyncio
+async def test_upload_into_foreign_folder_creates_nothing(client: AsyncClient, pool):
+    """An upload that cannot be filed where it was asked fails before the first
+    write: a session left behind in the wrong project (or unfiled) would be
+    material the curator routes on the wrong project's switch."""
+    mine, my_id = await _register_user(client)
+    theirs, their_id = await _register_user(client)
+    folder = await client.post(
+        "/api/v1/me/session-folders",
+        json={"name": "not-yours"},
+        headers={"Authorization": f"Bearer {theirs}"},
+    )
+    assert folder.status_code == 200
+
+    up = await client.post(
+        "/api/v1/me/transcripts",
+        files={"file": ("f.jsonl", io.BytesIO(BODY), "application/jsonl")},
+        data={
+            "session_id": "sess-stray",
+            "agent_name": "claude",
+            "session_folder_id": folder.json()["id"],
+        },
+        headers={"Authorization": f"Bearer {mine}"},
+    )
+    assert up.status_code == 404
+    assert (
+        await pool.fetchval(
+            "SELECT 1 FROM sessions WHERE owner_user_id = $1 AND session_id = $2",
+            UUID(my_id),
+            "sess-stray",
+        )
+        is None
+    )
+
+
+@pytest.mark.asyncio
+async def test_upload_files_the_session_under_the_project(client: AsyncClient, pool):
+    """The console's flow — upload a transcript and file it under a project in
+    one call — lands the session row inside that project."""
+    key, user_id = await _register_user(client)
+    headers = {"Authorization": f"Bearer {key}"}
+    folder = await client.post(
+        "/api/v1/me/session-folders", json={"name": "payments-api"}, headers=headers
+    )
+    assert folder.status_code == 200
+
+    up = await client.post(
+        "/api/v1/me/transcripts",
+        files={"file": ("f.jsonl", io.BytesIO(BODY), "application/jsonl")},
+        data={
+            "session_id": "sess-filed",
+            "agent_name": "claude",
+            "session_folder_id": folder.json()["id"],
+        },
+        headers=headers,
+    )
+    assert up.status_code == 201, up.text
+    assert await pool.fetchval(
+        "SELECT session_folder_id FROM sessions WHERE owner_user_id = $1 AND session_id = $2",
+        UUID(user_id),
+        "sess-filed",
+    ) == UUID(folder.json()["id"])
+
+
+@pytest.mark.asyncio
+async def test_upload_without_a_folder_leaves_the_session_unfiled(client: AsyncClient, pool):
+    """The lane that omits the folder is untouched: no folder is resolved for
+    it, so the session stays unfiled rather than landing in some default."""
+    key, user_id = await _register_user(client)
+
+    up = await client.post(
+        "/api/v1/me/transcripts",
+        files={"file": ("f.jsonl", io.BytesIO(BODY), "application/jsonl")},
+        data={"session_id": "sess-bare", "agent_name": "claude"},
+        headers={"Authorization": f"Bearer {key}"},
+    )
+    assert up.status_code == 201, up.text
+    assert (
+        await pool.fetchval(
+            "SELECT session_folder_id FROM sessions WHERE owner_user_id = $1 AND session_id = $2",
+            UUID(user_id),
+            "sess-bare",
+        )
+        is None
+    )

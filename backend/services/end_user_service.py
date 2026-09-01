@@ -25,7 +25,7 @@ platform is active" marker.
 from uuid import UUID
 
 from ..database import get_pool
-from . import files_tree_service, source_service, workspace_service
+from . import files_tree_service, session_folder_service, source_service, workspace_service
 
 _END_USER_COLS_PLAIN = "id, workspace_id, external_id, name, share_wiki, wiki_folder_id, created_at"
 _END_USER_COLS = (
@@ -236,6 +236,7 @@ async def external_curator_prompt(workspace: dict, since) -> str:
             for end_user in end_users
         ],
         since.isoformat() if since else None,
+        await session_folder_service.sharing_project_names(workspace["scope_user_id"]),
     )
 
 
@@ -260,23 +261,32 @@ async def workspace_stats(workspace: dict) -> dict:
 
 
 async def workspace_sessions(workspace: dict, limit: int = 200) -> list[dict]:
-    """Every session in the workspace, newest first, labelled by user.
+    """Every session in the workspace, newest first, labelled by user and by the
+    project (session folder) it is filed under — the console groups this list by
+    project and shows each project's shared-wiki clearance, so the row carries
+    the filing fields rather than making the GUI fetch them per session.
 
     Sessions with no user are the workspace's own agents — most usefully the
     curator's runs, which the console shows in the same list so the developer
     can see when their users' sessions were read."""
     pool = get_pool()
     rows = await pool.fetch(
-        "SELECT s.session_id, s.agent_name, s.started_at, s.title, "
+        "SELECT s.id, s.session_id, s.agent_name, s.started_at, s.title, s.cwd, "
         "       eu.id AS user_id, eu.name AS user_name, eu.external_id AS user_external_id, "
+        "       s.session_folder_id, sf.name AS session_folder_name, "
+        "       sf.is_default AS session_folder_is_default, "
+        "       sf.share_wiki AS session_folder_share_wiki, "
         "       COUNT(he.id)::int AS event_count, "
         "       COALESCE(MAX(he.created_at), s.started_at) AS last_event_at "
         "FROM sessions s "
         "LEFT JOIN end_users eu ON eu.id = s.end_user_id "
+        "LEFT JOIN session_folders sf ON sf.id = s.session_folder_id "
         "LEFT JOIN history_events he "
         "  ON he.owner_user_id = s.owner_user_id AND he.session_id = s.session_id "
         "WHERE s.owner_user_id = $1 AND s.deleted_at IS NULL "
-        "GROUP BY s.session_id, s.agent_name, s.started_at, s.title, eu.id, eu.name, eu.external_id "
+        "GROUP BY s.id, s.session_id, s.agent_name, s.started_at, s.title, s.cwd, "
+        "         eu.id, eu.name, eu.external_id, s.session_folder_id, sf.name, "
+        "         sf.is_default, sf.share_wiki "
         "ORDER BY last_event_at DESC LIMIT $2",
         workspace["scope_user_id"],
         limit,

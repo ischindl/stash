@@ -40,9 +40,12 @@ async def upsert_session(
     `end_user_id` (External Multiplayer) is set at insert only: the end user a session
     was born into is its privacy boundary and never changes.
 
-    `session_folder_id` is the LEGACY filing lane, kept for installed clients
-    (Heavi's backend foremost). Set at insert only, honored only when sent —
-    nothing on the platform reads it, and no default folder is resolved.
+    `session_folder_id` files the session under a project (a session folder).
+    Set at insert only, honored only when sent — sent by `stash mv` and by the
+    transcript upload, which rejects a folder the caller may not file into
+    before writing anything. Nothing resolves a default folder: a session is
+    filed only where someone deliberately filed it, and the shared-wiki
+    routing reads that decision off the folder.
 
     `last_event_at` is the recency the sessions list orders by. Event pushes
     pass their newest event time; it only ever moves forward (GREATEST), so a

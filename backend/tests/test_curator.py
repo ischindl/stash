@@ -6,7 +6,7 @@ from uuid import UUID
 import pytest
 from httpx import AsyncClient
 
-from backend.services import agent_service, curation_service, prompts
+from backend.services import agent_service, curation_service, prompts, session_folder_service
 
 from .conftest import unique_name
 
@@ -728,3 +728,240 @@ async def test_memory_tree_nests_folders_and_scopes_to_memory(client: AsyncClien
     files_tree = (await client.get("/api/v1/me/tree", headers=_auth(key))).json()
     assert [p["name"] for p in files_tree["pages"]] == ["Outside"]
     assert all(f["id"] != mem["id"] for f in files_tree["folders"])
+
+
+async def _file_session_into_folder(
+    client: AsyncClient, key: str, uid: UUID, pool, session_id: str
+) -> str:
+    """Create the "Acme Corp" folder, push one event for `session_id`, and
+    file that session into the folder through the production assign route.
+    Returns the folder id."""
+    r = await client.post(
+        "/api/v1/me/session-folders", json={"name": "Acme Corp"}, headers=_auth(key)
+    )
+    assert r.status_code == 200
+    folder = r.json()
+
+    await _push_events(
+        client,
+        key,
+        [
+            {
+                "agent_name": "heavi-chat",
+                "event_type": "user_message",
+                "content": "filing the session",
+                "session_id": session_id,
+                "created_at": datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC).isoformat(),
+            }
+        ],
+    )
+    row_id = await pool.fetchval(
+        "SELECT id FROM sessions WHERE owner_user_id = $1 AND session_id = $2",
+        uid,
+        session_id,
+    )
+    r = await client.post(
+        "/api/v1/me/session-folders/assign",
+        json={"session_row_ids": [str(row_id)], "folder_id": str(folder["id"])},
+        headers=_auth(key),
+    )
+    assert r.status_code == 200
+    assert r.json() == {"ok": True, "moved": 1}
+    return folder["id"]
+
+
+@pytest.mark.asyncio
+async def test_feed_carries_session_folder(client: AsyncClient, _db_pool):
+    """The personal curator prompt tells the curator that each history event
+    carries its session's folder — folder placement is the owner's deliberate
+    curation signal. The feed must actually deliver it: a filed session
+    presents its folder name (plus the id at row level), a bare session
+    presents null, and the pre-existing keys stay untouched."""
+    key, uid = await _register(client)
+    old = datetime(2020, 1, 1, tzinfo=UTC)
+
+    folder_id = await _file_session_into_folder(client, key, uid, _db_pool, "conv-folder")
+    await _push_events(
+        client,
+        key,
+        [
+            {
+                "agent_name": "heavi-chat",
+                "event_type": "user_message",
+                "content": "no folder here",
+                "session_id": "conv-bare",
+                "created_at": datetime(2026, 1, 1, 12, 5, 0, tzinfo=UTC).isoformat(),
+            }
+        ],
+    )
+
+    feed = await curation_service.changes_since(uid, uid, old)
+    by_session = {h["session_id"]: h for h in feed["history"]}
+    filed, bare = by_session["conv-folder"], by_session["conv-bare"]
+    assert filed["session_folder"] == "Acme Corp"
+    assert bare["session_folder"] is None
+    # The pre-existing contract is untouched: same keys, same values.
+    for h in (filed, bare):
+        assert h["agent_name"] == "heavi-chat"
+        assert h["event_type"] == "user_message"
+        assert h["content"]
+        assert h["created_at"]
+        assert h["user"] is None
+        assert h["user_share_wiki"] is None
+
+    # Row level carries the id too — 1:1, so no fan-out and no missing row.
+    rows, has_more = await curation_service._feed_events(uid, old, None, 100)
+    assert has_more is False
+    rows_by_session = {r["session_id"]: r for r in rows}
+    assert rows_by_session["conv-folder"]["session_folder"] == "Acme Corp"
+    assert rows_by_session["conv-folder"]["session_folder_id"] == UUID(folder_id)
+    assert rows_by_session["conv-bare"]["session_folder"] is None
+    assert rows_by_session["conv-bare"]["session_folder_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_changes_endpoint_exposes_session_folder(client: AsyncClient, _db_pool):
+    """GET /api/v1/me/changes is the exact JSON `stash changes --json` passes
+    through — the curator's actual input must carry the session's folder,
+    since the prompt's folder rules are dead text without it."""
+    key, uid = await _register(client)
+    old = datetime(2020, 1, 1, tzinfo=UTC)
+
+    await _file_session_into_folder(client, key, uid, _db_pool, "conv-folder")
+
+    r = await client.get(
+        "/api/v1/me/changes", params={"since": old.isoformat()}, headers=_auth(key)
+    )
+    assert r.status_code == 200
+    body = r.json()
+    entry = next(h for h in body["history"] if h["session_id"] == "conv-folder")
+    assert entry["session_folder"] == "Acme Corp"
+
+
+async def _push_one(client: AsyncClient, key: str, session_id: str, when: datetime) -> None:
+    await _push_events(
+        client,
+        key,
+        [
+            {
+                "agent_name": "heavi-chat",
+                "event_type": "user_message",
+                "content": f"work in {session_id}",
+                "session_id": session_id,
+                "created_at": when.isoformat(),
+            }
+        ],
+    )
+
+
+async def _file_session(
+    client: AsyncClient, key: str, uid: UUID, pool, session_id: str, folder_id: str
+) -> None:
+    row_id = await pool.fetchval(
+        "SELECT id FROM sessions WHERE owner_user_id = $1 AND session_id = $2",
+        uid,
+        session_id,
+    )
+    r = await client.post(
+        "/api/v1/me/session-folders/assign",
+        json={"session_row_ids": [str(row_id)], "folder_id": str(folder_id)},
+        headers=_auth(key),
+    )
+    assert r.status_code == 200, r.text
+
+
+async def _default_folder_id(client: AsyncClient, key: str) -> str:
+    """Listing a scope's folders lazily ensures its Default — like any console
+    visit does."""
+    r = await client.get("/api/v1/me/session-folders", headers=_auth(key))
+    assert r.status_code == 200
+    return next(f["id"] for f in r.json()["folders"] if f["is_default"])
+
+
+@pytest.mark.asyncio
+async def test_feed_marks_which_projects_are_cleared(client: AsyncClient, _db_pool):
+    """The shared wiki now clears whole projects, not just whole users, so each
+    history event has to say whether ITS project is cleared.
+
+    Four data states, because only the middle distinction is the product:
+    a session under no folder and a session in the Default folder are both
+    UNFILED (nobody deliberately placed them, so there is no project decision to
+    honor) — while a filed session reports its project's switch either way.
+    `session_folder` keeps its raw value throughout: the name is the personal
+    curator's context signal and is not this field's business.
+    """
+    key, uid = await _register(client)
+    old = datetime(2020, 1, 1, tzinfo=UTC)
+    at = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
+
+    await _push_one(client, key, "conv-unfiled", at)
+
+    default_id = await _default_folder_id(client, key)
+    await _push_one(client, key, "conv-default", at)
+    await _file_session(client, key, uid, _db_pool, "conv-default", default_id)
+
+    off_folder = await client.post(
+        "/api/v1/me/session-folders", json={"name": "quiet-project"}, headers=_auth(key)
+    )
+    assert off_folder.status_code == 200
+    await _push_one(client, key, "conv-off", at)
+    await _file_session(client, key, uid, _db_pool, "conv-off", off_folder.json()["id"])
+
+    on_folder = await client.post(
+        "/api/v1/me/session-folders", json={"name": "loud-project"}, headers=_auth(key)
+    )
+    assert on_folder.status_code == 200
+    await session_folder_service.set_folder_share_wiki(
+        scope_user_id=uid,
+        folder_id=UUID(on_folder.json()["id"]),
+        share_wiki=True,
+    )
+    await _push_one(client, key, "conv-on", at)
+    await _file_session(client, key, uid, _db_pool, "conv-on", on_folder.json()["id"])
+
+    feed = await curation_service.changes_since(uid, uid, old)
+    by_session = {h["session_id"]: h for h in feed["history"]}
+
+    assert by_session["conv-unfiled"]["session_folder_share_wiki"] is None
+    assert by_session["conv-default"]["session_folder_share_wiki"] is None
+    assert by_session["conv-off"]["session_folder_share_wiki"] is False
+    assert by_session["conv-on"]["session_folder_share_wiki"] is True
+
+    # The raw name survives untouched for the personal curator — Default still
+    # reads as "Default" even though its clearance normalized to null.
+    assert by_session["conv-unfiled"]["session_folder"] is None
+    assert by_session["conv-default"]["session_folder"] == "Default"
+    assert by_session["conv-off"]["session_folder"] == "quiet-project"
+    assert by_session["conv-on"]["session_folder"] == "loud-project"
+
+    # The user contract is untouched by the new field.
+    for h in by_session.values():
+        assert h["user"] is None
+        assert h["user_share_wiki"] is None
+
+
+@pytest.mark.asyncio
+async def test_changes_endpoint_exposes_project_clearance(client: AsyncClient, _db_pool):
+    """`stash changes --json` passes this payload through verbatim, so the
+    project clearance the prompt routes on has to be in the HTTP shape too — the
+    cleared project reads true and its sibling reads false."""
+    key, uid = await _register(client)
+    old = datetime(2020, 1, 1, tzinfo=UTC)
+    at = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
+
+    on = await client.post(
+        "/api/v1/me/session-folders", json={"name": "loud-project"}, headers=_auth(key)
+    )
+    await session_folder_service.set_folder_share_wiki(
+        scope_user_id=uid, folder_id=UUID(on.json()["id"]), share_wiki=True
+    )
+    await _push_one(client, key, "conv-on", at)
+    await _file_session(client, key, uid, _db_pool, "conv-on", on.json()["id"])
+
+    r = await client.get(
+        "/api/v1/me/changes", params={"since": old.isoformat()}, headers=_auth(key)
+    )
+    assert r.status_code == 200
+    entry = next(h for h in r.json()["history"] if h["session_id"] == "conv-on")
+    assert entry["session_folder_share_wiki"] is True
+    assert entry["session_folder"] == "loud-project"
