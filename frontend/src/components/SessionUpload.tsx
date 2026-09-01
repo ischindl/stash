@@ -51,6 +51,7 @@ export default function SessionUpload({ onUploaded, projects }: SessionUploadPro
         sessionId,
         "manual-upload",
         undefined,
+        undefined,
         folderId || undefined
       );
       setStatus("done");
