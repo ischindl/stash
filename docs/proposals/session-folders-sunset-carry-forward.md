@@ -111,7 +111,7 @@ All must hold before the sunset can even be scheduled (0190's veto is external, 
 2. The whole installed CLI/plugin/extension fleet stopped sending `session_folder` on upload (`transcripts.py` form field): the sweep predicate (`session_folder_id IS NOT NULL AND end_user_id IS NULL`) counts **zero** over a settled window in prod — then the sweep is provably a no-op on the day.
 3. Zero live `object_type='session_folder'` share rows (or migrated).
 4. The step-2 widen guard passes (dark unkeyed folder sessions moved).
-5. Migration number: **next free at run time** — re-measured 2026-09-02, the tip is `0203_session_folders_share_wiki` on the **integration line** (`main`) and `0202_llm_wiki_items` on the **PR line** (`origin/main`), so the next free number differs by line; `0204_session_folders_share_wiki` exists only on `fold/assembled-2026-08-29`, and no `local_models_json` migration file exists on either line (Pin 2); do not write a fixed number into the sunset plan.
+5. Migration number: **next free at run time** — re-measured 2026-09-02, the tip is `0203_session_folders_share_wiki` on the **integration line** (`main`) and `0202` (`0202_converted_accounts_memory_is_the_external_wiki.py`) on the **PR line** (`origin/main`), so the next free number differs by line; `0204_session_folders_share_wiki` exists only on `fold/assembled-2026-08-29`, and no `local_models_json` migration file exists on either line (Pin 2); do not write a fixed number into the sunset plan.
 6. **Settled on the integration line** (re-measured 2026-09-02): item 4's premise and the surface it blocks on both landed there in `80d592f7` — the null-handling text for a null `project_share_wiki`, and an operator-facing remediation surface (the developer console's per-project toggle). Neither is met on the PR line, and the CLI stays refusal-only on both lines. Evidence in Pin 4 below; until this item holds on the line you are deploying to, item 4 is unmeetable there.
 
 ## Hand-off
@@ -137,7 +137,8 @@ on **17** refs; `0204_session_folders_share_wiki` on **2** (`fold/assembled-2026
 trigger condition 5's "next free at run time" is load-bearing, not cautionary.
 [Census scope, re-measured 2026-09-02: the paragraph above is kept as the record of what was measured
 from base `b55183be`. Per line today: the **integration line** (`main`) tip is `0203_session_folders_share_wiki`
-and the **PR line** (`origin/main`) tip is still `0202_llm_wiki_items`; `0204_session_folders_share_wiki`
+and the **PR line** (`origin/main`) tip is still `0202_converted_accounts_memory_is_the_external_wiki.py`
+(Alembic id `0202`); `0204_session_folders_share_wiki`
 remains branch-only on `fold/assembled-2026-08-29`; and the `0203_local_models_json` file counted on 17
 refs never landed on either line — it exists only as D4's expected *table*. The guardrail's conclusion is
 unchanged. See Pin 2.]
@@ -268,6 +269,10 @@ and inline, each tagged with the line it is true on. Read this section before th
   and still false on the PR line, so a bare "landed" / "not landed" is now ambiguous. Where the
   sections above say "trunk" without qualification, they meant the PR line, which is what `origin/main`
   was when they were written — and they were accurate then.
+- This record exists **only on the integration line** — `git cat-file -e
+  origin/main:docs/proposals/session-folders-sunset-carry-forward.md` → absent — so no PR-line reader
+  can consult it. Every PR-line statement below is deliberately cross-line, which is the same
+  one-directional blindness that let the claims above go stale in the first place.
 
 **Pin 1 — STAS-128 landed on the integration line; it is still absent from the PR line.** The
 descendant commit is `80d592f7` ("STAS-128: add per-project shared-wiki routing to the developer
@@ -280,10 +285,15 @@ origin/main || echo ABSENT-from-PR-line`; `git show --stat --format=%s 80d592f7`
 **Pin 2 — the migration census needs a per-line tip, and one of its supporting facts never
 happened.** Tip per line: `git ls-tree --name-only main:backend/migrations/versions | sort | tail
 -3` → tip `0203_session_folders_share_wiki.py`; `git ls-tree --name-only
-origin/main:backend/migrations/versions | sort | tail -3` → tip `0202_llm_wiki_items`. The landed
-chain is `0201_keyed_folders_become_end_users` → `0202_llm_wiki_items` →
-`0203_session_folders_share_wiki` (`git show
-main:backend/migrations/versions/0203_session_folders_share_wiki.py | grep -i down_revision`).
+origin/main:backend/migrations/versions | sort | tail -3` → tip
+`0202_converted_accounts_memory_is_the_external_wiki.py`. The landed chain is
+`0201_keyed_folders_become_end_users.py` → `0202_converted_accounts_memory_is_the_external_wiki.py`
+→ `0203_session_folders_share_wiki.py`. Cite a tip by **filename**, and note that the Alembic ids are
+bare numbers rather than slugs — the newest file on each line carries `revision = "0203"` /
+`down_revision = "0202"` and `revision = "0202"` / `down_revision = "0201"` respectively (`git show
+main:backend/migrations/versions/0203_session_folders_share_wiki.py | grep -iE
+"^(revision|down_revision)") — so the number is what the guardrail cares about and the filename is
+what a census can actually be checked against.
 **Correction to the census paragraph above:** there is no `local_models_json` **migration file** on
 either line — `git ls-tree -r --name-only main | grep -i local_model` and the same over
 `origin/main` both return nothing. `local_models_json` exists only as the *table* D4's collision
@@ -328,11 +338,14 @@ removed with the developer platform work") and offers no per-project wiki comman
 longer clean: on `main` it carries a session-folder row at line 38 (`test_session_folder_share_wiki.py`
 — "Per-project shared-wiki opt-in: starts off, only the switch flips it"), added by the same
 `80d592f7`; it is still absent from `origin/main`. Re-derive: `git show main:docs/testing.md |
-grep -n session_folder` (→ 1 row) vs `git show origin/main:docs/testing.md | grep -c session_folder`
-(→ `0`). That row is a **test-coverage inventory entry for the new feature**, not a statement about
-the sunset, so the measurement paragraph's conclusion — no other doc contradicts this note — stands;
-`docs/architecture.html` remains clean on both lines (`git grep -licE 'session.?folder' main --
-docs/architecture.html` → no output).
+grep -n session_folder` (→ that row and only that row) vs the same `grep -n session_folder` on
+`origin/main:docs/testing.md` (→ no output). Use `grep -n` on both sides, not `grep -c`: a bare `0`
+cannot distinguish "the string is absent" from "the file was never there". That row is a
+**test-coverage inventory entry for the new feature**, not a statement about the sunset, so the
+measurement paragraph's conclusion — no other doc contradicts this note — stands.
+`docs/architecture.html` remains clean on both lines, and that is a verified absence rather than a
+missing file: `git cat-file -e main:docs/architecture.html` succeeds while `git grep -licE
+'session.?folder' main -- docs/architecture.html` prints nothing (same command against `origin/main`).
 
 **Scope of this update.** Landing status, migration numbering, feed/event emission, the settled-gate
 evidence, and the `docs/testing.md` record. No decision, mechanism, candidate score, invariant,
