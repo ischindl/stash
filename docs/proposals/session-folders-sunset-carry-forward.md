@@ -1,6 +1,8 @@
 # The session_folders sunset must not erase per-project wiki routing
 
-Status: proposal (2026-08-31) — decision record for STAS-155
+Status: proposal (2026-08-31) — decision record for STAS-155. Landing status, migration numbering,
+and feed/emission claims were re-derived per line on 2026-09-02 — read **Landing-status update** at
+the end of this file before the prose below.
 Owner: Backend Engineer (agent-ff03cfcc), for operator review
 Trigger: `backend/migrations/versions/0201_keyed_folders_become_end_users.py` docstring (lines ~14–19) — the future sunset migration's FIRST statement must re-run 0201's session UPDATE sweep, then DROP `session_folders`, `sessions.session_folder_id`, and the legacy read aliases. Two features now read exactly those columns. The sunset itself is unscheduled and externally gated (0190's veto).
 Commit target: `docs/proposals/session-folders-sunset-carry-forward.md` (one docs-only commit; this task document is the machine-readable copy).
@@ -10,8 +12,25 @@ Commit target: `docs/proposals/session-folders-sunset-carry-forward.md` (one doc
 - **0201 sweep + conversion** (`0201_keyed_folders_become_end_users.py`): each keyed folder (`session_folders.external_key IS NOT NULL`) becomes an `end_users` row carrying the same external id (1:1 per owner — 0143's unique partial index); sessions are stamped `end_user_id`. The sunset's sweep re-run is idempotent (`end_user_id IS NULL` guard); `test_legacy_lane_coexistence.py` pins its properties. **Unkeyed folders are "UI grouping and are left alone" — until the sunset drops them.**
 - **0190** (no-op): the drop was vetoed because Heavi's backend and every installed CLI/plugin/extension still write through the folder lane; the cutover must be coordinated.
 - **Privacy floor**: `end_users.share_wiki BOOLEAN NOT NULL DEFAULT true` (0189), PATCHable (`end_user_service.update_end_user`, `routers/developer.py:360`), GUI toggle shipped (`frontend/src/components/developer/WikiToggle.tsx`).
-- **Curator feed (trunk)**: `curation_service._feed_events` emits `user` / `user_share_wiki` via `sessions.end_user_id → end_users`; it emits **no** `session_folder`. The personal curator prompt (`prompts.py:203–209`) nevertheless documents a per-event `folder` curation signal — **dead text on trunk**. STAS-127 (the feed-signal task) is archived at step 2/5; its join (`sf.name AS session_folder, … LEFT JOIN`, pr/1088) is not an ancestor of origin/main.
-- **STAS-128 (unlanded)**: `63b5af98` on `fold/assembled-2026-08-29` adds `session_folders.share_wiki BOOLEAN NOT NULL DEFAULT FALSE` via migration **0204** (`0204_session_folders_share_wiki.py`; the task text's "0203" is wrong — 0203 is claimed by `local_models_json` on ~15 in-flight refs). Semantics as shipped in its prompt text: an event informs the shared wiki only when BOTH `user_share_wiki` and `project_share_wiki` are true; project opt-in never overrides user opt-out (hard floor); **events with no user follow the project gate only**; unfiled/Default sessions stay eligible (D4 row 1 of 5). Console: GET/PATCH `/developer/projects` — opt-IN is creator-gated (`can_manage_scope`), opt-OUT never blocked for a write member; newly created projects start dark.
+- **Curator feed — per line, re-measured 2026-09-02** (`curation_service._feed_events`): it emits
+  `user` / `user_share_wiki` via `sessions.end_user_id → end_users` on **both** lines. On the **PR
+  line** (`origin/main`) it emits neither `session_folder` nor `session_folder_share_wiki`, so the
+  personal curator prompt (`prompts.py:203–209`) documents a per-event `folder` curation signal that
+  is **dead text on the PR line**. On the **integration line** (`main`) STAS-128 (`80d592f7`) extended
+  that same function: the `_project_share_wiki` helper emits `session_folder_share_wiki` per event and
+  `_feed_events` synthesizes a `session_folder` summary item, so a folder signal does exist there — but
+  note the key mismatch, recorded in the sub-fact below: the prompt names `folder`, the feed emits
+  `session_folder`, on **both** lines. The
+  file and helper names to re-derive either claim are in Pin 3 below. STAS-127 (the feed-signal task)
+  is archived at step 2/5; its join (`sf.name AS session_folder, … LEFT JOIN`, pr/1088) is not an
+  ancestor of either line — the integration line's folder events come from STAS-128, not from STAS-127.
+- **STAS-128 — landed on the integration line, still absent from the PR line (re-measured 2026-09-02)**:
+  the design revision was `63b5af98` on `fold/assembled-2026-08-29`, adding `session_folders.share_wiki
+  BOOLEAN NOT NULL DEFAULT FALSE` via migration **0204** (`0204_session_folders_share_wiki.py`). What
+  actually reached local `main` is `80d592f7`, carrying the same migration **renumbered to 0203**
+  (`0203_session_folders_share_wiki.py`), and it is not an ancestor of `origin/main`. (The note this
+  bullet carried on 2026-08-31 — that `local_models_json` already occupied 0203 — was branch-count
+  drift: no such migration file exists on either line. See Pin 2.) Semantics as shipped in its prompt text: an event informs the shared wiki only when BOTH `user_share_wiki` and `project_share_wiki` are true; project opt-in never overrides user opt-out (hard floor); **events with no user follow the project gate only**; unfiled/Default sessions stay eligible (D4 row 1 of 5). Console: GET/PATCH `/developer/projects` — opt-IN is creator-gated (`can_manage_scope`), opt-OUT never blocked for a write member; newly created projects start dark.
 - **Other folder-lane surfaces the drop touches**: `session_folder_service.py` (full), `session_service.upsert_session` legacy filing parameter (`session_service.py:25,43`), `routers/session_folders.py` (both routers), `routers/sessions.py:160` (`sf.name AS session_folder_name` join), `routers/transcripts.py` (`session_folder_id` form field), `routers/memory.py` + `memory_service.py` (folder id through ingestion), and `permission_service.py:30` — `session_folder` is a **shareable object type** whose live share rows must be zeroed or migrated before the table disappears.
 
 ## The two signals at risk
@@ -66,8 +85,17 @@ For every session that the project gate can ever touch on the legacy lane, 0201'
 
 ### Signal 2: attribution survives for free; the trust convention retires and gets a future home
 
-- **Attribution hint**: post-sunset the feed's `user` field **is** the former project name (conversion preserves the folder name onto the end-user row — verified: 0201's loop copies `sf.name`), so per-event project attribution already flows on trunk machinery. The sunset removes the `sf.*` join from `_feed_events` (if pr/1088 landed it) and the external prompt's two-gate bullets (63b5af98's block) collapse to the single-gate text that existed before STAS-128.
-- **`prompts.py:203–209` (personal curator "folder" bullet)**: dead text today; if pr/1088 lands it first, it dies at the sunset — remove or rewrite it in the sunset PR, otherwise the prompt instructs the curator to read a field the feed can no longer emit.
+- **Attribution hint**: post-sunset the feed's `user` field **is** the former project name (conversion preserves the folder name onto the end-user row — verified: 0201's loop copies `sf.name`), so per-event project attribution already flows on trunk machinery. The sunset removes the `sf.*` join from `_feed_events` wherever one exists — on the **PR line** there is
+no such join to remove, on the **integration line** it ships with STAS-128 — and the external prompt's
+two-gate bullets (63b5af98's block) collapse to the single-gate text that existed before STAS-128. The
+attribution gap is the same on both lines: the feed's `user` field is joined off `end_user_id` alone, so
+a session whose `end_user_id` is null keeps no project attribution on either line.
+- **`prompts.py:203–209` (personal curator "folder" bullet)**: dead text on the **PR line**; on the
+  **integration line** the *substance* is live (`80d592f7` made the feed emit a folder signal) but the
+  *key is still wrong there* — the bullet tells the curator to read `folder`, while the feed emits
+  `session_folder`, on **either** line. So the bullet names a field no line emits. Either way it dies at
+  the sunset — remove or rewrite it in the sunset PR, otherwise the prompt instructs the curator to read
+  a field the feed can no longer emit.
 - **"Global — approved for learning" trust convention**: the one genuinely orphaned fragment. Its honest home is candidate C done right later: a wiki-placement annotation in the owner's own folder tree (placement of curated knowledge, not routing of private sessions) — explicitly out of scope for the sunset; recorded so the sunset PR does not quietly keep the prompt bullet alive to preserve it.
 
 ## Privacy floor, stated as an invariant
@@ -83,13 +111,18 @@ All must hold before the sunset can even be scheduled (0190's veto is external, 
 2. The whole installed CLI/plugin/extension fleet stopped sending `session_folder` on upload (`transcripts.py` form field): the sweep predicate (`session_folder_id IS NOT NULL AND end_user_id IS NULL`) counts **zero** over a settled window in prod — then the sweep is provably a no-op on the day.
 3. Zero live `object_type='session_folder'` share rows (or migrated).
 4. The step-2 widen guard passes (dark unkeyed folder sessions moved).
-5. Migration number: **next free at run time** — 0203 is claimed by `local_models_json`, 0204 by `session_folders_share_wiki` (fold); do not write a fixed number into the sunset plan.
+5. Migration number: **next free at run time** — re-measured 2026-09-02, the tip is `0203_session_folders_share_wiki` on the **integration line** (`main`) and `0202_llm_wiki_items` on the **PR line** (`origin/main`), so the next free number differs by line; `0204_session_folders_share_wiki` exists only on `fold/assembled-2026-08-29`, and no `local_models_json` migration file exists on either line (Pin 2); do not write a fixed number into the sunset plan.
+6. **Settled on the integration line** (re-measured 2026-09-02): item 4's premise and the surface it blocks on both landed there in `80d592f7` — the null-handling text for a null `project_share_wiki`, and an operator-facing remediation surface (the developer console's per-project toggle). Neither is met on the PR line, and the CLI stays refusal-only on both lines. Evidence in Pin 4 below; until this item holds on the line you are deploying to, item 4 is unmeetable there.
 
 ## Hand-off
 
 - STAS-128 PR link line (paste-ready; PR creation stays operator-gated): *"Per-project wiki routing survives the future `session_folders` sunset: the founder's decision ANDs into `end_users.share_wiki` before the drop and the console toggle keeps working — see `docs/proposals/session-folders-sunset-carry-forward.md` (STAS-155)."*
 - STAS-128's own design is unchanged by this note (its `session_folders.share_wiki` choice is correct today; the sunset is unscheduled).
-- Corrections recorded: task text said migration "0203" → actual artifact is **0204**, unlanded, on `fold/assembled-2026-08-29`; STAS-127 archived at step 2/5, its feed join not on trunk; trunk's `folder` prompt bullet is already dead text.
+- Corrections recorded (per line, re-measured 2026-09-02): task text said migration "0203" → the branch
+  artifact was **0204** on `fold/assembled-2026-08-29`, and what landed on the **integration line** is
+  that migration **renumbered to 0203**; the **PR line** still has neither. STAS-127 archived at step
+  2/5, its feed join on neither line (the integration line's folder events come from STAS-128's
+  `80d592f7`). The `folder` prompt bullet is dead text on the PR line and live on the integration line.
 
 ## Executor verification addendum (2026-08-31, read from base `b55183be` = `origin/main` `631ff161`)
 
@@ -102,6 +135,12 @@ testing `git ls-tree` for each file): trunk's tip is `0202`; `0203_local_models_
 on **17** refs; `0204_session_folders_share_wiki` on **2** (`fold/assembled-2026-08-29`,
 `dogfood/internal-email-domains`). Neither 0203 nor 0204 is an ancestor of `origin/main`, so
 trigger condition 5's "next free at run time" is load-bearing, not cautionary.
+[Census scope, re-measured 2026-09-02: the paragraph above is kept as the record of what was measured
+from base `b55183be`. Per line today: the **integration line** (`main`) tip is `0203_session_folders_share_wiki`
+and the **PR line** (`origin/main`) tip is still `0202_llm_wiki_items`; `0204_session_folders_share_wiki`
+remains branch-only on `fold/assembled-2026-08-29`; and the `0203_local_models_json` file counted on 17
+refs never landed on either line — it exists only as D4's expected *table*. The guardrail's conclusion is
+unchanged. See Pin 2.]
 
 **One material addition — STAS-128 as written leaves the unfiled case undefined, and the way
 it gets resolved decides whether this note's widen guard is even needed.** On
@@ -117,6 +156,10 @@ against; null-as-false silently **narrows** every unfiled session in every devel
 — which happens to make the guard's population harmless, at the cost of a far larger behavior
 change nobody specified. STAS-128 must land the null-handling text before either this note's
 guard or D4's own table can be assumed true.
+[Settled per line, 2026-09-02: that text landed on the **integration line** inside `80d592f7` — the
+personal curator's routing rules now read a null `project_share_wiki` as if the account had exactly one
+project, i.e. the null-as-true reading, which is this note's guard's premise. On the **PR line** the text
+is still absent and the null-as-false narrowing risk remains live there. See Pin 4.]
 
 **The remediation path step 2's guard points at does not exist on trunk.** The guard says the
 operator must move the affected sessions or delete the dark folders; server-side that is
@@ -126,6 +169,12 @@ session folders were removed with the developer platform work", `cli/main.py:380
 the console's project endpoints exist only on the unlanded branch. So the guard can only ever
 pass after STAS-128 lands: the sunset's ordering dependency is not just "the sweep ran", but
 "a remediation surface exists for the population the guard blocks on".
+[Status pointer, 2026-09-02: this paragraph stays exactly as written — it is dated analysis of base
+`b55183be`. The dependency it names is **settled on the integration line**: the console's project
+endpoints landed there in `80d592f7` (`backend/routers/developer.py`,
+`frontend/src/components/developer/ProjectWikiToggle.tsx`), so the surface the guard blocks on exists
+on `main`. It is **still unmet on the PR line**, where those endpoints exist only on a branch, and the
+CLI refusal quoted above holds on both lines. See Pin 4 and trigger condition 6.]
 
 **Drop-surface the decision's list omits** (all present on this base; the list above is
 accurate but not exhaustive): `session_folder_service.py` is twelve public functions plus
@@ -198,3 +247,94 @@ unkeyed and by folder `share_wiki`; plus a count of live `object_type='session_f
 rows. The first decides whether step 2's guard is passable in practice, the second whether step
 4 needs a user-facing note beyond the changeset. `docs/architecture.html` and `docs/testing.md`
 were checked and contain no session-folder statements, so no other doc contradicts this note.
+[Superseded on the documentation point only — see "Pin 5" in the Landing-status update below.]
+
+## Landing-status update (2026-09-02)
+
+Nothing above is decided differently. What changed is **where things live**, so every factual claim
+about landing, migration numbering, and feed emission was re-derived from git and is corrected here
+and inline, each tagged with the line it is true on. Read this section before the prose above.
+
+**Vocabulary — and why a sentence in this file can be true and false at the same time.**
+
+- the **integration line** = local `main` (`2d83feb4`), the branch merge commits land on here;
+- the **PR line** = `origin/main` (`c56f81c9`), GitHub's `main` — the branch CI gates on and, per
+  the repo's deployment notes, the branch hosted prod builds from. Hosted prod therefore still runs
+  PR-line code, which is what the trigger list's *prod* measurement is measuring.
+- The relation is measured, not assumed: `git rev-list --left-right --count origin/main...main` →
+  `29 0`, and `git merge-base --is-ancestor origin/main main` → true. The PR line is a strict
+  ancestor of the integration line, which is its **strict descendant** — 29 commits ahead, 0 behind.
+  That asymmetry is the entire reason this section exists: a landing is true on the integration line
+  and still false on the PR line, so a bare "landed" / "not landed" is now ambiguous. Where the
+  sections above say "trunk" without qualification, they meant the PR line, which is what `origin/main`
+  was when they were written — and they were accurate then.
+
+**Pin 1 — STAS-128 landed on the integration line; it is still absent from the PR line.** The
+descendant commit is `80d592f7` ("STAS-128: add per-project shared-wiki routing to the developer
+console"), and it arrived carrying the folder-adjacent migration **renumbered**: the merge ships
+`backend/migrations/versions/0203_session_folders_share_wiki.py`, not the `0204_…` file that the
+executor addendum saw on `fold/assembled-2026-08-29`. Re-derive: `git merge-base --is-ancestor
+80d592f7 main && echo LANDED-on-integration-line`; `git merge-base --is-ancestor 80d592f7
+origin/main || echo ABSENT-from-PR-line`; `git show --stat --format=%s 80d592f7`.
+
+**Pin 2 — the migration census needs a per-line tip, and one of its supporting facts never
+happened.** Tip per line: `git ls-tree --name-only main:backend/migrations/versions | sort | tail
+-3` → tip `0203_session_folders_share_wiki.py`; `git ls-tree --name-only
+origin/main:backend/migrations/versions | sort | tail -3` → tip `0202_llm_wiki_items`. The landed
+chain is `0201_keyed_folders_become_end_users` → `0202_llm_wiki_items` →
+`0203_session_folders_share_wiki` (`git show
+main:backend/migrations/versions/0203_session_folders_share_wiki.py | grep -i down_revision`).
+**Correction to the census paragraph above:** there is no `local_models_json` **migration file** on
+either line — `git ls-tree -r --name-only main | grep -i local_model` and the same over
+`origin/main` both return nothing. `local_models_json` exists only as the *table* D4's collision
+table expects in the same fold batch (and as a column on `enterprise_organizations`), so the
+census's "`0203_local_models_json` exists on **17** refs" counted branch copies that never reached
+either line. That is precisely the drift the census's own conclusion warns about, and the
+guardrail is vindicated rather than relaxed: the sunset still takes the **next free number at run
+time** and no fixed number goes into the plan.
+
+**Pin 3 — the curator feed's folder events are line-conditional, not absent.** The file is
+`backend/services/curation_service.py` on both lines. On the **PR line** `_feed_events` emits
+`user` / `user_share_wiki` only: no `session_folder` event and no `session_folder_share_wiki`
+event, so both prompt consumers reading those fields are dead text **there**. On the **integration
+line** `80d592f7` extends the same function: the new `_project_share_wiki` helper contributes a
+`session_folder_share_wiki` item per event, and `_feed_events` synthesizes a `session_folder`
+summary item (with its wiki `target`) from the session's `session_folder_id`. One naming mismatch
+survives on **both** lines: the personal curator bullet tells the curator to read a per-event
+`folder`, while the emitted key is `session_folder` — so the bullet's literal key matches nothing on
+either line. Re-derive: `git show origin/main:backend/services/curation_service.py | grep -nE "session_folder|_project_share_wiki"`
+(no output) vs the same command against `main:` (the helper and both emissions). One consequence
+holds on **both** lines and is the reason Signal 2 is still not solved: the feed's `user` field is
+joined off `e.get("end_user_id")` alone — never `session_user_id` — so a session with a null
+`end_user_id` still carries no attribution whichever line you deploy, and resolving the old
+"if pr/1088 landed it" conditional changes nothing about that gap.
+
+**Pin 4 — the two settled gates settled on the integration line only.** The null-handling text the
+trigger list waits on is landed on `main`, inside `80d592f7`: the personal curator's routing rules
+in `backend/services/prompts.py` now instruct the curator to treat a null `project_share_wiki` as
+if the account had exactly one project — the **null-as-true** reading, i.e. the premise step 2's
+widen guard is written against, so the guard is still needed and still meaningful. Re-derive:
+`git show main:backend/services/prompts.py | grep -n "routes as if there"` and `git log --oneline
+main -S "routes as if there" -- backend/services/prompts.py` (→ `80d592f7`). The remediation
+surface the guard blocks on also landed in that commit — the developer console's per-project
+`GET/PATCH` in `backend/routers/developer.py` and `frontend/src/components/developer/ProjectWikiToggle.tsx`.
+Neither gate is met on the PR line, and the CLI is not a remediation surface on **either** line:
+it still refuses session moves (`cli/main.py` "Sessions can't be moved — session folders were
+removed with the developer platform work") and offers no per-project wiki command. Re-derive:
+`git show main:backend/routers/developer.py | grep -n share_wiki` (→ hits) vs the same on
+`origin/main:` (→ none).
+
+**Pin 5 — the doc check in "Measurement still owed" needs one correction.** `docs/testing.md` is no
+longer clean: on `main` it carries a session-folder row at line 38 (`test_session_folder_share_wiki.py`
+— "Per-project shared-wiki opt-in: starts off, only the switch flips it"), added by the same
+`80d592f7`; it is still absent from `origin/main`. Re-derive: `git show main:docs/testing.md |
+grep -n session_folder` (→ 1 row) vs `git show origin/main:docs/testing.md | grep -c session_folder`
+(→ `0`). That row is a **test-coverage inventory entry for the new feature**, not a statement about
+the sunset, so the measurement paragraph's conclusion — no other doc contradicts this note — stands;
+`docs/architecture.html` remains clean on both lines (`git grep -licE 'session.?folder' main --
+docs/architecture.html` → no output).
+
+**Scope of this update.** Landing status, migration numbering, feed/event emission, the settled-gate
+evidence, and the `docs/testing.md` record. No decision, mechanism, candidate score, invariant,
+trigger requirement, or numbering guardrail above is altered; the corrections were applied inside
+this file only — `docs/testing.md` and `docs/architecture.html` are reported here, not edited.
