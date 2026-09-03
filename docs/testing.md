@@ -68,6 +68,50 @@ npm run test:watch  # watch mode
 
 ---
 
+## CLI tests
+
+- **Framework:** pytest, no database
+- **Config:** `cli/pytest.ini`
+- **CI:** the `cli-test` job in `.github/workflows/test.yml` (ubuntu-latest, Python 3.12)
+
+### Running tests
+
+```bash
+uv venv -p 3.12 && uv pip install -e .          # once per checkout
+uv pip install -r backend/requirements-dev.txt  # pytest, pytest-cov, ruff
+source .venv/bin/activate
+
+python -m pytest cli/tests --no-cov
+```
+
+Invoking the suite by path anchors `rootdir` at `cli/`, so `cli/pytest.ini` replaces the root
+config's backend-scoped coverage gate with a CLI-scoped one (`--cov=cli --cov-fail-under=45`).
+A targeted single-file run still needs `--no-cov`: one file cannot meet a whole-package floor.
+
+### Environment integrity
+
+`cli/tests/conftest.py` refuses to collect unless the interpreter running it **is** this
+checkout's environment. That is deliberate. Past its pin, `typer` vendors a private click, so
+`MissingParameter` stops being a `click.exceptions.UsageError`, escapes the boundary catch in
+`cli.main`, and prints raw tracebacks — two dozen failures that describe the host interpreter
+rather than the product, and that an operator can only "fix" by breaking working code. A stale
+`pip install -e .` left pointing at another, usually deleted, checkout is the same failure
+wearing a different face: the suite validates one tree while executing a different one.
+
+The guard checks exactly two things:
+
+- the interpreter's `typer` equals the pin in `pyproject.toml`, which the guard reads at run
+  time — the pin has one home, so bumping it never means editing the guard;
+- `cli` and `stashai` resolve to files inside this checkout, so an editable install aimed at
+  another tree cannot report a verdict on this one.
+
+On mismatch it aborts before collecting anything, naming the observed value and the remedy
+(`uv venv -p 3.12 && uv pip install -e .`). There is deliberately no way to waive it: a warning
+beside two dozen misleading failures is still misleading. `cli/tests/test_env_guard.py` locks
+all of that, the remedy string included.
+
+---
+
 ## Plugin tests
 
 - **Framework:** pytest, no database
