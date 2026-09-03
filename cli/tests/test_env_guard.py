@@ -124,9 +124,9 @@ def test_guard_reads_the_pin_instead_of_hardcoding_it() -> None:
 
     from cli.tests import conftest
 
-    dependencies = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))[
-        "project"
-    ]["dependencies"]
+    dependencies = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"][
+        "dependencies"
+    ]
     typer = [Requirement(dep) for dep in dependencies if Requirement(dep).name.lower() == "typer"]
     assert len(typer) == 1, f"expected exactly one typer dependency, got {len(typer)}"
 
