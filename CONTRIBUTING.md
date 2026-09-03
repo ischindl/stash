@@ -117,12 +117,21 @@ TEST_DATABASE_URL=postgresql://stash:stash@localhost:5432/stash_test \
 
 ### CLI
 
-Install the package from the working tree before running the CLI tests:
+The CLI is only this checkout's code once it is installed into a virtualenv, one per checkout
+(the recipe under "Developing the stash CLI" in `CLAUDE.md`):
 
 ```bash
-pip install -e .
+uv venv -p 3.12 && uv pip install -e .
+uv pip install -r backend/requirements-dev.txt   # pytest
+source .venv/bin/activate
+
 python -m pytest cli/tests --no-cov
 ```
+
+Do not run the suite on the machine's own interpreter — `cli/tests/conftest.py` refuses it, and
+it is right to: a `typer` that is not the pinned one makes two dozen passing tests look broken,
+and those failures describe the interpreter rather than the code. See
+[the CLI testing notes](docs/testing.md#cli-tests).
 
 ### Frontend
 
