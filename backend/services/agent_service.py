@@ -365,9 +365,17 @@ async def mark_run_succeeded(agent_id: UUID) -> None:
 
 async def mark_curated(agent_id: UUID, through) -> None:
     """Advance the curator's delta watermark — only after a successful run, so
-    a failed run's window is re-covered next time."""
+    a failed run's window is re-covered next time.
+
+    The advance is monotonic: GREATEST means a run that computed its position
+    from a snapshot taken before an overlapping run finished (or a backfill
+    that read from the oldest) can never walk the watermark backwards. The one
+    writer allowed to move it backwards is the ingest rewind in memory_service
+    — a deliberate re-read of imported history, not a run's bookkeeping."""
     await get_pool().execute(
-        "UPDATE agents SET curated_through = $2 WHERE id = $1", agent_id, through
+        "UPDATE agents SET curated_through = greatest(curated_through, $2) WHERE id = $1",
+        agent_id,
+        through,
     )
 
 

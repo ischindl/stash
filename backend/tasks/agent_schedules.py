@@ -74,9 +74,11 @@ async def _run_curator_now(
     the due-check — the user is the trigger. The router already enforced the
     free-tier allowance and resolved credentials.
 
-    `full_history` is the backfill: the run reads with no watermark, but the
-    stored watermark is only advanced after success — a failed backfill must
-    not have thrown away the incremental position.
+    `full_history` is the backfill: the run reads with no watermark, so the
+    prompt bootstraps from everything ever uploaded. It never clears the stored
+    watermark — a failed backfill keeps the incremental position, and because
+    the watermark only ever advances (see agent_service.mark_curated), even a
+    successful one cannot move it back to where the re-read started.
 
     `metered=False` is for runs the platform initiates on its own (the
     first-day curator): they must not eat the user's free monthly allowance."""

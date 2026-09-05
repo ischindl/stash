@@ -1337,3 +1337,75 @@ async def test_opted_out_end_user_stays_out_whatever_the_project_says(client: As
     project_closed = await feed_entry("s-floor")
     assert project_closed["user_share_wiki"] is True
     assert project_closed["session_folder_share_wiki"] is False
+
+
+@pytest.mark.asyncio
+async def test_ingest_rewind_stays_inside_its_wiki(client: AsyncClient, pool, caplog):
+    """Re-ingesting history deliberately pulls a curator's watermark back so its
+    next run reads the late arrivals — but only the curators whose wiki may read
+    them, and never in silence. The live symptom this guards: agent transcripts
+    re-pushed pulled BOTH wikis' watermarks back to the same microsecond,
+    because the rewind had no wiki predicate, so the shared-wiki curator
+    reopened sessions it cannot legally read."""
+    import logging
+    from datetime import UTC, datetime, timedelta
+
+    api_key, _, workspace = await _developer(client)
+    machine_key = await _mint_workspace_key(client, api_key, workspace)
+    scope_uid = uuid.UUID(workspace["scope_user_id"])
+    caplog.set_level(logging.INFO, logger="backend.services.memory_service")
+
+    async def watermark(wiki: str):
+        return await pool.fetchval(
+            "SELECT curated_through FROM agents "
+            "WHERE user_id = $1 AND is_curator AND curator_wiki = $2",
+            scope_uid,
+            wiki,
+        )
+
+    async def import_history(session_id: str, when: datetime) -> None:
+        event = _event(session_id, user_id="org_acme", user_name="Acme")
+        event["created_at"] = when.isoformat()
+        await _push(client, machine_key, [event])
+
+    # Park both wikis far ahead of now so a rewind is visible.
+    future = datetime.now(UTC) + timedelta(days=1)
+    await pool.execute(
+        "UPDATE agents SET curated_through = $2 WHERE user_id = $1 AND is_curator",
+        scope_uid,
+        future,
+    )
+
+    shared = datetime.now(UTC) - timedelta(days=9)
+    await import_history("sess-history", shared)
+    # The session reaches the shared wiki through its sharing end user: both
+    # wikis' positions reopen, and the log says which ones.
+    assert await watermark("internal") == shared - timedelta(microseconds=1)
+    assert await watermark("external") == shared - timedelta(microseconds=1)
+    rewinds = [r.getMessage() for r in caplog.records if "rewound" in r.getMessage()]
+    assert any("internal" in m for m in rewinds)
+    assert any("external" in m for m in rewinds)
+
+    # Park them again, then opt the customer out of the shared wiki mid-stream.
+    caplog.clear()
+    await pool.execute(
+        "UPDATE agents SET curated_through = $2 WHERE user_id = $1 AND is_curator",
+        scope_uid,
+        future,
+    )
+    await pool.execute(
+        "UPDATE end_users SET share_wiki = false WHERE workspace_id = $1 "
+        "AND external_id = 'org_acme'",
+        uuid.UUID(workspace["id"]),
+    )
+    older = datetime.now(UTC) - timedelta(days=20)
+    await import_history("sess-private-history", older)
+
+    # The owner's own wiki reads everything, so it reopens. The shared wiki may
+    # never read this session — its watermark must not move, and no log line
+    # claims it did.
+    assert await watermark("internal") == older - timedelta(microseconds=1)
+    assert await watermark("external") == future
+    rewinds = [r.getMessage() for r in caplog.records if "rewound" in r.getMessage()]
+    assert any("internal" in m for m in rewinds)
+    assert not any("external" in m for m in rewinds)

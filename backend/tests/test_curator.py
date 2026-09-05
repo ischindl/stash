@@ -968,3 +968,101 @@ async def test_changes_endpoint_exposes_project_clearance(client: AsyncClient, _
     entry = next(h for h in r.json()["history"] if h["session_id"] == "conv-on")
     assert entry["session_folder_share_wiki"] is True
     assert entry["session_folder"] == "loud-project"
+
+
+@pytest.mark.asyncio
+async def test_mark_curated_cannot_walk_the_watermark_back(client: AsyncClient, _db_pool):
+    """The watermark advance is monotonic: a run that computed its position
+    from a snapshot taken before an overlapping run finished writes an older
+    value than the stored one, and the write must clamp, not clobber. A NULL
+    watermark (never curated) must still accept its first advance."""
+    _key, uid = await _register(client)
+    curator = await agent_service.get_or_create_curator(uid)
+    cid = UUID(curator["id"])
+    never = datetime(2020, 1, 1, tzinfo=UTC)
+    later = datetime(2026, 6, 1, 12, 0, tzinfo=UTC)
+
+    await _db_pool.execute("UPDATE agents SET curated_through = NULL WHERE id = $1", cid)
+    await agent_service.mark_curated(cid, never)
+    assert await _db_pool.fetchval("SELECT curated_through FROM agents WHERE id = $1", cid) == never
+
+    await agent_service.mark_curated(cid, later)
+    await agent_service.mark_curated(cid, never)
+    assert await _db_pool.fetchval("SELECT curated_through FROM agents WHERE id = $1", cid) == later
+
+
+@pytest.mark.asyncio
+async def test_full_history_backfill_cannot_regress_an_advanced_watermark(
+    client: AsyncClient, sprite_exec, _db_pool, monkeypatch
+):
+    """The backfill reads from the oldest event, so when its feed overflows the
+    position it computes sits BELOW the stored watermark. The successful run
+    keeps the advanced cursor — 'the full history' is a re-read, not a reset."""
+    from backend.services import curation_service
+    from backend.tasks.agent_schedules import _run_curator_now
+    from backend.tasks.session_titles import generate_session_title
+
+    # sprite_exec sets the test Anthropic key, which arms the title dispatch —
+    # no broker here (same neutralization conftest applies to the first-day tick).
+    monkeypatch.setattr(generate_session_title, "delay", lambda *a, **k: None)
+    key, uid = await _register(client)
+    curator = await agent_service.get_or_create_curator(uid)
+    cid = UUID(curator["id"])
+    old = datetime.now(UTC) - timedelta(days=3)
+    await _push_one(client, key, "conv-old-a", old)
+    await _push_one(client, key, "conv-old-b", old + timedelta(hours=1))
+    stored = datetime.now(UTC) - timedelta(hours=2)
+    await _db_pool.execute("UPDATE agents SET curated_through = $2 WHERE id = $1", cid, stored)
+
+    # Two events under a cap of one: the full-history feed overflows, so
+    # complete_through lands on the first event minus a microsecond — below
+    # the stored watermark.
+    monkeypatch.setattr(curation_service, "_MAX_EVENTS", 1)
+    await _run_curator_now(cid, full_history=True, metered=False)
+
+    row = await _db_pool.fetchrow(
+        "SELECT curated_through, last_run_outcome FROM agents WHERE id = $1", cid
+    )
+    assert row["last_run_outcome"] == "ran"
+    assert row["curated_through"] == stored
+
+
+@pytest.mark.asyncio
+async def test_stale_completion_cannot_regress_an_overlapping_run(
+    client: AsyncClient, sprite_exec, _db_pool, monkeypatch
+):
+    """Two overlapping curator runs: the slower one finished its turn after the
+    faster one had already advanced the watermark. The slower run's bookkeeping
+    is computed from its pre-turn snapshot and must not discard the progress —
+    that silent clobber was the CEO-reported 'completed curation discarded'."""
+    from backend.services import sprite_agent_service
+    from backend.tasks.agent_schedules import _run_curator_now
+    from backend.tasks.session_titles import generate_session_title
+
+    # sprite_exec sets the test Anthropic key, which arms the title dispatch —
+    # no broker here (same neutralization conftest applies to the first-day tick).
+    monkeypatch.setattr(generate_session_title, "delay", lambda *a, **k: None)
+    key, uid = await _register(client)
+    curator = await agent_service.get_or_create_curator(uid)
+    cid = UUID(curator["id"])
+    await _push_one(client, key, "conv-live", datetime.now(UTC) - timedelta(minutes=5))
+    await _db_pool.execute(
+        "UPDATE agents SET curated_through = $2 WHERE id = $1",
+        cid,
+        datetime.now(UTC) - timedelta(days=1),
+    )
+    advanced = datetime.now(UTC) + timedelta(minutes=10)
+
+    async def overlapping_run_finished(agent, stamp):
+        # Stands in for the other run completing mid-turn: its watermark is
+        # newer than anything this run can compute, whose `until` predates it.
+        await agent_service.mark_curated(cid, advanced)
+
+    monkeypatch.setattr(sprite_agent_service, "run_scheduled", overlapping_run_finished)
+    await _run_curator_now(cid, metered=False)
+
+    row = await _db_pool.fetchrow(
+        "SELECT curated_through, last_run_outcome FROM agents WHERE id = $1", cid
+    )
+    assert row["last_run_outcome"] == "ran"
+    assert row["curated_through"] == advanced

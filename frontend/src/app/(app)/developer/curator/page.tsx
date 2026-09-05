@@ -110,7 +110,7 @@ function Curator() {
               <ScheduleRow
                 trigger="Backfill"
                 when="Immediately, after you confirm it"
-                reads="The full history, watermark cleared"
+                reads="The full history — the stored watermark is never moved back"
               />
             </tbody>
           </table>

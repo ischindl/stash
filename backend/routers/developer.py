@@ -357,9 +357,9 @@ async def backfill_curator(
     The run reads with no watermark, so the prompt bootstraps from everything
     ever uploaded instead of the delta since last night. Pages are updated in
     place — the curator merges rather than duplicates — so this is safe after
-    changing the instructions or onboarding real traffic. The stored watermark
-    is untouched until the run succeeds: a failed backfill must not have
-    thrown away the incremental position.
+    changing the instructions or onboarding real traffic. The read has no
+    watermark; the stored one is never moved back, by a failed run or a
+    successful one: the watermark only ever advances.
     """
     from ..tasks.agent_schedules import run_curator_now as dispatch
 
