@@ -128,7 +128,8 @@ async def test_fresh_curator_stays_quiet(client: AsyncClient, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_run_due_failure_sends_alert(client: AsyncClient, monkeypatch):
+async def test_run_due_failure_sends_alert(client: AsyncClient, sprite_exec, monkeypatch):
+    # The run lock needs Redis; sprite_exec is what supplies the fake.
     from backend.services import agent_auth, sprite_agent_service
 
     user_id = await _register(client)
@@ -171,10 +172,11 @@ async def test_run_due_failure_sends_alert(client: AsyncClient, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_run_bookkeeping_failure_sends_alert(client: AsyncClient, monkeypatch):
+async def test_run_bookkeeping_failure_sends_alert(client: AsyncClient, sprite_exec, monkeypatch):
     """A run whose post-turn bookkeeping fails must record last_run_error and
     alert, exactly like a failed turn — otherwise the watermark silently stops
     advancing with no trace on the agent row."""
+    # The run lock needs Redis; sprite_exec is what supplies the fake.
     from backend.services import curation_service, sprite_agent_service
 
     user_id = await _register(client)

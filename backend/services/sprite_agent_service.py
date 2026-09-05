@@ -378,21 +378,61 @@ async def _stoppable(events: AsyncIterator[dict], session_id: str) -> AsyncItera
 
 
 class _TurnLock:
-    def __init__(self, session_id: str) -> None:
-        self._key = f"agent-turn:{session_id}"
+    """Redis single-flight lock: one holder per key, released only by its owner.
+
+    The caller names the key, which is the whole point — the two locks this
+    module hands out serialize different things. See `_turn_lock` and
+    `agent_run_lock` for what each one actually prevents."""
+
+    def __init__(self, key: str, ttl_seconds: int) -> None:
+        self._key = key
+        self._ttl = ttl_seconds
         self._token = secrets.token_hex(16)
 
-    async def __aenter__(self) -> None:
-        acquired = await _get_redis().set(
-            self._key, self._token, nx=True, ex=settings.AGENT_TURN_TIMEOUT_SECONDS
-        )
+    async def acquire(self) -> None:
+        """Take the lock, or raise `TurnInProgress` when someone holds it."""
+        acquired = await _get_redis().set(self._key, self._token, nx=True, ex=self._ttl)
         if not acquired:
             raise TurnInProgress
 
-    async def __aexit__(self, *exc) -> None:
+    async def release(self) -> None:
+        """Give the lock back, but only if it is still ours — a lock whose TTL
+        expired mid-run belongs to whoever took it next."""
         r = _get_redis()
         if await r.get(self._key) == self._token.encode():
             await r.delete(self._key)
+
+    async def __aenter__(self) -> None:
+        await self.acquire()
+
+    async def __aexit__(self, *exc) -> None:
+        await self.release()
+
+
+def _turn_lock(session_id: str) -> _TurnLock:
+    """One turn per chat session.
+
+    Keyed by session id, so it serializes turns of the *same session*. It is
+    not an agent-level lock: a scheduled run's session id carries a per-run
+    stamp, so two runs of the same agent never contend on it."""
+    return _TurnLock(f"agent-turn:{session_id}", settings.AGENT_TURN_TIMEOUT_SECONDS)
+
+
+def agent_run_lock(agent_id: UUID | str, ttl_seconds: int) -> _TurnLock:
+    """One run per agent, keyed by agent id — the lock that actually keeps two
+    runs of the same curator from overlapping.
+
+    Overlapping runs are what discarded finished curation: each run computes
+    its watermark from the snapshot it read at start, so the slower one writes
+    an older position than the run that finished first. The watermark now
+    refuses to move backwards (agent_service.mark_curated), and this lock keeps
+    the overlap from happening at all — it also stops a second paid harness
+    turn from stacking onto work already in flight.
+
+    `ttl_seconds` outlives the harness wall-clock limit so a run is never
+    unlocked while still executing; a worker killed mid-run releases it on TTL
+    instead of wedging the agent forever."""
+    return _TurnLock(f"agent-run:{agent_id}", ttl_seconds)
 
 
 def _system_prompt(owner_name: str, persona: str | None) -> str:
@@ -487,7 +527,7 @@ async def _pump_turn(
         queue.put_nowait(event)
 
     try:
-        async with _TurnLock(session_id):
+        async with _turn_lock(session_id):
             history = await _load_history(owner_user_id, session_id, user_id)
             await memory_service.push_event(
                 owner_user_id, agent_name, "user_message", message, user_id, session_id=session_id
@@ -647,7 +687,7 @@ async def run_chat(
     # its own Stash credentials: without them the `stash` CLI inside it falls
     # back to the developer's ~/.stash, which points at production.
     auth.env.update(await sprite_service.local_agent_env(user_id))
-    async with _TurnLock(session_id):
+    async with _turn_lock(session_id):
         history = await _load_history(owner_user_id, session_id, user_id)
         await memory_service.push_event(
             owner_user_id, agent_name, "user_message", message, user_id, session_id=session_id

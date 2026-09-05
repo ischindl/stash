@@ -1066,3 +1066,71 @@ async def test_stale_completion_cannot_regress_an_overlapping_run(
     )
     assert row["last_run_outcome"] == "ran"
     assert row["curated_through"] == advanced
+
+
+@pytest.mark.asyncio
+async def test_double_dispatch_on_one_agent_runs_single_flight(
+    client: AsyncClient, sprite_exec, _db_pool, monkeypatch
+):
+    """The live fingerprint: two `run_curator_now` dispatches for the same agent
+    arriving seconds apart, each holding a 13–80 minute turn. Overlap is what
+    made one run discard the other's finished curation, so the second dispatch
+    must not get a second turn — it resolves as the designed skip and touches
+    neither the meter nor the watermark the run in flight is responsible for."""
+    import asyncio
+
+    from backend.services import sprite_agent_service
+    from backend.tasks.agent_schedules import _run_curator_now
+    from backend.tasks.session_titles import generate_session_title
+
+    # sprite_exec sets the test Anthropic key, which arms the title dispatch on
+    # ingest — no broker here (same neutralization the sibling tests apply).
+    monkeypatch.setattr(generate_session_title, "delay", lambda *a, **k: None)
+
+    key, uid = await _register(client)
+    curator = await agent_service.get_or_create_curator(uid)
+    cid = UUID(curator["id"])
+    await _push_one(client, key, "conv-flight", datetime.now(UTC) - timedelta(minutes=30))
+    seeded = datetime.now(UTC) - timedelta(hours=2)
+    await _db_pool.execute("UPDATE agents SET curated_through = $2 WHERE id = $1", cid, seeded)
+    meter_before = await _db_pool.fetchval("SELECT month_run_count FROM agents WHERE id = $1", cid)
+
+    turn_started = asyncio.Event()
+    turn_released = asyncio.Event()
+    turns: list[str] = []
+
+    async def turn_holds_the_agent(agent, stamp):
+        turns.append(stamp)
+        turn_started.set()
+        await turn_released.wait()
+        return "curated"
+
+    monkeypatch.setattr(sprite_agent_service, "run_scheduled", turn_holds_the_agent)
+
+    running = asyncio.create_task(_run_curator_now(cid, metered=False))
+    await turn_started.wait()
+
+    # A manual run / recompute / first-day tick lands mid-turn: no second turn,
+    # no charge, and the watermark stays exactly where the running run left it.
+    await _run_curator_now(cid)
+    row = await _db_pool.fetchrow(
+        "SELECT curated_through, last_run_outcome, month_run_count FROM agents WHERE id = $1", cid
+    )
+    assert len(turns) == 1, "the contended dispatch must not wake a second harness turn"
+    assert row["curated_through"] == seeded
+    assert row["month_run_count"] == meter_before
+    assert row["last_run_outcome"] == "skipped_already_running"
+
+    # The in-flight run finishes normally, and the lock went with it: the next
+    # dispatch is not locked out by a run that is already over.
+    turn_released.set()
+    await running
+    done = await _db_pool.fetchrow(
+        "SELECT curated_through, last_run_outcome, month_run_count FROM agents WHERE id = $1", cid
+    )
+    assert done["last_run_outcome"] == "ran"
+    assert done["curated_through"] > seeded
+
+    turn_started.clear()
+    await _run_curator_now(cid, metered=False)
+    assert len(turns) == 2, "a dispatch after the run released the lock must execute"

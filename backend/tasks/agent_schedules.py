@@ -4,8 +4,13 @@ The beat task fires every minute and is a pure dispatcher: it finds agents
 whose cron tick is due, consumes the tick, applies the cheap gates (credits,
 credential, pending changes), and hands each eligible run to
 `run_scheduled_agent` on the heavy queue — a headless agent turn runs for
-minutes and must not hold a default-queue slot. The agent's own turn lock
-(Redis) prevents overlap with an in-flight run.
+minutes and must not hold a default-queue slot.
+
+One run per agent at a time, enforced by `agent_run_lock` (Redis, keyed by
+agent id) at the task entry points. The per-session turn lock is not that
+lock: a scheduled run's session id carries a per-run stamp, so two runs of the
+same agent never contend on it — which is how two overlapping curator runs
+came to discard each other's finished curation.
 """
 
 from __future__ import annotations
@@ -30,6 +35,13 @@ logger = logging.getLogger(__name__)
 # global stays the ceiling for everything else.
 HARNESS_SOFT_TIME_LIMIT = 5400  # 90 min
 HARNESS_TIME_LIMIT = 5700  # 95 min
+
+# The single-flight run lock has to outlive the limit that kills the run, or an
+# honest long run loses its lock mid-turn and a second dispatch joins it. The
+# margin covers the gap between the hard timeout firing and the worker exiting;
+# a worker killed before its `finally` releases the lock on this TTL rather
+# than wedging the agent's schedule forever.
+AGENT_RUN_LOCK_TTL = HARNESS_TIME_LIMIT + 900
 
 
 def _is_due(cron: str, last_run: datetime | None, now: datetime) -> bool:
@@ -81,33 +93,51 @@ async def _run_curator_now(
     successful one cannot move it back to where the re-read started.
 
     `metered=False` is for runs the platform initiates on its own (the
-    first-day curator): they must not eat the user's free monthly allowance."""
+    first-day curator): they must not eat the user's free monthly allowance.
+
+    One run per agent: a dispatch that lands while this agent's run is still
+    mid-turn resolves as the designed `already_running` skip. It costs nothing
+    and is not a failure — the run in flight advances the watermark past
+    exactly what it read, so a skipped dispatch discards no work, and it never
+    charges the allowance because the skip happens before the run is metered."""
     from ..services import agent_service, curation_service, sprite_agent_service
 
-    agent = await agent_service.get_agent_by_id(agent_id)
-    if full_history:
-        agent = {**agent, "curated_through": None}
-    now = datetime.now(UTC)
-    await agent_service.mark_run(agent_id, metered=metered)
+    lock = sprite_agent_service.agent_run_lock(agent_id, AGENT_RUN_LOCK_TTL)
     try:
-        # Seconds-resolution stamp so a manual run never shares a session with
-        # the beat's minute-stamped run.
-        await sprite_agent_service.run_scheduled(agent, now.strftime("%Y%m%d%H%M%S"))
-        through = await curation_service.complete_through(
-            UUID(str(agent["user_id"])), agent["curated_through"], now, agent["curator_wiki"]
-        )
-        await agent_service.mark_curated(agent_id, through)
-        await agent_service.mark_run_succeeded(agent_id)
-    except Exception as e:
-        await agent_service.mark_run_failed(agent_id, str(e), metered=metered)
-        raise
+        await lock.acquire()
+    except sprite_agent_service.TurnInProgress:
+        logger.info("curator run in flight for agent %s — skipping this dispatch", agent_id)
+        await agent_service.mark_run_skipped(agent_id, "already_running")
+        return
+    try:
+        agent = await agent_service.get_agent_by_id(agent_id)
+        if full_history:
+            agent = {**agent, "curated_through": None}
+        now = datetime.now(UTC)
+        await agent_service.mark_run(agent_id, metered=metered)
+        try:
+            # Seconds-resolution stamp so a manual run never shares a session
+            # with the beat's minute-stamped run. The stamp separates history
+            # only — single flight is `lock` above, not this.
+            await sprite_agent_service.run_scheduled(agent, now.strftime("%Y%m%d%H%M%S"))
+            through = await curation_service.complete_through(
+                UUID(str(agent["user_id"])), agent["curated_through"], now, agent["curator_wiki"]
+            )
+            await agent_service.mark_curated(agent_id, through)
+            await agent_service.mark_run_succeeded(agent_id)
+        except Exception as e:
+            await agent_service.mark_run_failed(agent_id, str(e), metered=metered)
+            raise
+    finally:
+        await lock.release()
 
 
 # During a scope's first day its wiki updates after every conversation, not
 # just on the nightly tick — a user who just signed up (or a developer who
 # just activated the platform) watches the wiki grow while they get set up.
-# Debounced so a stream of event batches coalesces into at most one run per
-# window; the agent's Redis turn lock already prevents overlapping runs.
+# Debounced so a stream of event batches coalesces into at most one dispatch
+# per window; a dispatch that still lands on a run in flight resolves as the
+# `already_running` skip (see `_run_curator_now`).
 FIRST_DAY_HOURS = 24
 FIRST_DAY_DEBOUNCE = timedelta(minutes=10)
 
@@ -228,6 +258,16 @@ async def _run_scheduled_agent(agent_id: UUID, stamp: str) -> None:
         return
     user_id = UUID(str(agent["user_id"]))
     now = datetime.now(UTC)
+    lock = sprite_agent_service.agent_run_lock(agent_id, AGENT_RUN_LOCK_TTL)
+    try:
+        await lock.acquire()
+    except sprite_agent_service.TurnInProgress:
+        # The beat already consumed this tick and its credit when it dispatched
+        # — the same accounting as every other designed skip in this module.
+        # The run this one deferred to is doing the work right now.
+        logger.info("agent %s has a run in flight — skipping this dispatch", agent_id)
+        await agent_service.mark_run_skipped(agent_id, "already_running")
+        return
     try:
         await sprite_agent_service.run_scheduled(agent, stamp)
         if agent["is_curator"]:
@@ -249,6 +289,8 @@ async def _run_scheduled_agent(agent_id: UUID, stamp: str) -> None:
         await alert_service.send_alert(
             f"Scheduled agent run failed: {agent['name']!r} for {email}: {str(e)[:300]}"
         )
+    finally:
+        await lock.release()
 
 
 # A curator whose watermark is older than this while changes are pending has

@@ -2517,6 +2517,7 @@ export type Agent = {
     | "skipped_credits"
     | "skipped_no_credential"
     | "skipped_no_changes"
+    | "skipped_already_running"
     | null;
   curated_through: string | null;
 };
