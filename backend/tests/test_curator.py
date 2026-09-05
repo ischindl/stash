@@ -992,6 +992,35 @@ async def test_mark_curated_cannot_walk_the_watermark_back(client: AsyncClient, 
 
 
 @pytest.mark.asyncio
+async def test_a_refused_watermark_advance_is_visible_in_the_log(
+    client: AsyncClient, _db_pool, caplog
+):
+    """The monotonic clamp must not erase a number in silence: when a run
+    proposes a position behind the stored one — a full_history re-read or a
+    stale overlapping completion — the log names the curator, the refused
+    position, and the position that was kept. The CEO read a silently-vanished
+    advance as 'the curator never curates'."""
+    import logging
+
+    caplog.set_level(logging.INFO, logger="backend.services.agent_service")
+    _key, uid = await _register(client)
+    curator = await agent_service.get_or_create_curator(uid)
+    cid = UUID(curator["id"])
+    ahead = datetime(2026, 6, 1, 12, 0, tzinfo=UTC)
+    behind = datetime(2020, 1, 1, tzinfo=UTC)
+
+    await _db_pool.execute("UPDATE agents SET curated_through = NULL WHERE id = $1", cid)
+    assert await agent_service.mark_curated(cid, behind) == behind
+    assert await agent_service.mark_curated(cid, ahead) == ahead
+    assert "not moved" not in caplog.text  # genuine advances stay quiet
+
+    assert await agent_service.mark_curated(cid, behind) == ahead  # refused
+    assert "not moved" in caplog.text
+    assert str(cid) in caplog.text
+    assert str(behind) in caplog.text and str(ahead) in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_full_history_backfill_cannot_regress_an_advanced_watermark(
     client: AsyncClient, sprite_exec, _db_pool, monkeypatch
 ):

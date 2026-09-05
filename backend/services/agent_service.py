@@ -8,12 +8,15 @@ agent, whose config shapes the turn.
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, date, datetime
 from uuid import UUID
 
 from fastapi import HTTPException
 
 from ..database import get_pool
+
+logger = logging.getLogger(__name__)
 
 _COLUMNS = (
     "id, user_id, name, model_provider, system_prompt, run_mode, "
@@ -367,20 +370,33 @@ async def mark_run_succeeded(agent_id: UUID) -> None:
     )
 
 
-async def mark_curated(agent_id: UUID, through) -> None:
+async def mark_curated(agent_id: UUID, through: datetime) -> datetime:
     """Advance the curator's delta watermark — only after a successful run, so
-    a failed run's window is re-covered next time.
+    a failed run's window is re-covered next time. Returns the stored position.
 
     The advance is monotonic: GREATEST means a run that computed its position
     from a snapshot taken before an overlapping run finished (or a backfill
-    that read from the oldest) can never walk the watermark backwards. The one
-    writer allowed to move it backwards is the ingest rewind in memory_service
-    — a deliberate re-read of imported history, not a run's bookkeeping."""
-    await get_pool().execute(
-        "UPDATE agents SET curated_through = greatest(curated_through, $2) WHERE id = $1",
+    that read from the oldest) can never walk the watermark backwards. A
+    refused position is logged naming the curator and the retained position —
+    a run's number vanishing in silence is exactly what read as "completed
+    curation discarded". The one writer allowed to move it backwards is the
+    ingest rewind in memory_service: a deliberate re-read of imported history,
+    not a run's bookkeeping."""
+    stored = await get_pool().fetchval(
+        "UPDATE agents SET curated_through = greatest(curated_through, $2) WHERE id = $1 "
+        "RETURNING curated_through",
         agent_id,
         through,
     )
+    if stored > through:
+        logger.info(
+            "curator %s watermark not moved: run proposed %s, stored position kept at %s "
+            "(advance is monotonic; see mark_curated)",
+            agent_id,
+            through,
+            stored,
+        )
+    return stored
 
 
 async def set_system_prompt(agent_id: UUID, text: str | None) -> dict:
