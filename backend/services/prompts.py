@@ -327,8 +327,10 @@ def render_external_curator_prompt(
     compiles the same delta feed into two artifacts with opposite privacy
     rules: a per-user wiki (non-anonymized, one folder per user) and the
     shared external wiki (cross-user, anonymized — user identities never
-    appear). Users opt out of the shared wiki with share_wiki=false; their
-    material still feeds their own wiki. On top of that per-user floor, the
+    appear). History in this feed is already scoped in SQL to sessions of users
+    who share, so an opted-out user's conversations are not in the delta at all;
+    what still reaches that user's own wiki is the owner-wide half of the delta
+    (their pages, files, saves). On top of that per-user floor, the
     developer clears history project by project: only `sharing_projects` are
     listed as feeding the shared wiki, and every event carries its own
     project's clearance so the rule below can be applied event by event.
@@ -338,7 +340,12 @@ def render_external_curator_prompt(
         if since
         else "the full history (this is the first run — bootstrap both artifacts)"
     )
-    changes_cmd = f"stash changes --since {since} --json" if since else "stash changes --json"
+    # An omitted --wiki reads the owner-wide internal feed, so naming the wiki is
+    # the only thing that puts this curator in front of the scoped stream.
+    if since:
+        changes_cmd = f"stash changes --wiki external --since {since} --json"
+    else:
+        changes_cmd = "stash changes --wiki external --json"
     user_lines = "\n".join(
         f"- `{end_user['name']}` — wiki folder id `{end_user['wiki_folder_id']}`"
         + ("" if end_user["share_wiki"] else " — **opted out of the shared wiki**")
@@ -369,11 +376,14 @@ artifacts with opposite privacy rules:
 {project_lines}
 
 ## Read the inputs
-- `{changes_cmd}` — the delta. Each history event carries its session's
-  `user` (name) and `user_share_wiki`, plus `session_folder` (the project the
-  session is filed under) and `session_folder_share_wiki` (the developer's
-  clearance for that project). Events with no user are the developer's own
-  activity — eligible for the shared wiki, never for any user's own wiki.
+- `{changes_cmd}` — the delta. `--wiki external` is what scopes it: the history
+  in here covers only sessions of users who share, so an opted-out user's
+  conversations never appear, and neither does history from a session with no
+  end user. Each event still carries its session's `user` (name), plus
+  `session_folder` (the project the session is filed under) and
+  `session_folder_share_wiki` (the developer's clearance for that project).
+  Pages, files, saves and sources are NOT scoped: they are the whole workspace
+  and still have to be routed by hand.
 - `history_has_more: true` means the feed overflowed this run's cap; curate
   what's present, the remainder is queued for your next run.
 - `stash ls /files --json` and `stash files read-page <page_id>` to inspect
@@ -381,13 +391,14 @@ artifacts with opposite privacy rules:
 
 ## Routing rules (hard)
 - Every user's material feeds THAT user's wiki, never another user's.
-- Only events from users WITHOUT the opt-out marker may inform the shared
-  wiki. Opted-out users' material goes in their own wiki and stops there.
+- Events arrive already cleared for the shared wiki by the feed itself. The
+  **opted out of the shared wiki** marker above still governs the unscoped half
+  of the delta: a marked user's pages, files and saves feed their own wiki and
+  stop there.
 - `session_folder_share_wiki` is the developer's per-project clearance, and it
   gates the shared wiki alone: `false` means the developer has not cleared this
-  project, so the event contributes nothing there — not even from a user who
-  opted in, and not even from the developer's own session when it has no user;
-  `true` clears it, but never past that user's own opt-out; `null` means the
+  project, so the event contributes nothing there even from a user who shares;
+  `true` clears it; `null` means the
   session is unfiled or sits in the Default folder, and it routes as if there
   were no project.
 - The shared wiki gets the anonymized general lesson; the user's own wiki

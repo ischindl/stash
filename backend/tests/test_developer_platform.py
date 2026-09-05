@@ -1132,9 +1132,11 @@ def test_external_prompt_states_the_project_clearance_fields():
     assert "session_folder_share_wiki" in prompt
     assert "`session_folder`" in prompt
     assert "the developer has not cleared this project" in prose
-    # A project that is off stops even the developer's own sessions, which is
-    # the case the founder asked to control.
-    assert "not even from the developer's own session when it has no user" in prose
+    # A project that is off stops even a sharing user's event. The developer's
+    # own sessions are no longer the case to police in this prose: a session
+    # with no end user is outside the external feed entirely now, so what their
+    # project clearance still governs is the workspace-wide half of the delta.
+    assert "even from a user who shares" in prose
 
 
 def test_external_prompt_lists_cleared_projects_and_says_none():
@@ -1145,6 +1147,33 @@ def test_external_prompt_lists_cleared_projects_and_says_none():
     empty = _external_prompt("2026-01-01T00:00:00+00:00", [])
     assert "## Projects that feed the shared wiki" in empty
     assert "- none" in empty
+
+
+def test_external_prompt_names_its_wiki_on_the_feed_command():
+    """The feed is scoped in SQL, but only for a reader that asks for the
+    external wiki: a `stash changes` without `--wiki` answers for the owner's
+    internal feed, which is everything. The flag is therefore load-bearing for
+    this curator's whole privacy story, asserted in both command shapes."""
+    bootstrap = _external_prompt(None, ["Acme Parts"])
+    maintenance = _external_prompt("2026-01-01T00:00:00+00:00", ["Acme Parts"])
+
+    assert "stash changes --wiki external --json" in bootstrap
+    assert "stash changes --wiki external --since 2026-01-01T00:00:00+00:00 --json" in maintenance
+
+
+def test_external_prompt_says_what_the_feed_filters_and_what_it_does_not():
+    """Two truths the curator has to hold: it can stop filtering events by hand,
+    because the feed already excludes opted-out users and userless sessions; and
+    it must keep routing the owner-wide half of the delta, because pages, files
+    and saves were never scoped by the wiki and still need judgement."""
+    prose = " ".join(_external_prompt(None, ["Acme Parts"]).split())
+
+    assert "covers only sessions of users who share" in prose
+    assert "neither does history from a session with no end user" in prose
+    assert "Pages, files, saves and sources are NOT scoped" in prose
+    # The by-hand event routing the SQL predicate replaced. Left in place it
+    # would be a second, weaker copy of a rule the feed now enforces itself.
+    assert "Only events from users WITHOUT the opt-out marker" not in prose
 
 
 @pytest.mark.asyncio
