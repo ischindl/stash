@@ -5,6 +5,19 @@ everything before it is captured in git history (`git log`), not here.
 
 ## Unreleased
 
+- The shared wiki's curator now reads only the history that was actually
+  offered to it. The external (developer workspace) wiki's event feed, run gate,
+  and watermark are scoped in SQL to sessions whose end user has `share_wiki`
+  enabled, so an opted-out user's conversations never enter the delta the
+  curator chews through — the filtering that previously lived only as prose in
+  the curator's instructions. The cheap "did anything change" gate applies the same
+  rule, so a beat no longer wakes an external curator for a delta its feed would
+  then find empty. The owner's own Memory wiki is unchanged: it still curates the
+  whole workspace. `stash changes` gains a `--wiki internal|external` flag so an
+  agent can name the wiki it means; omitting it keeps today's behavior, and an
+  unknown value is refused with a clear error instead of silently widening scope.
+  CLI `stashai` 0.1.368.
+
 - A source you never actually connected now says what is missing instead of
   promising a retry that can never help. Not-connected providers, a provider key
   the server was never configured with, and an empty account/channel selection

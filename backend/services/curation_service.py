@@ -7,6 +7,15 @@ and the user's connected sources as pointers (the agent pulls source
 specifics with `stash search`) — the curator never sees its own output.
 `has_changes_since` is the cheap EXISTS the beat task uses to skip idle users
 without waking a sprite.
+
+A caller names which wiki it reads: the owner's own (`internal`) or the
+workspace's shared, anonymized one (`external`). The shared wiki may be built
+only from sessions of end users who share, and that rule is enforced in SQL
+rather than left to prompt prose — for the cheap gate too, so a curator is
+never woken for a delta its own feed cannot show. `has_changes_since`,
+`_feed_events` and `complete_through` therefore all splice the single clause in
+`_SHARE_WIKI_EVENT_SCOPE`. A second near-identical query would let gate and feed
+disagree, which is the failure this file exists to make impossible.
 """
 
 from __future__ import annotations
