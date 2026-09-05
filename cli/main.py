@@ -12,6 +12,7 @@ import sys
 import tempfile
 import textwrap
 import time
+from enum import StrEnum
 from pathlib import Path
 
 import click
@@ -3699,15 +3700,31 @@ def memory_ls(as_json: bool = typer.Option(False, "--json")):
     _print_memory_tree(tree, indent=1)
 
 
+class WikiScope(StrEnum):
+    """Which curator wiki a feed read is scoped to. Typer turns an invalid
+    value into a usage error listing these, so a typo cannot quietly read the
+    wider one."""
+
+    INTERNAL = "internal"
+    EXTERNAL = "external"
+
+
 @app.command("changes")
 def changes(
     since: str = typer.Option(None, "--since", help="ISO timestamp; omit for everything."),
+    wiki: WikiScope | None = typer.Option(
+        None,
+        "--wiki",
+        help="Which curator wiki to read: 'internal' (your own memory — the default) or "
+        "'external' (the developer workspace's shared anonymized wiki, whose feed only ever "
+        "covers sessions of users who share).",
+    ),
     as_json: bool = typer.Option(False, "--json"),
 ):
     """What changed since a timestamp — history, pages, files, saves, sources.
     Feeds the Memory curator's incremental pass."""
     with _client() as c:
-        data = c.get_changes(since or None)
+        data = c.get_changes(since or None, wiki.value if wiki else None)
     if _use_json(as_json):
         output_json(data)
         return

@@ -28,7 +28,7 @@ from httpx import AsyncClient
 
 from backend.services import curation_service
 
-from .test_curator import _register
+from .test_curator import _auth, _register
 from .test_developer_platform import _developer, _mint_workspace_key, _push
 
 INTERNAL = "internal"
@@ -314,3 +314,52 @@ async def test_unknown_wiki_raises_naming_the_value(client: AsyncClient, pool):
     ):
         with pytest.raises(ValueError, match="exteranl"):
             await call()
+
+
+@pytest.mark.asyncio
+async def test_changes_endpoint_serves_each_wiki_its_own_scope(client: AsyncClient, pool):
+    """The endpoint is the curator's actual read path, so the scope has to
+    survive the HTTP hop or the SQL fix is invisible to the agent it is for.
+
+    One dataset, three asks: named internal sees both users' work, named
+    external sees only the sharing one, and an absent `wiki` keeps the answer
+    it gave before this flag existed."""
+    scope, key = await _workspace(client)
+    await _two_users(client, pool, key, scope)
+    await _push(
+        client,
+        key,
+        [
+            _event("sess-sharing", "roadmap shared", user_id="acme", at=LATER),
+            _event("sess-opted-out", "private terms", user_id="secret-corp", at=LATER),
+        ],
+    )
+
+    async def feed_sessions(**params) -> set[str]:
+        r = await client.get(
+            "/api/v1/me/changes",
+            params={"since": WATERMARK.isoformat(), **params},
+            headers=_auth(key),
+        )
+        assert r.status_code == 200, r.text
+        return {h["session_id"] for h in r.json()["history"]}
+
+    both = {"sess-sharing", "sess-opted-out"}
+    assert await feed_sessions(wiki=INTERNAL) == both
+    assert await feed_sessions(wiki=EXTERNAL) == {"sess-sharing"}
+    assert await feed_sessions() == both
+
+
+@pytest.mark.asyncio
+async def test_changes_endpoint_refuses_an_unknown_wiki(client: AsyncClient, pool):
+    """A bad `?wiki=` is refused naming the two allowed values — never quietly
+    served the wider internal stream, which is the failure this whole card
+    exists to remove."""
+    _, key = await _workspace(client)
+
+    r = await client.get("/api/v1/me/changes", params={"wiki": "exteranl"}, headers=_auth(key))
+
+    assert r.status_code == 400
+    detail = r.json()["detail"]
+    assert "exteranl" in detail
+    assert "internal" in detail and "external" in detail
