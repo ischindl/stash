@@ -28,20 +28,69 @@ _MAX_SAVES = 100
 _MAX_SOURCE_DOCS = 100
 _SNIPPET = 280
 
+# The two wikis a curator writes. Which one a run belongs to is a property of
+# the agent (`agents.curator_wiki`), and it decides what its feed may contain.
+WIKI_INTERNAL = "internal"
+WIKI_EXTERNAL = "external"
+WIKI_VALUES = (WIKI_INTERNAL, WIKI_EXTERNAL)
 
-async def has_changes_since(owner_user_id: UUID, user_id: UUID, since: datetime | None) -> bool:
-    """True if anything the curator cares about changed after `since`. A cheap
-    gate — the beat task skips a curator run (and the sprite wake) when False."""
+# An event reaches the shared, anonymized wiki only through the end user its
+# session belongs to — the privacy rule the prompt used to be trusted to
+# enforce. The fragment names `he`, the `history_events` alias every reader
+# gives it, so the SAME text is spliced into the feed, the watermark advance,
+# and the beat's gate. That sharing is the point: gate-true has to mean
+# feed-non-empty, and three separately-derived predicates drift — the beat
+# dispatches a curator whose feed is empty (a sprite wake and a metered run
+# burned on nothing) or stays silent while the feed has work.
+#
+# An event the wiki cannot attribute to a sharing end user — a session with no
+# end user, or an event whose session row is gone — does not reach it. The
+# owner's own wiki filters nothing: it is the owner's own memory.
+_SHARE_WIKI_EVENT_SCOPE = (
+    "AND EXISTS (SELECT 1 FROM sessions wse "
+    "JOIN end_users we ON we.id = wse.end_user_id "
+    "WHERE wse.owner_user_id = he.owner_user_id "
+    "AND wse.session_id = he.session_id "
+    "AND we.share_wiki)"
+)
+
+
+def _wiki_event_scope(wiki: str) -> str:
+    """The `AND` clause limiting an event query to what one wiki may read.
+
+    Empty for the owner's own wiki. `wiki` has exactly two values and no
+    default anywhere: a typo has to fail where it is typed rather than quietly
+    curate the wrong wiki with the wrong scope."""
+    if wiki == WIKI_INTERNAL:
+        return ""
+    if wiki == WIKI_EXTERNAL:
+        return _SHARE_WIKI_EVENT_SCOPE
+    raise ValueError(f"unknown wiki {wiki!r}; expected {WIKI_INTERNAL!r} or {WIKI_EXTERNAL!r}")
+
+
+async def has_changes_since(
+    owner_user_id: UUID, user_id: UUID, since: datetime | None, wiki: str
+) -> bool:
+    """True if anything this wiki's curator cares about changed after `since`.
+
+    A cheap gate — the beat task skips a curator run (and the sprite wake) when
+    False. Its event clause carries the same scope the feed does, which is what
+    makes "the gate fired" mean "the feed has something to read". Every other
+    clause stays owner-wide: they are filtered downstream, so they can only
+    over-trigger, and tightening one clause without the others is exactly how
+    the gate and the feed stop agreeing."""
     if since is None:
         return True  # never curated → bootstrap.
     pool = get_pool()
     memory_ids = await files_tree_service.memory_subtree_folder_ids(owner_user_id)
+    event_scope = _wiki_event_scope(wiki)
     exists = await pool.fetchval(
-        """
+        f"""
         SELECT
-          EXISTS (SELECT 1 FROM history_events
-                  WHERE owner_user_id = $1 AND created_at > $2
-                    AND (session_id IS NULL OR session_id NOT LIKE 'agent-curate-%'))
+          EXISTS (SELECT 1 FROM history_events he
+                  WHERE he.owner_user_id = $1 AND he.created_at > $2
+                    AND (he.session_id IS NULL OR he.session_id NOT LIKE 'agent-curate-%')
+                    {event_scope})
           OR EXISTS (SELECT 1 FROM pages
                      WHERE owner_user_id = $1 AND updated_at > $2
                        AND ($3::uuid[] IS NULL OR folder_id IS NULL
@@ -82,15 +131,21 @@ def _project_share_wiki(event: dict) -> bool | None:
     return event["session_folder_share_wiki"]
 
 
-async def changes_since(owner_user_id: UUID, user_id: UUID, since: datetime | None) -> dict:
+async def changes_since(
+    owner_user_id: UUID, user_id: UUID, since: datetime | None, wiki: str
+) -> dict:
     """The delta the curator reads: history events, changed pages (excl. Memory),
-    new files, changed Drive-folder documents, newly hydrated X/Instagram
-    saves, and connected-source pointers."""
+    new files, changed Drive-folder documents, newly hydrated X/Instagram saves,
+    and connected-source pointers.
+
+    `wiki` scopes the events only — see `_feed_events`. Pages, files, saves, and
+    source pointers come from the caller's own scope and are filtered
+    downstream, so they stay owner-wide here."""
     pool = get_pool()
     memory_ids = await files_tree_service.memory_subtree_folder_ids(owner_user_id)
     exclude = list(memory_ids) or None
 
-    events, history_has_more = await _feed_events(owner_user_id, since, None, _MAX_EVENTS)
+    events, history_has_more = await _feed_events(owner_user_id, since, None, _MAX_EVENTS, wiki)
     history = [
         {
             "session_id": e.get("session_id"),
@@ -257,6 +312,7 @@ async def _feed_events(
     since: datetime | None,
     until: datetime | None,
     limit: int,
+    wiki: str,
 ) -> tuple[list[dict], bool]:
     """The curator's event feed, oldest first. Returns (events, has_more).
 
@@ -265,16 +321,25 @@ async def _feed_events(
     wiki, and filtering after the query would let them consume feed slots that
     belong to real activity.
 
-    Each event carries its session's end user (name and wiki opt-out) when it
-    has one — the external curator routes by it: every user's material feeds
-    that user's own wiki, and only share_wiki users feed the shared anonymized
-    wiki. Events also carry the session's folder (name and id) or null — the
-    personal curator attributes learning to that folder's context — plus that
-    folder's shared-wiki clearance and whether it is the Default one, which the
-    external curator routes the project-level opt-in by."""
+    `wiki` decides which events are in the feed at all, in SQL: the shared wiki
+    reads only sessions whose end user still shares it. Scoping here rather than
+    downstream is what lets the feed, the gate, and `complete_through` tell one
+    story, and it means an opted-out session cannot consume the slots a
+    shareable session needs.
+
+    The end user still rides along on every event that does reach the feed,
+    because the curator's roster names people by what they share: the flag
+    identifies the users whose material lands only in their own wiki, and it
+    cannot be recovered once their sessions are absent from the feed.
+
+    Events also carry the session's folder (name and id) or null — the personal
+    curator attributes learning to that folder's context — plus that folder's
+    shared-wiki clearance and whether it is the Default one, which the external
+    curator routes the separate, per-project opt-in by."""
     pool = get_pool()
     args: list = [owner_user_id]
     where = "he.owner_user_id = $1 AND (he.session_id IS NULL OR he.session_id NOT LIKE 'agent-curate-%')"
+    where += _wiki_event_scope(wiki)
     if since is not None:
         args.append(since)
         where += f" AND he.created_at > ${len(args)}"
@@ -301,7 +366,7 @@ async def _feed_events(
 
 
 async def complete_through(
-    owner_user_id: UUID, since: datetime | None, until: datetime
+    owner_user_id: UUID, since: datetime | None, until: datetime, wiki: str
 ) -> datetime:
     """How far the curator's watermark may advance after a successful run.
 
@@ -309,8 +374,12 @@ async def complete_through(
     which case it is only complete through the last event that fit — minus a
     microsecond, so events sharing that exact timestamp are re-presented next
     run rather than skipped. Overflow therefore drains run by run and no event
-    is ever silently dropped from curation."""
-    events, has_more = await _feed_events(owner_user_id, since, until, _MAX_EVENTS)
+    is ever silently dropped from curation.
+
+    `wiki` must be the value the run's feed was read with: this decides how far
+    that run's watermark may move, so a wider scope here would let the watermark
+    step past events the curator was never shown."""
+    events, has_more = await _feed_events(owner_user_id, since, until, _MAX_EVENTS, wiki)
     if not has_more:
         return until
     return events[-1]["created_at"] - timedelta(microseconds=1)

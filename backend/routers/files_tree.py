@@ -31,6 +31,7 @@ from ..models import (
 )
 from ..services import (
     comment_service,
+    curation_service,
     end_user_service,
     files_tree_service,
     page_events,
@@ -219,17 +220,32 @@ async def get_local_curator_prompt(
 @router.get("/changes")
 async def get_changes(
     since: str | None = None,
+    wiki: str = Query(
+        curation_service.WIKI_INTERNAL,
+        description="Which curator wiki the feed is scoped for: 'internal' (the owner's own "
+        "memory) or 'external' (the developer workspace's shared anonymized wiki, whose feed "
+        "is restricted to sessions of users who share).",
+    ),
     current_user: dict = Depends(get_current_user),
     scope_user_id: UUID = Depends(get_scope),
 ):
     """The incremental change feed the Memory curator reads: history, changed
-    pages (excl. Memory), new files, and connected sources since `since`."""
+    pages (excl. Memory), new files, changed Drive-folder documents, and the
+    user's connected sources as pointers (the agent pulls source specifics with
+    `stash search`) — the curator never sees its own output.
+
+    `wiki` decides how far the history events are scoped: the external wiki only
+    ever receives events from sessions whose end user shares, enforced in SQL."""
     from datetime import datetime
 
-    from ..services import curation_service
+    if wiki not in curation_service.WIKI_VALUES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"unknown wiki {wiki!r}; expected {' or '.join(curation_service.WIKI_VALUES)}",
+        )
 
     since_dt = datetime.fromisoformat(since) if since else None
-    return await curation_service.changes_since(scope_user_id, current_user["id"], since_dt)
+    return await curation_service.changes_since(scope_user_id, current_user["id"], since_dt, wiki)
 
 
 @router.post("/memory/recompute", status_code=202)
@@ -241,7 +257,7 @@ async def recompute_memory(
     onboarding flow: connect sources, upload documents, watch the wiki build.
     Enforces the same free-tier sleep-time allowance as the scheduler."""
     from ..config import settings
-    from ..services import agent_auth, agent_service, curation_service
+    from ..services import agent_auth, agent_service
     from ..tasks.agent_schedules import run_curator_now
 
     # A workspace's curator runs on the workspace's own credentials and
@@ -254,7 +270,9 @@ async def recompute_memory(
         )
     user_id = current_user["id"]
     curator = await agent_service.get_or_create_curator(user_id)
-    if not await curation_service.has_changes_since(user_id, user_id, curator["curated_through"]):
+    if not await curation_service.has_changes_since(
+        user_id, user_id, curator["curated_through"], curator["curator_wiki"]
+    ):
         raise HTTPException(status_code=409, detail="Nothing new to curate since the last run.")
     if agent_service.month_runs_used(curator) >= settings.FREE_CURATOR_RUNS_PER_MONTH:
         from ..services import billing_service
