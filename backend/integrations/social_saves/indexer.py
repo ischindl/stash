@@ -44,7 +44,10 @@ def post_url(shortcode: str) -> str:
 
 async def index_instagram_saves(source: dict) -> str | None:
     if not settings.SCRAPECREATORS_API_KEY:
-        raise RuntimeError("SCRAPECREATORS_API_KEY is not set")
+        raise source_service.SourceSetupRequired(
+            "SCRAPECREATORS_API_KEY is not set — set it in the backend environment "
+            "to sync Instagram saves"
+        )
     if not storage_service.is_configured():
         raise RuntimeError("File storage is not configured; cannot archive save media")
 

@@ -93,7 +93,9 @@ def _tweet_id_from_path(path: str) -> str:
 
 async def index_x_saves(source: dict) -> str | None:
     if not settings.TWITTERAPI_IO_KEY:
-        raise RuntimeError("TWITTERAPI_IO_KEY is not set")
+        raise source_service.SourceSetupRequired(
+            "TWITTERAPI_IO_KEY is not set — set it in the backend environment to sync X saves"
+        )
     if not storage_service.is_configured():
         raise RuntimeError("File storage is not configured; cannot archive save media")
 

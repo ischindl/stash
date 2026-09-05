@@ -1151,6 +1151,10 @@ async def test_github_indexer_crawls_text_files_and_resyncs(client, monkeypatch)
     async def fake_snapshot_tree(url, headers, sha):
         return {"truncated": False, "tree": [{"type": "blob", "size": 10}]}
 
+    async def fake_token(user_id, provider, account_key="default"):
+        return "gh-token"
+
+    monkeypatch.setattr(indexer, "get_valid_token", fake_token)
     monkeypatch.setattr(indexer, "_github_head_sha", fake_head_sha)
     monkeypatch.setattr(indexer, "_github_snapshot_tree", fake_snapshot_tree)
     monkeypatch.setattr(indexer, "_download_archive", fake_download)
@@ -1212,6 +1216,10 @@ async def test_github_indexer_skips_files_too_big_to_index(client, monkeypatch):
     async def fake_snapshot_tree(url, headers, sha):
         return {"truncated": False, "tree": [{"type": "blob", "size": 10}]}
 
+    async def fake_token(user_id, provider, account_key="default"):
+        return "gh-token"
+
+    monkeypatch.setattr(indexer, "get_valid_token", fake_token)
     monkeypatch.setattr(indexer, "_github_head_sha", fake_head_sha)
     monkeypatch.setattr(indexer, "_github_snapshot_tree", fake_snapshot_tree)
     monkeypatch.setattr(indexer, "_download_archive", fake_download)
@@ -1280,6 +1288,261 @@ async def test_sync_source_status_redacts_provider_exception(client: AsyncClient
     )
     assert status.status_code == 200
     assert status.json()["sync_error"] == sources_task.SYNC_FAILED_MESSAGE
+
+
+# --- sync failure classification: permanent configuration states park ---------
+
+
+async def _insert_disconnected_connection(
+    pool, owner_id: UUID, provider: str, account_key: str = "default"
+) -> None:
+    """A disconnected-with-data connection: the row survives, its tokens nulled.
+    Distinct from never-connected (no row at all) and it carries its own message."""
+    await pool.execute(
+        "INSERT INTO user_integrations (user_id, provider, access_token_encrypted, account_key) "
+        "VALUES ($1, $2, NULL, $3)",
+        owner_id,
+        provider,
+        account_key,
+    )
+
+
+async def _sync_row(pool, source_id: str) -> dict:
+    return await pool.fetchrow("SELECT * FROM user_sources WHERE id = $1", UUID(source_id))
+
+
+@pytest.mark.asyncio
+async def test_sync_source_never_connected_parks_needs_setup(client, _db_pool):
+    """'Never connected to this provider' is permanent until the owner connects,
+    and the indexer reaches it as a credential 401. That must park the source
+    with the provider's own instruction — not record a failure whose message
+    promises a retry that can never help. Goes through the real indexer and the
+    real credential lookup so the park is proven reachable from an indexer, not
+    just from a helper."""
+    from backend.tasks import sources as sources_task
+
+    _, owner_id = await _register(client, "park_gmail")
+    src = await source_service.create_source(
+        owner_user_id=owner_id,
+        source_type="gmail",
+        external_ref="parked@example.com",
+        display_name="Gmail (parked@example.com)",
+    )
+
+    result = await sources_task._sync_source(UUID(src["id"]))
+
+    assert result["status"] == "needs_setup"
+    row = await _sync_row(_db_pool, src["id"])
+    assert row["sync_status"] == "needs_setup"
+    assert "not connected to gmail" in row["sync_error"]
+    assert row["sync_error"] != sources_task.SYNC_FAILED_MESSAGE
+    assert row["last_synced_at"] is None
+
+
+@pytest.mark.asyncio
+async def test_sync_source_disconnected_connection_asks_to_reconnect(client, _db_pool):
+    """Connected-then-disconnected keeps the row with nulled tokens, so the
+    credential layer says 'reconnect' instead of 'not connected'. Either way it
+    is a state only the owner can change, so it parks with that instruction."""
+    from backend.tasks import sources as sources_task
+
+    _, owner_id = await _register(client, "park_disc")
+    src = await source_service.create_source(
+        owner_user_id=owner_id,
+        source_type="gmail",
+        external_ref="gone@example.com",
+        display_name="Gmail (gone@example.com)",
+    )
+    await _insert_disconnected_connection(_db_pool, owner_id, "gmail", "gone@example.com")
+
+    result = await sources_task._sync_source(UUID(src["id"]))
+
+    assert result["status"] == "needs_setup"
+    row = await _sync_row(_db_pool, src["id"])
+    assert row["sync_status"] == "needs_setup"
+    assert "is disconnected — reconnect to read" in row["sync_error"]
+    assert row["sync_error"] != sources_task.SYNC_FAILED_MESSAGE
+
+
+@pytest.mark.asyncio
+async def test_sync_source_missing_provider_key_parks_naming_the_key(client, _db_pool, monkeypatch):
+    """A provider key the server was never configured with is a permanent state
+    no owner can fix by reconnecting, but the state is still 'waiting on setup',
+    not 'broken'. Park it, and name the setting (a name, never a value) so the
+    operator knows what to set."""
+    from backend.config import settings
+    from backend.tasks import sources as sources_task
+
+    _, owner_id = await _register(client, "park_xkey")
+    src = await source_service.create_source(
+        owner_user_id=owner_id,
+        source_type="x_saves",
+        external_ref="saves",
+        display_name="X saves",
+    )
+    monkeypatch.setattr(settings, "TWITTERAPI_IO_KEY", None)
+
+    result = await sources_task._sync_source(UUID(src["id"]))
+
+    assert result["status"] == "needs_setup"
+    row = await _sync_row(_db_pool, src["id"])
+    assert row["sync_status"] == "needs_setup"
+    assert "TWITTERAPI_IO_KEY" in row["sync_error"]
+    assert row["sync_error"] != sources_task.SYNC_FAILED_MESSAGE
+
+
+@pytest.mark.asyncio
+async def test_sync_source_missing_instagram_key_parks_naming_the_key(
+    client, _db_pool, monkeypatch
+):
+    """The Instagram saves indexer has the same missing-key family as X saves."""
+    from backend.config import settings
+    from backend.tasks import sources as sources_task
+
+    _, owner_id = await _register(client, "park_igkey")
+    src = await source_service.create_source(
+        owner_user_id=owner_id,
+        source_type="instagram_saves",
+        external_ref="saves",
+        display_name="Instagram saves",
+    )
+    monkeypatch.setattr(settings, "SCRAPECREATORS_API_KEY", None)
+
+    result = await sources_task._sync_source(UUID(src["id"]))
+
+    assert result["status"] == "needs_setup"
+    row = await _sync_row(_db_pool, src["id"])
+    assert row["sync_status"] == "needs_setup"
+    assert "SCRAPECREATORS_API_KEY" in row["sync_error"]
+    assert row["sync_error"] != sources_task.SYNC_FAILED_MESSAGE
+
+
+@pytest.mark.asyncio
+async def test_gong_sync_without_accounts_needs_setup(client, _db_pool):
+    """Gong indexes only the accounts the owner picks. Picking none must park the
+    source with the instruction — the same shape as the Slack no-channels park.
+    It is a separate family from the credential parks: this raise fires before
+    any credential lookup, so nothing translates it and it cannot be covered by
+    the 401 path."""
+    from backend.tasks import sources as sources_task
+
+    _, owner_id = await _register(client, "park_gong")
+    src = await source_service.create_source(
+        owner_user_id=owner_id,
+        source_type="gong_calls",
+        external_ref="demo-gong",
+        display_name="Gong",
+        settings={},
+    )
+
+    result = await sources_task._sync_source(UUID(src["id"]))
+
+    assert result["status"] == "needs_setup"
+    row = await _sync_row(_db_pool, src["id"])
+    assert row["sync_status"] == "needs_setup"
+    assert "Choose the Gong accounts" in row["sync_error"]
+    assert row["sync_error"] != sources_task.SYNC_FAILED_MESSAGE
+    assert row["last_synced_at"] is None
+
+
+@pytest.mark.asyncio
+async def test_github_sync_without_connection_parks_before_any_network(
+    client, _db_pool, monkeypatch
+):
+    """A github.com source used to swallow its missing connection and crawl
+    anonymously, so the permanent 'not connected to github' state surfaced as an
+    unexplained provider error forever. It now parks — and parks before a single
+    request leaves the process."""
+    from backend.integrations.github import indexer
+    from backend.tasks import sources as sources_task
+
+    def refuse_network(*args, **kwargs):
+        raise AssertionError("a parked github source must not reach the network")
+
+    monkeypatch.setattr(indexer, "_github_head_sha", refuse_network)
+    monkeypatch.setattr(indexer, "_download_archive", refuse_network)
+    monkeypatch.setattr(indexer, "_crawl_archive", refuse_network)
+
+    _, owner_id = await _register(client, "park_gh")
+    src = await source_service.create_source(
+        owner_user_id=owner_id,
+        source_type="github_repo",
+        external_ref="acme/parked",
+        display_name="acme/parked",
+    )
+
+    result = await sources_task._sync_source(UUID(src["id"]))
+
+    assert result["status"] == "needs_setup"
+    row = await _sync_row(_db_pool, src["id"])
+    assert row["sync_status"] == "needs_setup"
+    assert "not connected to github" in row["sync_error"]
+    assert row["sync_error"] != sources_task.SYNC_FAILED_MESSAGE
+
+
+@pytest.mark.asyncio
+async def test_non_github_repo_syncs_without_a_github_connection(client, _db_pool, monkeypatch):
+    """Only github.com archives need a GitHub connection. A GitLab ref must keep
+    syncing for a user who never connected GitHub — the credential fetch is gated
+    on the host, not on the source type."""
+    from backend.integrations.github import indexer
+    from backend.tasks import sources as sources_task
+
+    async def refuse_github_token(*args, **kwargs):
+        raise AssertionError("a GitLab source must not need a GitHub connection")
+
+    async def fake_crawl(archive_url, headers, on_text_file):
+        await on_text_file("README.md", "# From GitLab")
+        return ["README.md"]
+
+    monkeypatch.setattr(indexer, "get_valid_token", refuse_github_token)
+    monkeypatch.setattr(indexer, "_crawl_archive", fake_crawl)
+
+    _, owner_id = await _register(client, "gh_gitlab")
+    src = await source_service.create_source(
+        owner_user_id=owner_id,
+        source_type="github_repo",
+        external_ref="https://gitlab.com/acme/widgets",
+        display_name="acme/widgets (GitLab)",
+    )
+
+    result = await sources_task._sync_source(UUID(src["id"]))
+
+    assert result["status"] == "done"
+    paths = {d["path"] for d in await source_service.list_documents(src)}
+    assert paths == {"README.md"}
+
+
+@pytest.mark.asyncio
+async def test_sync_source_transient_failure_still_retries(client, _db_pool, monkeypatch):
+    """Parking is only for states the owner has to change. A network blip is not
+    one: the source keeps the redacted failure message and a next_sync_at in the
+    future, so it retries on its own cadence without ever being re-dispatched by
+    the reconciler ahead of schedule."""
+    import httpx
+
+    from backend.tasks import sources as sources_task
+
+    _, owner_id = await _register(client, "transient")
+    src = await source_service.create_source(
+        owner_user_id=owner_id,
+        source_type="github_repo",
+        external_ref="acme/blip",
+        display_name="acme/blip",
+    )
+
+    async def fail_transient(source):
+        raise httpx.ConnectError("connection reset by peer")
+
+    monkeypatch.setattr(sources_task, "INDEXERS", {"github_repo": fail_transient})
+
+    result = await sources_task._sync_source(UUID(src["id"]))
+
+    assert result["status"] == "failed"
+    row = await _sync_row(_db_pool, src["id"])
+    assert row["sync_status"] == "failed"
+    assert row["sync_error"] == sources_task.SYNC_FAILED_MESSAGE
+    assert row["next_sync_at"] > datetime.now(UTC)
 
 
 # --- slack webhook + event ingest -------------------------------------------

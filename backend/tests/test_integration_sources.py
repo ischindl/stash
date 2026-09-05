@@ -478,9 +478,10 @@ async def test_linear_account_requests_and_returns_stable_identity(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_gong_indexer_requires_account_allowlist(monkeypatch):
-    """An unconfigured allowlist must purge previously indexed (unscoped)
-    calls and fail the sync — not report a healthy no-op that leaves them
-    searchable."""
+    """An unconfigured allowlist must purge previously indexed (unscoped) calls
+    and park the source — not report a healthy no-op that leaves them searchable.
+    Nothing is broken and no retry can pick the accounts, so this is setup the
+    owner owes, not a sync failure."""
     purges: list[str] = []
 
     async def fail_get_valid_token(user_id, provider):
@@ -497,7 +498,7 @@ async def test_gong_indexer_requires_account_allowlist(monkeypatch):
         fake_purge_disallowed_copied_documents,
     )
 
-    with pytest.raises(RuntimeError, match="no allowed gong accounts"):
+    with pytest.raises(source_service.SourceSetupRequired, match="Choose the Gong accounts"):
         await gong_indexer.index_gong(
             {
                 "id": "00000000-0000-0000-0000-000000000001",

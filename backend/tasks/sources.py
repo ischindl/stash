@@ -16,6 +16,8 @@ import logging
 from collections.abc import Awaitable, Callable
 from uuid import UUID
 
+from fastapi import HTTPException
+
 from ..celery_app import celery
 from ..integrations.asana.indexer import index_asana
 from ..integrations.github.indexer import index_github_repo
@@ -59,6 +61,31 @@ INDEXERS: dict[str, Callable[[dict], Awaitable[str | None]]] = {
 }
 
 
+async def _run_indexer(
+    indexer: Callable[[dict], Awaitable[str | None]], source: dict
+) -> str | None:
+    """Run one indexer, translating a credential 401 into a park.
+
+    A provider credential lookup inside an indexer raises fastapi's
+    HTTPException(401) — the same exception the HTTP request handlers raise
+    (see integrations/storage.py, which serves both paths and so cannot raise
+    a sync-only type). On a sync there is no client to answer, and a 401 there
+    always means the same thing: this source's connection is missing,
+    disconnected, or expired beyond refresh. That is permanently true until the
+    owner acts, so hand it to mark_needs_setup — the state built for exactly
+    that — instead of letting the catch-all below record a failure that
+    promises a retry which can never help.
+
+    Any other status stays a real error and re-raises untouched.
+    """
+    try:
+        return await indexer(source)
+    except HTTPException as exc:
+        if exc.status_code == 401:
+            raise source_service.SourceSetupRequired(str(exc.detail))
+        raise
+
+
 async def _sync_source(source_id: UUID) -> dict:
     source = await source_service.get_source_for_sync(source_id)
     if source is None:
@@ -70,7 +97,7 @@ async def _sync_source(source_id: UUID) -> dict:
 
     await source_service.mark_sync_started(source_id)
     try:
-        cursor = await indexer(source)
+        cursor = await _run_indexer(indexer, source)
     except source_service.SourceSetupRequired as exc:
         # Waiting on the owner, not broken: no error log, no failed status.
         await source_service.mark_needs_setup(source_id, str(exc)[:500])

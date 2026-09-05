@@ -102,10 +102,15 @@ async def index_gong(source: dict) -> str | None:
     allowed_account_ids = set(source_service.gong_allowed_workspace_ids(source))
     await source_service.purge_disallowed_copied_documents(source)
     if not allowed_account_ids:
-        # purge_disallowed_copied_documents above already removed unscoped
-        # transcripts; fail loudly so the sync records a sync_error instead
-        # of reporting a successful no-op.
-        raise RuntimeError("no allowed gong accounts configured")
+        # purge_disallowed_copied_documents above already removed the unscoped
+        # transcripts. Nothing is broken and no retry can change this — Gong
+        # indexes only the accounts the owner picks, and none are picked yet —
+        # so the source parks with the instruction instead of failing with a
+        # retry promise. mark_needs_setup still records the message as the
+        # source's sync_error, so the owner always sees why nothing synced.
+        raise source_service.SourceSetupRequired(
+            "Choose the Gong accounts to index — nothing syncs until you do."
+        )
 
     creds = json.loads(await get_valid_token(owner_user_id, "gong"))
     headers = {"Authorization": f"Bearer {creds['access_token']}"}

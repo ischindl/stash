@@ -145,14 +145,22 @@ async def index_github_repo(source: dict) -> str | None:
     owner_user_id = UUID(source["owner_user_id"])
     external_ref = source["external_ref"]
 
-    try:
-        token = await get_valid_token(owner_user_id, "github")
-    except Exception:
-        token = None
-
     url = external_ref if "://" in external_ref else f"https://github.com/{external_ref}"
+
+    # Host detection is pure URL math, so resolve without a credential first to
+    # learn which host this is. Only a github.com archive needs the owner's
+    # GitHub connection; GitLab/Bitbucket/direct-.zip refs sync with no GitHub
+    # connection at all.
+    #
+    # A github.com source whose owner has no working connection now parks: the
+    # 401 from get_valid_token reaches the task boundary and becomes
+    # needs_setup. It used to be swallowed so the crawl ran anonymously forever,
+    # which recorded "not connected to github" as an unexplained provider error.
     try:
-        resolved = resolve_archive_url(url, None, github_token=token)
+        resolved = resolve_archive_url(url, None)
+        if resolved.host_kind == "github":
+            token = await get_valid_token(owner_user_id, "github")
+            resolved = resolve_archive_url(url, None, github_token=token)
     except UnsupportedHostError as e:
         raise RuntimeError(str(e))
 
