@@ -1160,6 +1160,144 @@ async def test_an_advance_from_a_pre_rewind_snapshot_re_closes_a_reopened_window
 
 
 @pytest.mark.asyncio
+async def test_a_pre_rewind_completion_cannot_swallow_a_reopened_window(
+    client: AsyncClient, _db_pool
+):
+    """The founder interleaving of 2026-09-05 (measured live on that account),
+    now refused: an ingest rewind re-opened history the curator had already
+    passed, and a run that had read its position *before* that rewind then tried
+    to complete. Its proposal is HIGHER than the rewound cursor, so a plain
+    monotonic `greatest()` would accept it and close the deliberately re-opened
+    window unread — the ~4,300-row silent skip. The advance is instead a
+    compare-and-set on the position the run actually read: because that position
+    moved under the run, the write is refused and raised, the rewound cursor
+    stands exactly, and the window stays open for the next run to re-read."""
+    key, uid = await _register(client)
+    curator = await agent_service.get_or_create_curator(uid)
+    cid = UUID(curator["id"])
+    re_imported = datetime.now(UTC) - timedelta(days=3)
+    position = datetime.now(UTC) - timedelta(days=1)
+
+    await _push_one(client, key, "conv-imported", re_imported)
+    await _db_pool.execute("UPDATE agents SET curated_through = $2 WHERE id = $1", cid, position)
+
+    # A late import older than the watermark drags it back — the rewind doing its
+    # job: history the curator had walked past is pending again.
+    await _push_one(client, key, "conv-imported-late", re_imported + timedelta(days=1))
+    rewound = await _db_pool.fetchval("SELECT curated_through FROM agents WHERE id = $1", cid)
+    assert rewound < position
+    assert await curation_service.has_changes_since(
+        uid, uid, rewound, curation_service.WIKI_INTERNAL
+    )
+
+    # A run dispatched before the rewind, completing from its own pre-rewind read
+    # (`position`) and proposing a point ahead of it. The stored value moved to
+    # `rewound`, so this completion may not write.
+    stale_proposal = datetime.now(UTC) + timedelta(hours=1)
+    with pytest.raises(agent_service.CuratorWatermarkConflict):
+        await agent_service.mark_curated(cid, position, stale_proposal)
+
+    assert (
+        await _db_pool.fetchval("SELECT curated_through FROM agents WHERE id = $1", cid) == rewound
+    )  # the rewind is honored exactly — nothing swallowed it
+    assert await curation_service.has_changes_since(
+        uid, uid, rewound, curation_service.WIKI_INTERNAL
+    )  # the re-opened window stays open, not shut unread
+
+
+@pytest.mark.asyncio
+async def test_a_mid_run_ingest_rewind_fails_the_curator_run_loud(
+    client: AsyncClient, sprite_exec, _db_pool, monkeypatch
+):
+    """The same loss reached through the real entry point, not a hand-set value:
+    an ingest rewind fires *while* the curator's turn is in flight (the exact
+    `push_event` call the ingest endpoint makes), moving the stored watermark
+    below the position the run read. The completion is refused and the conflict
+    propagates out of `_run_curator_now`, the run resolves `failed`, the rewind
+    survives, the metered credit it charged is refunded (mark_run_failed's job —
+    pinned here), and the re-opened window stays open for the next run."""
+    from backend.services import sprite_agent_service
+    from backend.tasks.agent_schedules import _run_curator_now
+    from backend.tasks.session_titles import generate_session_title
+
+    monkeypatch.setattr(generate_session_title, "delay", lambda *a, **k: None)
+    key, uid = await _register(client)
+    curator = await agent_service.get_or_create_curator(uid)
+    cid = UUID(curator["id"])
+    await _push_one(client, key, "conv-live", datetime.now(UTC) - timedelta(minutes=5))
+    position = datetime.now(UTC) - timedelta(days=1)
+    await _db_pool.execute("UPDATE agents SET curated_through = $2 WHERE id = $1", cid, position)
+    meter_before = await _db_pool.fetchval("SELECT month_run_count FROM agents WHERE id = $1", cid)
+
+    async def ingest_older_history(agent, stamp):
+        # A late import lands mid-turn; its rewind drags the stored watermark
+        # below the position this run read at start. Real ingest path.
+        await _push_one(client, key, "conv-late-import", datetime.now(UTC) - timedelta(days=3))
+
+    monkeypatch.setattr(sprite_agent_service, "run_scheduled", ingest_older_history)
+
+    with pytest.raises(agent_service.CuratorWatermarkConflict):
+        await _run_curator_now(cid)  # metered: the user-requested path
+
+    rewound = await _db_pool.fetchval("SELECT curated_through FROM agents WHERE id = $1", cid)
+    assert rewound < position  # the mid-run rewind survived the refused write
+    row = await _db_pool.fetchrow(
+        "SELECT last_run_outcome, month_run_count FROM agents WHERE id = $1", cid
+    )
+    assert row["last_run_outcome"] == "failed"
+    assert row["month_run_count"] == meter_before  # the metered run was refunded
+    assert await curation_service.has_changes_since(
+        uid, uid, rewound, curation_service.WIKI_INTERNAL
+    )  # the re-opened window stays open
+
+
+@pytest.mark.asyncio
+async def test_the_scheduled_curator_run_fails_loud_when_the_watermark_moves(
+    client: AsyncClient, sprite_exec, _db_pool, monkeypatch
+):
+    """The beat caller (`_run_scheduled_agent`) honors the same CAS contract. It
+    records failures rather than re-raising to the broker, so the refusal surfaces
+    as a visible `failed` outcome + alert on the agent row, and the other writer's
+    stored value — the progress this run must never clobber — survives untouched."""
+    from backend.services import alert_service, sprite_agent_service
+    from backend.tasks.agent_schedules import _run_scheduled_agent
+    from backend.tasks.session_titles import generate_session_title
+
+    monkeypatch.setattr(generate_session_title, "delay", lambda *a, **k: None)
+    alerts: list[str] = []
+
+    async def capture_alert(text: str) -> None:
+        alerts.append(text)
+
+    monkeypatch.setattr(alert_service, "send_alert", capture_alert)
+
+    key, uid = await _register(client)
+    curator = await agent_service.get_or_create_curator(uid)
+    cid = UUID(curator["id"])
+    await _push_one(client, key, "conv-live", datetime.now(UTC) - timedelta(minutes=5))
+    seeded = datetime.now(UTC) - timedelta(days=1)
+    await _db_pool.execute("UPDATE agents SET curated_through = $2 WHERE id = $1", cid, seeded)
+    advanced = datetime.now(UTC) + timedelta(minutes=10)
+
+    async def overlapping_writer(agent, stamp):
+        # The other run advanced the watermark mid-turn; its own CAS matches
+        # (it started from the same stored position), so its write lands.
+        await agent_service.mark_curated(cid, seeded, advanced)
+
+    monkeypatch.setattr(sprite_agent_service, "run_scheduled", overlapping_writer)
+
+    await _run_scheduled_agent(cid, "202609050000")  # records the failure, no re-raise
+
+    row = await _db_pool.fetchrow(
+        "SELECT curated_through, last_run_outcome, last_run_error FROM agents WHERE id = $1", cid
+    )
+    assert row["curated_through"] == advanced  # the other writer's value survives
+    assert row["last_run_outcome"] == "failed"
+    assert "watermark" in (row["last_run_error"] or "")
+    assert alerts  # the failure is escalated, not swallowed
+
+
+@pytest.mark.asyncio
 async def test_double_dispatch_on_one_agent_runs_single_flight(
     client: AsyncClient, sprite_exec, _db_pool, monkeypatch
 ):
