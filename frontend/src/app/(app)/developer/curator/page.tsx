@@ -60,7 +60,7 @@ function Curator() {
         user&apos;s own wiki, and the shared anonymized wiki every user&apos;s agent reads.
       </PageHeading>
 
-      <section className="mb-12 grid grid-cols-1 gap-4 sm:grid-cols-3">
+      <section className="mb-12 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <Fact
           label="Next run"
           value={formatWhen(data.next_run_at)}
@@ -70,7 +70,12 @@ function Curator() {
         <Fact
           label="Reading since"
           value={formatWhen(data.curator.curated_through)}
-          detail="Everything uploaded after this point is still uncurated."
+          detail="The point the last run finished reading; the next run starts here."
+        />
+        <Fact
+          label="Uncurated events"
+          value={`${data.event_backlog.distinct_events.toLocaleString()} still to read`}
+          detail={`${data.event_backlog.raw_rows.toLocaleString()} rows were uploaded since then — ${data.event_backlog.distinct_sessions.toLocaleString()} sessions, and ${duplicateCount(data.event_backlog).toLocaleString()} of those rows are re-imported copies of an event already counted.`}
         />
       </section>
 
@@ -465,6 +470,10 @@ function describeSchedule(cron: string): string {
   if (!nightly) return `Runs on ${cron} (UTC)`;
   const [, minute, hour] = nightly;
   return `Every night at ${hour.padStart(2, "0")}:${minute.padStart(2, "0")} UTC`;
+}
+
+function duplicateCount(backlog: CuratorData["event_backlog"]): number {
+  return backlog.raw_rows - backlog.distinct_events;
 }
 
 function formatWhen(iso: string | null): string {

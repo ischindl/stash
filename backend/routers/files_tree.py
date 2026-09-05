@@ -235,7 +235,12 @@ async def get_changes(
     `stash search`) — the curator never sees its own output.
 
     `wiki` decides how far the history events are scoped: the external wiki only
-    ever receives events from sessions whose end user shares, enforced in SQL."""
+    ever receives events from sessions whose end user shares, enforced in SQL.
+
+    `event_backlog` is how much of this wiki's feed is still unread from `since`,
+    counted as distinct events over exactly the rows this feed may read — so it
+    reaches 0 exactly when the feed comes back empty. It counts history events
+    only, not changed pages, new files, source documents, or saves."""
     from datetime import datetime
 
     if wiki not in curation_service.WIKI_VALUES:
@@ -245,7 +250,11 @@ async def get_changes(
         )
 
     since_dt = datetime.fromisoformat(since) if since else None
-    return await curation_service.changes_since(scope_user_id, current_user["id"], since_dt, wiki)
+    feed = await curation_service.changes_since(scope_user_id, current_user["id"], since_dt, wiki)
+    feed["event_backlog"] = await curation_service.curator_event_backlog(
+        scope_user_id, wiki, since_dt
+    )
+    return feed
 
 
 @router.post("/memory/recompute", status_code=202)

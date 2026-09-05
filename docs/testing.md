@@ -33,6 +33,7 @@ TEST_DATABASE_URL=postgresql://stash:stash@localhost:5432/stash_test \
 | `test_webhooks.py` | SSRF URL validation, secret hashing, delivery logic |
 | `test_curator.py` | Curator provisioning, schedule, gate, feed, page writes, and the watermark: an advance can never lower `curated_through`, a refused advance is logged, `full_history` never clears the stored position, one run per agent at a time, and the one gap the guard leaves |
 | `test_curator_feed_scoping.py` | Which events each wiki may read — the internal wiki everything, the external wiki only sessions of end users who share — and the gate agreeing with that feed |
+| `test_curator_event_identity.py` | One event, however often its session was re-pushed: the identity the feed, the gate, the watermark boundary, and the backlog share; distinct-vs-raw backlog; the honest zero (a leftover of only the curator's own transcripts is not work); drain equality; and both endpoints publishing the honest number |
 | `test_first_day_curator.py` | First-day curator tick, and the ingest rewind re-opening the cursor that imported history predates |
 | `test_agent_schedule_alerts.py` | Beat dispatch, designed skips, and the stale-watermark / failing-curator alerts |
 | `test_developer_platform.py` | Developer console curator run and backfill dispatch, and the ingest rewind staying inside the wiki whose feed can read the events |

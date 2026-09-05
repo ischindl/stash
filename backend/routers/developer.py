@@ -18,6 +18,7 @@ from ..auth import API_KEY_ACCESS_LEVELS, create_api_key, get_current_user, get_
 from ..database import get_pool
 from ..services import (
     agent_service,
+    curation_service,
     end_user_service,
     permission_service,
     session_folder_service,
@@ -276,6 +277,13 @@ async def get_curator(
         # watermark, so the run bootstraps from the full history.
         "backfill_prompt": await end_user_service.external_curator_prompt(workspace, None),
         "instructions": curator["system_prompt"],
+        # How much of the shared wiki's feed is still unread, counted as distinct
+        # events rather than rows: a transcript re-uploaded eight times is one
+        # event, so this is the figure a drain estimate can be built from. The
+        # raw row count travels with it so the gap explains itself.
+        "event_backlog": await curation_service.curator_event_backlog(
+            scope_user_id, curator["curator_wiki"], since
+        ),
         "feeding": [
             {"id": str(u["id"]), "name": u["name"], "external_id": u["external_id"]}
             for u in end_users

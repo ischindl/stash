@@ -407,6 +407,14 @@ export async function getCurator(): Promise<{
   prompt: string;
   backfill_prompt: string;
   instructions: string | null;
+  /** History events still unread in this curator's feed, from its watermark.
+   * `distinct_events` counts an event once however often its session was
+   * re-uploaded; `raw_rows` is the rows behind them, so the gap is visible. */
+  event_backlog: {
+    distinct_events: number;
+    raw_rows: number;
+    distinct_sessions: number;
+  };
   feeding: EndUserRef[];
   opted_out: EndUserRef[];
   runs: CuratorRun[];

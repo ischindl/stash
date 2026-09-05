@@ -3735,6 +3735,12 @@ def changes(
         f"{counts.get('files', 0)} files, {counts.get('saves', 0)} saves, "
         f"{counts.get('sources', 0)} sources"
     )
+    backlog = data.get("event_backlog", {})
+    console.print(
+        f"Backlog: {backlog.get('distinct_events', 0)} distinct events still unread "
+        f"({backlog.get('raw_rows', 0)} rows across "
+        f"{backlog.get('distinct_sessions', 0)} sessions)"
+    )
 
 
 @sources_app.command("add")
