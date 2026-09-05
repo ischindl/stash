@@ -57,6 +57,28 @@ async def test_first_day_conversation_dispatches_unmetered_runs(
 
 
 @pytest.mark.asyncio
+async def test_external_curator_is_gated_by_its_own_scope(client: AsyncClient, pool, dispatched):
+    """Day-one dispatch asks each wiki separately, because each one is gated by
+    its own feed. A conversation from an opted-out customer is real activity for
+    the workspace's own Memory wiki and NO activity for the shared one, so only
+    the internal curator may be woken — an external curator roused for nothing
+    would burn the workspace's runs on an empty delta."""
+    scope_id = await _workspace_with_conversation(client)
+    opted_out = await pool.fetchrow(
+        "UPDATE end_users SET share_wiki = false WHERE external_id = 'cust-1'"
+        "  AND workspace_id = (SELECT id FROM workspaces WHERE scope_user_id = $1)"
+        "  AND share_wiki RETURNING id",
+        scope_id,
+    )
+    # Proves the fixture did what it claims — the user existed and WAS sharing,
+    # so the test cannot pass because the workspace never had an end user.
+    assert opted_out is not None, "cust-1 was not a sharing end user of this workspace"
+
+    await _first_day_curator_tick(scope_id)
+    assert await _dispatched_wikis(pool, dispatched) == {"internal"}
+
+
+@pytest.mark.asyncio
 async def test_old_workspace_still_curates_its_own_memory(client: AsyncClient, pool, dispatched):
     scope_id = await _workspace_with_conversation(client)
     await pool.execute(
@@ -205,4 +227,6 @@ async def test_late_import_reopens_curation(client: AsyncClient, pool, dispatche
     assert dispatched == []
     from backend.services import curation_service
 
-    assert await curation_service.has_changes_since(user_id, user_id, curated_through)
+    assert await curation_service.has_changes_since(
+        user_id, user_id, curated_through, wiki="internal"
+    )

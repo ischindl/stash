@@ -112,9 +112,9 @@ async def test_has_changes_and_feed_exclude_memory(client: AsyncClient, _db_pool
         json={"name": "Notes", "content": "a real note"},
         headers=_auth(key),
     )
-    assert await curation_service.has_changes_since(uid, uid, old) is True
+    assert await curation_service.has_changes_since(uid, uid, old, wiki="internal") is True
 
-    feed = await curation_service.changes_since(uid, uid, old)
+    feed = await curation_service.changes_since(uid, uid, old, wiki="internal")
     assert any(p["name"] == "Notes" for p in feed["pages"])
 
     # A page written INTO the Memory folder must NOT appear (no self-curation).
@@ -124,7 +124,7 @@ async def test_has_changes_and_feed_exclude_memory(client: AsyncClient, _db_pool
         json={"name": "Wiki Page", "content": "curated", "folder_id": mem["id"]},
         headers=_auth(key),
     )
-    feed2 = await curation_service.changes_since(uid, uid, old)
+    feed2 = await curation_service.changes_since(uid, uid, old, wiki="internal")
     assert all(p["name"] != "Wiki Page" for p in feed2["pages"])
 
 
@@ -152,8 +152,8 @@ async def test_hydrated_saves_flow_through_the_feed(client: AsyncClient, _db_poo
         UUID(source["id"]),
     )
 
-    assert await curation_service.has_changes_since(uid, uid, old) is True
-    feed = await curation_service.changes_since(uid, uid, old)
+    assert await curation_service.has_changes_since(uid, uid, old, wiki="internal") is True
+    feed = await curation_service.changes_since(uid, uid, old, wiki="internal")
     assert feed["counts"]["saves"] == 1
     save = feed["saves"][0]
     assert save["name"] == "@bob - 77"
@@ -187,8 +187,8 @@ async def test_changed_drive_docs_flow_through_the_feed(client: AsyncClient, _db
         UUID(source["id"]),
     )
 
-    assert await curation_service.has_changes_since(uid, uid, old) is True
-    feed = await curation_service.changes_since(uid, uid, old)
+    assert await curation_service.has_changes_since(uid, uid, old, wiki="internal") is True
+    feed = await curation_service.changes_since(uid, uid, old, wiki="internal")
     assert feed["counts"]["source_docs"] == 1
     doc = feed["source_docs"][0]
     assert doc["path"] == "Sheets/Brakes"
@@ -228,12 +228,12 @@ async def test_feed_overflow_never_drops_events(client: AsyncClient, _db_pool, m
         ],
     )
 
-    feed = await curation_service.changes_since(uid, uid, old)
+    feed = await curation_service.changes_since(uid, uid, old, wiki="internal")
     assert feed["history_has_more"] is True
     assert [h["content"] for h in feed["history"]] == ["turn 0", "turn 1", "turn 2"]
 
     until = base + timedelta(hours=1)
-    through = await curation_service.complete_through(uid, old, until)
+    through = await curation_service.complete_through(uid, old, until, wiki="internal")
     # Complete only through the last event that fit, not through `until`.
     assert through < base + timedelta(minutes=3)
 
@@ -241,10 +241,10 @@ async def test_feed_overflow_never_drops_events(client: AsyncClient, _db_pool, m
     # The boundary event re-appears by design — the watermark backs off a
     # microsecond so events sharing its timestamp can never be skipped; a
     # duplicated boundary event is the cheap side of that trade.
-    next_feed = await curation_service.changes_since(uid, uid, through)
+    next_feed = await curation_service.changes_since(uid, uid, through, wiki="internal")
     assert [h["content"] for h in next_feed["history"]] == ["turn 2", "turn 3", "turn 4"]
     assert next_feed["history_has_more"] is False
-    assert await curation_service.complete_through(uid, through, until) == until
+    assert await curation_service.complete_through(uid, through, until, wiki="internal") == until
 
 
 @pytest.mark.asyncio
@@ -281,11 +281,11 @@ async def test_curate_sessions_do_not_consume_feed_slots(
     ]
     await _push_events(client, key, curate_noise + real)
 
-    feed = await curation_service.changes_since(uid, uid, old)
+    feed = await curation_service.changes_since(uid, uid, old, wiki="internal")
     assert [h["content"] for h in feed["history"]] == ["real 0", "real 1"]
     assert feed["history_has_more"] is False
     assert await curation_service.complete_through(
-        uid, old, base + timedelta(hours=1)
+        uid, old, base + timedelta(hours=1), wiki="internal"
     ) == base + timedelta(hours=1)
 
 
@@ -296,7 +296,7 @@ async def test_has_changes_false_after_watermark(client: AsyncClient, _db_pool):
     )
     future = datetime.now(UTC) + timedelta(hours=1)
     # Nothing changed after a future watermark → no changes → curator skipped.
-    assert await curation_service.has_changes_since(uid, uid, future) is False
+    assert await curation_service.has_changes_since(uid, uid, future, wiki="internal") is False
 
 
 @pytest.mark.asyncio
@@ -399,8 +399,11 @@ async def test_curator_run_does_not_echo_loop(
     # Watermark advanced past the page change, and the run's own transcript
     # doesn't re-trigger the gate or appear in the feed.
     assert row["last_run_outcome"] == "ran"
-    assert await curation_service.has_changes_since(uid, uid, row["curated_through"]) is False
-    feed = await curation_service.changes_since(uid, uid, row["curated_through"])
+    assert (
+        await curation_service.has_changes_since(uid, uid, row["curated_through"], wiki="internal")
+        is False
+    )
+    feed = await curation_service.changes_since(uid, uid, row["curated_through"], wiki="internal")
     assert all(not str(e["session_id"] or "").startswith("agent-curate-") for e in feed["history"])
 
 
@@ -600,7 +603,7 @@ async def test_manual_recompute_bookkeeping_failure_records_failed_outcome(
     _key, uid = await _register(client)
     curator = await agent_service.get_or_create_curator(uid)
 
-    async def boom(user_id, curated_through, now):
+    async def boom(user_id, curated_through, now, wiki):
         raise RuntimeError("watermark write failed")
 
     monkeypatch.setattr(curation_service, "complete_through", boom)
@@ -795,7 +798,7 @@ async def test_feed_carries_session_folder(client: AsyncClient, _db_pool):
         ],
     )
 
-    feed = await curation_service.changes_since(uid, uid, old)
+    feed = await curation_service.changes_since(uid, uid, old, wiki="internal")
     by_session = {h["session_id"]: h for h in feed["history"]}
     filed, bare = by_session["conv-folder"], by_session["conv-bare"]
     assert filed["session_folder"] == "Acme Corp"
@@ -810,7 +813,7 @@ async def test_feed_carries_session_folder(client: AsyncClient, _db_pool):
         assert h["user_share_wiki"] is None
 
     # Row level carries the id too — 1:1, so no fan-out and no missing row.
-    rows, has_more = await curation_service._feed_events(uid, old, None, 100)
+    rows, has_more = await curation_service._feed_events(uid, old, None, 100, wiki="internal")
     assert has_more is False
     rows_by_session = {r["session_id"]: r for r in rows}
     assert rows_by_session["conv-folder"]["session_folder"] == "Acme Corp"
@@ -919,7 +922,7 @@ async def test_feed_marks_which_projects_are_cleared(client: AsyncClient, _db_po
     await _push_one(client, key, "conv-on", at)
     await _file_session(client, key, uid, _db_pool, "conv-on", on_folder.json()["id"])
 
-    feed = await curation_service.changes_since(uid, uid, old)
+    feed = await curation_service.changes_since(uid, uid, old, wiki="internal")
     by_session = {h["session_id"]: h for h in feed["history"]}
 
     assert by_session["conv-unfiled"]["session_folder_share_wiki"] is None

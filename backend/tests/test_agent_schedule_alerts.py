@@ -183,7 +183,7 @@ async def test_run_bookkeeping_failure_sends_alert(client: AsyncClient, monkeypa
     async def fake_run_scheduled(agent, stamp):
         return ""
 
-    async def boom(user_id, curated_through, now):
+    async def boom(user_id, curated_through, now, wiki):
         raise RuntimeError("watermark write failed")
 
     monkeypatch.setattr(sprite_agent_service, "run_scheduled", fake_run_scheduled)
@@ -215,13 +215,18 @@ async def test_run_due_records_no_changes_skip(client: AsyncClient, monkeypatch)
     async def fake_resolve(user_id, prefer_provider=None):
         return None
 
-    async def no_changes(owner_user_id, user_id, since):
+    gated_by: list[str] = []
+
+    async def no_changes(owner_user_id, user_id, since, wiki):
+        gated_by.append(wiki)
         return False
 
     monkeypatch.setattr(agent_auth, "resolve", fake_resolve)
     monkeypatch.setattr(curation_service, "has_changes_since", no_changes)
 
     assert await agent_schedules._run_due() == 0
+    # The beat judges this curator by ITS wiki, not a hardcoded one.
+    assert gated_by == ["internal"]
     outcome = await get_pool().fetchval(
         "SELECT last_run_outcome FROM agents WHERE id = $1", agent["id"]
     )
