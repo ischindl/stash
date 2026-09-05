@@ -1098,6 +1098,53 @@ async def test_stale_completion_cannot_regress_an_overlapping_run(
 
 
 @pytest.mark.asyncio
+async def test_an_advance_from_a_pre_rewind_snapshot_re_closes_a_reopened_window(
+    client: AsyncClient, _db_pool
+):
+    """Characterizes the one loss the monotonic guard cannot prevent, measured live
+    on the founder account on 2026-09-05: an ingest rewind re-opened history the
+    curator had already passed, and a run that had read its position *before* that
+    rewind then completed. Its proposal is HIGHER than the rewound watermark, so
+    `greatest()` accepts it and the window the rewind deliberately re-opened is
+    skipped with no refusal to read. That is the same loss this card exists to
+    stop, arriving from the opposite direction.
+
+    Recording it is not endorsing it: refusing an advance that would swallow a
+    rewind means compare-and-set against the position the run read, a different
+    contract than "never move backwards", and it re-charges curation for material
+    already distilled. The last two assertions are what such a card would flip."""
+    key, uid = await _register(client)
+    curator = await agent_service.get_or_create_curator(uid)
+    cid = UUID(curator["id"])
+    re_imported = datetime.now(UTC) - timedelta(days=3)
+    position = datetime.now(UTC) - timedelta(days=1)
+
+    await _push_one(client, key, "conv-imported", re_imported)
+    await _db_pool.execute("UPDATE agents SET curated_through = $2 WHERE id = $1", cid, position)
+
+    # A late import older than the watermark drags it back, which is the rewind
+    # doing its job: history the curator had walked past is pending again.
+    await _push_one(client, key, "conv-imported-late", re_imported + timedelta(days=1))
+    rewound = await _db_pool.fetchval("SELECT curated_through FROM agents WHERE id = $1", cid)
+    assert rewound < position
+    assert await curation_service.has_changes_since(
+        uid, cid, rewound, curation_service.WIKI_INTERNAL
+    )
+
+    # The run dispatched before the rewind finishes, proposing where its own
+    # pre-rewind read said the feed ended.
+    stale_proposal = datetime.now(UTC) + timedelta(hours=1)
+    assert await agent_service.mark_curated(cid, stale_proposal) == stale_proposal
+
+    assert (
+        await curation_service.has_changes_since(
+            uid, cid, stale_proposal, curation_service.WIKI_INTERNAL
+        )
+        is False
+    )  # the re-opened window is shut again, unread
+
+
+@pytest.mark.asyncio
 async def test_double_dispatch_on_one_agent_runs_single_flight(
     client: AsyncClient, sprite_exec, _db_pool, monkeypatch
 ):

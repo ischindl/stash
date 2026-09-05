@@ -31,7 +31,7 @@ TEST_DATABASE_URL=postgresql://stash:stash@localhost:5432/stash_test \
 | `test_auth.py` | Registration, login, API key auth, password validation |
 | `test_permissions.py` | Private-by-default access, owner read/write, share grants, publish records |
 | `test_webhooks.py` | SSRF URL validation, secret hashing, delivery logic |
-| `test_curator.py` | Curator provisioning, schedule, gate, feed, page writes, and the watermark: an advance can never lower `curated_through`, a refused advance is logged, `full_history` never clears the stored position, one run per agent at a time |
+| `test_curator.py` | Curator provisioning, schedule, gate, feed, page writes, and the watermark: an advance can never lower `curated_through`, a refused advance is logged, `full_history` never clears the stored position, one run per agent at a time, and the one gap the guard leaves |
 | `test_curator_feed_scoping.py` | Which events each wiki may read — the internal wiki everything, the external wiki only sessions of end users who share — and the gate agreeing with that feed |
 | `test_first_day_curator.py` | First-day curator tick, and the ingest rewind re-opening the cursor that imported history predates |
 | `test_agent_schedule_alerts.py` | Beat dispatch, designed skips, and the stale-watermark / failing-curator alerts |
@@ -53,6 +53,14 @@ marker backwards is the ingest rewind in `memory_service`: importing history tha
 cursor has to reopen it, or the imported material would never be curated. That rewind is pinned
 by `test_first_day_curator.py::test_late_import_reopens_curation`, and its per-wiki scope by
 `test_developer_platform.py::test_ingest_rewind_stays_inside_its_wiki`.
+
+One gap is deliberately left open rather than papered over: a run that read its position
+*before* a rewind completes higher than the rewound cursor, so the monotonic guard accepts it
+and the window the rewind reopened shuts again, unread. Refusing that shape means
+compare-and-set on the position the run read — a different contract, and it re-charges
+curation for material already distilled — so it needs its own card.
+`test_curator.py::test_an_advance_from_a_pre_rewind_snapshot_re_closes_a_reopened_window`
+records the current behavior so that card has something to flip.
 
 ### Conventions
 
