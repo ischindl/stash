@@ -5,6 +5,20 @@ everything before it is captured in git history (`git log`), not here.
 
 ## Unreleased
 
+- A source you never actually connected now says what is missing instead of
+  promising a retry that can never help. Not-connected providers, a provider key
+  the server was never configured with, and an empty account/channel selection
+  now park the source as "Needs setup" with the concrete reason — "not connected
+  to gmail", "TWITTERAPI_IO_KEY is not set — set it in the backend environment to
+  sync X saves", "Choose the Gong accounts to index — nothing syncs until you
+  do." — instead of a red "Sync hit an unexpected error — it will retry
+  automatically" that retried a permanent configuration state forever. A
+  genuinely temporary failure (a network blip) still retries on its own schedule.
+  Background dispatch also claims each source at enqueue time, so a stale queue
+  message can no longer re-run a sync that already happened: on a freshly seeded
+  dev machine the work queue now stays empty instead of growing by ~300 doomed
+  jobs an hour, and `seed_dev` seeds its demo sources parked so a new stack does
+  not manufacture that load at all.
 - The `stash` CLI restores its machine-readable output contract for AI agent
   consumers. `stash --json <command>` now works globally on any command (OR'd
   with each command's own `--json`) and stdout carries only parseable data; all
