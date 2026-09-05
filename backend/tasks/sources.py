@@ -129,17 +129,13 @@ async def _sync_source(source_id: UUID) -> dict:
 
 
 async def _reconcile_due() -> int:
-    due = await source_service.due_sources()
-    dispatched = 0
-    for s in due:
-        if s["source_type"] not in INDEXERS:
-            continue
+    claimed = await source_service.claim_due_sources(source_types=list(INDEXERS))
+    for source_id in claimed:
         celery.send_task(
             "backend.tasks.sources.sync_source",
-            kwargs={"source_id": s["id"]},
+            kwargs={"source_id": source_id},
         )
-        dispatched += 1
-    return dispatched
+    return len(claimed)
 
 
 @celery.task(name="backend.tasks.sources.sync_source")

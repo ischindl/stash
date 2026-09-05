@@ -302,7 +302,7 @@ async def create_source(
     now(). Types without a scheduled-sync interval (search-driven) have no
     indexer and must NOT enroll in the sync queue: the reconciler skips
     them without advancing next_sync_at, so an enabled row would sit "due"
-    forever at the front of the due_sources window and starve real syncs."""
+    forever at the front of the claim order and starve real syncs."""
     validate_source_external_ref(source_type, external_ref)
     capability = SOURCE_CAPABILITY.get(source_type, "navigable")
     interval = DEFAULT_SYNC_INTERVAL_S.get(source_type, 3600)
@@ -543,32 +543,45 @@ async def get_source_for_sync(source_id: UUID) -> dict | None:
     }
 
 
-async def due_sources(limit: int = 50) -> list[dict]:
-    """Pull sources whose scheduled sync is due (for the Beat reconciler). Also
-    reclaims sources stuck in 'syncing' for over 10 minutes: a sync killed
-    mid-run (e.g. a worker redeploy) never reaches mark_sync_done, so without
-    this the source would sit 'syncing' forever and never re-sync."""
+async def claim_due_sources(*, source_types: list[str], limit: int = 50) -> list[str]:
+    """Atomically claim the sources whose scheduled sync is due (for the Beat
+    reconciler); the caller enqueues exactly one sync task per returned id.
+
+    Claiming is the point. The old path read a due list and enqueued it, so a
+    stale queue message re-ran the same sync whenever it was finally consumed,
+    and a source that fails instantly re-failed at the queue's pace instead of
+    its own. The atomic UPDATE ... FOR UPDATE SKIP LOCKED — the same shape
+    kick_stale_sources uses — applies mark_sync_started's mutation at enqueue
+    time, so a source is dispatched at most once per interval however many
+    reconciler passes or queued messages follow.
+
+    Keeps due_sources' crash-recovery clause: a sync killed mid-run (e.g. a
+    worker redeploy) never reaches mark_sync_done, so a 'syncing' row quiet for
+    over 10 minutes is claimable again.
+
+    Deliberately does NOT exclude 'needs_setup': mark_sync_started already
+    advanced next_sync_at when the source was dispatched, so a parked source
+    re-attempts on its own cadence and heals itself once the owner fixes the
+    setup. The access kick keeps excluding it — re-syncing on a page read cannot
+    fix a setup problem either.
+    """
     rows = await get_pool().fetch(
-        "SELECT id, owner_user_id, source_type, external_ref, sync_cursor, settings "
-        "FROM user_sources "
-        "WHERE sync_enabled AND ("
-        "  next_sync_at <= now() "
-        "  OR (sync_status = 'syncing' AND updated_at < now() - interval '10 minutes')"
-        ") "
-        "ORDER BY next_sync_at LIMIT $1",
+        "UPDATE user_sources SET sync_status = 'syncing', sync_error = NULL, "
+        "next_sync_at = now() + (sync_interval_s || ' seconds')::interval, updated_at = now() "
+        "WHERE id IN ("
+        "  SELECT id FROM user_sources "
+        "  WHERE sync_enabled "
+        "  AND (next_sync_at <= now() "
+        "       OR (sync_status = 'syncing' AND updated_at < now() - interval '10 minutes')) "
+        "  AND source_type = ANY($1::text[]) "
+        "  ORDER BY next_sync_at "
+        "  LIMIT $2 "
+        "  FOR UPDATE SKIP LOCKED"
+        ") RETURNING id",
+        source_types,
         limit,
     )
-    return [
-        {
-            "id": str(r["id"]),
-            "owner_user_id": str(r["owner_user_id"]),
-            "source_type": r["source_type"],
-            "external_ref": r["external_ref"],
-            "sync_cursor": r["sync_cursor"],
-            "settings": r["settings"] or {},
-        }
-        for r in rows
-    ]
+    return [str(r["id"]) for r in rows]
 
 
 SKILL_BINDABLE_SOURCE_TYPES = ("google_drive_folder",)

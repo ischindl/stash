@@ -323,18 +323,22 @@ async def test_source_sync_resolves_via_owner(client: AsyncClient):
     )
     source_id = UUID(source["id"])
 
-    due_ids = {UUID(source["id"]) for source in await source_service.due_sources(limit=20)}
+    from backend.tasks import sources as sources_task
 
-    assert source_id in due_ids
+    claimed = await source_service.claim_due_sources(
+        source_types=list(sources_task.INDEXERS), limit=20
+    )
+
+    assert source_id in {UUID(c) for c in claimed}
     fetched = await source_service.get_source_for_sync(source_id)
     assert fetched is not None
     assert UUID(fetched["owner_user_id"]) == owner_id
 
 
 @pytest.mark.asyncio
-async def test_due_sources_reclaims_stuck_syncing(client: AsyncClient, _db_pool):
-    """A sync killed mid-run leaves the source 'syncing'; due_sources reclaims it
-    once it's been stuck past the threshold, but leaves a fresh one alone."""
+async def test_claim_due_sources_reclaims_stuck_syncing(client: AsyncClient, _db_pool):
+    """A sync killed mid-run leaves the source 'syncing'; the due claim reclaims
+    it once it has been stuck past the threshold, but leaves a fresh one alone."""
     _, owner_id = await _register(client, "src_stuck")
     source = await source_service.create_source(
         owner_user_id=owner_id,
@@ -351,15 +355,120 @@ async def test_due_sources_reclaims_stuck_syncing(client: AsyncClient, _db_pool)
         "next_sync_at = now() + interval '1 hour', updated_at = now() WHERE id = $1",
         sid,
     )
-    due = {UUID(s["id"]) for s in await source_service.due_sources(limit=50)}
-    assert sid not in due
+    claimed = await source_service.claim_due_sources(source_types=["slack"], limit=50)
+    assert sid not in {UUID(c) for c in claimed}
 
-    # Stuck syncing past the threshold -> reclaimed even though not schedule-due.
+    # Stuck syncing past the threshold -> reclaimed even though not schedule-due,
+    # and the claim re-arms the row so it is not reclaimed again immediately.
     await _db_pool.execute(
         "UPDATE user_sources SET updated_at = now() - interval '15 minutes' WHERE id = $1", sid
     )
-    due = {UUID(s["id"]) for s in await source_service.due_sources(limit=50)}
-    assert sid in due
+    claimed = await source_service.claim_due_sources(source_types=["slack"], limit=50)
+    assert sid in {UUID(c) for c in claimed}
+
+    row = await _db_pool.fetchrow("SELECT * FROM user_sources WHERE id = $1", sid)
+    assert row["sync_status"] == "syncing"
+    assert row["next_sync_at"] > datetime.now(UTC)
+
+
+@pytest.mark.asyncio
+async def test_reconcile_due_claims_each_source_only_once(
+    client: AsyncClient, _db_pool, monkeypatch
+):
+    """The reconciler must claim what it enqueues. It used to read a due list and
+    publish it every 120 s without any in-flight dedupe, and sync_source never
+    re-checked due-ness, so a stale backlog re-ran the same sync every time a
+    message was finally consumed — the self-sustaining retry storm. Claiming at
+    dispatch means a second pass finds nothing to enqueue."""
+    from backend.tasks import sources as sources_task
+
+    _, owner_id = await _register(client, "reconcile_once")
+    src = await source_service.create_source(
+        owner_user_id=owner_id,
+        source_type="slack",
+        external_ref="TRECONCILE",
+        display_name="Reconcile",
+        settings={"allowed_channel_ids": ["CRECONCILE"]},
+    )
+
+    sent: list[dict] = []
+    monkeypatch.setattr(
+        sources_task.celery,
+        "send_task",
+        lambda *args, **kwargs: sent.append(kwargs.get("kwargs", {})),
+    )
+
+    first = await sources_task._reconcile_due()
+    assert first == 1
+    assert sent == [{"source_id": src["id"]}]
+
+    # The claim advanced next_sync_at and marked the row syncing, so the next
+    # beat tick has nothing to publish — even though nothing has run the sync.
+    second = await sources_task._reconcile_due()
+    assert second == 0
+    assert len(sent) == 1
+
+    row = await _db_pool.fetchrow("SELECT * FROM user_sources WHERE id = $1", UUID(src["id"]))
+    assert row["sync_status"] == "syncing"
+    assert row["next_sync_at"] > datetime.now(UTC)
+
+
+@pytest.mark.asyncio
+async def test_claim_due_sources_ignores_types_without_an_indexer(client, _db_pool):
+    """A sync-enabled row whose type has no indexer must be neither claimed nor
+    re-armed: the source_type filter in the claim is what replaces the old
+    post-read skip, and claiming it would hide a permanently undeliverable row."""
+    _, owner_id = await _register(client, "no_indexer")
+    row_id = await _db_pool.fetchval(
+        "INSERT INTO user_sources (owner_user_id, source_type, external_ref, display_name, "
+        "capability, sync_interval_s, sync_enabled, next_sync_at) "
+        "VALUES ($1, 'not_a_real_type', 'x', 'Ghost', 'navigable', 3600, true, now()) RETURNING id",
+        owner_id,
+    )
+    before = await _db_pool.fetchval("SELECT next_sync_at FROM user_sources WHERE id = $1", row_id)
+
+    from backend.tasks import sources as sources_task
+
+    claimed = await source_service.claim_due_sources(
+        source_types=list(sources_task.INDEXERS), limit=50
+    )
+
+    assert row_id not in {UUID(c) for c in claimed}
+    after = await _db_pool.fetchval("SELECT next_sync_at FROM user_sources WHERE id = $1", row_id)
+    assert after == before
+
+
+@pytest.mark.asyncio
+async def test_claim_due_sources_reclaims_parked_source_on_its_own_cadence(client, _db_pool):
+    """A parked source is not stranded: once its own interval elapses it is
+    claimable again, so it heals itself as soon as the owner fixes the setup.
+    A parked row that is not yet due is still left alone."""
+    _, owner_id = await _register(client, "parked_reclaim")
+    src = await source_service.create_source(
+        owner_user_id=owner_id,
+        source_type="gmail",
+        external_ref="healed@example.com",
+        display_name="Gmail",
+    )
+    sid = UUID(src["id"])
+    await _db_pool.execute(
+        "UPDATE user_sources SET sync_status = 'needs_setup', sync_error = 'not connected to gmail' "
+        "WHERE id = $1",
+        sid,
+    )
+
+    # Still parked for the future: nothing to reclaim.
+    await _db_pool.execute(
+        "UPDATE user_sources SET next_sync_at = now() + interval '1 hour' WHERE id = $1", sid
+    )
+    claimed = await source_service.claim_due_sources(source_types=["gmail"], limit=50)
+    assert sid not in {UUID(c) for c in claimed}
+
+    # Its own interval has elapsed -> claimable, so a fixed setup resumes sync
+    # without anyone re-enrolling the source.
+    await _db_pool.execute("UPDATE user_sources SET next_sync_at = now() WHERE id = $1", sid)
+    claimed = await source_service.claim_due_sources(source_types=["gmail"], limit=50)
+    assert sid in {UUID(c) for c in claimed}
 
 
 @pytest.mark.asyncio
