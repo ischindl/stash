@@ -41,8 +41,12 @@ DEMO_EMAIL = "demo@example.com"
 DEMO_PASSWORD = "demopass123"
 
 # One fake source per provider (google has two). Each external_ref / settings
-# satisfies that type's validation: jira wants "{cloudId}:{projectKey}", linear
-# must be "me", and slack needs at least one channel id.
+# must be a shape that provider's own parser accepts — jira wants
+# "{cloudId}:{projectKey}", linear must be "me", slack needs at least one
+# channel id, notion wants a 32-char hex id. validate_source_external_ref is not
+# enough: a provider that parses its ref inside the indexer rejects a lazy
+# placeholder before the credential lookup, which lands as 'failed' and re-arms
+# forever instead of parking. test_every_seeded_demo_source_parks enforces this.
 SEED_SOURCES = [
     {
         "source_type": "github_repo",
@@ -60,7 +64,11 @@ SEED_SOURCES = [
         "external_ref": "demo@example.com",
         "display_name": "Gmail (demo@example.com)",
     },
-    {"source_type": "notion", "external_ref": "demo-notion", "display_name": "Product Wiki"},
+    {
+        "source_type": "notion",
+        "external_ref": "deadbeefdeadbeefdeadbeefdeadbeef",
+        "display_name": "Product Wiki",
+    },
     {
         "source_type": "slack",
         "external_ref": "T0DEMO",

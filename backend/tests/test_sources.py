@@ -21,6 +21,7 @@ from fastapi import HTTPException
 from httpx import AsyncClient, HTTPStatusError
 
 from backend.routers import sources as sources_router
+from backend.scripts.seed_dev import SEED_SOURCES
 from backend.services import agent_runtime, source_service
 
 from .conftest import unique_name
@@ -1652,6 +1653,35 @@ async def test_sync_source_transient_failure_still_retries(client, _db_pool, mon
     assert row["sync_status"] == "failed"
     assert row["sync_error"] == sources_task.SYNC_FAILED_MESSAGE
     assert row["next_sync_at"] > datetime.now(UTC)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("spec", SEED_SOURCES, ids=[spec["source_type"] for spec in SEED_SOURCES])
+async def test_every_seeded_demo_source_parks(client, _db_pool, monkeypatch, spec):
+    """A seeded demo row must never be able to fail permanently.
+
+    A seed has no connection, so its sync has to reach the credential boundary
+    and park there. A ref the provider's own parser rejects dies before that,
+    which records a failure that can never succeed and keeps the row re-arming
+    on every dev stack. This is what caught a notion seed ref that was not a
+    notion id: the indexer parsed it before looking up a token, so the row
+    failed forever instead of parking.
+    """
+    from backend.config import settings
+    from backend.tasks import sources as sources_task
+
+    monkeypatch.setattr(settings, "TWITTERAPI_IO_KEY", None)
+    monkeypatch.setattr(settings, "SCRAPECREATORS_API_KEY", None)
+
+    _, owner_id = await _register(client, f"seed_{spec['source_type']}")
+    src = await source_service.create_source(owner_user_id=owner_id, **spec)
+
+    result = await sources_task._sync_source(UUID(src["id"]))
+
+    assert result["status"] == "needs_setup", (spec["source_type"], result)
+    row = await _sync_row(_db_pool, src["id"])
+    assert row["sync_status"] == "needs_setup"
+    assert row["sync_error"] != sources_task.SYNC_FAILED_MESSAGE
 
 
 # --- slack webhook + event ingest -------------------------------------------
