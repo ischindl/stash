@@ -20,11 +20,22 @@ from cli.client import StashClient
 
 runner = CliRunner()
 
+# What the server answers. These tests assert what goes ON the wire, so the body
+# only has to be one the command can honestly render: `changes` prints a backlog
+# line whose every field is required — a missing one raises rather than printing
+# a fabricated zero (STAS-192) — so an empty `{}` body is no longer a response
+# the command accepts. The zeros below are the honest kind: a server reporting a
+# drained feed, not a field the CLI invented.
+_CHANGES_BODY = {
+    "counts": {"history": 0, "pages": 0, "files": 0, "saves": 0, "sources": 0},
+    "event_backlog": {"distinct_events": 0, "raw_rows": 0, "distinct_sessions": 0},
+}
+
 
 def _recording_handler(requests: list[httpx.Request]):
     def handle(request: httpx.Request) -> httpx.Response:
         requests.append(request)
-        return httpx.Response(200, json={})
+        return httpx.Response(200, json=_CHANGES_BODY)
 
     return handle
 

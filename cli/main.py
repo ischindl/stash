@@ -3735,11 +3735,16 @@ def changes(
         f"{counts.get('files', 0)} files, {counts.get('saves', 0)} saves, "
         f"{counts.get('sources', 0)} sources"
     )
-    backlog = data.get("event_backlog", {})
+    # Every field is indexed, never defaulted: this line is the founder's only
+    # view of how much of their history the curator has left to read, and a
+    # missing field rendered as 0 reads as a drained backlog to a curator that
+    # has read nothing. The server sets `event_backlog` on every successful
+    # response, so its absence is a contract break and must surface as one.
+    backlog = data["event_backlog"]
     console.print(
-        f"Backlog: {backlog.get('distinct_events', 0)} distinct events still unread "
-        f"({backlog.get('raw_rows', 0)} rows across "
-        f"{backlog.get('distinct_sessions', 0)} sessions)"
+        f"Backlog: {backlog['distinct_events']} distinct events still unread "
+        f"({backlog['raw_rows']} rows across "
+        f"{backlog['distinct_sessions']} sessions)"
     )
 
 
