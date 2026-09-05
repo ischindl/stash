@@ -730,24 +730,59 @@ async def mark_run_succeeded(agent_id: UUID) -> None:
     )
 
 
-async def mark_curated(agent_id: UUID, through: datetime) -> datetime:
-    """Advance the curator's delta watermark — only after a successful run, so
-    a failed run's window is re-covered next time. Returns the stored position.
+class CuratorWatermarkConflict(Exception):
+    """The curator watermark moved between the position a run read and the
+    advance it earned, so the completion is refused rather than allowed to write
+    over the newer value. A plain monotonic GREATEST would silently accept an
+    advance that swallows an ingest rewind (the founder's 2026-09-05 ~4,300-row
+    skip) or, from the other direction, clobber an overlapping run — so the
+    advance is a compare-and-set on the position the run actually read. The run
+    that loses is recorded as a failure, never a silent success."""
 
-    The advance is monotonic: GREATEST means a run that computed its position
-    from a snapshot taken before an overlapping run finished (or a backfill
-    that read from the oldest) can never walk the watermark backwards. A
-    refused position is logged naming the curator and the retained position —
-    a run's number vanishing in silence is exactly what read as "completed
-    curation discarded". The one writer allowed to move it backwards is the
-    ingest rewind in memory_service: a deliberate re-read of imported history,
-    not a run's bookkeeping."""
+    def __init__(self, agent_id: UUID, read_position: datetime | None, stored: datetime | None):
+        self.agent_id = agent_id
+        self.read_position = read_position
+        self.stored = stored
+        super().__init__(
+            f"curator watermark conflict for agent {agent_id}: the run read "
+            f"position {read_position} but the stored position is now {stored}; "
+            f"the watermark moved under the run, so its advance was refused"
+        )
+
+
+async def mark_curated(
+    agent_id: UUID, read_position: datetime | None, through: datetime
+) -> datetime:
+    """Advance the curator's delta watermark — only after a successful run, so a
+    failed run's window is re-covered next time. Returns the stored position.
+
+    The advance is a compare-and-set: it lands only while the stored value is
+    still the position the run read (`read_position`). If anything moved it in
+    the interim — an ingest rewind re-opening deliberately-re-read history, or
+    an overlapping run pushing ahead — the write is refused and raised as
+    CuratorWatermarkConflict, so a stale completion can neither swallow a rewind
+    nor discard the other run's progress. Inside a match, GREATEST keeps the
+    write monotonic: a matched read whose proposal sits behind the stored value
+    clamps rather than regressing, and that clamp is logged naming the curator
+    and the retained position (a run's number vanishing in silence is what read
+    as "completed curation discarded"). The one writer allowed to move the
+    watermark backwards is the ingest rewind in memory_service — a deliberate
+    re-read, not a run's bookkeeping — and this compare-and-set is precisely
+    what makes that rewind un-clobberable by a run that read before it."""
     stored = await get_pool().fetchval(
         "UPDATE agents SET curated_through = greatest(curated_through, $2) WHERE id = $1 "
-        "RETURNING curated_through",
+        "AND curated_through IS NOT DISTINCT FROM $3::timestamptz RETURNING curated_through",
         agent_id,
         through,
+        read_position,
     )
+    if stored is None:
+        # No row matched: the position moved under the run (or the agent row is
+        # gone). Re-read to report where it actually stands, then fail loud.
+        current = await get_pool().fetchval(
+            "SELECT curated_through FROM agents WHERE id = $1", agent_id
+        )
+        raise CuratorWatermarkConflict(agent_id, read_position, current)
     if stored > through:
         logger.info(
             "curator %s watermark not moved: run proposed %s, stored position kept at %s "

@@ -89,8 +89,8 @@ async def _run_curator_now(
     `full_history` is the backfill: the run reads with no watermark, so the
     prompt bootstraps from everything ever uploaded. It never clears the stored
     watermark — a failed backfill keeps the incremental position, and because
-    the watermark only ever advances (see agent_service.mark_curated), even a
-    successful one cannot move it back to where the re-read started.
+    the advance is a monotonic compare-and-set (see agent_service.mark_curated),
+    even a successful one cannot move it back to where the re-read started.
 
     `metered=False` is for runs the platform initiates on its own (the
     first-day curator): they must not eat the user's free monthly allowance.
@@ -121,6 +121,12 @@ async def _run_curator_now(
         # run an agent the user turned off, metered or not.
         if not metered and agent["run_mode"] != "scheduled":
             return
+        # The compare-and-set anchor for mark_curated is the stored position this
+        # run actually loaded — captured BEFORE the full_history override below,
+        # which zeroes the feed's `since` but must not change what the run may
+        # write against. A rewind or an overlapping run that moves the stored
+        # position during the turn makes this run's completion refuse loudly.
+        read_position = agent["curated_through"]
         if full_history:
             agent = {**agent, "curated_through": None}
         now = datetime.now(UTC)
@@ -141,7 +147,7 @@ async def _run_curator_now(
                     agent["curator_wiki"],
                     agent.get("curator_folder_id"),
                 )
-                await agent_service.mark_curated(agent_id, through)
+                await agent_service.mark_curated(agent_id, read_position, through)
             await agent_service.mark_run_succeeded(agent_id)
         except Exception as e:
             await agent_service.mark_run_failed(agent_id, str(e), metered=metered)
@@ -343,15 +349,19 @@ async def _run_scheduled_agent(agent_id: UUID, stamp: str) -> None:
             # overflowed the event cap, the watermark stops at the last event
             # that fit — the overflow drains on subsequent runs. Bookkeeping
             # failures share the run's try so they also record last_run_error
-            # and alert, instead of dying as a bare task error.
+            # and alert, instead of dying as a bare task error. The CAS anchor is
+            # the very `agent["curated_through"]` handed to `complete_through` as
+            # `since` — one value, so the position written against and the
+            # position read cannot drift; a move under the run fails loudly here.
+            read_position = agent["curated_through"]
             through = await curation_service.complete_through(
                 user_id,
-                agent["curated_through"],
+                read_position,
                 now,
                 agent["curator_wiki"],
                 agent.get("curator_folder_id"),
             )
-            await agent_service.mark_curated(agent_id, through)
+            await agent_service.mark_curated(agent_id, read_position, through)
         await agent_service.mark_run_succeeded(agent_id)
     except Exception as e:
         logger.exception("agent schedule: run failed for agent %s", agent_id)
