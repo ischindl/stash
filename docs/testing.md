@@ -31,12 +31,28 @@ TEST_DATABASE_URL=postgresql://stash:stash@localhost:5432/stash_test \
 | `test_auth.py` | Registration, login, API key auth, password validation |
 | `test_permissions.py` | Private-by-default access, owner read/write, share grants, publish records |
 | `test_webhooks.py` | SSRF URL validation, secret hashing, delivery logic |
-| `test_sleep_agent.py` | Curation tool lifecycle, advisory locks, watermark advancement |
+| `test_curator.py` | Curator provisioning, schedule, gate, feed, page writes, and the watermark: an advance can never lower `curated_through`, a refused advance is logged, `full_history` never clears the stored position, one run per agent at a time |
+| `test_curator_feed_scoping.py` | Which events each wiki may read — the internal wiki everything, the external wiki only sessions of end users who share — and the gate agreeing with that feed |
+| `test_first_day_curator.py` | First-day curator tick, and the ingest rewind re-opening the cursor that imported history predates |
+| `test_agent_schedule_alerts.py` | Beat dispatch, designed skips, and the stale-watermark / failing-curator alerts |
+| `test_developer_platform.py` | Developer console curator run and backfill dispatch, and the ingest rewind staying inside the wiki whose feed can read the events |
 | `test_migrations.py` | Alembic upgrade/history smoke tests |
 | `test_startup_logging.py` | App startup owns root logging: one INFO handler on stderr, and the migration runner must not disable app loggers |
 | `test_collab.py` | Sharing, copy, and collaboration on user-scoped objects |
 | `test_session_folder_share_wiki.py` | Per-project shared-wiki opt-in: starts off, only the switch flips it |
 | `test_websocket.py` | ConnectionManager delivery, dead-socket cleanup, pg_notify, oversized fallback |
+
+**The curator watermark (`agents.curated_through`) has two writers and one direction.** An
+advance is monotonic — `mark_curated` writes `greatest(curated_through, …)`, so a run that
+started behind a run that already finished cannot overwrite it — and a position the database
+refused is logged rather than dropped. Pinned by `test_curator.py`'s
+`test_mark_curated_cannot_walk_the_watermark_back`, `test_stale_completion_cannot_regress_an_overlapping_run`,
+`test_full_history_backfill_cannot_regress_an_advanced_watermark` and
+`test_a_refused_watermark_advance_is_visible_in_the_log`. The only write allowed to move the
+marker backwards is the ingest rewind in `memory_service`: importing history that predates the
+cursor has to reopen it, or the imported material would never be curated. That rewind is pinned
+by `test_first_day_curator.py::test_late_import_reopens_curation`, and its per-wiki scope by
+`test_developer_platform.py::test_ingest_rewind_stays_inside_its_wiki`.
 
 ### Conventions
 

@@ -5,6 +5,20 @@ everything before it is captured in git history (`git log`), not here.
 
 ## Unreleased
 
+- The memory curator can no longer lose ground it has already made. Its read marker — how
+  far it has read into your history — is now advanced with `greatest()`, so a run that
+  started before another one finished can never overwrite the newer position with the older
+  one, and completed curation stops being thrown away. Importing history still re-opens that
+  marker (imported material has to get curated), but now only for the wiki whose feed can
+  actually read the events: one session import used to drag both curators back to the same
+  microsecond. A position the database refused is logged with the number it kept instead of
+  vanishing silently. The developer console's Backfill keeps the marker too — it re-reads the
+  whole history and records nothing, so the incremental position you already paid for
+  survives, and the screen now says that instead of promising the watermark is cleared. And a
+  curator that is already running no longer gets a second run stacked on top of it: the extra
+  dispatch resolves as a designed skip that costs nothing — no second harness turn, no charge
+  against the monthly allowance.
+
 - The shared wiki's curator now reads only the history that was actually
   offered to it. The external (developer workspace) wiki's event feed, run gate,
   and watermark are scoped in SQL to sessions whose end user has `share_wiki`
