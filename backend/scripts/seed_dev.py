@@ -8,6 +8,18 @@ renders with one command. Tokens live in a separate table the listing path
 never reads, so a bare source row is enough to show up — a real sync or live
 read would still 401 until a provider is actually connected.
 
+Every seeded row is therefore parked as 'needs_setup' with its next sync a
+throwaway 30 days out: without credentials these sources could only ever
+fail, and a due-but-doomed source is exactly the load that used to storm the
+worker queue (STAS-185). Parking keeps the whole UI surface demoable while
+the background schedulers leave the rows alone.
+
+Known consequence, not a bug: because the park pushes next_sync_at out 30
+days, connecting a real provider to a SEEDED row will not sync it for that
+month. To go live on a seeded row, connect the provider and then clear the
+park: UPDATE user_sources SET next_sync_at = now(), sync_status = 'idle'
+WHERE id = '<the row>'.
+
 Refuses to run under Auth0: this is the password / DB-bypass path.
 
 Run against a migrated dev DB (start the backend first, which migrates):
@@ -17,10 +29,11 @@ Run against a migrated dev DB (start the backend first, which migrates):
 
 import asyncio
 import sys
+from uuid import UUID
 
 from ..auth import create_api_key
 from ..config import settings
-from ..database import close_db, init_pool
+from ..database import close_db, get_pool, init_pool
 from ..services import source_service, user_service
 
 DEMO_NAME = "demo"
@@ -68,6 +81,22 @@ SEED_SOURCES = [
 ]
 
 
+async def _park_for_setup(source_id: UUID) -> None:
+    """Park a seeded row in the state the sync path itself uses for 'waiting on
+    the owner' (mark_needs_setup), then push its next attempt far out. The
+    30 days is the script's own choice — mark_needs_setup deliberately does not
+    touch next_sync_at, because for a real source the next attempt is the
+    self-heal; here the row can never sync until it is re-created anyway.
+    sync_enabled stays untouched: this is 'waiting on the owner', not 'off'."""
+    await source_service.mark_needs_setup(
+        source_id, "not connected — connect this source to start syncing"
+    )
+    await get_pool().execute(
+        "UPDATE user_sources SET next_sync_at = now() + interval '30 days' WHERE id = $1",
+        source_id,
+    )
+
+
 async def _demo_user() -> tuple[dict, str]:
     """The demo user and a fresh API key. Idempotent: on re-run it reuses the
     existing account and just mints a new key."""
@@ -86,10 +115,11 @@ async def _run() -> None:
     await init_pool()
     try:
         user, api_key = await _demo_user()
-        print("Seeded sources:")
+        print("Seeded sources (parked as needs_setup — connect for real to sync):")
         for spec in SEED_SOURCES:
             source = await source_service.create_source(owner_user_id=user["id"], **spec)
-            print(f"  {source['source_type']:20} {source['display_name']}")
+            await _park_for_setup(UUID(source["id"]))
+            print(f"  {source['source_type']:20} {source['display_name']:24} parked")
 
         print()
         print(f"Demo user: {user['name']} <{DEMO_EMAIL}>  (password: {DEMO_PASSWORD})")
