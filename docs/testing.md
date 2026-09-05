@@ -33,7 +33,7 @@ TEST_DATABASE_URL=postgresql://stash:stash@localhost:5432/stash_test \
 | `test_internal_email_domains.py` | The internal-account domain list as one env setting: defaults equal the fixed company domains, the env string replaces them (normalized, empty grants nobody), the kill switch still wins, and admin analytics follows the same list |
 | `test_tools_and_chat_domains.py` | The Tools-and-Chat `/users/me` flag driven by its own env domain list — false for unlisted domains, true for the defaults and env-listed ones |
 | `test_webhooks.py` | SSRF URL validation, secret hashing, delivery logic |
-| `test_curator.py` | Curator provisioning, schedule, gate, feed, page writes, and the watermark: an advance can never lower `curated_through`, a refused advance is logged, `full_history` never clears the stored position, one run per agent at a time, and the one gap the guard leaves |
+| `test_curator.py` | Curator provisioning, schedule, gate, feed, page writes, and the watermark: an advance is compare-and-set on the position the run read, so a moved-under run fails loud instead of swallowing an ingest rewind; monotonic within a match, a refused clamp is logged, `full_history` never clears the stored position, one run per agent at a time |
 | `test_curator_feed_scoping.py` | Which events each wiki may read — the internal wiki everything, the external wiki only sessions of end users who share — and the gate agreeing with that feed |
 | `test_curator_event_identity.py` | One event, however often its session was re-pushed: the identity the feed, the gate, the watermark boundary, and the backlog share; distinct-vs-raw backlog; the honest zero (a leftover of only the curator's own transcripts is not work); drain equality; and both endpoints publishing the honest number |
 | `test_first_day_curator.py` | First-day curator tick, and the ingest rewind re-opening the cursor that imported history predates |
@@ -46,25 +46,39 @@ TEST_DATABASE_URL=postgresql://stash:stash@localhost:5432/stash_test \
 | `test_session_folder_share_wiki.py` | Per-project shared-wiki opt-in: starts off, only the switch flips it |
 | `test_websocket.py` | ConnectionManager delivery, dead-socket cleanup, pg_notify, oversized fallback |
 
-**The curator watermark (`agents.curated_through`) has two writers and one direction.** An
-advance is monotonic — `mark_curated` writes `greatest(curated_through, …)`, so a run that
-started behind a run that already finished cannot overwrite it — and a position the database
-refused is logged rather than dropped. Pinned by `test_curator.py`'s
-`test_mark_curated_cannot_walk_the_watermark_back`, `test_stale_completion_cannot_regress_an_overlapping_run`,
+**The curator watermark (`agents.curated_through`) has several writers and one CAS-protected
+advance.** `mark_curated` — the completion write for both the personal-memory curator and the
+project-folder curators — lands its write only while the stored value is still the position
+the run *read* when it started (`WHERE curated_through IS NOT DISTINCT FROM <read position>`);
+inside that match, `greatest(...)` keeps the write monotonic, so a matched read whose proposal
+sits behind the stored value clamps rather than regresses and the refused position is logged
+rather than dropped. If anything moved the marker under the run — a rewind or an overlapping
+run — the completion is refused loud as `CuratorWatermarkConflict` (raised through
+`_run_curator_now`, recorded via `mark_run_failed` on the beat path) and the moved value,
+including any deliberately re-opened window, survives untouched for the next run. Pinned by
+`test_curator.py`'s `test_a_pre_rewind_completion_cannot_swallow_a_reopened_window` (the
+founder interleaving: read X, rewound to Y < X mid-run, the stale advance is refused and the
+window stays open), its end-to-end variants `test_a_mid_run_ingest_rewind_fails_the_curator_run_loud`
+and `test_the_scheduled_curator_run_fails_loud_when_the_watermark_moves`, plus
+`test_mark_curated_cannot_walk_the_watermark_back`,
+`test_stale_completion_cannot_regress_an_overlapping_run`,
 `test_full_history_backfill_cannot_regress_an_advanced_watermark` and
-`test_a_refused_watermark_advance_is_visible_in_the_log`. The only write allowed to move the
-marker backwards is the ingest rewind in `memory_service`: importing history that predates the
-cursor has to reopen it, or the imported material would never be curated. That rewind is pinned
-by `test_first_day_curator.py::test_late_import_reopens_curation`, and its per-wiki scope by
-`test_developer_platform.py::test_ingest_rewind_stays_inside_its_wiki`.
-
-One gap is deliberately left open rather than papered over: a run that read its position
-*before* a rewind completes higher than the rewound cursor, so the monotonic guard accepts it
-and the window the rewind reopened shuts again, unread. Refusing that shape means
-compare-and-set on the position the run read — a different contract, and it re-charges
-curation for material already distilled — so it needs its own card.
-`test_curator.py::test_an_advance_from_a_pre_rewind_snapshot_re_closes_a_reopened_window`
-records the current behavior so that card has something to flip.
+`test_a_refused_watermark_advance_is_visible_in_the_log`. Writes sanctioned to move the
+marker outside the CAS are deliberate re-reads, not run bookkeeping: the ingest rewind in
+`memory_service` (importing history that predates the cursor has to reopen it — pinned by
+`test_first_day_curator.py::test_late_import_reopens_curation`, per-wiki scope by
+`test_developer_platform.py::test_ingest_rewind_stays_inside_its_wiki`), the folder-curator
+rewind in `agent_service.rewind_folder_curator_for_sessions` (filing sessions into a curated
+project reopens that project curator's position —
+`test_folder_curators.py::test_filing_old_sessions_reopens_the_folder_position`), and the
+shared-wiki revocation reset in `end_user_service._archive_shared_wiki`, which NULLs the
+external curator's position so re-sharing re-curates from the start (migration `0204`
+backfilled the same reset for already-revoked wikis — `test_curation_optout_migration.py`).
+The compare-and-set is what makes each of those moves un-clobberable by a run that read
+before it. One forward writer still bypasses the CAS: the scoped-workspace commit in
+`scoped_curation_service.run_workspace` stamps its own watermark unguarded under the
+permission lock (not even the monotonic `greatest` applies there); it is left as found and
+needs its own card.
 
 ### Conventions
 
