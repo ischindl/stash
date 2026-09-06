@@ -322,3 +322,98 @@ async def test_changes_endpoint_accepts_a_folder(client: AsyncClient, _db_pool, 
         headers=_auth(other_key),
     )
     assert r.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_repushed_history_does_not_reopen_the_workspace_watermark(
+    client: AsyncClient, _db_pool
+):
+    """The founder's stall, pinned: his Fusion instance re-pushes its own
+    transcripts, and the ingest rewind read every re-push as fresh history —
+    pulling the watermark back an hour's run at a time, forever. The feed
+    dedupes twins by identity; the rewind must apply the same anti-join, or
+    ingest and run spend the day fighting each other instead of draining."""
+    key, uid = await _register(client)
+    curator = await agent_service.get_or_create_curator(uid)
+    cid = UUID(curator["id"])
+    old = BASE - timedelta(days=1)
+    await _db_pool.execute("UPDATE agents SET curated_through = $2 WHERE id = $1", cid, BASE)
+
+    events = [
+        {
+            "agent_name": "fusion",
+            "event_type": "user_message",
+            "content": "task SANE-367 transcript, pushed again",
+            "session_id": "fusion-task-SANE-367",
+            "created_at": old.isoformat(),
+        }
+    ]
+    await _push_events(client, key, events)
+    first = await _db_pool.fetchval("SELECT curated_through FROM agents WHERE id = $1", cid)
+    assert first == old - timedelta(microseconds=1)  # genuinely old history reopens
+
+    await _push_events(client, key, events)  # the re-push that used to relivelock
+    again = await _db_pool.fetchval("SELECT curated_through FROM agents WHERE id = $1", cid)
+    assert again == first
+
+
+@pytest.mark.asyncio
+async def test_folder_curator_is_not_at_the_ingest_s_leash(client: AsyncClient, _db_pool, pool):
+    """An old event ingested into an unfiled session belongs to no project yet.
+    It reopens the workspace curator as always — but must not touch a folder
+    curator's position, or any unrelated push holds every project's drain."""
+    key, uid = await _register(client)
+    rozvrh = await _folder(client, key, "Rozvrh")
+    await _file_session(client, key, uid, pool, "conv-rozvrh", rozvrh, "seminars on tuesday")
+    curator = await agent_service.create_folder_curator(uid, UUID(rozvrh), "local", "qwen")
+    internal = await agent_service.get_or_create_curator(uid)
+    future = BASE + timedelta(days=1)
+    await _db_pool.execute(
+        "UPDATE agents SET curated_through = $2 WHERE id = $1", UUID(internal["id"]), future
+    )
+
+    await _push_events(
+        client,
+        key,
+        [
+            {
+                "agent_name": "fusion",
+                "event_type": "user_message",
+                "content": "an old transcript in a session with no folder",
+                "session_id": "fusion-task-loose",
+                "created_at": (BASE - timedelta(hours=3)).isoformat(),
+            }
+        ],
+    )
+
+    folder_wm = await _db_pool.fetchval(
+        "SELECT curated_through FROM agents WHERE id = $1", UUID(curator["id"])
+    )
+    assert folder_wm == BASE  # untouched
+    workspace_wm = await _db_pool.fetchval(
+        "SELECT curated_through FROM agents WHERE id = $1", UUID(internal["id"])
+    )
+    assert workspace_wm == BASE - timedelta(
+        hours=3, microseconds=1
+    )  # workspace rewinds as designed
+
+
+@pytest.mark.asyncio
+async def test_filing_old_sessions_reopens_the_folder_position(client: AsyncClient, _db_pool, pool):
+    """The folder curator's promise — everything filed into the project gets
+    read — is kept where filing happens: assigning a session whose events
+    predate the watermark reopens the folder curator's position to them."""
+    key, uid = await _register(client)
+    rozvrh = await _folder(client, key, "Rozvrh")
+    await _file_session(client, key, uid, pool, "conv-rozvrh", rozvrh, "seminars on tuesday")
+    curator = await agent_service.create_folder_curator(uid, UUID(rozvrh), "local", "qwen")
+    cid = UUID(curator["id"])
+    assert await _db_pool.fetchval("SELECT curated_through FROM agents WHERE id = $1", cid) == BASE
+
+    older = BASE - timedelta(hours=6)
+    await _file_session(client, key, uid, pool, "conv-old", rozvrh, "the old kickoff", at=older)
+
+    wm = await _db_pool.fetchval("SELECT curated_through FROM agents WHERE id = $1", cid)
+    assert wm == older - timedelta(microseconds=1)
+    backlog = await curation_service.curator_event_backlog(uid, INTERNAL, wm, UUID(rozvrh))
+    assert backlog["distinct_events"] == 2  # both the filed history and the fresh event

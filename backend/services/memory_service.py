@@ -113,14 +113,24 @@ async def _embed_events_batch(event_ids: list[UUID], contents: list[str]) -> Non
 # --- Event CRUD ---
 
 
-async def _rewind_curated_through(
-    owner_user_id: UUID, event_ids: list[UUID], unscoped_oldest: datetime
-) -> None:
+async def _rewind_curated_through(owner_user_id: UUID, event_ids: list[UUID]) -> None:
     """Imported sessions keep their original event times, which can predate a
     curator's curated_through — its delta runs would never read them. Pull each
     wiki's position back to the oldest event that wiki may actually read, so the
     next run does. This is the ONLY write allowed to move the watermark
     backwards: a successful run's mark_curated can only ever advance it.
+
+    Only genuinely new content reopens the position. The feed dedupes an event
+    re-pushed eight times to one slot by an identity anti-join, and rewinding
+    without the same anti-join let a twin re-open what the curator had passed:
+    a dogfooded agent re-pushing its own transcripts rewound the curator every
+    push, and run and ingest spent the day fighting each other instead of
+    draining the backlog.
+
+    Workspace curators only. A folder curator reads one project's sessions, and
+    ingest cannot know where a session will be filed — a folder's position
+    reopens when history is actually filed into it (see
+    `agent_service.rewind_folder_curator_for_sessions`).
 
     Per-wiki on purpose, and it reads like the feed. An event reaches the shared
     external wiki only through a sharing end user (`_SHARE_WIKI_EVENT_SCOPE`), so
@@ -129,12 +139,27 @@ async def _rewind_curated_through(
     can never contain. The move is logged: a watermark that walks backwards in
     silence reads as "the curator never curates", not as "importing history
     re-opened its position", which is what it actually is."""
-    from .curation_service import _SHARE_WIKI_EVENT_SCOPE, WIKI_EXTERNAL, WIKI_INTERNAL
+    from .curation_service import (
+        _SHARE_WIKI_EVENT_SCOPE,
+        WIKI_EXTERNAL,
+        WIKI_INTERNAL,
+        _event_identity,
+    )
 
     pool = get_pool()
+    fresh = (
+        f"SELECT he.id, he.created_at FROM history_events he "
+        f"WHERE he.id = ANY($1::uuid[]) AND NOT EXISTS ( "
+        f"  SELECT 1 FROM history_events dup "
+        f"  WHERE dup.owner_user_id = he.owner_user_id "
+        f"    AND ({_event_identity('dup')}) = ({_event_identity('he')}) "
+        f"    AND dup.id < he.id)"
+    )
+    unscoped_oldest = await pool.fetchval(f"SELECT min(created_at) FROM ({fresh}) fresh", event_ids)
     external_oldest = await pool.fetchval(
-        f"SELECT min(he.created_at) FROM history_events he "
-        f"WHERE he.id = ANY($1::uuid[]) {_SHARE_WIKI_EVENT_SCOPE}",
+        f"SELECT min(fresh.created_at) FROM ({fresh}) fresh "
+        f"JOIN history_events he ON he.id = fresh.id "
+        f"WHERE true {_SHARE_WIKI_EVENT_SCOPE}",
         event_ids,
     )
     per_wiki = ((WIKI_INTERNAL, unscoped_oldest), (WIKI_EXTERNAL, external_oldest))
@@ -146,7 +171,7 @@ async def _rewind_curated_through(
             "UPDATE agents a SET curated_through = $3 "
             "FROM (SELECT id, curated_through AS was FROM agents "
             "      WHERE user_id = $1 AND is_curator AND curator_wiki = $2 "
-            "      AND curated_through > $3) o "
+            "      AND curator_folder_id IS NULL AND curated_through > $3) o "
             "WHERE a.id = o.id RETURNING o.was",
             owner_user_id,
             wiki,
@@ -236,7 +261,7 @@ async def push_event(
         # Last, once the session row exists: the shared-wiki scope reaches a
         # curator only through sessions and their end user, so rewinding earlier
         # would judge a brand-new session against the old ones (or see none).
-        await _rewind_curated_through(owner_user_id, [event["id"]], ts)
+        await _rewind_curated_through(owner_user_id, [event["id"]])
     return event
 
 
@@ -302,7 +327,7 @@ async def push_events_batch(
         # After the sessions exist (see push_event): the external wiki's reach is
         # decided through sessions and their end user, so rewinding here earlier
         # would rewind external for a session whose share status it can't see yet.
-        await _rewind_curated_through(owner_user_id, [r["id"] for r in results], min(timestamps))
+        await _rewind_curated_through(owner_user_id, [r["id"] for r in results])
     if embedding_service.is_configured() and results:
         ids = [r["id"] for r in results]
         contents_for_embed = [r["content"] for r in results]

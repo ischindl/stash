@@ -9,7 +9,7 @@ agent, whose config shapes the turn.
 from __future__ import annotations
 
 import logging
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from uuid import UUID
 
 from fastapi import HTTPException
@@ -324,6 +324,44 @@ async def delete_curator(agent_id: UUID) -> None:
     pair is permanent (their `is_curator` guard lives in the callers)."""
     pool = get_pool()
     await pool.execute("DELETE FROM agents WHERE id = $1 AND is_curator", agent_id)
+
+
+async def rewind_folder_curator_for_sessions(
+    owner_user_id: UUID, folder_id: UUID, session_row_ids: list[UUID]
+) -> None:
+    """Filing sessions into a curated project reopens the folder curator's
+    position when the sessions carry events older than it. The curator's promise
+    is that everything filed into its project gets read, and the ingest-side
+    rewind (memory_service) cannot keep that promise: at ingest a session has
+    no folder yet, and rewinding every folder curator for every event would
+    hand any unrelated push a leash on every project's position."""
+    pool = get_pool()
+    oldest = await pool.fetchval(
+        "SELECT min(he.created_at) FROM history_events he "
+        "JOIN sessions s ON s.owner_user_id = he.owner_user_id AND s.session_id = he.session_id "
+        "WHERE s.owner_user_id = $1 AND s.id = ANY($2::uuid[])",
+        owner_user_id,
+        session_row_ids,
+    )
+    if oldest is None:
+        return
+    target = oldest - timedelta(microseconds=1)
+    moved = await pool.fetch(
+        "UPDATE agents a SET curated_through = $2 "
+        "FROM (SELECT id, curated_through AS was FROM agents "
+        "      WHERE curator_folder_id = $1 AND is_curator AND curated_through > $2) o "
+        "WHERE a.id = o.id RETURNING a.id, o.was",
+        folder_id,
+        target,
+    )
+    for row in moved:
+        logger.info(
+            "folder curator %s watermark rewound: %s -> %s (sessions filed in "
+            "carry events older than the watermark)",
+            row["id"],
+            row["was"],
+            target,
+        )
 
 
 def _validate(model_provider, run_mode, schedule_cron) -> None:
