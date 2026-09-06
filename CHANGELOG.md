@@ -5,6 +5,14 @@ everything before it is captured in git history (`git log`), not here.
 
 ## Unreleased
 
+- Self-hosters and containerized deployments get the features that until now only
+  worked when someone built a custom image by hand. The backend image now ships the
+  local embedding model, so semantic search answers immediately after a deploy
+  instead of hanging on a first-request download; it also ships the node runtime and
+  the `pi` coding agent, so local-exec mode works out of the box. And a database that
+  was migrated by the old dogfood image's chain no longer sits in a state where the
+  curator's designed "already running" skip is rejected by the database — one repair
+  migration brings both migration histories to the same schema.
 - The memory curator can no longer lose ground it has already made. Its read marker — how
   far it has read into your history — is now advanced with `greatest()`, so a run that
   started before another one finished can never overwrite the newer position with the older
@@ -79,6 +87,19 @@ everything before it is captured in git history (`git log`), not here.
   backend image ships the `stash` CLI the harness shells out to, and
   `LOCAL_STASH_API_URL` points the CLI's callbacks at the backend service
   (the localhost default still covers the dev-laptop case).
+- The Developer Platform console can now point a workspace's agents at a local
+  model: the curator page has a "Local model" section that connects an
+  OpenAI-compatible endpoint (Ollama or similar — a tunnel or self-host) on
+  the workspace's behalf. Every agent of that workspace, the nightly wiki
+  curator included, runs on the connected endpoint; the operator's personal
+  model settings stay untouched. The connected endpoint also carries an
+  editable pi `models.json` override (a "test connection" check verifies the
+  endpoint before it is saved), so a self-hoster can add models or tune
+  context windows instead of accepting the synthesized default.
+- Agent history is now semantically searchable: `GET
+  /me/sessions/events/semantic-search` answers in plain text over the
+  meaning of your recorded sessions, and a background backfill embeds events
+  that were recorded before embeddings existed so nothing stays unfindable.
 - The developer console now routes the shared memory per project: the Sessions
   tab groups every session under its project (folder, cwd fallback), carries a
   "Feeds shared memory" switch per project beside the per-user one, uploads
