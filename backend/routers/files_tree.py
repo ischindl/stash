@@ -19,6 +19,8 @@ from ..models import (
     CommentThreadListResponse,
     CopyRequest,
     FolderCreateRequest,
+    FolderCuratorCreateRequest,
+    FolderCuratorUpdateRequest,
     FolderListResponse,
     FolderResponse,
     FolderUpdateRequest,
@@ -226,6 +228,11 @@ async def get_changes(
         "memory) or 'external' (the developer workspace's shared anonymized wiki, whose feed "
         "is restricted to sessions of users who share).",
     ),
+    folder: UUID | None = Query(
+        None,
+        description="Restrict the feed to one session folder — its sessions' events and its "
+        "own pages, nothing else. The work set of a folder-scoped curator.",
+    ),
     current_user: dict = Depends(get_current_user),
     scope_user_id: UUID = Depends(get_scope),
 ):
@@ -236,6 +243,11 @@ async def get_changes(
 
     `wiki` decides how far the history events are scoped: the external wiki only
     ever receives events from sessions whose end user shares, enforced in SQL.
+
+    `folder` narrows the whole feed to one project folder: only that folder's
+    sessions' events and its own pages, and the source-doc/saved/source-pointer
+    halves drop out entirely. The scoping is in SQL, so a folder curator is
+    never even shown material from outside its folder.
 
     `event_backlog` is how much of this wiki's feed is still unread from `since`,
     counted as distinct events over exactly the rows this feed may read — so it
@@ -249,10 +261,21 @@ async def get_changes(
             detail=f"unknown wiki {wiki!r}; expected {' or '.join(curation_service.WIKI_VALUES)}",
         )
 
+    if folder is not None:
+        owns = await get_pool().fetchval(
+            "SELECT 1 FROM session_folders WHERE id = $1 AND owner_user_id = $2",
+            folder,
+            scope_user_id,
+        )
+        if owns is None:
+            raise HTTPException(status_code=404, detail="folder not found")
+
     since_dt = datetime.fromisoformat(since) if since else None
-    feed = await curation_service.changes_since(scope_user_id, current_user["id"], since_dt, wiki)
+    feed = await curation_service.changes_since(
+        scope_user_id, current_user["id"], since_dt, wiki, folder
+    )
     feed["event_backlog"] = await curation_service.curator_event_backlog(
-        scope_user_id, wiki, since_dt
+        scope_user_id, wiki, since_dt, folder
     )
     return feed
 
@@ -293,7 +316,7 @@ async def recompute_memory(
                 "curator runs per month; Pro is unlimited.",
             )
     try:
-        await agent_auth.resolve(user_id, curator["model_provider"])
+        await agent_auth.resolve(user_id, curator["model_provider"], curator.get("model_id"))
     except agent_auth.NeedsAuth:
         raise HTTPException(
             status_code=402,
@@ -304,6 +327,112 @@ async def recompute_memory(
         raise HTTPException(status_code=503, detail="The agent is not configured.")
     run_curator_now.delay(curator["id"])
     return {"status": "started", "agent_id": curator["id"]}
+
+
+# --- Curators (list, folder-scoped create/update/retire) ---
+
+
+@router.get("/curators")
+async def list_scope_curators(
+    current_user: dict = Depends(get_current_user),
+    scope_user_id: UUID = Depends(get_scope),
+):
+    """Every curator of this scope — the provisioned pair plus folder-scoped
+    ones — with what an operator steers them by: schedule, model pick, current
+    watermark, last outcome, next run, and (for folder curators) how much of
+    their scoped feed is still unread."""
+    from ..services import agent_service
+
+    await _check_scope_access(scope_user_id, current_user["id"])
+    curators = await agent_service.list_curators(scope_user_id)
+    folder_ids = [UUID(str(c["curator_folder_id"])) for c in curators if c["curator_folder_id"]]
+    folders: dict[str, tuple[str, str | None]] = {}
+    if folder_ids:
+        rows = await get_pool().fetch(
+            "SELECT id, name, wiki_folder_id FROM session_folders WHERE id = ANY($1::uuid[])",
+            folder_ids,
+        )
+        folders = {
+            str(r["id"]): (r["name"], str(r["wiki_folder_id"]) if r["wiki_folder_id"] else None)
+            for r in rows
+        }
+    out = []
+    for c in curators:
+        entry = {**c, "next_run_at": agent_service.next_run_at(c)}
+        if c["curator_folder_id"]:
+            folder_id = str(c["curator_folder_id"])
+            name, wiki_folder_id = folders.get(folder_id, (None, None))
+            entry["folder_name"] = name
+            entry["wiki_folder_id"] = wiki_folder_id
+            entry["event_backlog"] = await curation_service.curator_event_backlog(
+                scope_user_id, c["curator_wiki"], c["curated_through"], UUID(folder_id)
+            )
+        out.append(entry)
+    return {"curators": out}
+
+
+@router.post("/curators", status_code=201)
+async def create_scope_folder_curator(
+    req: FolderCuratorCreateRequest,
+    current_user: dict = Depends(get_current_user),
+    scope_user_id: UUID = Depends(get_scope),
+):
+    """Bind a curator to one session folder: it reads that folder's scoped feed
+    and writes that folder's wiki. Idempotent — re-posting the same folder
+    returns the existing curator. Runs on the local provider while folder
+    curation is dogfooded against a self-hosted endpoint; `model_id` picks
+    which model on it."""
+    from ..services import agent_service
+
+    await _check_scope_access(scope_user_id, current_user["id"])
+    curator = await agent_service.create_folder_curator(
+        scope_user_id, req.folder_id, req.model_provider, req.model_id
+    )
+    return {"curator": curator}
+
+
+@router.patch("/curators/{agent_id}")
+async def update_scope_curator(
+    agent_id: UUID,
+    req: FolderCuratorUpdateRequest,
+    current_user: dict = Depends(get_current_user),
+    scope_user_id: UUID = Depends(get_scope),
+):
+    """Retune one of this scope's curators: its model pick, provider, or
+    schedule cadence. Only fields present in the body change."""
+    from ..services import agent_service
+
+    curator = await agent_service.get_curator_by_id(agent_id)
+    if curator is None or UUID(str(curator["user_id"])) != scope_user_id:
+        raise HTTPException(status_code=404, detail="curator not found")
+    fields = {
+        name: getattr(req, name)
+        for name in ("model_provider", "model_id", "schedule_cron")
+        if name in req.model_fields_set
+    }
+    return {"curator": await agent_service.update_curator(agent_id, **fields)}
+
+
+@router.delete("/curators/{agent_id}")
+async def delete_scope_curator(
+    agent_id: UUID,
+    current_user: dict = Depends(get_current_user),
+    scope_user_id: UUID = Depends(get_scope),
+):
+    """Retire a folder curator. The provisioned workspace pair is permanent —
+    disable one by clearing its schedule through PATCH instead."""
+    from ..services import agent_service
+
+    curator = await agent_service.get_curator_by_id(agent_id)
+    if curator is None or UUID(str(curator["user_id"])) != scope_user_id:
+        raise HTTPException(status_code=404, detail="curator not found")
+    if not curator["curator_folder_id"]:
+        raise HTTPException(
+            status_code=400,
+            detail="workspace curators are permanent; clear their schedule to idle them",
+        )
+    await agent_service.delete_curator(agent_id)
+    return {"ok": True}
 
 
 # --- Folders ---

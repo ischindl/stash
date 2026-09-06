@@ -172,6 +172,21 @@ class FolderUpdateRequest(BaseModel):
     move_to_root: bool = False
 
 
+class FolderCuratorCreateRequest(BaseModel):
+    folder_id: UUID
+    model_provider: str = "local"
+    model_id: str | None = None
+
+
+class FolderCuratorUpdateRequest(BaseModel):
+    # A field absent from the body stays untouched; an explicit null clears it
+    # (schedule_cron nulls only idle a folder curator — workspace ones must
+    # keep a cadence).
+    model_provider: str | None = None
+    model_id: str | None = None
+    schedule_cron: str | None = None
+
+
 class FolderResponse(BaseModel):
     id: UUID
     owner_user_id: UUID

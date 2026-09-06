@@ -380,10 +380,12 @@ class StashClient:
         Returns {stdout, stderr, exit_code} like a shell would."""
         return self._post("/api/v1/me/vfs", json={"script": script, "cwd": cwd})
 
-    def get_changes(self, since: str | None = None, wiki: str | None = None) -> dict:
-        """The curator's incremental feed. `wiki` is sent only when named, so a
-        caller that does not scope keeps the server's own default."""
-        params = {k: v for k, v in {"since": since, "wiki": wiki}.items() if v}
+    def get_changes(
+        self, since: str | None = None, wiki: str | None = None, folder: str | None = None
+    ) -> dict:
+        """The curator's incremental feed. `wiki` and `folder` are sent only when
+        named, so a caller that does not scope keeps the server's own default."""
+        params = {k: v for k, v in {"since": since, "wiki": wiki, "folder": folder}.items() if v}
         return self._get("/api/v1/me/changes", **params)
 
     def recompute_memory(self) -> dict:

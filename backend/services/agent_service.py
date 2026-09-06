@@ -22,7 +22,7 @@ _COLUMNS = (
     "id, user_id, name, model_provider, system_prompt, run_mode, "
     "schedule_cron, schedule_prompt, is_default, is_curator, slack_bound, "
     "telegram_bound, last_run_at, last_run_error, last_run_outcome, curated_through, "
-    "curator_wiki, month_run_count, month_run_anchor, created_at"
+    "curator_wiki, curator_folder_id, model_id, month_run_count, month_run_anchor, created_at"
 )
 
 
@@ -133,7 +133,8 @@ async def get_or_create_curator(user_id: UUID, wiki: str = "internal") -> dict:
     first run is due immediately and bootstraps from real history."""
     pool = get_pool()
     row = await pool.fetchrow(
-        f"SELECT {_COLUMNS} FROM agents WHERE user_id = $1 AND is_curator AND curator_wiki = $2",
+        f"SELECT {_COLUMNS} FROM agents "
+        "WHERE user_id = $1 AND is_curator AND curator_wiki = $2 AND curator_folder_id IS NULL",
         user_id,
         wiki,
     )
@@ -147,7 +148,10 @@ async def get_or_create_curator(user_id: UUID, wiki: str = "internal") -> dict:
         SELECT $1, $4, 'scheduled', $2, true, $5, backfill, backfill
         FROM (SELECT greatest((SELECT created_at FROM users WHERE id = $1),
                               now() - make_interval(days => $3)) AS backfill) seed
-        ON CONFLICT (user_id, curator_wiki) WHERE is_curator DO NOTHING
+        ON CONFLICT (
+            user_id, curator_wiki,
+            COALESCE(curator_folder_id, '00000000-0000-0000-0000-000000000000'::uuid)
+        ) WHERE is_curator DO NOTHING
         RETURNING {_COLUMNS}
         """,
         user_id,
@@ -159,11 +163,167 @@ async def get_or_create_curator(user_id: UUID, wiki: str = "internal") -> dict:
     if row is None:  # lost the race — read the winner.
         row = await pool.fetchrow(
             f"SELECT {_COLUMNS} FROM agents "
-            "WHERE user_id = $1 AND is_curator AND curator_wiki = $2",
+            "WHERE user_id = $1 AND is_curator AND curator_wiki = $2 AND curator_folder_id IS NULL",
             user_id,
             wiki,
         )
     return _row(row)
+
+
+async def list_curators(user_id: UUID) -> list[dict]:
+    """Every curator of this scope: the two provisioned ones and folder-scoped ones."""
+    pool = get_pool()
+    rows = await pool.fetch(
+        f"SELECT {_COLUMNS} FROM agents WHERE user_id = $1 AND is_curator ORDER BY created_at",
+        user_id,
+    )
+    return [_row(r) for r in rows]
+
+
+async def create_folder_curator(
+    user_id: UUID, folder_id: UUID, model_provider: str, model_id: str | None = None
+) -> dict:
+    """A curator bound to one session folder: it reads that folder's feed and
+    writes that folder's wiki.
+
+    Idempotent like the workspace curators — the per-scope unique index absorbs
+    the race. Its watermark seeds at the folder's first event; a folder with no
+    events yet seeds NULL, which reads as "never curated" and bootstraps from
+    whatever appears. The local provider is required while folder scoping is
+    dogfooded against a self-hosted endpoint.
+
+    The project's wiki home is a file-tree folder (pages only hang off
+    `folders`): the first curator a project gets opens it under the project's
+    name and links it through session_folders.wiki_folder_id; every later one
+    reuses it. Its id travels with the curator row so the run knows where to
+    write.
+
+    Folder curators sit on the internal wiki scope: the material they read is
+    the owner's own project activity, and the external feed is restricted to
+    end-user sessions by design."""
+    pool = get_pool()
+    folder = await pool.fetchrow(
+        "SELECT name, wiki_folder_id FROM session_folders WHERE id = $1 AND owner_user_id = $2",
+        folder_id,
+        user_id,
+    )
+    if folder is None:
+        raise HTTPException(status_code=404, detail="folder not found")
+    if model_provider != "local":
+        raise HTTPException(status_code=400, detail="folder curators run on the local provider")
+    wiki_folder_id = folder["wiki_folder_id"]
+    if wiki_folder_id is None:
+        home = await pool.fetchrow(
+            "INSERT INTO folders (owner_user_id, name, created_by) VALUES ($1, $2, $1) "
+            "RETURNING id",
+            user_id,
+            folder["name"],
+        )
+        wiki_folder_id = home["id"]
+        await pool.execute(
+            "UPDATE session_folders SET wiki_folder_id = $2 WHERE id = $1",
+            folder_id,
+            home["id"],
+        )
+    row = await pool.fetchrow(
+        f"""
+        INSERT INTO agents (user_id, name, run_mode, schedule_cron, is_curator,
+                            curator_wiki, curator_folder_id, model_provider, model_id,
+                            last_run_at, curated_through)
+        SELECT $1, 'Wiki curator — ' || $4, 'scheduled', $2, true,
+               'internal', $3, $5, $6,
+               now(),
+               (SELECT min(he.created_at)
+                FROM history_events he
+                JOIN sessions s ON s.owner_user_id = he.owner_user_id
+                               AND s.session_id = he.session_id
+                WHERE s.owner_user_id = $1 AND s.session_folder_id = $3)
+        ON CONFLICT (
+            user_id, curator_wiki,
+            COALESCE(curator_folder_id, '00000000-0000-0000-0000-000000000000'::uuid)
+        ) WHERE is_curator DO NOTHING
+        RETURNING {_COLUMNS}
+        """,
+        user_id,
+        _staggered_nightly_cron(user_id),
+        folder_id,
+        folder["name"],
+        model_provider,
+        model_id,
+    )
+    if row is None:  # lost the race (or already existed) — read the winner.
+        row = await pool.fetchrow(
+            f"SELECT {_COLUMNS} FROM agents "
+            "WHERE user_id = $1 AND is_curator AND curator_folder_id = $2",
+            user_id,
+            folder_id,
+        )
+    curator = _row(row)
+    curator["wiki_folder_id"] = str(wiki_folder_id)
+    return curator
+
+
+async def get_curator_by_id(agent_id: UUID) -> dict | None:
+    pool = get_pool()
+    row = await pool.fetchrow(
+        f"SELECT {_COLUMNS} FROM agents WHERE id = $1 AND is_curator", agent_id
+    )
+    return _row(row) if row else None
+
+
+async def update_curator(
+    agent_id: UUID,
+    model_provider: str | None = ...,
+    model_id: str | None = ...,
+    schedule_cron: str | None = ...,
+    curated_through: datetime | None = ...,
+) -> dict:
+    """PATCH semantics: `...` means leave the field alone, None clears it."""
+    fields: dict = {}
+    if model_provider is not ...:
+        if model_provider is not None and model_provider not in _VALID_PROVIDERS:
+            raise HTTPException(status_code=400, detail=f"invalid model_provider: {model_provider}")
+        fields["model_provider"] = model_provider
+    if model_id is not ...:
+        fields["model_id"] = model_id
+    if schedule_cron is not ...:
+        if schedule_cron is None:
+            # The runtime has no enabled column: a folder curator is idled by
+            # clearing its schedule. A workspace curator without one silently
+            # rots, so it must always carry a cadence.
+            row = await get_curator_by_id(agent_id) or _raise_missing(agent_id)
+            if row["curator_folder_id"] is None:
+                raise HTTPException(
+                    status_code=400, detail="workspace curators must keep a schedule"
+                )
+        elif not schedule_cron.strip():
+            raise HTTPException(status_code=400, detail="invalid schedule_cron")
+        fields["schedule_cron"] = schedule_cron
+    if curated_through is not ...:
+        fields["curated_through"] = curated_through
+    if not fields:
+        return await get_curator_by_id(agent_id) or _raise_missing(agent_id)
+    sets = ", ".join(f"{k} = ${i + 2}" for i, k in enumerate(fields))
+    pool = get_pool()
+    row = await pool.fetchrow(
+        f"UPDATE agents SET {sets} WHERE id = $1 AND is_curator RETURNING {_COLUMNS}",
+        agent_id,
+        *fields.values(),
+    )
+    if row is None:
+        _raise_missing(agent_id)
+    return _row(row)
+
+
+def _raise_missing(agent_id: UUID):
+    raise HTTPException(status_code=404, detail=f"curator {agent_id} not found")
+
+
+async def delete_curator(agent_id: UUID) -> None:
+    """Retire a curator. Folder-scoped ones only via the API; the workspace
+    pair is permanent (their `is_curator` guard lives in the callers)."""
+    pool = get_pool()
+    await pool.execute("DELETE FROM agents WHERE id = $1 AND is_curator", agent_id)
 
 
 def _validate(model_provider, run_mode, schedule_cron) -> None:

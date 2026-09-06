@@ -3719,12 +3719,18 @@ def changes(
         "'external' (the developer workspace's shared anonymized wiki, whose feed only ever "
         "covers sessions of users who share).",
     ),
+    folder: str = typer.Option(
+        None,
+        "--folder",
+        help="Session folder id: restrict the feed to one project's sessions — "
+        "the work set of a folder-scoped curator.",
+    ),
     as_json: bool = typer.Option(False, "--json"),
 ):
     """What changed since a timestamp — history, pages, files, saves, sources.
     Feeds the Memory curator's incremental pass."""
     with _client() as c:
-        data = c.get_changes(since or None, wiki.value if wiki else None)
+        data = c.get_changes(since or None, wiki.value if wiki else None, folder or None)
     if _use_json(as_json):
         output_json(data)
         return

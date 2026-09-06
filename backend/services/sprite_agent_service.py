@@ -472,6 +472,26 @@ async def build_scheduled_turn(agent: dict, run_stamp: str) -> tuple[str, str]:
     session_id = f"{scheduled_session_prefix(agent)}{run_stamp}"
     if agent.get("is_curator"):
         since = agent["curated_through"].isoformat() if agent.get("curated_through") else None
+        # A folder-bound curator gets neither workspace prompt: its whole world
+        # is one project folder — the scoped feed as input, the folder's pages
+        # as the artifact.
+        if agent.get("curator_folder_id"):
+            from ..database import get_pool
+
+            folder = await get_pool().fetchrow(
+                "SELECT name, wiki_folder_id FROM session_folders WHERE id = $1",
+                UUID(str(agent["curator_folder_id"])),
+            )
+            if folder is None:
+                raise ValueError(f"curator folder {agent['curator_folder_id']} no longer exists")
+            if folder["wiki_folder_id"] is None:
+                raise ValueError(f"folder {folder['name']!r} has no wiki home yet")
+            return session_id, prompts.render_folder_curator_prompt(
+                str(agent["curator_folder_id"]),
+                str(folder["wiki_folder_id"]),
+                folder["name"],
+                since,
+            )
         # Which wiki this curator writes decides its prompt. A developer
         # workspace runs both: the internal pass over its own Memory wiki, and
         # the external pass compiling the cross-user wiki plus per-user wikis.
@@ -506,6 +526,7 @@ async def run_scheduled(agent: dict, run_stamp: str) -> str:
         session_id,
         message,
         model_provider=agent["model_provider"],
+        model_id=agent.get("model_id"),
         persona=agent["system_prompt"],
         agent_name=agent["name"],
     )
@@ -677,6 +698,7 @@ async def run_chat(
     message: str,
     channel: str | None = None,
     model_provider: str | None = None,
+    model_id: str | None = None,
     persona: str | None = None,
     agent_name: str = AGENT_NAME,
 ) -> str:
@@ -690,7 +712,7 @@ async def run_chat(
         persona = agent["system_prompt"]
         agent_name = agent["name"]
     try:
-        auth = await agent_auth.resolve(user_id, model_provider)
+        auth = await agent_auth.resolve(user_id, model_provider, model_id)
     except agent_auth.NeedsAuth:
         raise NeedsAuth
     except agent_auth.ProviderNotConfigured:

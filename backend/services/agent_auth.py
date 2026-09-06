@@ -293,12 +293,19 @@ async def delete_credential(user_id: UUID, provider: str) -> None:
     )
 
 
-async def resolve(user_id: UUID, prefer_provider: str | None = None) -> RunAuth:
+async def resolve(
+    user_id: UUID,
+    prefer_provider: str | None = None,
+    model_id: str | None = None,
+) -> RunAuth:
     """The harness + credential injection for this user's next turn.
 
     `prefer_provider` is an agent's model override: if the user has that
     provider's credential, run it; a managed OpenRouter preference on Pro uses
     the managed GLM. Falls back to the user's default resolution otherwise.
+    `model_id` picks a model *within* the local provider's endpoint (the
+    connect doc carries the default); naming one for any other provider fails
+    loud — non-local credentials are a key, not an endpoint with a model list.
 
     In local exec mode a connected local endpoint still resolves to pi: its
     credential is self-contained (base URL + model), so no sprite is needed —
@@ -316,13 +323,17 @@ async def resolve(user_id: UUID, prefer_provider: str | None = None) -> RunAuth:
             # binary and masked the missing credential row (STAS-131).
             raise NeedsAuth
         if prefer_provider in (None, "local"):
-            return _local_auth(local_cred, home=str(sprite_service.local_box_home()))
+            return _local_auth(
+                local_cred, home=str(sprite_service.local_box_home()), model_override=model_id
+            )
+        if model_id:
+            raise ValueError("model_id only applies to the local provider")
         return RunAuth(harness=harness_mod.CLAUDE)
 
     if prefer_provider:
         cred = await _get_credential(user_id, prefer_provider)
         if cred is not None:
-            return _byo_auth(cred)
+            return _byo_auth(cred, model_id=model_id)
         # Preferred managed OpenRouter with no BYO key → managed GLM (Pro gate).
         if prefer_provider == "openrouter":
             return await _managed(user_id)
@@ -332,7 +343,7 @@ async def resolve(user_id: UUID, prefer_provider: str | None = None) -> RunAuth:
 
     cred = await _get_credential(user_id)
     if cred is not None:
-        return _byo_auth(cred)
+        return _byo_auth(cred, model_id=model_id)
     return await _managed(user_id)
 
 
@@ -350,9 +361,11 @@ async def _managed(user_id: UUID) -> RunAuth:
     )
 
 
-def _byo_auth(cred: dict) -> RunAuth:
+def _byo_auth(cred: dict, model_id: str | None = None) -> RunAuth:
     if cred["provider"] == "local":
-        return _local_auth(cred)
+        return _local_auth(cred, model_override=model_id)
+    if model_id:
+        raise ValueError("model_id only applies to the local provider")
     harness = _PROVIDER_HARNESS[cred["provider"]]
     if cred["kind"] == "api_key":
         return RunAuth(harness=harness, env={harness.provider.env_var: cred["secret"]})
@@ -410,7 +423,7 @@ def _synthesized_models_json(base_url: str, model: str, key_ref: str) -> str:
     )
 
 
-def _local_auth(cred: dict, home: str = _SPRITE_HOME) -> RunAuth:
+def _local_auth(cred: dict, home: str = _SPRITE_HOME, model_override: str | None = None) -> RunAuth:
     """Local model: the credential is a JSON doc describing the user's own
     OpenAI-compatible endpoint (base_url, model, optional api_key). pi reads a
     provider config file; the key, when set, rides only in the STASH_LOCAL_KEY
@@ -427,11 +440,13 @@ def _local_auth(cred: dict, home: str = _SPRITE_HOME) -> RunAuth:
     When the user stored their own models.json in Settings, its bytes are
     written VERBATIM (no parse, no re-serialize) — the stored text is the
     single source of truth. Endpoint, model, and the key env always come from
-    the connect doc.
+    the connect doc. A per-agent `model_override` cannot be honored against a
+    verbatim stored file, so pairing the two fails loud rather than running a
+    model neither source named.
     """
     doc = _local_credential_doc(cred)
     base_url = doc["base_url"]
-    model = doc["model"]
+    model = model_override or doc["model"]
     env = {"PI_OFFLINE": "1", "HOME": home}  # no pi startup network calls
     api_key = doc.get("api_key")
     if api_key:
@@ -440,6 +455,10 @@ def _local_auth(cred: dict, home: str = _SPRITE_HOME) -> RunAuth:
     else:
         key_ref = "local"
     override = cred.get("models_json")
+    if override is not None and model_override:
+        raise ValueError(
+            "agent model_id cannot be applied while a stored models.json override is set"
+        )
     models_json = (
         override if override is not None else _synthesized_models_json(base_url, model, key_ref)
     )
