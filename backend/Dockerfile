@@ -55,6 +55,28 @@ COPY stashai/ ./stashai/
 COPY README.md ./README.md
 RUN pip install --no-cache-dir .
 
+# Bake the local embedding model into the image. With EMBEDDING_PROVIDER=local
+# the semantic-search endpoints answer from a sentence-transformers model on
+# disk; downloading it at first request made the founder's first query after
+# every deploy hang, and a fresh container has no writable cache to put it in
+# anyway. The model id matches EMBEDDING_MODEL in the deployment env.
+ENV HF_HOME=/opt/hf
+RUN mkdir -p /opt/hf && HF_HOME=/opt/hf python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2')" && chmod -R a+rX /opt/hf
+
+# Node runtime + the pi coding agent, for local exec mode (AGENT_EXEC_MODE
+# defaults to "local"): harness turns run as subprocesses of THIS image, and
+# the pi harness shells out to the `pi` binary. Cloud sprite boxes get pi from
+# the sprite seed instead; local exec has no seed, so the image carries it.
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates xz-utils && \
+    curl -fsSL https://nodejs.org/dist/v22.23.2/node-v22.23.2-linux-x64.tar.xz -o /tmp/node.tar.xz && \
+    tar -xJf /tmp/node.tar.xz -C /opt && \
+    ln -sf /opt/node-v22.23.2-linux-x64/bin/node /usr/local/bin/node && \
+    ln -sf /opt/node-v22.23.2-linux-x64/bin/npm /usr/local/bin/npm && \
+    ln -sf /opt/node-v22.23.2-linux-x64/bin/npx /usr/local/bin/npx && \
+    rm /tmp/node.tar.xz && \
+    npm install -g --ignore-scripts @earendil-works/pi-coding-agent@0.84.2 && \
+    ln -sf /opt/node-v22.23.2-linux-x64/bin/pi /usr/local/bin/pi
+
 RUN mkdir -p /app/.secrets && \
     chmod 700 /app/.secrets && \
     chmod +x /app/entrypoint.sh && \
