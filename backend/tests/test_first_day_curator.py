@@ -222,9 +222,7 @@ async def test_imported_pre_signup_history_dispatches(client: AsyncClient, pool,
 
 
 @pytest.mark.asyncio
-async def test_unconnected_scope_gets_no_doomed_dispatch(
-    client: AsyncClient, pool, monkeypatch
-):
+async def test_unconnected_scope_gets_no_doomed_dispatch(client: AsyncClient, pool, monkeypatch):
     """STAS-131: with the machine-login fallback gone, a scope with no
     connected model has nothing to run — the tick must skip it instead of
     dispatching a run doomed to fail at exec time."""
