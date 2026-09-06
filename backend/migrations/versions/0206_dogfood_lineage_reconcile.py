@@ -55,8 +55,7 @@ def _replace_check(allowed: str) -> None:
 
 def upgrade() -> None:
     op.execute(
-        "ALTER TABLE user_agent_credentials "
-        "ADD COLUMN IF NOT EXISTS models_json_enc bytea NULL"
+        "ALTER TABLE user_agent_credentials ADD COLUMN IF NOT EXISTS models_json_enc bytea NULL"
     )
     _replace_check(_WIDENED_SET)
 
