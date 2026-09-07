@@ -417,3 +417,175 @@ async def test_filing_old_sessions_reopens_the_folder_position(client: AsyncClie
     assert wm == older - timedelta(microseconds=1)
     backlog = await curation_service.curator_event_backlog(uid, INTERNAL, wm, UUID(rozvrh))
     assert backlog["distinct_events"] == 2  # both the filed history and the fresh event
+
+
+@pytest.mark.asyncio
+async def test_digest_model_travels_with_the_curator(client: AsyncClient, _db_pool, pool):
+    """The two-phase knobs are configuration, not fate: set at create, retuned
+    by PATCH, cleared by an explicit null — and never a nonsensical pair
+    (a digest model needs a digest provider, and a folder curator's digest
+    lives on the self-hosted endpoint like its main model)."""
+    key, uid = await _register(client)
+    rozvrh = await _folder(client, key, "Rozvrh")
+    await _file_session(client, key, uid, pool, "conv-rozvrh", rozvrh, "seminars on tuesday")
+
+    r = await client.post(
+        "/api/v1/me/curators",
+        json={
+            "folder_id": rozvrh,
+            "model_provider": "local",
+            "model_id": "qwen",
+            "digest_provider": "local",
+            "digest_model_id": "qwen-fast",
+        },
+        headers=_auth(key),
+    )
+    assert r.status_code == 201, r.text
+    curator = r.json()["curator"]
+    assert curator["digest_provider"] == "local"
+    assert curator["digest_model_id"] == "qwen-fast"
+
+    r = await client.patch(
+        f"/api/v1/me/curators/{curator['id']}",
+        json={"digest_model_id": "other-fast"},
+        headers=_auth(key),
+    )
+    assert r.status_code == 200
+    assert r.json()["curator"]["digest_model_id"] == "other-fast"
+    assert r.json()["curator"]["digest_provider"] == "local"  # absent, untouched
+
+    # An explicit null drops the curator back to single-phase.
+    r = await client.patch(
+        f"/api/v1/me/curators/{curator['id']}",
+        json={"digest_provider": None},
+        headers=_auth(key),
+    )
+    assert r.status_code == 200
+    assert r.json()["curator"]["digest_provider"] is None
+
+    # Nonsensical pairs are refused at both doors.
+    r = await client.post(
+        "/api/v1/me/curators",
+        json={"folder_id": rozvrh, "digest_model_id": "orphan"},
+        headers=_auth(key),
+    )
+    assert r.status_code == 400
+    r = await client.post(
+        "/api/v1/me/curators",
+        json={"folder_id": rozvrh, "digest_provider": "anthropic"},
+        headers=_auth(key),
+    )
+    assert r.status_code == 400
+    await client.patch(
+        f"/api/v1/me/curators/{curator['id']}",
+        json={"digest_provider": None},
+        headers=_auth(key),
+    )
+    r = await client.patch(
+        f"/api/v1/me/curators/{curator['id']}",
+        json={"digest_provider": "anthropic"},
+        headers=_auth(key),
+    )
+    assert r.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_external_curator_refuses_a_second_model(client: AsyncClient, _db_pool):
+    """The external feed is end-user material: a digest model would be a
+    second processor of customer data. The API says no."""
+    key, uid = await _register(client)
+    internal = await agent_service.get_or_create_curator(uid)
+    await _db_pool.execute(
+        "UPDATE agents SET curator_wiki = 'external' WHERE id = $1", UUID(internal["id"])
+    )
+    r = await client.patch(
+        f"/api/v1/me/curators/{internal['id']}",
+        json={"digest_provider": "local"},
+        headers=_auth(key),
+    )
+    assert r.status_code == 400
+
+    # The workspace (internal, unbound) curator may use the hosters' providers.
+    await _db_pool.execute(
+        "UPDATE agents SET curator_wiki = 'internal' WHERE id = $1", UUID(internal["id"])
+    )
+    r = await client.patch(
+        f"/api/v1/me/curators/{internal['id']}",
+        json={"digest_provider": "anthropic"},
+        headers=_auth(key),
+    )
+    assert r.status_code == 200
+    assert r.json()["curator"]["digest_provider"] == "anthropic"
+
+
+@pytest.mark.asyncio
+async def test_two_phase_run_digests_then_writes_from_the_report(
+    client: AsyncClient, _db_pool, pool, monkeypatch
+):
+    """The run the founder asked for: a fast model reads the scoped feed and
+    reports extracts, then the curator's own model writes the wiki from the
+    report — never rerunning the feed command itself. The digest turn lands in
+    its own `agent-curate-` session so its transcript stays out of the feed."""
+
+    async def fake_run_chat(user_id, owner_name, uid, session_id, message, **kwargs):
+        calls.append((session_id, message, kwargs))
+        return "EXTRACT: seminars moved to thursday (conv-rozvrh)" if len(calls) == 1 else "LOG"
+
+    calls: list = []
+    monkeypatch.setattr(sprite_agent_service, "run_chat", fake_run_chat)
+
+    key, uid = await _register(client)
+    rozvrh = await _folder(client, key, "Rozvrh")
+    await _file_session(client, key, uid, pool, "conv-rozvrh", rozvrh, "seminars on tuesday")
+    curator = await agent_service.create_folder_curator(
+        uid, UUID(rozvrh), "local", "qwen", digest_provider="local", digest_model_id="qwen-fast"
+    )
+    agent = await agent_service.get_curator_by_id(UUID(curator["id"]))
+
+    result = await sprite_agent_service.run_scheduled(agent, "20260102030405")
+    assert result == "LOG"
+
+    assert len(calls) == 2
+    digest_session, digest_prompt, digest_kwargs = calls[0]
+    writer_session, writer_prompt, writer_kwargs = calls[1]
+
+    assert digest_session.startswith(f"agent-curate-{curator['id']}-")
+    assert digest_session.endswith("-digest")
+    assert not writer_session.endswith("-digest")
+    assert digest_kwargs["model_id"] == "qwen-fast"
+    assert writer_kwargs["model_id"] == "qwen"
+
+    assert "Digest the Curation Delta" in digest_prompt
+    assert f"stash changes --folder {rozvrh}" in digest_prompt  # the same feed, fast model
+
+    assert "## Digest report" in writer_prompt
+    assert "EXTRACT: seminars moved to thursday" in writer_prompt
+    assert f"stash changes --folder {rozvrh}" not in writer_prompt  # no rereading
+
+
+@pytest.mark.asyncio
+async def test_empty_digest_fails_the_run_before_the_writer(
+    client: AsyncClient, _db_pool, pool, monkeypatch
+):
+    """A digest that yields nothing must fail the run — writing a wiki from an
+    empty report would curate nothing and advance the watermark over
+    everything, silently dropping the backlog."""
+
+    async def fake_run_chat(user_id, owner_name, uid, session_id, message, **kwargs):
+        calls.append(session_id)
+        return "   "
+
+    calls: list = []
+    monkeypatch.setattr(sprite_agent_service, "run_chat", fake_run_chat)
+
+    key, uid = await _register(client)
+    rozvrh = await _folder(client, key, "Rozvrh")
+    await _file_session(client, key, uid, pool, "conv-rozvrh", rozvrh, "seminars on tuesday")
+    curator = await agent_service.create_folder_curator(
+        uid, UUID(rozvrh), "local", "qwen", digest_provider="local", digest_model_id="qwen-fast"
+    )
+    agent = await agent_service.get_curator_by_id(UUID(curator["id"]))
+
+    with pytest.raises(RuntimeError, match="no extracts"):
+        await sprite_agent_service.run_scheduled(agent, "20260102030406")
+    assert len(calls) == 1  # the writer never ran

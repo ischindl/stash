@@ -22,7 +22,8 @@ _COLUMNS = (
     "id, user_id, name, model_provider, system_prompt, run_mode, "
     "schedule_cron, schedule_prompt, is_default, is_curator, slack_bound, "
     "telegram_bound, last_run_at, last_run_error, last_run_outcome, curated_through, "
-    "curator_wiki, curator_folder_id, model_id, month_run_count, month_run_anchor, created_at"
+    "curator_wiki, curator_folder_id, model_id, digest_provider, digest_model_id, "
+    "month_run_count, month_run_anchor, created_at"
 )
 
 
@@ -181,7 +182,12 @@ async def list_curators(user_id: UUID) -> list[dict]:
 
 
 async def create_folder_curator(
-    user_id: UUID, folder_id: UUID, model_provider: str, model_id: str | None = None
+    user_id: UUID,
+    folder_id: UUID,
+    model_provider: str,
+    model_id: str | None = None,
+    digest_provider: str | None = None,
+    digest_model_id: str | None = None,
 ) -> dict:
     """A curator bound to one session folder: it reads that folder's feed and
     writes that folder's wiki.
@@ -211,6 +217,12 @@ async def create_folder_curator(
         raise HTTPException(status_code=404, detail="folder not found")
     if model_provider != "local":
         raise HTTPException(status_code=400, detail="folder curators run on the local provider")
+    if digest_model_id is not None and digest_provider is None:
+        raise HTTPException(status_code=400, detail="digest_model_id needs a digest_provider")
+    if digest_provider is not None and digest_provider != "local":
+        raise HTTPException(
+            status_code=400, detail="folder curator digest models run on the local provider"
+        )
     wiki_folder_id = folder["wiki_folder_id"]
     if wiki_folder_id is None:
         home = await pool.fetchrow(
@@ -229,9 +241,11 @@ async def create_folder_curator(
         f"""
         INSERT INTO agents (user_id, name, run_mode, schedule_cron, is_curator,
                             curator_wiki, curator_folder_id, model_provider, model_id,
+                            digest_provider, digest_model_id,
                             last_run_at, curated_through)
         SELECT $1, 'Wiki curator — ' || $4, 'scheduled', $2, true,
                'internal', $3, $5, $6,
+               $7, $8,
                now(),
                (SELECT min(he.created_at)
                 FROM history_events he
@@ -250,6 +264,8 @@ async def create_folder_curator(
         folder["name"],
         model_provider,
         model_id,
+        digest_provider,
+        digest_model_id,
     )
     if row is None:  # lost the race (or already existed) — read the winner.
         row = await pool.fetchrow(
@@ -277,6 +293,8 @@ async def update_curator(
     model_id: str | None = ...,
     schedule_cron: str | None = ...,
     curated_through: datetime | None = ...,
+    digest_provider: str | None = ...,
+    digest_model_id: str | None = ...,
 ) -> dict:
     """PATCH semantics: `...` means leave the field alone, None clears it."""
     fields: dict = {}
@@ -286,6 +304,38 @@ async def update_curator(
         fields["model_provider"] = model_provider
     if model_id is not ...:
         fields["model_id"] = model_id
+    if digest_provider is not ...:
+        if digest_provider is not None and digest_provider not in _VALID_PROVIDERS:
+            raise HTTPException(
+                status_code=400, detail=f"invalid digest_provider: {digest_provider}"
+            )
+        fields["digest_provider"] = digest_provider
+    if digest_model_id is not ...:
+        fields["digest_model_id"] = digest_model_id
+    if fields.get("digest_provider") is not None or fields.get("digest_model_id") is not None:
+        # A digest model reads the raw feed before the curator's own model —
+        # on the external curator that feed is end-user material, and a
+        # second model on it is a second processor of customer data. Not this
+        # knob's call to make silently. Folder curators keep the create-time
+        # rule: the self-hosted endpoint only.
+        row = await get_curator_by_id(agent_id) or _raise_missing(agent_id)
+        if row["curator_wiki"] == "external":
+            raise HTTPException(
+                status_code=400,
+                detail="the external curator runs a single model (its feed is end-user material)",
+            )
+        effective_provider = fields.get("digest_provider", row["digest_provider"])
+        if fields.get("digest_model_id") is not None and effective_provider is None:
+            raise HTTPException(status_code=400, detail="digest_model_id needs a digest_provider")
+        if (
+            row["curator_folder_id"] is not None
+            and effective_provider is not None
+            and effective_provider != "local"
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="folder curator digest models run on the local provider",
+            )
     if schedule_cron is not ...:
         if schedule_cron is None:
             # The runtime has no enabled column: a folder curator is idled by

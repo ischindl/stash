@@ -459,13 +459,19 @@ def scheduled_session_prefix(agent: dict) -> str:
     return f"agent-{kind}-{agent['id']}-"
 
 
-async def build_scheduled_turn(agent: dict, run_stamp: str) -> tuple[str, str]:
+async def build_scheduled_turn(
+    agent: dict, run_stamp: str, extracts: str | None = None
+) -> tuple[str, str]:
     """(session_id, message) for one run of a scheduled agent.
 
     The reserved Memory curator (is_curator) runs the curation prompt built
     server-side from its watermark; other scheduled agents run schedule_prompt.
     Each run gets its own per-run session id so history (and the CLI transcript
-    it replays) can't grow unbounded across a long-lived schedule."""
+    it replays) can't grow unbounded across a long-lived schedule.
+
+    `extracts` is the digest report of a two-phase curator run: the wiki
+    prompt then works from the report instead of telling the model to read
+    the raw feed itself."""
     from . import end_user_service, files_tree_service, prompts
 
     user_id = UUID(str(agent["user_id"]))
@@ -491,6 +497,7 @@ async def build_scheduled_turn(agent: dict, run_stamp: str) -> tuple[str, str]:
                 str(folder["wiki_folder_id"]),
                 folder["name"],
                 since,
+                extracts,
             )
         # Which wiki this curator writes decides its prompt. A developer
         # workspace runs both: the internal pass over its own Memory wiki, and
@@ -503,13 +510,42 @@ async def build_scheduled_turn(agent: dict, run_stamp: str) -> tuple[str, str]:
                 workspace, agent.get("curated_through")
             )
         memory = await files_tree_service.get_or_create_memory_folder(user_id, user_id)
-        return session_id, prompts.render_curator_prompt(memory["id"], since)
+        return session_id, prompts.render_curator_prompt(memory["id"], since, extracts)
     return session_id, agent["schedule_prompt"]
+
+
+async def build_digest_turn(agent: dict, run_stamp: str) -> tuple[str, str]:
+    """Phase one of a two-phase curator run: (session_id, digest prompt).
+
+    The digest model's whole job is to read the delta the curator is about to
+    curate and report extracts, so it runs the very feed command the
+    single-phase prompt would have run. The session carries the run's
+    `agent-curate-` prefix, so the digest transcript stays out of the feed.
+    """
+    from . import prompts
+
+    if agent.get("curator_wiki") != "internal":
+        # The external feed is end-user material: adding a second model to it
+        # adds a second processor of customer data, which is not this knob's
+        # call to make. Internal wikis (Memory + project folders) are the
+        # owner's own material.
+        raise ValueError("digest runs cover the internal curators only")
+    session_id = f"{scheduled_session_prefix(agent)}{run_stamp}-digest"
+    since = agent["curated_through"].isoformat() if agent.get("curated_through") else None
+    folder_id = str(agent["curator_folder_id"]) if agent.get("curator_folder_id") else None
+    changes_cmd = prompts.curator_changes_cmd(since, folder_id)
+    return session_id, prompts.render_digest_prompt(changes_cmd, prompts.curator_window(since))
 
 
 async def run_scheduled(agent: dict, run_stamp: str) -> str:
     """Run a scheduled agent headless — one turn into a fresh per-run session —
-    and return the result text."""
+    and return the result text.
+
+    A curator with a digest model runs in two phases: the digest model
+    reads the raw feed and reports extracts, then the curator's own model
+    writes the wiki from the report. The split is what makes a long backlog
+    affordable — the expensive model never rereads transcripts. A digest that
+    yields nothing fails the run rather than spending the writer on emptiness."""
     from . import user_service
 
     user_id = UUID(str(agent["user_id"]))
@@ -518,7 +554,24 @@ async def run_scheduled(agent: dict, run_stamp: str) -> str:
         return ""
     owner_name = user["display_name"] or user["name"]
 
-    session_id, message = await build_scheduled_turn(agent, run_stamp)
+    extracts = None
+    if agent.get("is_curator") and agent.get("digest_provider") is not None:
+        digest_session, digest_prompt = await build_digest_turn(agent, run_stamp)
+        extracts = await run_chat(
+            user_id,
+            owner_name,
+            user_id,
+            digest_session,
+            digest_prompt,
+            model_provider=agent["digest_provider"],
+            model_id=agent.get("digest_model_id"),
+            persona=agent["system_prompt"],
+            agent_name=agent["name"],
+        )
+        if not extracts.strip():
+            raise RuntimeError("digest phase returned no extracts")
+
+    session_id, message = await build_scheduled_turn(agent, run_stamp, extracts)
     return await run_chat(
         user_id,
         owner_name,

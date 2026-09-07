@@ -176,6 +176,8 @@ class FolderCuratorCreateRequest(BaseModel):
     folder_id: UUID
     model_provider: str = "local"
     model_id: str | None = None
+    digest_provider: str | None = None
+    digest_model_id: str | None = None
 
 
 class FolderCuratorUpdateRequest(BaseModel):
@@ -185,6 +187,8 @@ class FolderCuratorUpdateRequest(BaseModel):
     model_provider: str | None = None
     model_id: str | None = None
     schedule_cron: str | None = None
+    digest_provider: str | None = None
+    digest_model_id: str | None = None
 
 
 class FolderResponse(BaseModel):
