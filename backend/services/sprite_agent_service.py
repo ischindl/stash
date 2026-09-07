@@ -565,6 +565,12 @@ async def run_scheduled(agent: dict, run_stamp: str) -> str:
             digest_prompt,
             model_provider=agent["digest_provider"],
             model_id=agent.get("digest_model_id"),
+            # The row's pin names the LOCAL box; a digest configured on a key
+            # provider has no box to pin, and a pin would (rightly) fail loud
+            # as a provider mismatch. Only a local digest inherits the box.
+            credential_id=(
+                agent.get("credential_id") if agent["digest_provider"] == "local" else None
+            ),
             persona=agent["system_prompt"],
             agent_name=agent["name"],
         )
@@ -580,6 +586,7 @@ async def run_scheduled(agent: dict, run_stamp: str) -> str:
         message,
         model_provider=agent["model_provider"],
         model_id=agent.get("model_id"),
+        credential_id=agent.get("credential_id"),
         persona=agent["system_prompt"],
         agent_name=agent["name"],
     )
@@ -752,20 +759,27 @@ async def run_chat(
     channel: str | None = None,
     model_provider: str | None = None,
     model_id: str | None = None,
+    credential_id: UUID | None = None,
     persona: str | None = None,
     agent_name: str = AGENT_NAME,
 ) -> str:
     """Non-streaming turn for Slack/Telegram/scheduled: returns the final answer.
     `channel` ('slack'|'telegram') selects the bound agent's model + persona;
-    a scheduled run passes model_provider/persona directly.
+    a scheduled run passes model_provider/persona directly. Either way the
+    agent row's own model_id and credential pin decide the box and model — the
+    same values reach every turn of the run, never just the first.
     Raises NeedsAuth for an unconnected free account so the channel can prompt."""
     if channel:
         agent = await agent_service.channel_agent(user_id, channel)
         model_provider = agent["model_provider"]
+        model_id = agent["model_id"]
+        credential_id = agent["credential_id"]
         persona = agent["system_prompt"]
         agent_name = agent["name"]
     try:
-        auth = await agent_auth.resolve(user_id, model_provider, model_id=model_id)
+        auth = await agent_auth.resolve(
+            user_id, model_provider, model_id=model_id, credential_id=credential_id
+        )
     except agent_auth.NeedsAuth:
         raise NeedsAuth
     except agent_auth.ProviderNotConfigured:

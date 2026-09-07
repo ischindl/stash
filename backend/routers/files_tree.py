@@ -317,7 +317,10 @@ async def recompute_memory(
             )
     try:
         await agent_auth.resolve(
-            user_id, curator["model_provider"], model_id=curator.get("model_id")
+            user_id,
+            curator["model_provider"],
+            model_id=curator.get("model_id"),
+            credential_id=curator.get("credential_id"),
         )
     except agent_auth.NeedsAuth:
         raise HTTPException(

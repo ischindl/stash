@@ -45,7 +45,12 @@ async def chat(
     # Resolve the harness + credentials up front so an unconnected free user
     # gets a clean 402 instead of a stream that dies mid-flight.
     try:
-        auth = await agent_auth.resolve(current_user["id"], agent["model_provider"])
+        auth = await agent_auth.resolve(
+            current_user["id"],
+            agent["model_provider"],
+            model_id=agent.get("model_id"),
+            credential_id=agent.get("credential_id"),
+        )
     except agent_auth.NeedsAuth:
         raise HTTPException(
             status_code=402,
@@ -100,7 +105,12 @@ async def run_now(
     if not agent["schedule_prompt"]:
         raise HTTPException(status_code=400, detail="This agent has no scheduled prompt to run.")
     try:
-        auth = await agent_auth.resolve(current_user["id"], agent["model_provider"])
+        auth = await agent_auth.resolve(
+            current_user["id"],
+            agent["model_provider"],
+            model_id=agent.get("model_id"),
+            credential_id=agent.get("credential_id"),
+        )
     except agent_auth.NeedsAuth:
         raise HTTPException(
             status_code=402,

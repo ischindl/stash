@@ -361,7 +361,10 @@ async def _runnable_curator(scope_user_id: UUID, user_id: UUID) -> dict:
     curator = await agent_service.get_or_create_curator(scope_user_id, wiki="external")
     try:
         await agent_auth.resolve(
-            scope_user_id, curator["model_provider"], model_id=curator.get("model_id")
+            scope_user_id,
+            curator["model_provider"],
+            model_id=curator.get("model_id"),
+            credential_id=curator.get("credential_id"),
         )
     except agent_auth.NeedsAuth:
         raise HTTPException(

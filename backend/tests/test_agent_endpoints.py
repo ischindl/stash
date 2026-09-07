@@ -21,7 +21,7 @@ from cryptography.fernet import Fernet
 from httpx import AsyncClient
 
 from backend.config import settings
-from backend.services import agent_auth, agent_service
+from backend.services import agent_auth, agent_service, sprite_agent_service
 
 from .test_curator import _register
 from .test_developer_platform import _developer
@@ -541,3 +541,136 @@ async def test_workspace_credentials_route_mirrors_the_endpoint_api(
         )
     ).json()
     assert body["endpoints"] == []
+
+
+# --- Run plumbing: the row's pin and model reach every turn's resolve ---
+
+
+async def _two_boxes(uid: UUID) -> tuple[UUID, UUID]:
+    one = await agent_auth.store_credential(
+        uid,
+        "local",
+        "endpoint",
+        agent_auth.local_endpoint_secret(BOX_ONE, "llama", None),
+        name="box-one",
+    )
+    two = await agent_auth.store_credential(
+        uid,
+        "local",
+        "endpoint",
+        agent_auth.local_endpoint_secret(BOX_TWO, "qwen", None),
+        name="box-two",
+    )
+    return one, two
+
+
+async def _pin_curator(_db_pool, uid: UUID, **fields) -> dict:
+    sets = ", ".join(f"{col} = ${i + 2}" for i, col in enumerate(fields))
+    row = await _db_pool.fetchrow(
+        f"UPDATE agents SET {sets} WHERE id = (SELECT id FROM agents WHERE user_id = $1 "
+        "AND is_curator AND curator_folder_id IS NULL LIMIT 1) RETURNING id",
+        uid,
+        *fields.values(),
+    )
+    return await agent_service.get_agent_by_id(row["id"])
+
+
+def _spy_resolve(monkeypatch) -> list[dict]:
+    """Capture resolve args for the run's turns and abort before any turn runs.
+
+    Returns (calls, undo): undo restores the real resolver for the follow-up
+    assertion that the REAL resolve dials the box the row names."""
+    calls: list[dict] = []
+    real = agent_auth.resolve
+
+    async def spy(user_id, prefer_provider=None, model_id=None, credential_id=None):
+        calls.append({"prefer": prefer_provider, "model_id": model_id, "cred": credential_id})
+        raise agent_auth.NeedsAuth
+
+    monkeypatch.setattr(agent_auth, "resolve", spy)
+
+    def undo():
+        monkeypatch.setattr(agent_auth, "resolve", real)
+
+    return calls, undo
+
+
+@pytest.mark.asyncio
+async def test_a_pinned_curators_run_resolves_through_the_pin(
+    client: AsyncClient, monkeypatch, _db_pool
+):
+    """The founder's curator pinned to the NEWER of two boxes: the scheduled
+    run hands the pin to resolve — and the real resolver dials exactly that
+    box, proving the wiring reaches RunAuth.endpoint, not just the kwargs."""
+    _key, uid = await _register(client)
+    _one, two = await _two_boxes(uid)
+    agent = await _pin_curator(
+        _db_pool, uid, model_provider="local", model_id="qwen", credential_id=two
+    )
+
+    calls, undo = _spy_resolve(monkeypatch)
+    with pytest.raises(sprite_agent_service.NeedsAuth):
+        await sprite_agent_service.run_scheduled(agent, "202601011200")
+    assert calls == [{"prefer": "local", "model_id": "qwen", "cred": two}]
+
+    undo()
+    auth = await agent_auth.resolve(uid, "local", model_id="qwen", credential_id=two)
+    assert auth.endpoint == BOX_TWO
+
+
+@pytest.mark.asyncio
+async def test_an_unpinned_curator_run_still_dials_the_oldest_box(
+    client: AsyncClient, monkeypatch, _db_pool
+):
+    """Default-model equivalence survives the plumbing: an unpinned curator
+    passes no pin, and the real resolver keeps the oldest-box answer."""
+    _key, uid = await _register(client)
+    one, _two = await _two_boxes(uid)
+    agent = await _pin_curator(_db_pool, uid, model_provider="local", credential_id=None)
+
+    calls, undo = _spy_resolve(monkeypatch)
+    with pytest.raises(sprite_agent_service.NeedsAuth):
+        await sprite_agent_service.run_scheduled(agent, "202601011200")
+    assert calls == [{"prefer": "local", "model_id": None, "cred": None}]
+
+    undo()
+    auth = await agent_auth.resolve(uid, "local")
+    assert auth.endpoint == BOX_ONE
+
+
+@pytest.mark.asyncio
+async def test_the_digest_phase_carries_the_pin_only_for_a_local_box(
+    client: AsyncClient, monkeypatch, _db_pool
+):
+    """Curator pins box B, digest on a key provider: the digest turn must NOT
+    inherit the pin (it would fail loud as a provider mismatch — correctly,
+    but it's the wrong pairing, not a typo), while a local digest DOES inherit
+    the box. Only prefer_provider/model_id swap between the phases."""
+    _key, uid = await _register(client)
+    _one, two = await _two_boxes(uid)
+
+    agent = await _pin_curator(
+        _db_pool,
+        uid,
+        model_provider="local",
+        credential_id=two,
+        digest_provider="anthropic",
+        digest_model_id="haiku",
+    )
+    calls, _undo = _spy_resolve(monkeypatch)
+    with pytest.raises(sprite_agent_service.NeedsAuth):
+        await sprite_agent_service.run_scheduled(agent, "202601011200")
+    assert calls == [{"prefer": "anthropic", "model_id": "haiku", "cred": None}]
+
+    agent = await _pin_curator(
+        _db_pool,
+        uid,
+        model_provider="local",
+        credential_id=two,
+        digest_provider="local",
+        digest_model_id="qwen-mini",
+    )
+    calls, _undo = _spy_resolve(monkeypatch)
+    with pytest.raises(sprite_agent_service.NeedsAuth):
+        await sprite_agent_service.run_scheduled(agent, "202601011200")
+    assert calls == [{"prefer": "local", "model_id": "qwen-mini", "cred": two}]
