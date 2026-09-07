@@ -288,6 +288,25 @@ async def create_folder_curator(
     return curator
 
 
+async def disconnect_local_endpoint(user_id: UUID, credential_id: UUID) -> list[dict]:
+    """Disconnect a local endpoint — unless one of the user's agents pins it.
+
+    Deleting a pinned box would strand every run that points at it, so the
+    referencing agents (id + name) are returned and NOTHING is deleted; the
+    caller turns that list into a 409 that names them. An empty list means the
+    endpoint is gone.
+    """
+    refs = await get_pool().fetch(
+        "SELECT id, name FROM agents WHERE user_id = $1 AND credential_id = $2 ORDER BY name",
+        user_id,
+        credential_id,
+    )
+    if refs:
+        return [{"id": str(r["id"]), "name": r["name"]} for r in refs]
+    await agent_auth.delete_endpoint(user_id, credential_id)
+    return []
+
+
 async def get_curator_by_id(agent_id: UUID) -> dict | None:
     pool = get_pool()
     row = await pool.fetchrow(

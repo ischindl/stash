@@ -273,9 +273,7 @@ def _credential(row) -> dict | None:
     }
 
 
-async def store_credential(
-    user_id: UUID, provider: str, kind: str, secret: str, name: str
-) -> UUID:
+async def store_credential(user_id: UUID, provider: str, kind: str, secret: str, name: str) -> UUID:
     """Connect a credential and return the row id an agent can pin.
 
     A local endpoint is a BOX, so connecting one APPENDS: the founder runs
@@ -380,15 +378,28 @@ async def list_local_endpoints(user_id: UUID) -> list[dict]:
     """Every local model endpoint this user has connected, oldest first.
 
     What the Settings list needs to name and choose a box: id, name, base URL,
-    the model ids we know it serves. The key never travels this path — it stays
-    inside the encrypted doc, where only a turn that dials the box can reach it.
+    and the model ids read LIVE from the box itself. A box that is not
+    answering still appears — with models: [] and a probe_error naming why —
+    so a rebooting machine reads as down, not as deleted, and one silent box
+    never blanks the others' listings. The key never travels this path: it
+    stays inside the encrypted doc and only ever knocks on its own box.
     """
     rows = await get_pool().fetch(
         "SELECT id, name, secret_enc FROM user_agent_credentials "
         "WHERE user_id = $1 AND provider = 'local' ORDER BY created_at, id",
         user_id,
     )
-    return [_endpoint_summary(r["id"], r["name"], r["secret_enc"]) for r in rows]
+    entries = []
+    for row in rows:
+        doc = json.loads(_decrypt(row["secret_enc"]))
+        entry = {"id": row["id"], "name": row["name"], "base_url": doc["base_url"], "models": []}
+        probe = await probe_local_endpoint(doc["base_url"], doc["api_key"])
+        if probe["ok"]:
+            entry["models"] = probe["models"]
+        else:
+            entry["probe_error"] = probe["error_detail"]
+        entries.append(entry)
+    return entries
 
 
 async def get_local_endpoint(user_id: UUID, credential_id: UUID) -> dict | None:
@@ -502,7 +513,9 @@ async def _pinned_auth(
     if prefer_provider not in (None, "local"):
         raise ValueError(f"credential_id pins a local endpoint; it cannot run as {prefer_provider}")
     home = (
-        str(sprite_service.local_box_home()) if settings.AGENT_EXEC_MODE == "local" else _SPRITE_HOME
+        str(sprite_service.local_box_home())
+        if settings.AGENT_EXEC_MODE == "local"
+        else _SPRITE_HOME
     )
     return _local_auth(cred, home=home, model_override=model_id)
 

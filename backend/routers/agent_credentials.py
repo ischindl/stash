@@ -8,11 +8,13 @@ flows are separate.
 
 from __future__ import annotations
 
+from uuid import UUID
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from ..auth import get_current_user
-from ..services import agent_auth, agent_oauth
+from ..services import agent_auth, agent_oauth, agent_service
 
 router = APIRouter(prefix="/api/v1/me/agent-credentials", tags=["agent-credentials"])
 
@@ -50,11 +52,13 @@ class LocalTestRequest(BaseModel):
 
 @router.get("")
 async def list_credentials(current_user: dict = Depends(get_current_user)):
-    """Which providers this user has connected, plus their own local endpoint doc
-    so the Settings form can show the key it holds and prefill a reconnect. The
-    key providers' secrets are never returned."""
+    """Which providers this user has connected, the endpoint entries for the
+    Settings list (id, name, base URL, models probed live — never a key), and
+    the user's own local endpoint doc for the Settings form to show and
+    prefill. The key providers' secrets are never returned."""
     return {
         "connected": await agent_auth.list_connected(current_user["id"]),
+        "endpoints": await agent_auth.list_local_endpoints(current_user["id"]),
         "local": await agent_auth.local_credential(current_user["id"]),
     }
 
@@ -65,22 +69,30 @@ async def connect(req: ConnectRequest, current_user: dict = Depends(get_current_
         raise HTTPException(status_code=400, detail=f"unknown provider: {req.provider}")
     if req.provider == "local":
         # The credential is an endpoint, not a key: an absolute http(s) base URL
-        # the sprite dials at turn time plus a model id. The backend only dials
-        # it itself when the user presses Test connection below.
+        # the sprite dials at turn time plus a model id. Connecting APPENDS a
+        # box — but only a live one: the probe runs before anything is stored,
+        # so a typo'd URL never enters the list the user trusts.
         try:
-            secret = agent_auth.local_endpoint_secret(
-                req.base_url or "", req.model or "", req.api_key
-            )
+            doc = agent_auth.local_endpoint_doc(req.base_url or "", req.model or "", req.api_key)
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
-        await agent_auth.store_credential(
+        probe = await agent_auth.probe_local_endpoint(doc["base_url"], doc["api_key"])
+        if not probe["ok"]:
+            raise HTTPException(
+                status_code=400, detail=f"endpoint probe failed: {probe['error_detail']}"
+            )
+        credential_id = await agent_auth.store_credential(
             current_user["id"],
             "local",
             "endpoint",
-            secret,
-            name=agent_auth.endpoint_name(req.base_url or ""),
+            agent_auth.local_endpoint_secret(doc["base_url"], doc["model"], doc["api_key"]),
+            name=agent_auth.endpoint_name(doc["base_url"]),
         )
-        return {"ok": True, "connected": await agent_auth.list_connected(current_user["id"])}
+        return {
+            "ok": True,
+            "id": str(credential_id),
+            "connected": await agent_auth.list_connected(current_user["id"]),
+        }
     if not req.api_key or not req.api_key.strip():
         raise HTTPException(status_code=400, detail="api_key is required")
     await agent_auth.store_credential(
@@ -164,7 +176,30 @@ async def delete_local_models_json(current_user: dict = Depends(get_current_user
     return {"ok": True, "stored": False}
 
 
+@router.delete("/endpoints/{credential_id}")
+async def disconnect_endpoint(credential_id: UUID, current_user: dict = Depends(get_current_user)):
+    """Disconnect exactly one local endpoint. Refused (409, listing the agents)
+    while any of the user's agents pins it — deleting the box under a running
+    curator would strand that agent mid-map."""
+    refs = await agent_service.disconnect_local_endpoint(current_user["id"], credential_id)
+    if refs:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": "agents still pin this endpoint — re-pin or unpin them first",
+                "agents": refs,
+            },
+        )
+    return {"ok": True, "connected": await agent_auth.list_connected(current_user["id"])}
+
+
 @router.delete("/{provider}")
 async def disconnect(provider: str, current_user: dict = Depends(get_current_user)):
+    if provider == "local":
+        raise HTTPException(
+            status_code=400,
+            detail="a local endpoint is disconnected by id: DELETE "
+            "/api/v1/me/agent-credentials/endpoints/{credential_id}",
+        )
     await agent_auth.delete_credential(current_user["id"], provider)
     return {"ok": True, "connected": await agent_auth.list_connected(current_user["id"])}
