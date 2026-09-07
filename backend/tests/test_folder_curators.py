@@ -15,12 +15,14 @@ that steers them.
 """
 
 from datetime import UTC, datetime, timedelta
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
+from cryptography.fernet import Fernet
 from httpx import AsyncClient
 
-from backend.services import agent_service, curation_service, sprite_agent_service
+from backend.config import settings
+from backend.services import agent_auth, agent_service, curation_service, sprite_agent_service
 
 from .test_curator import _auth, _push_events, _register
 
@@ -589,3 +591,158 @@ async def test_empty_digest_fails_the_run_before_the_writer(
     with pytest.raises(RuntimeError, match="no extracts"):
         await sprite_agent_service.run_scheduled(agent, "20260102030406")
     assert len(calls) == 1  # the writer never ran
+
+
+@pytest.mark.asyncio
+async def test_folder_curator_without_model_selection_inherits(client: AsyncClient, _db_pool, pool):
+    """Scope B's promise: a curator created with no model selection stores
+    NULL/NULL/NULL — the same row shape the workspace curators carry — so its
+    turns resolve on the shared path (the default curator model), not through
+    a folder-curator branch. A selection without a provider is refused: the
+    row would carry a pin that decides nothing and silently reads as someone
+    having un-inherited it."""
+    key, uid = await _register(client)
+    rozvrh = await _folder(client, key, "Rozvrh")
+
+    r = await client.post("/api/v1/me/curators", json={"folder_id": rozvrh}, headers=_auth(key))
+    assert r.status_code == 201, r.text
+    curator = r.json()["curator"]
+    assert curator["model_provider"] is None
+    assert curator["model_id"] is None
+    assert curator["credential_id"] is None
+    stored = await pool.fetchrow(
+        "SELECT model_provider, model_id, credential_id FROM agents WHERE id = $1",
+        UUID(curator["id"]),
+    )
+    assert stored["model_provider"] is None
+    assert stored["model_id"] is None
+    assert stored["credential_id"] is None
+
+    # The provisioned workspace curator carries the identical shape — this is
+    # the same resolution path, demonstrably not a new special case.
+    workspace = await agent_service.get_or_create_curator(uid)
+    assert workspace["model_provider"] is None
+
+    # A dangling selection is refused at PATCH time too, and nothing lands.
+    r = await client.patch(
+        f"/api/v1/me/curators/{curator['id']}", json={"model_id": "qwen"}, headers=_auth(key)
+    )
+    assert r.status_code == 400
+    r = await client.patch(
+        f"/api/v1/me/curators/{curator['id']}",
+        json={"credential_id": str(uuid4())},
+        headers=_auth(key),
+    )
+    assert r.status_code == 400
+    stored = await pool.fetchrow(
+        "SELECT model_provider, model_id, credential_id FROM agents WHERE id = $1",
+        UUID(curator["id"]),
+    )
+    assert stored["model_id"] is None
+    assert stored["credential_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_folder_curator_pin_and_digest_round_trip(
+    client: AsyncClient, _db_pool, pool, monkeypatch
+):
+    """Explicit local + credential_id + digest fields: the pin survives later
+    PATCHes (digest retunes must not silently drop the curator's box), and
+    moving the pin moves the box."""
+    monkeypatch.setattr(settings, "INTEGRATIONS_ENCRYPTION_KEY", Fernet.generate_key().decode())
+    key, uid = await _register(client)
+    rozvrh = await _folder(client, key, "Rozvrh")
+    box_a = await agent_auth.store_credential(
+        uid,
+        "local",
+        "endpoint",
+        agent_auth.local_endpoint_secret("http://box-a:11434/v1", "llama"),
+        name="box-a",
+    )
+    box_b = await agent_auth.store_credential(
+        uid,
+        "local",
+        "endpoint",
+        agent_auth.local_endpoint_secret("http://box-b:11434/v1", "qwen"),
+        name="box-b",
+    )
+
+    r = await client.post(
+        "/api/v1/me/curators",
+        json={
+            "folder_id": rozvrh,
+            "model_provider": "local",
+            "model_id": "llama",
+            "credential_id": str(box_a),
+        },
+        headers=_auth(key),
+    )
+    assert r.status_code == 201, r.text
+    curator = r.json()["curator"]
+    assert curator["credential_id"] == str(box_a)
+    assert curator["model_id"] == "llama"
+
+    # Retuning the digest leaves the endpoint pin exactly where it was.
+    r = await client.patch(
+        f"/api/v1/me/curators/{curator['id']}",
+        json={"digest_provider": "local", "digest_model_id": "cheap"},
+        headers=_auth(key),
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["curator"]["credential_id"] == str(box_a)
+    assert r.json()["curator"]["digest_model_id"] == "cheap"
+
+    # Moving the pin moves the box — the id, not the model name, decides.
+    r = await client.patch(
+        f"/api/v1/me/curators/{curator['id']}",
+        json={"credential_id": str(box_b)},
+        headers=_auth(key),
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["curator"]["credential_id"] == str(box_b)
+
+
+@pytest.mark.asyncio
+async def test_folder_curator_refuses_dangling_and_foreign_pins(
+    client: AsyncClient, _db_pool, monkeypatch
+):
+    """Create-time refusals: credential_id without a model_provider, and a pin
+    pointing at someone else's endpoint — saving either would only blow up at
+    the next run, when the cause is hardest to see."""
+    monkeypatch.setattr(settings, "INTEGRATIONS_ENCRYPTION_KEY", Fernet.generate_key().decode())
+    key, uid = await _register(client)
+    other_key, other_uid = await _register(client)
+    rozvrh = await _folder(client, key, "Rozvrh")
+    foreign = await agent_auth.store_credential(
+        other_uid,
+        "local",
+        "endpoint",
+        agent_auth.local_endpoint_secret("http://not-yours:11434/v1", "llama"),
+        name="not-yours",
+    )
+
+    r = await client.post(
+        "/api/v1/me/curators",
+        json={"folder_id": rozvrh, "credential_id": str(foreign)},
+        headers=_auth(key),
+    )
+    assert r.status_code == 400  # dangling AND foreign
+
+    r = await client.post(
+        "/api/v1/me/curators",
+        json={"folder_id": rozvrh, "model_provider": "local", "credential_id": str(foreign)},
+        headers=_auth(key),
+    )
+    assert r.status_code == 400  # foreign, even with a provider
+
+    r = await client.post(
+        "/api/v1/me/curators",
+        json={"folder_id": rozvrh, "model_id": "qwen"},
+        headers=_auth(key),
+    )
+    assert r.status_code == 400  # model_id without a provider
+
+    # Nothing half-saved: no curator row exists for the folder.
+    listed = await client.get("/api/v1/me/curators", headers=_auth(key))
+    assert listed.status_code == 200
+    assert all(c["curator_folder_id"] is None for c in listed.json()["curators"])

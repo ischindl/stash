@@ -173,9 +173,15 @@ class FolderUpdateRequest(BaseModel):
 
 
 class FolderCuratorCreateRequest(BaseModel):
+    # With no model selection the curator inherits the workspace curator's
+    # resolution (the default curator model). An explicit selection is
+    # restricted to the local provider while folder scoping is dogfooded
+    # against a self-hosted endpoint; credential_id names which connected
+    # endpoint to dial.
     folder_id: UUID
-    model_provider: str = "local"
+    model_provider: str | None = None
     model_id: str | None = None
+    credential_id: UUID | None = None
     digest_provider: str | None = None
     digest_model_id: str | None = None
 
@@ -186,6 +192,7 @@ class FolderCuratorUpdateRequest(BaseModel):
     # keep a cadence).
     model_provider: str | None = None
     model_id: str | None = None
+    credential_id: UUID | None = None
     schedule_cron: str | None = None
     digest_provider: str | None = None
     digest_model_id: str | None = None

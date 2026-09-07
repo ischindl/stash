@@ -381,11 +381,13 @@ async def create_scope_folder_curator(
 ):
     """Bind a curator to one session folder: it reads that folder's scoped feed
     and writes that folder's wiki. Idempotent — re-posting the same folder
-    returns the existing curator. Runs on the local provider while folder
-    curation is dogfooded against a self-hosted endpoint; `model_id` picks
-    which model on it. `digest_provider`/`digest_model_id` optionally split the
-    run: a second model reads the raw feed first, the curator writes from its
-    report."""
+    returns the existing curator. With no model selection it inherits the
+    workspace curator's resolution (the default curator model); an explicit
+    `model_provider` is restricted to `local` while folder curation is
+    dogfooded against a self-hosted endpoint, `model_id` picks which model on
+    it, and `credential_id` pins which connected endpoint to dial.
+    `digest_provider`/`digest_model_id` optionally split the run: a second
+    model reads the raw feed first, the curator writes from its report."""
     from ..services import agent_service
 
     await _check_scope_access(scope_user_id, current_user["id"])
@@ -394,6 +396,7 @@ async def create_scope_folder_curator(
         req.folder_id,
         req.model_provider,
         req.model_id,
+        req.credential_id,
         req.digest_provider,
         req.digest_model_id,
     )
@@ -419,6 +422,7 @@ async def update_scope_curator(
         for name in (
             "model_provider",
             "model_id",
+            "credential_id",
             "schedule_cron",
             "digest_provider",
             "digest_model_id",
