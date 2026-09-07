@@ -13,6 +13,7 @@ minutes.
 from backend.celery_app import celery
 from backend.tasks.agent_schedules import (
     alert_stale_curators,
+    drain_curator_backlog,
     first_day_curator_tick,
     run_curator_now,
     run_due,
@@ -20,7 +21,7 @@ from backend.tasks.agent_schedules import (
 )
 
 HARNESS_TASKS = [run_curator_now, run_scheduled_agent]
-DISPATCHER_TASKS = [run_due, first_day_curator_tick, alert_stale_curators]
+DISPATCHER_TASKS = [run_due, drain_curator_backlog, first_day_curator_tick, alert_stale_curators]
 
 
 def test_harness_tasks_carry_extended_limits():

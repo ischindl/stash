@@ -9,7 +9,11 @@ from backend.celery_app import celery
 from backend.exports.pdf import export_pdf
 from backend.exports.pptx import export_pptx
 from backend.integrations.google.exporters.slides import export_to_google_slides
-from backend.tasks.agent_schedules import run_curator_now, run_scheduled_agent
+from backend.tasks.agent_schedules import (
+    drain_curator_backlog,
+    run_curator_now,
+    run_scheduled_agent,
+)
 from backend.tasks.clips import process_url_imports
 from backend.tasks.drive_extraction import extract_drive_document
 from backend.tasks.extraction import extract_file_text
@@ -44,6 +48,18 @@ def test_only_expensive_viz_beat_task_is_heavy():
     # Viz is the one exception because the task itself fits UMAP inline.
     beat_tasks = {entry["task"] for entry in celery.conf.beat_schedule.values()}
     assert beat_tasks & HEAVY_TASKS == {precompute.name}
+
+
+def test_curator_drain_beat_task_keeps_a_continuous_cadence():
+    # The drain is what turns one curator run a day into a continuous queue, so a
+    # cadence drift silently restores the nightly wait (AC: no lane idles more
+    # than ~15 minutes between automated dispatches). It must also stay off the
+    # heavy queue: a drain that queues behind the turns it starts is a nightly
+    # cadence with extra steps, and it no longer fills the heavy pool's slots.
+    entry = celery.conf.beat_schedule["agent-schedules-drain-curator-backlog"]
+    assert entry["task"] == drain_curator_backlog.name
+    assert entry["schedule"] <= 15 * 60
+    assert entry["task"] not in celery.conf.task_routes
 
 
 def test_bare_worker_consumes_both_queues():

@@ -146,6 +146,16 @@ celery.conf.update(
             "task": "backend.tasks.agent_schedules.run_due",
             "schedule": 60.0,
         },
+        "agent-schedules-drain-curator-backlog": {
+            "task": "backend.tasks.agent_schedules.drain_curator_backlog",
+            # A curator lane with more material than one run fits is still behind
+            # after a successful run, so waiting for its nightly cron makes the
+            # backlog a multi-day queue. Five minutes is the cheapest interval
+            # that keeps a run's two lanes of capacity busy without overlapping
+            # dispatches: a run holds its agent lock for its whole duration, so a
+            # lane already running is stepped past by the next tick.
+            "schedule": 300.0,
+        },
         "agent-schedules-alert-stale-curators": {
             "task": "backend.tasks.agent_schedules.alert_stale_curators",
             # A crontab, not an interval: interval timers restart from zero on

@@ -6,6 +6,12 @@ credential, pending changes), and hands each eligible run to
 `run_scheduled_agent` on the heavy queue — a headless agent turn runs for
 minutes and must not hold a default-queue slot.
 
+Two beat tasks dispatch, and both are pure dispatchers that run nothing
+themselves: `run_due` fires an agent whose own cron tick has come, and
+`drain_curator_backlog` keeps a lane that has more material than one run can
+read from waiting a whole day for its next slice. Every run they start is
+executed by `run_curator_now`/`run_scheduled_agent` on the heavy queue.
+
 One run per agent at a time, enforced by `agent_run_lock` (Redis, keyed by
 agent id) at the task entry points. The per-session turn lock is not that
 lock: a scheduled run's session id carries a per-run stamp, so two runs of the
@@ -96,10 +102,14 @@ async def _run_curator_now(
     first-day curator): they must not eat the user's free monthly allowance.
 
     One run per agent: a dispatch that lands while this agent's run is still
-    mid-turn resolves as the designed `already_running` skip. It costs nothing
-    and is not a failure — the run in flight advances the watermark past
-    exactly what it read, so a skipped dispatch discards no work, and it never
-    charges the allowance because the skip happens before the run is metered."""
+    mid-turn records nothing at all. It costs nothing and is not a failure — the
+    run in flight advances the watermark past exactly what it read, so the
+    contended dispatch discards no work and never charges the allowance (it
+    returns before the run is metered). It also must not resolve the lane's
+    outcome as a skip: this dispatch consumed no tick, so the row belongs to the
+    run in flight, and `alert_stale_curators` pages on an unresolved 'started'. A
+    skip written over that 'started' would hide a run that dies mid-turn forever
+    — the lane would read as a designed skip with a stale watermark and stay quiet."""
     from ..services import (
         agent_service,
         curation_service,
@@ -111,8 +121,10 @@ async def _run_curator_now(
     try:
         await lock.acquire()
     except sprite_agent_service.TurnInProgress:
-        logger.info("curator run in flight for agent %s — skipping this dispatch", agent_id)
-        await agent_service.mark_run_skipped(agent_id, "already_running")
+        logger.info(
+            "curator run in flight for agent %s — this dispatch defers to it and writes nothing",
+            agent_id,
+        )
         return
     try:
         agent = await agent_service.get_agent_by_id(agent_id)
@@ -160,8 +172,8 @@ async def _run_curator_now(
 # just on the nightly tick — a user who just signed up (or a developer who
 # just activated the platform) watches the wiki grow while they get set up.
 # Debounced so a stream of event batches coalesces into at most one dispatch
-# per window; a dispatch that still lands on a run in flight resolves as the
-# `already_running` skip (see `_run_curator_now`).
+# per window; a dispatch that still lands on a run in flight defers to it and
+# records nothing (see `_run_curator_now`).
 FIRST_DAY_HOURS = 24
 FIRST_DAY_DEBOUNCE = timedelta(minutes=10)
 
@@ -306,6 +318,138 @@ async def _run_due() -> int:
             await agent_service.mark_run_skipped(agent["id"], "no_changes")
             continue
         run_scheduled_agent.delay(str(agent["id"]), stamp)
+        dispatched += 1
+    return dispatched
+
+
+# ── Backlog drain ────────────────────────────────────────────────────────────
+#
+# A curator's cron fires once a day, so a lane holding more material than one run
+# can read waits another full day for every slice it did not fit. The founder's
+# lanes are the extreme case: ~140k distinct events behind at ~20-40 min per run
+# is weeks of calendar at one run per lane per day. This beat task closes the gap
+# on the platform's own clock — the nightly cron stays exactly as it was and keeps
+# owning every outcome the drain deliberately holds back (see
+# `_drain_curator_backlog`). Re-dispatching from inside a finished run was the
+# alternative and was rejected: a chain that re-arms itself dies silently on a
+# worker restart, and one more beat entry costs nothing.
+#
+# Two lanes per tick because that is exactly the heavy pool's width
+# (`--concurrency=2` in docker-compose.prod.yml and start.sh): a third dispatch
+# would only queue behind the two turns in flight, so it buys no throughput and
+# blurs the "at most ~2 lanes run at once" guarantee.
+CURATOR_DRAIN_LANES_PER_TICK = 2
+
+
+@celery.task(name="backend.tasks.agent_schedules.drain_curator_backlog")
+def drain_curator_backlog() -> int:
+    return run_async(_drain_curator_backlog())
+
+
+def _run_in_flight(agent: dict, now: datetime) -> bool:
+    """True while this lane's own run still holds its single-flight lock.
+
+    `mark_run` stamps `last_run_at` as it records 'started' — that is the only
+    start timestamp a lane has — and the lock's TTL outlives the hard limit that
+    kills a run, so an unresolved 'started' younger than that TTL is a run still
+    in flight. An *older* one is a lane whose worker died mid-run without
+    releasing the lock: calling that busy would strand the lane forever, so it is
+    not — the next dispatch finds the lock expired and runs.
+    """
+    return (
+        agent["last_run_outcome"] == "started"
+        and agent["last_run_at"] is not None
+        and agent["last_run_at"] > now - timedelta(seconds=AGENT_RUN_LOCK_TTL)
+    )
+
+
+def _drain_order(agent: dict) -> datetime:
+    """Most-behind lane first. A curator that has never run has no watermark at
+    all, which is further behind than any timestamp can be."""
+    return agent["curated_through"] or datetime.min.replace(tzinfo=UTC)
+
+
+async def _drain_curator_backlog() -> int:
+    """Dispatch the most-behind curator lanes that have material waiting.
+
+    Every dispatch is metered exactly as a nightly run is, because the free-tier
+    allowance is only real if continuous dispatch spends it — an unmetered drain
+    would hand every free scope unlimited curator runs, which is why the
+    first-day path's `metered=False` is deliberately not copied here. The
+    entitlement gate below is therefore the drain's own stop sign; it never
+    raises the allowance, and `_run_due`'s meter-before-gates design is untouched.
+
+    Which path owns each outcome, so a lane cannot be stranded by this dispatcher:
+      - run in flight → skipped here, and the ≤daily `_run_due` tick retries it;
+      - last run failed → left to `_run_due` alone. A failed run is refunded its
+        allowance credit, so an always-failing lane would otherwise re-dispatch
+        for free every tick forever; the nightly tick still retries it daily, and
+        `alert_stale_curators` pages on the failed outcome if it persists;
+      - 'started' older than the lock TTL → un-sticks here (see `_run_in_flight`),
+        which is what stops a killed run from looking busy forever;
+      - no credential / allowance spent / nothing pending → skipped here with no
+        row write, because a drain tick consumes nothing to resolve.
+
+    Skips are logged at debug rather than written into the lane: a drain tick that
+    dispatches nothing has consumed nothing, and its return value is what shows in
+    the worker's own task-completion line.
+    """
+    from ..config import settings
+    from ..services import agent_auth, agent_service, billing_service, curation_service
+
+    now = datetime.now(UTC)
+    lanes = sorted(
+        (agent for agent in await agent_service.list_scheduled() if agent["is_curator"]),
+        key=_drain_order,
+    )
+    dispatched = 0
+    for agent in lanes:
+        if dispatched >= CURATOR_DRAIN_LANES_PER_TICK:
+            break
+        user_id = UUID(str(agent["user_id"]))
+        # Busy first: a lane whose run is mid-turn would resolve as the designed
+        # `already_running` skip anyway, but stepping past it here is what stops
+        # one long-running lane from eating the tick's whole budget of two lanes.
+        if _run_in_flight(agent, now):
+            logger.debug("curator drain: lane %s has a run in flight", agent["id"])
+            continue
+        if agent["last_run_outcome"] == "failed":
+            logger.debug(
+                "curator drain: lane %s is failing — the nightly tick owns it", agent["id"]
+            )
+            continue
+        # The dispatched task meters itself when it starts, so this reads the same
+        # allowance `_run_due` enforces from one run ahead of the counter: the run
+        # may be dispatched while it still lands inside the monthly budget.
+        if agent_service.month_runs_used(agent) + 1 > settings.FREE_CURATOR_RUNS_PER_MONTH:
+            # Pro and enterprise are unlimited, as on the nightly path.
+            if not await billing_service.is_pro(user_id):
+                logger.debug("curator drain: lane %s has spent its allowance", agent["id"])
+                continue
+        try:
+            await agent_auth.resolve(
+                user_id, agent["model_provider"], model_id=agent.get("model_id")
+            )
+        except (agent_auth.NeedsAuth, agent_auth.ProviderNotConfigured):
+            logger.debug("curator drain: lane %s has no runnable credential", agent["id"])
+            continue
+        # Cost gate, same one the nightly tick applies: a lane caught up to its
+        # watermark costs one EXISTS and no run.
+        if not await curation_service.has_changes_since(
+            user_id,
+            user_id,
+            agent["curated_through"],
+            agent["curator_wiki"],
+            agent.get("curator_folder_id"),
+        ):
+            continue
+        logger.info(
+            "curator backlog drain: dispatching lane %s (wiki=%s folder=%s)",
+            agent["id"],
+            agent["curator_wiki"],
+            agent.get("curator_folder_id"),
+        )
+        run_curator_now.delay(str(agent["id"]))
         dispatched += 1
     return dispatched
 

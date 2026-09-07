@@ -1310,7 +1310,11 @@ async def test_double_dispatch_on_one_agent_runs_single_flight(
     await turn_started.wait()
 
     # A manual run / recompute / first-day tick lands mid-turn: no second turn,
-    # no charge, and the watermark stays exactly where the running run left it.
+    # no charge, the watermark stays exactly where the running run left it, and
+    # the lane still reads as the run in flight. The contended dispatch consumed
+    # no tick, so it must not resolve the outcome as its own skip — 'started' is
+    # what `alert_stale_curators` pages on, and overwriting it would make a run
+    # that dies mid-turn look like a designed skip forever.
     await _run_curator_now(cid)
     row = await _db_pool.fetchrow(
         "SELECT curated_through, last_run_outcome, month_run_count FROM agents WHERE id = $1", cid
@@ -1318,7 +1322,9 @@ async def test_double_dispatch_on_one_agent_runs_single_flight(
     assert len(turns) == 1, "the contended dispatch must not wake a second harness turn"
     assert row["curated_through"] == seeded
     assert row["month_run_count"] == meter_before
-    assert row["last_run_outcome"] == "skipped_already_running"
+    assert row["last_run_outcome"] == "started", (
+        "the in-flight run's state must survive the contended dispatch"
+    )
 
     # The in-flight run finishes normally, and the lock went with it: the next
     # dispatch is not locked out by a run that is already over.
