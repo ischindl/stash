@@ -142,6 +142,20 @@ def local_endpoint_secret(base_url: str, model: str, api_key: str | None = None)
     return json.dumps(local_endpoint_doc(base_url, model, api_key))
 
 
+def endpoint_name(base_url: str) -> str:
+    """The name an endpoint gets when its owner did not name it himself.
+
+    The host of the box is the part of ``http://box-one:11434/v1`` a person uses
+    to say which machine he means, so it is what the Settings list shows him for
+    an unnamed endpoint. Derived from the base URL on connect and never
+    maintained as a second copy afterwards.
+    """
+    host = urlparse(base_url).hostname
+    if not host:
+        raise ValueError(LOCAL_BASE_URL_HINT)
+    return host
+
+
 def _probe_models(body: str) -> list[str] | None:
     """The model ids of an OpenAI-shaped /models body, or None when the body is
     not that shape — a proxy's HTML landing page answers 200 and must not be
@@ -214,24 +228,44 @@ async def probe_local_endpoint(base_url: str, api_key: str | None) -> dict:
 
 async def _get_credential(user_id: UUID, provider: str | None = None) -> dict | None:
     """The user's connected credential. With `provider`, only that one (so an
-    agent's model override selects a specific connected harness)."""
-    if provider is not None:
-        row = await get_pool().fetchrow(
-            "SELECT provider, kind, secret_enc, models_json_enc FROM user_agent_credentials "
-            "WHERE user_id = $1 AND provider = $2",
-            user_id,
-            provider,
-        )
-    else:
-        row = await get_pool().fetchrow(
-            "SELECT provider, kind, secret_enc, models_json_enc FROM user_agent_credentials "
-            "WHERE user_id = $1 ORDER BY created_at LIMIT 1",
-            user_id,
-        )
+    agent's model override selects a specific connected harness).
+
+    The id travels because it is what an agent pins: a turn that resolved a
+    credential has to be able to say which row it used. Several rows can now
+    answer one provider — every local box the user connected — so the OLDEST is
+    the default: the single row a one-endpoint account already had, which is why
+    today's behaviour is unchanged for him. `id` breaks a created_at tie so the
+    answer never depends on the storage order.
+    """
+    row = await get_pool().fetchrow(
+        "SELECT id, provider, name, kind, secret_enc, models_json_enc FROM user_agent_credentials "
+        "WHERE user_id = $1 AND ($2::text IS NULL OR provider = $2) "
+        "ORDER BY created_at, id LIMIT 1",
+        user_id,
+        provider,
+    )
+    return _credential(row)
+
+
+async def _get_credential_by_id(user_id: UUID, credential_id: UUID) -> dict | None:
+    """One credential by id, scoped to its owner: a pin naming somebody else's
+    endpoint reads as not-found, never as a credential to borrow."""
+    row = await get_pool().fetchrow(
+        "SELECT id, provider, name, kind, secret_enc, models_json_enc FROM user_agent_credentials "
+        "WHERE id = $1 AND user_id = $2",
+        credential_id,
+        user_id,
+    )
+    return _credential(row)
+
+
+def _credential(row) -> dict | None:
     if row is None:
         return None
     return {
+        "id": row["id"],
         "provider": row["provider"],
+        "name": row["name"],
         "kind": row["kind"],
         "secret": _decrypt(row["secret_enc"]),
         # NULL until the user stores their own pi models.json in Settings.
@@ -239,7 +273,17 @@ async def _get_credential(user_id: UUID, provider: str | None = None) -> dict | 
     }
 
 
-async def store_credential(user_id: UUID, provider: str, kind: str, secret: str) -> None:
+async def store_credential(
+    user_id: UUID, provider: str, kind: str, secret: str, name: str
+) -> UUID:
+    """Connect a credential and return the row id an agent can pin.
+
+    A local endpoint is a BOX, so connecting one APPENDS: the founder runs
+    several at once, and overwriting the previous one — which is what the old
+    (user_id, provider) key made connect do — threw away his other machines. The
+    key providers keep connect's exact old semantics, a reconnect overwriting,
+    through the partial unique index that covers only them.
+    """
     if provider not in _PROVIDER_HARNESS:
         raise ValueError(f"unknown provider: {provider}")
     if kind not in ("api_key", "oauth", "endpoint"):
@@ -250,21 +294,39 @@ async def store_credential(user_id: UUID, provider: str, kind: str, secret: str)
     # else has that shape.
     if kind == "endpoint" and provider != "local":
         raise ValueError(f"{provider} does not support endpoint credentials")
-    await get_pool().execute(
-        "INSERT INTO user_agent_credentials (user_id, provider, kind, secret_enc) "
-        "VALUES ($1, $2, $3, $4) "
-        "ON CONFLICT (user_id, provider) DO UPDATE "
-        "SET kind = EXCLUDED.kind, secret_enc = EXCLUDED.secret_enc, created_at = now()",
+    if kind == "endpoint":
+        return await get_pool().fetchval(
+            "INSERT INTO user_agent_credentials (user_id, provider, kind, secret_enc, name) "
+            "VALUES ($1, $2, $3, $4, $5) RETURNING id",
+            user_id,
+            provider,
+            kind,
+            _encrypt(secret),
+            name,
+        )
+    return await get_pool().fetchval(
+        "INSERT INTO user_agent_credentials (user_id, provider, kind, secret_enc, name) "
+        "VALUES ($1, $2, $3, $4, $5) "
+        "ON CONFLICT (user_id, provider) WHERE provider <> 'local' DO UPDATE "
+        "SET kind = EXCLUDED.kind, secret_enc = EXCLUDED.secret_enc, created_at = now() "
+        "RETURNING id",
         user_id,
         provider,
         kind,
         _encrypt(secret),
+        name,
     )
 
 
 async def list_connected(user_id: UUID) -> list[str]:
+    """Which providers this user has something connected.
+
+    DISTINCT because a local endpoint is now one row per box: several boxes are
+    still one connected provider, and 'local' repeated three times is a lie about
+    what the user has.
+    """
     rows = await get_pool().fetch(
-        "SELECT provider FROM user_agent_credentials WHERE user_id = $1", user_id
+        "SELECT DISTINCT provider FROM user_agent_credentials WHERE user_id = $1", user_id
     )
     return [r["provider"] for r in rows]
 
@@ -286,6 +348,13 @@ async def local_credential(user_id: UUID) -> dict | None:
 
 
 async def delete_credential(user_id: UUID, provider: str) -> None:
+    """Disconnect a key provider. 'local' is refused rather than guessed: with
+    several endpoints connected, a provider name no longer names one row to
+    remove, and silently picking the oldest would delete a box he did not point
+    at. Disconnect an endpoint by id with :func:`delete_endpoint`.
+    """
+    if provider == "local":
+        raise ValueError("a local endpoint is disconnected by id, not by provider name")
     await get_pool().execute(
         "DELETE FROM user_agent_credentials WHERE user_id = $1 AND provider = $2",
         user_id,
@@ -293,9 +362,63 @@ async def delete_credential(user_id: UUID, provider: str) -> None:
     )
 
 
+async def delete_endpoint(user_id: UUID, credential_id: UUID) -> None:
+    """Disconnect exactly one local endpoint.
+
+    Scoped to 'local' on purpose: an id is also how a key provider's row is
+    addressable, and a route that disconnects boxes must not be able to take an
+    Anthropic key with it.
+    """
+    await get_pool().execute(
+        "DELETE FROM user_agent_credentials WHERE id = $1 AND user_id = $2 AND provider = 'local'",
+        credential_id,
+        user_id,
+    )
+
+
+async def list_local_endpoints(user_id: UUID) -> list[dict]:
+    """Every local model endpoint this user has connected, oldest first.
+
+    What the Settings list needs to name and choose a box: id, name, base URL,
+    the model ids we know it serves. The key never travels this path — it stays
+    inside the encrypted doc, where only a turn that dials the box can reach it.
+    """
+    rows = await get_pool().fetch(
+        "SELECT id, name, secret_enc FROM user_agent_credentials "
+        "WHERE user_id = $1 AND provider = 'local' ORDER BY created_at, id",
+        user_id,
+    )
+    return [_endpoint_summary(r["id"], r["name"], r["secret_enc"]) for r in rows]
+
+
+async def get_local_endpoint(user_id: UUID, credential_id: UUID) -> dict | None:
+    """One endpoint in the same shape as :func:`list_local_endpoints`, or None
+    when it is not this user's local endpoint at all."""
+    row = await get_pool().fetchrow(
+        "SELECT id, name, secret_enc FROM user_agent_credentials "
+        "WHERE id = $1 AND user_id = $2 AND provider = 'local'",
+        credential_id,
+        user_id,
+    )
+    if row is None:
+        return None
+    return _endpoint_summary(row["id"], row["name"], row["secret_enc"])
+
+
+def _endpoint_summary(credential_id: UUID, name: str, secret_enc) -> dict:
+    doc = json.loads(_decrypt(secret_enc))
+    return {
+        "id": credential_id,
+        "name": name,
+        "base_url": doc["base_url"],
+        "models": doc.get("models") or [doc["model"]],
+    }
+
+
 async def resolve(
     user_id: UUID,
     prefer_provider: str | None = None,
+    credential_id: UUID | None = None,
     model_id: str | None = None,
 ) -> RunAuth:
     """The harness + credential injection for this user's next turn.
@@ -306,12 +429,23 @@ async def resolve(
     `model_id` picks a model *within* the local provider's endpoint (the
     connect doc carries the default); naming one for any other provider fails
     loud — non-local credentials are a key, not an endpoint with a model list.
+    `credential_id` names WHICH local endpoint to dial. Without it, 'local' means
+    the oldest one connected; with it, exactly that box, and nothing else about
+    resolution changes.
+
+    The pin arrives here as one value because a run has one endpoint, not one
+    endpoint per phase: a two-phase curator's digest and writer turns both dial
+    the box its row names, and only `model_id` differs between them. That is why
+    an agent carries a credential id and no per-phase endpoint field.
 
     In local exec mode a connected local endpoint still resolves to pi: its
     credential is self-contained (base URL + model), so no sprite is needed —
     and the turn runs against the simulated box's home, isolated from the
     developer's own pi config.
     """
+    if credential_id is not None:
+        return await _pinned_auth(user_id, credential_id, prefer_provider, model_id)
+
     # Local mode: a connected local endpoint runs on the machine's own pi —
     # its credential is self-contained. With nothing connected, fail loud
     # (STAS-131) instead of riding the machine's unauthenticated login; a
@@ -345,6 +479,32 @@ async def resolve(
     if cred is not None:
         return _byo_auth(cred, model_id=model_id)
     return await _managed(user_id)
+
+
+async def _pinned_auth(
+    user_id: UUID, credential_id: UUID, prefer_provider: str | None, model_id: str | None
+) -> RunAuth:
+    """Run on exactly one local endpoint, the one the agent's row names.
+
+    Which box is answered by the id alone — never by the model id, never by
+    storage order — so a curator pinned to a newer machine cannot have its
+    digest summarised on an older one. The failures are RuntimeError rather than
+    NeedsAuth because nothing here is a user action waiting to happen: the row
+    was saved, so a pin that no longer resolves is a broken reference to fix.
+    """
+    cred = await _get_credential_by_id(user_id, credential_id)
+    if cred is None:
+        raise RuntimeError(f"agent credential_id {credential_id} is not a credential of this user")
+    if cred["kind"] != "endpoint":
+        raise RuntimeError(
+            f"agent credential_id {credential_id} is a {cred['provider']} key, not a local endpoint"
+        )
+    if prefer_provider not in (None, "local"):
+        raise ValueError(f"credential_id pins a local endpoint; it cannot run as {prefer_provider}")
+    home = (
+        str(sprite_service.local_box_home()) if settings.AGENT_EXEC_MODE == "local" else _SPRITE_HOME
+    )
+    return _local_auth(cred, home=home, model_override=model_id)
 
 
 async def _managed(user_id: UUID) -> RunAuth:
@@ -497,6 +657,10 @@ async def save_local_models_json(user_id: UUID, models_json: str) -> None:
     Validation is parse-don't-validate: the JSON must parse to an object with a
     top-level "providers" object, or the save fails loud. pi itself is the
     rest of the validator — no field patching or normalization here.
+
+    The write names the row by id — the same default endpoint `_get_credential`
+    just read — because a `provider = 'local'` predicate would now stamp the one
+    box's models.json onto every box the user connected.
     """
     cred = await _get_credential(user_id, "local")
     if cred is None:
@@ -508,10 +672,9 @@ async def save_local_models_json(user_id: UUID, models_json: str) -> None:
     if not isinstance(parsed, dict) or not isinstance(parsed.get("providers"), dict):
         raise ValueError('models.json must be a JSON object with a top-level "providers" object')
     await get_pool().execute(
-        "UPDATE user_agent_credentials SET models_json_enc = $1 "
-        "WHERE user_id = $2 AND provider = 'local'",
+        "UPDATE user_agent_credentials SET models_json_enc = $1 WHERE id = $2",
         _encrypt(models_json),
-        user_id,
+        cred["id"],
     )
 
 
@@ -521,9 +684,8 @@ async def reset_local_models_json(user_id: UUID) -> None:
     if cred is None:
         raise LookupError("local endpoint is not connected")
     await get_pool().execute(
-        "UPDATE user_agent_credentials SET models_json_enc = NULL "
-        "WHERE user_id = $1 AND provider = 'local'",
-        user_id,
+        "UPDATE user_agent_credentials SET models_json_enc = NULL WHERE id = $1",
+        cred["id"],
     )
 
 

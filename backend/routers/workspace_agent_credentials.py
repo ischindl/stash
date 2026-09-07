@@ -49,7 +49,13 @@ async def connect_local(req: ConnectLocalRequest, scope_user_id: UUID = Depends(
         secret = agent_auth.local_endpoint_secret(req.base_url, req.model, req.api_key)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    await agent_auth.store_credential(scope_user_id, "local", "endpoint", secret)
+    await agent_auth.store_credential(
+        scope_user_id,
+        "local",
+        "endpoint",
+        secret,
+        name=agent_auth.endpoint_name(req.base_url),
+    )
     return {"ok": True, "connected": await agent_auth.list_connected(scope_user_id)}
 
 

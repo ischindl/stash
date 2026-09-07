@@ -316,7 +316,9 @@ async def recompute_memory(
                 "curator runs per month; Pro is unlimited.",
             )
     try:
-        await agent_auth.resolve(user_id, curator["model_provider"], curator.get("model_id"))
+        await agent_auth.resolve(
+            user_id, curator["model_provider"], model_id=curator.get("model_id")
+        )
     except agent_auth.NeedsAuth:
         raise HTTPException(
             status_code=402,

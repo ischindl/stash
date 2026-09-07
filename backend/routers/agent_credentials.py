@@ -73,12 +73,18 @@ async def connect(req: ConnectRequest, current_user: dict = Depends(get_current_
             )
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
-        await agent_auth.store_credential(current_user["id"], "local", "endpoint", secret)
+        await agent_auth.store_credential(
+            current_user["id"],
+            "local",
+            "endpoint",
+            secret,
+            name=agent_auth.endpoint_name(req.base_url or ""),
+        )
         return {"ok": True, "connected": await agent_auth.list_connected(current_user["id"])}
     if not req.api_key or not req.api_key.strip():
         raise HTTPException(status_code=400, detail="api_key is required")
     await agent_auth.store_credential(
-        current_user["id"], req.provider, "api_key", req.api_key.strip()
+        current_user["id"], req.provider, "api_key", req.api_key.strip(), name=req.provider
     )
     return {"ok": True, "connected": await agent_auth.list_connected(current_user["id"])}
 

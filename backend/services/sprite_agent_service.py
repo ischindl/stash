@@ -765,7 +765,7 @@ async def run_chat(
         persona = agent["system_prompt"]
         agent_name = agent["name"]
     try:
-        auth = await agent_auth.resolve(user_id, model_provider, model_id)
+        auth = await agent_auth.resolve(user_id, model_provider, model_id=model_id)
     except agent_auth.NeedsAuth:
         raise NeedsAuth
     except agent_auth.ProviderNotConfigured:
