@@ -85,10 +85,20 @@ feed is already restricted — the agent must not ask for broader data.
   credential secret is `{base_url, model, api_key}`; `model_id` overrides
   `model` for that run. Unknown id → fail loud (NeedsAuth-style), never fall
   back.
-- v1 = **one connected local endpoint, many models on it** (vLLM/Ollama serve
-  N models; probe list already stored). Multiple *endpoints* (Ollama + vLLM
-  side by side) = phase 2: `agents.credential_id` + `credentials.name`,
-  uniqueness `(user_id, provider, name)`. Deliberately deferred.
+- One endpoint row is one **box** (shipped, migration 0209): a user may hold
+  many `local` rows, each with its own `id` and a `name` (defaulted to the
+  base_url hostname). The one-row-per-provider rule survives only as a partial
+  unique index over the key providers (`WHERE provider <> 'local'`), whose
+  connect keeps its overwrite semantics; connecting a local endpoint APPENDS.
+  `agents.credential_id` is the only endpoint selector on the row: a pin dials
+  exactly that box, NULL resolves to the oldest connected local endpoint — the
+  row a single-endpoint user already has, so his behaviour is byte-preserved.
+  One pin covers every turn of a run: the digest turn and the writer turn dial
+  the same `base_url`. A pin must be one of the user's own local endpoint rows
+  (validated at write time, not at the next turn).
+- A folder curator created with no model selection stores NULL provider/model/
+  credential and resolves byte-identically to the workspace curator; PATCH with
+  explicit null clears a pin back to inherit.
 - UI: model dropdown from `models_json` of the connected credential, with a
   "probe again" affordance.
 
@@ -143,8 +153,10 @@ Expected effect: Rozvrh wiki from ~3 days to ~12–16 h (scoped backlog
 
 ## Open decisions
 
-- **A. Model-selection depth** — v1 = model pick within one local endpoint
-  (recommended); endpoints-multi = phase 2 with `credential_id`.
+- **A. Model-selection depth** — RESOLVED, both depths shipped (phase 2,
+  migration 0209): the model pick works within an endpoint (`model_id`) and the
+  endpoint pick works across boxes (`credential_id`, oldest-connected fallback,
+  409-with-list delete guard when an agent still references the endpoint).
 - **B. Internal curator scoping** — proposed never (shared page set). Confirm.
 - **C. Allowance metering for scoped curators** — do they share the free
   monthly curator pool or get their own? (recommend: share; they run on the
