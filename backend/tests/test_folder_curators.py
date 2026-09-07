@@ -746,3 +746,151 @@ async def test_folder_curator_refuses_dangling_and_foreign_pins(
     listed = await client.get("/api/v1/me/curators", headers=_auth(key))
     assert listed.status_code == 200
     assert all(c["curator_folder_id"] is None for c in listed.json()["curators"])
+
+
+async def _run_once_auth(uid, agent: dict, monkeypatch) -> agent_auth.RunAuth:
+    """The RunAuth one scheduled run resolves, captured from the run itself.
+
+    The resolver is spyred so the turn never executes: the spy records the
+    selection the run actually passed and aborts the run the way a user with no
+    credential would. A digest-less curator must make exactly one resolve — a
+    second lookup would mean the plumbing was still paying for a phase the row
+    never asked for. The recorded selection is then replayed through the REAL
+    resolver, so the assertion lands on RunAuth bytes and not on kwargs."""
+    calls: list[dict] = []
+    real = agent_auth.resolve
+
+    async def spy(user_id, prefer_provider=None, model_id=None, credential_id=None):
+        calls.append(
+            {
+                "prefer_provider": prefer_provider,
+                "model_id": model_id,
+                "credential_id": credential_id,
+            }
+        )
+        raise agent_auth.NeedsAuth
+
+    monkeypatch.setattr(agent_auth, "resolve", spy)
+    with pytest.raises(sprite_agent_service.NeedsAuth):
+        await sprite_agent_service.run_scheduled(agent, "202601011200")
+    monkeypatch.setattr(agent_auth, "resolve", real)
+    assert len(calls) == 1  # digest NULL: one phase, one resolve
+    return await agent_auth.resolve(uid, **calls[0])
+
+
+@pytest.mark.asyncio
+async def test_an_inherited_curator_resolves_byte_equal_to_the_workspace_curator(
+    client: AsyncClient, pool, monkeypatch
+):
+    """The founder's ruling as an assertion: a folder curator created with no
+    model selection carries NULL/NULL/NULL — the workspace curator's own row
+    shape — so its run must produce the identical RunAuth: harness, env, files,
+    endpoint and model all equal. Both are captured through the scheduled-run
+    entry point, so a folder-curator branch reintroduced later breaks here
+    rather than silently shipping a second resolution path."""
+    monkeypatch.setattr(settings, "AGENT_EXEC_MODE", "sprites")
+    monkeypatch.setattr(settings, "INTEGRATIONS_ENCRYPTION_KEY", Fernet.generate_key().decode())
+    key, uid = await _register(client)
+    rozvrh = await _folder(client, key, "Rozvrh")
+    r = await client.post("/api/v1/me/curators", json={"folder_id": rozvrh}, headers=_auth(key))
+    assert r.status_code == 201, r.text
+    inherited = await agent_service.get_curator_by_id(UUID(r.json()["curator"]["id"]))
+    assert (inherited["model_provider"], inherited["model_id"], inherited["credential_id"]) == (
+        None,
+        None,
+        None,
+    )
+    workspace = await agent_service.get_or_create_curator(uid)
+
+    await agent_auth.store_credential(
+        uid,
+        "local",
+        "endpoint",
+        agent_auth.local_endpoint_secret("http://box-one:11434/v1", "llama"),
+        name="box-one",
+    )
+
+    inherited_auth = await _run_once_auth(uid, inherited, monkeypatch)
+    workspace_auth = await _run_once_auth(uid, workspace, monkeypatch)
+    assert inherited_auth == workspace_auth
+    assert inherited_auth.harness is workspace_auth.harness
+    assert inherited_auth.endpoint == "http://box-one:11434/v1"
+
+    # An anthropic key aged to be the OLDEST credential wins for both rows: the
+    # inherited curator special-cases no provider, least of all the self-hosted
+    # endpoint folder curation was dogfooded against.
+    anthropic = await agent_auth.store_credential(
+        uid, "anthropic", "api_key", "sk-ant-test", name="anthropic"
+    )
+    await pool.execute(
+        "UPDATE user_agent_credentials SET created_at = created_at - interval '1 day' "
+        "WHERE id = $1",
+        anthropic,
+    )
+
+    inherited_auth = await _run_once_auth(uid, inherited, monkeypatch)
+    workspace_auth = await _run_once_auth(uid, workspace, monkeypatch)
+    assert inherited_auth == workspace_auth
+    assert inherited_auth.endpoint is None  # a key provider dials no box
+    assert inherited_auth.env == {"ANTHROPIC_API_KEY": "sk-ant-test"}
+
+
+@pytest.mark.asyncio
+async def test_patching_every_selection_away_returns_a_curator_to_inheritance(
+    client: AsyncClient, monkeypatch
+):
+    """The founder's escape hatch is a round trip, not a theory: pin a folder
+    curator to one box and one model, then PATCH explicit nulls over all three
+    and the run resolves exactly like the workspace curator's again. The digest
+    gate survives the clear — a folder curator's second model still has to live
+    on the local endpoint."""
+    monkeypatch.setattr(settings, "AGENT_EXEC_MODE", "sprites")
+    monkeypatch.setattr(settings, "INTEGRATIONS_ENCRYPTION_KEY", Fernet.generate_key().decode())
+    key, uid = await _register(client)
+    box = await agent_auth.store_credential(
+        uid,
+        "local",
+        "endpoint",
+        agent_auth.local_endpoint_secret("http://box-one:11434/v1", "llama"),
+        name="box-one",
+    )
+    rozvrh = await _folder(client, key, "Rozvrh")
+    r = await client.post(
+        "/api/v1/me/curators",
+        json={
+            "folder_id": rozvrh,
+            "model_provider": "local",
+            "model_id": "qwen",
+            "credential_id": str(box),
+        },
+        headers=_auth(key),
+    )
+    assert r.status_code == 201, r.text
+    curator_id = r.json()["curator"]["id"]
+
+    r = await client.patch(
+        f"/api/v1/me/curators/{curator_id}",
+        json={"model_provider": None, "model_id": None, "credential_id": None},
+        headers=_auth(key),
+    )
+    assert r.status_code == 200, r.text
+    cleared = r.json()["curator"]
+    assert (cleared["model_provider"], cleared["model_id"], cleared["credential_id"]) == (
+        None,
+        None,
+        None,
+    )
+
+    agent = await agent_service.get_curator_by_id(UUID(curator_id))
+    workspace = await agent_service.get_or_create_curator(uid)
+    assert await _run_once_auth(uid, agent, monkeypatch) == await _run_once_auth(
+        uid, workspace, monkeypatch
+    )
+
+    # Clearing the selection does not loosen the digest rule.
+    r = await client.patch(
+        f"/api/v1/me/curators/{curator_id}",
+        json={"digest_provider": "anthropic"},
+        headers=_auth(key),
+    )
+    assert r.status_code == 400

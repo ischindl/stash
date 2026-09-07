@@ -543,6 +543,34 @@ async def test_workspace_credentials_route_mirrors_the_endpoint_api(
     assert body["endpoints"] == []
 
 
+@pytest.mark.asyncio
+async def test_workspace_by_name_disconnect_is_refused_with_the_pointer(
+    client: AsyncClient, monkeypatch
+):
+    """The console gets the personal route's loud refusal too, not a bare 405:
+    the name 'local' does not name one box to delete."""
+    monkeypatch.setattr(agent_auth, "probe_local_endpoint", _probe_ok("llama"))
+    api_key, _dev, workspace = await _developer(client)
+    scope = workspace["scope_user_id"]
+    await client.post(
+        "/api/v1/me/developer/agent-credentials",
+        json={"base_url": BOX_ONE, "model": "llama"},
+        headers=_scope_headers(api_key, scope),
+    )
+    r = await client.delete(
+        "/api/v1/me/developer/agent-credentials/local", headers=_scope_headers(api_key, scope)
+    )
+    assert r.status_code == 400
+    assert "/api/v1/me/developer/agent-credentials/endpoints/" in r.text
+    # The box survived the refused attempt.
+    body = (
+        await client.get(
+            "/api/v1/me/developer/agent-credentials", headers=_scope_headers(api_key, scope)
+        )
+    ).json()
+    assert [entry["base_url"] for entry in body["endpoints"]] == [BOX_ONE]
+
+
 # --- Run plumbing: the row's pin and model reach every turn's resolve ---
 
 
@@ -674,3 +702,52 @@ async def test_the_digest_phase_carries_the_pin_only_for_a_local_box(
     with pytest.raises(sprite_agent_service.NeedsAuth):
         await sprite_agent_service.run_scheduled(agent, "202601011200")
     assert calls == [{"prefer": "local", "model_id": "qwen-mini", "cred": two}]
+
+
+@pytest.mark.asyncio
+async def test_a_pinned_two_phase_curator_dials_one_box_for_both_turns(
+    client: AsyncClient, monkeypatch, _db_pool
+):
+    """Both turns of one run resolve against the SAME endpoint row.
+
+    Named boundary: a two-phase curator's run is `run_scheduled` handing both
+    turns to `run_chat`, and `run_chat` is what calls the resolver — so the
+    stubbed turn captures each phase's selection and the REAL resolver then
+    answers it. The pin names the newer box: the digest turn must not ride the
+    oldest one, and the two phases differ only in which model on that box they
+    ask for."""
+    monkeypatch.setattr(settings, "AGENT_EXEC_MODE", "sprites")
+    _key, uid = await _register(client)
+    _one, pinned = await _two_boxes(uid)
+    agent = await _pin_curator(
+        _db_pool,
+        uid,
+        model_provider="local",
+        model_id="qwen",
+        credential_id=pinned,
+        digest_provider="local",
+        digest_model_id="qwen-fast",
+    )
+
+    turns: list[dict] = []
+
+    async def fake_run_chat(user_id, owner_name, agent_uid, session_id, message, **fields):
+        turns.append(fields)
+        return "EXTRACT: two sessions changed" if len(turns) == 1 else "LOG: wiki written"
+
+    monkeypatch.setattr(sprite_agent_service, "run_chat", fake_run_chat)
+    assert await sprite_agent_service.run_scheduled(agent, "202601021200") == "LOG: wiki written"
+    assert len(turns) == 2
+
+    auths = [
+        await agent_auth.resolve(
+            uid,
+            fields["model_provider"],
+            credential_id=fields["credential_id"],
+            model_id=fields["model_id"],
+        )
+        for fields in turns
+    ]
+    assert [auth.endpoint for auth in auths] == [BOX_TWO, BOX_TWO]
+    assert [auth.model for auth in auths] == ["qwen-fast", "qwen"]
+    assert BOX_ONE not in {auth.endpoint for auth in auths}

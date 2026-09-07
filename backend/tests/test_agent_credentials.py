@@ -1,7 +1,13 @@
 """Connect / list / disconnect the cloud agent's model credential.
 
-The local endpoint flow is new: the credential is a base URL + model doc
-(never an sk- key), and the resolver sees it as kind "endpoint".
+The local credential is an endpoint: a base URL + model doc (never an sk-
+key) that the resolver sees as kind "endpoint". Connecting one now PROBES it
+first and APPENDS a named row, so a second box joins the list instead of
+replacing the first — and a box is disconnected by id, never by the provider
+name that no longer names a single row. The append/id/delete-guard behaviour
+itself is pinned in test_agent_endpoints.py; here the probe is stood in for a
+healthy box (the `_stub_probe` fixture) wherever the test's subject is what got
+stored, and dialled for real against a loopback server in the probe section.
 """
 
 import json
@@ -28,6 +34,18 @@ def _fernet(monkeypatch):
     monkeypatch.setattr(settings, "INTEGRATIONS_ENCRYPTION_KEY", Fernet.generate_key().decode())
 
 
+@pytest.fixture
+def _stub_probe(monkeypatch):
+    """Connect probes the box before storing it; tests about what got STORED
+    name boxes that do not exist (tunnel.example), so the dial is answered with
+    a healthy endpoint. The probe section at the bottom dials for real."""
+
+    async def probe(base_url, api_key):
+        return {"ok": True, "http_status": 200, "models": ["stub-model"]}
+
+    monkeypatch.setattr(agent_auth, "probe_local_endpoint", probe)
+
+
 async def _register(client: AsyncClient) -> str:
     r = await client.post(
         "/api/v1/users/register",
@@ -50,7 +68,7 @@ async def _stored_secret(client: AsyncClient, key: str, provider: str) -> str:
 
 
 @pytest.mark.asyncio
-async def test_connect_local_without_key(client: AsyncClient):
+async def test_connect_local_without_key(client: AsyncClient, _stub_probe):
     key = await _register(client)
     r = await client.post(
         "/api/v1/me/agent-credentials",
@@ -59,6 +77,9 @@ async def test_connect_local_without_key(client: AsyncClient):
     )
     assert r.status_code == 200, r.text
     assert "local" in r.json()["connected"]
+    # The connect answers with the row it wrote: an id is how the box is
+    # addressed from here on (list, pin, disconnect).
+    assert UUID(r.json()["id"])
     doc = json.loads(await _stored_secret(client, key, "local"))
     assert doc == {
         "base_url": "http://my-host:11434/v1",
@@ -68,7 +89,7 @@ async def test_connect_local_without_key(client: AsyncClient):
 
 
 @pytest.mark.asyncio
-async def test_connect_local_with_key_stores_it(client: AsyncClient):
+async def test_connect_local_with_key_stores_it(client: AsyncClient, _stub_probe):
     key = await _register(client)
     r = await client.post(
         "/api/v1/me/agent-credentials",
@@ -157,7 +178,10 @@ async def test_oauth_start_local_rejected(client: AsyncClient):
 
 
 @pytest.mark.asyncio
-async def test_disconnect_local(client: AsyncClient):
+async def test_disconnect_local_by_provider_name_is_refused(client: AsyncClient, _stub_probe):
+    """Several boxes can share the name 'local', so the name route no longer
+    deletes one: it refuses loudly and points at the id route, and the
+    connected box survives the attempt. (Deleting by id: test_agent_endpoints.)"""
     key = await _register(client)
     await client.post(
         "/api/v1/me/agent-credentials",
@@ -165,8 +189,26 @@ async def test_disconnect_local(client: AsyncClient):
         headers=_auth(key),
     )
     r = await client.delete("/api/v1/me/agent-credentials/local", headers=_auth(key))
+    assert r.status_code == 400
+    assert "agent-credentials/endpoints/{credential_id}" in r.json()["detail"]
+    body = (await client.get("/api/v1/me/agent-credentials", headers=_auth(key))).json()
+    assert body["connected"] == ["local"]
+    assert [e["base_url"] for e in body["endpoints"]] == ["http://host:11434/v1"]
+
+
+@pytest.mark.asyncio
+async def test_disconnect_key_provider_by_name_still_works(client: AsyncClient):
+    """The unchanged half of the route: a key provider is one row per
+    provider, so its name still names exactly the row to remove."""
+    key = await _register(client)
+    await client.post(
+        "/api/v1/me/agent-credentials",
+        json={"provider": "anthropic", "api_key": "sk-ant-mine"},
+        headers=_auth(key),
+    )
+    r = await client.delete("/api/v1/me/agent-credentials/anthropic", headers=_auth(key))
     assert r.status_code == 200
-    assert "local" not in r.json()["connected"]
+    assert r.json()["connected"] == []
 
 
 async def _connect_local(
@@ -206,7 +248,7 @@ CUSTOM_MODELS_JSON = """{
 
 
 @pytest.mark.asyncio
-async def test_get_local_models_json_default(client: AsyncClient):
+async def test_get_local_models_json_default(client: AsyncClient, _stub_probe):
     key = await _register(client)
     await _connect_local(client, key, "http://tunnel.example/v1", "llama3.1:8b", "my-secret-key")
     r = await client.get(MODELS_JSON_URL, headers=_auth(key))
@@ -222,7 +264,7 @@ async def test_get_local_models_json_default(client: AsyncClient):
 
 
 @pytest.mark.asyncio
-async def test_get_local_models_json_default_keyless(client: AsyncClient):
+async def test_get_local_models_json_default_keyless(client: AsyncClient, _stub_probe):
     key = await _register(client)
     await _connect_local(client, key, "http://host:11434/v1", "qwen2:7b", None)
     r = await client.get(MODELS_JSON_URL, headers=_auth(key))
@@ -233,7 +275,9 @@ async def test_get_local_models_json_default_keyless(client: AsyncClient):
 
 
 @pytest.mark.asyncio
-async def test_get_local_models_json_matches_synthesized_turn_file(client: AsyncClient):
+async def test_get_local_models_json_matches_synthesized_turn_file(
+    client: AsyncClient, _stub_probe
+):
     """Proof of a single synthesis path: the GET'd default and the file the
     turn actually writes are produced by the same helper — byte-identical."""
     key = await _register(client)
@@ -254,7 +298,7 @@ async def test_get_local_models_json_404_not_connected(client: AsyncClient):
 
 
 @pytest.mark.asyncio
-async def test_put_local_models_json_roundtrip_verbatim(client: AsyncClient):
+async def test_put_local_models_json_roundtrip_verbatim(client: AsyncClient, _stub_probe):
     key = await _register(client)
     await _connect_local(client, key)
     r = await client.put(
@@ -267,7 +311,7 @@ async def test_put_local_models_json_roundtrip_verbatim(client: AsyncClient):
 
 
 @pytest.mark.asyncio
-async def test_put_rejects_unparseable(client: AsyncClient):
+async def test_put_rejects_unparseable(client: AsyncClient, _stub_probe):
     key = await _register(client)
     await _connect_local(client, key)
     r = await client.put(MODELS_JSON_URL, json={"models_json": "{"}, headers=_auth(key))
@@ -279,7 +323,7 @@ async def test_put_rejects_unparseable(client: AsyncClient):
 
 
 @pytest.mark.asyncio
-async def test_put_requires_providers_object(client: AsyncClient):
+async def test_put_requires_providers_object(client: AsyncClient, _stub_probe):
     key = await _register(client)
     await _connect_local(client, key)
     for bad in ('{"foo": 1}', "[1, 2]", '{"providers": []}'):  # noqa: S108
@@ -299,7 +343,7 @@ async def test_put_404_not_connected(client: AsyncClient):
 
 
 @pytest.mark.asyncio
-async def test_put_replaces_previous_override(client: AsyncClient):
+async def test_put_replaces_previous_override(client: AsyncClient, _stub_probe):
     key = await _register(client)
     await _connect_local(client, key)
     override_a = '{"providers": {"a": {"models": []}}}'
@@ -315,7 +359,7 @@ async def test_put_replaces_previous_override(client: AsyncClient):
 
 
 @pytest.mark.asyncio
-async def test_reset_returns_to_synthesized_default(client: AsyncClient):
+async def test_reset_returns_to_synthesized_default(client: AsyncClient, _stub_probe):
     key = await _register(client)
     await _connect_local(client, key, "http://tunnel.example/v1", "llama3.1:8b", "my-secret-key")
     await client.put(MODELS_JSON_URL, json={"models_json": CUSTOM_MODELS_JSON}, headers=_auth(key))
@@ -338,41 +382,54 @@ async def test_reset_404_not_connected(client: AsyncClient):
 
 
 @pytest.mark.asyncio
-async def test_disconnect_clears_override(client: AsyncClient):
-    """Disconnecting the local endpoint deletes the row — override with it —
-    so a later GET is 404, not a stale override."""
+async def test_disconnect_clears_override(client: AsyncClient, _stub_probe):
+    """Disconnecting an endpoint deletes its row — override with it — so a
+    later GET is 404, not a stale override. The box goes by id."""
     key = await _register(client)
     await _connect_local(client, key)
     await client.put(MODELS_JSON_URL, json={"models_json": CUSTOM_MODELS_JSON}, headers=_auth(key))
-    d = await client.delete("/api/v1/me/agent-credentials/local", headers=_auth(key))
+    listed = await client.get(LIST_URL, headers=_auth(key))
+    (endpoint_id,) = [e["id"] for e in listed.json()["endpoints"]]
+    d = await client.delete(
+        f"/api/v1/me/agent-credentials/endpoints/{endpoint_id}", headers=_auth(key)
+    )
     assert d.status_code == 200
     g = await client.get(MODELS_JSON_URL, headers=_auth(key))
     assert g.status_code == 404
 
 
 @pytest.mark.asyncio
-async def test_reconnect_preserves_override(client: AsyncClient):
-    """The store_credential upsert must not touch the override: reconnecting
-    with a different model/key keeps the user's models.json."""
+async def test_reconnect_preserves_override(client: AsyncClient, _stub_probe):
+    """The override rides the DEFAULT (oldest) local row, which the GET reads:
+    connecting another box does not disturb the user's models.json."""
     key = await _register(client)
     await _connect_local(client, key, "http://tunnel.example/v1", "llama3.1:8b", "my-secret-key")
     await client.put(MODELS_JSON_URL, json={"models_json": CUSTOM_MODELS_JSON}, headers=_auth(key))
     await _connect_local(client, key, "http://other.example/v1", "qwen2:7b", None)
     g = await client.get(MODELS_JSON_URL, headers=_auth(key))
     assert g.json() == {"models_json": CUSTOM_MODELS_JSON, "stored": True}
+    # The second connect appended rather than replaced, and the default
+    # (oldest) box is still the one the override rides.
+    listed = await client.get(LIST_URL, headers=_auth(key))
+    assert [e["base_url"] for e in listed.json()["endpoints"]] == [
+        "http://tunnel.example/v1",
+        "http://other.example/v1",
+    ]
 
 
 # ── The list endpoint also carries the local doc ────────────────────────────
 # Reconnecting must not ask the user to retype a base URL and model id, and the
 # connected row must be able to show the user their own key. The local doc is
 # the ONLY credential the API ever returns: it is the user's own endpoint
-# config, while the key providers' secrets stay opaque.
+# config, while the key providers' secrets stay opaque. The listing of every
+# box lives beside it under "endpoints" — entries without any key at all
+# (their live-probe shape is test_agent_endpoints.py's subject).
 
 LIST_URL = "/api/v1/me/agent-credentials"
 
 
 @pytest.mark.asyncio
-async def test_list_returns_local_doc_including_its_key(client: AsyncClient):
+async def test_list_returns_local_doc_including_its_key(client: AsyncClient, _stub_probe):
     key = await _register(client)
     await _connect_local(client, key, "http://tunnel.example/v1", "llama3.1:8b", "sk-local-abcdef")
     r = await client.get(LIST_URL, headers=_auth(key))
@@ -386,7 +443,7 @@ async def test_list_returns_local_doc_including_its_key(client: AsyncClient):
 
 
 @pytest.mark.asyncio
-async def test_list_returns_local_doc_keyless(client: AsyncClient):
+async def test_list_returns_local_doc_keyless(client: AsyncClient, _stub_probe):
     key = await _register(client)
     await _connect_local(client, key, "http://tunnel.example/v1", "llama3.1:8b")
     r = await client.get(LIST_URL, headers=_auth(key))
@@ -401,11 +458,13 @@ async def test_list_returns_local_doc_keyless(client: AsyncClient):
 async def test_list_local_is_null_when_nothing_connected(client: AsyncClient):
     key = await _register(client)
     r = await client.get(LIST_URL, headers=_auth(key))
-    assert r.json() == {"connected": [], "local": None}
+    assert r.json() == {"connected": [], "endpoints": [], "local": None}
 
 
 @pytest.mark.asyncio
-async def test_list_keeps_key_provider_secrets_out_of_the_response(client: AsyncClient):
+async def test_list_keeps_key_provider_secrets_out_of_the_response(
+    client: AsyncClient, _stub_probe
+):
     """The local key is the user's own endpoint config and may come back; a
     Claude/OpenRouter key must never appear anywhere in the payload."""
     key = await _register(client)
@@ -665,10 +724,12 @@ async def test_local_test_is_a_pure_probe(
     client: AsyncClient, probe_endpoints: Callable[[str], _ProbeEndpoint]
 ):
     """It tests exactly the values sent: a stored credential is neither read as
-    the default nor overwritten by the attempt."""
+    the default nor overwritten by the attempt. Both boxes are dialled for real
+    here — this is the probe section, so the stub is not used."""
     endpoint = probe_endpoints("ok")
+    stored = probe_endpoints("ok")
     key = await _register(client)
-    await _connect_local(client, key, "http://stored.example/v1", "stored-model", "stored-key")
+    await _connect_local(client, key, stored.base_url, "stored-model", "stored-key")
     r = await client.post(
         TEST_URL,
         json={"base_url": endpoint.base_url, "model": "mock-model-1", "api_key": "candidate"},
@@ -676,7 +737,10 @@ async def test_local_test_is_a_pure_probe(
     )
     assert r.json()["ok"] is True
     assert json.loads(await _stored_secret(client, key, "local")) == {
-        "base_url": "http://stored.example/v1",
+        "base_url": stored.base_url,
         "model": "stored-model",
         "api_key": "stored-key",
     }
+    # The candidate key knocked on the tested box; the stored box only ever
+    # heard from the connect that saved it, never from the test route.
+    assert endpoint.requests == [("/v1/models", "Bearer candidate")]

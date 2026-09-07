@@ -90,3 +90,17 @@ async def disconnect_endpoint(credential_id: UUID, scope_user_id: UUID = Depends
             },
         )
     return {"ok": True, "connected": await agent_auth.list_connected(scope_user_id)}
+
+
+@router.delete("/{provider}")
+async def disconnect(provider: str, scope_user_id: UUID = Depends(get_scope)):
+    """The console cannot disconnect a box by the name 'local': several boxes
+    share that name, and picking one would delete a box nobody pointed at. The
+    personal route's loud refusal, mirrored so the console gets the same
+    pointer instead of a bare 405."""
+    await _require_active_workspace(scope_user_id)
+    raise HTTPException(
+        status_code=400,
+        detail="a local endpoint is disconnected by id: DELETE "
+        "/api/v1/me/developer/agent-credentials/endpoints/{credential_id}",
+    )
