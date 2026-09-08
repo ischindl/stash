@@ -659,6 +659,37 @@ def _spy_resolve(monkeypatch) -> list[dict]:
 
 
 @pytest.mark.asyncio
+async def test_switching_a_pinned_curator_off_local_is_refused_pin_intact(
+    client: AsyncClient, _db_pool
+):
+    """A pin is validated at write time, not at the next turn — the invariant
+    this task shipped. A one-field PATCH moving a pinned curator to anthropic
+    would otherwise save anthropic + stale box-pin, and every later run dies in
+    resolve with 'cannot run as anthropic' until the founder also discovers he
+    must null credential_id. So the switch is refused, and the row keeps its
+    working pin."""
+    key, uid = await _register(client)
+    _one, box = await _two_boxes(uid)
+    await agent_service.get_or_create_curator(uid)
+    agent = await _pin_curator(
+        _db_pool, uid, model_provider="local", model_id="qwen", credential_id=box
+    )
+
+    r = await client.patch(
+        f"/api/v1/me/curators/{agent['id']}",
+        json={"model_provider": "anthropic"},
+        headers=_auth(key),
+    )
+    assert r.status_code == 400
+
+    row = await _db_pool.fetchrow(
+        "SELECT model_provider, credential_id FROM agents WHERE id = $1", agent["id"]
+    )
+    assert row["model_provider"] == "local"
+    assert row["credential_id"] == box
+
+
+@pytest.mark.asyncio
 async def test_a_pinned_curators_run_resolves_through_the_pin(
     client: AsyncClient, monkeypatch, _db_pool
 ):

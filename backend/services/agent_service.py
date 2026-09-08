@@ -492,7 +492,9 @@ async def _validate_pin(
     name would silently decide nothing and a dangling endpoint id would read as
     an accidental inheritance change. And credential_id must be one of this
     user's local endpoint rows: a row whose pin cannot resolve would only fail
-    at the next turn, when the cause is hardest to see.
+    at the next turn, when the cause is hardest to see. A pin is the local
+    provider's shape — an agent moved to a key provider must shed the pin in
+    the same write, or the stale id would kill every later turn in resolve.
     """
     if model_provider is None and (model_id is not None or credential_id is not None):
         raise HTTPException(
@@ -500,6 +502,11 @@ async def _validate_pin(
             detail="model_id/credential_id require a model_provider; without one the agent inherits",
         )
     if credential_id is not None:
+        if model_provider != "local":
+            raise HTTPException(
+                status_code=400,
+                detail="credential_id pins a local endpoint; model_provider must be local",
+            )
         if await agent_auth.get_local_endpoint(user_id, credential_id) is None:
             raise HTTPException(
                 status_code=400, detail="credential_id is not one of your local endpoints"
