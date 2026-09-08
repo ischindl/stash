@@ -12,6 +12,7 @@ from uuid import UUID
 import pytest
 from httpx import AsyncClient
 
+from backend.services import agent_auth
 from backend.tasks.agent_schedules import _first_day_curator_tick, run_curator_now
 
 from .conftest import unique_name
@@ -21,8 +22,27 @@ from .test_permissions import _register_with_email
 
 @pytest.fixture
 def dispatched(monkeypatch):
+    """Capture dispatches for a scope that HAS a connected model.
+
+    The tick resolves the scope's credential before dispatching, and STAS-131
+    removed the no-credential machine-login fallback, so every dispatching
+    test needs a resolvable credential — a connected local endpoint, like the
+    founder's own stack. Without one, the honest answer is no dispatch at all
+    (see test_unconnected_scope_gets_no_doomed_dispatch).
+    """
     calls: list[tuple] = []
     monkeypatch.setattr(run_curator_now, "delay", lambda *a, **k: calls.append((a, k)))
+
+    async def local_endpoint(user_id, provider=None):
+        if provider == "local":
+            return {
+                "provider": "local",
+                "kind": "endpoint",
+                "secret": '{"base_url": "http://127.0.0.1:11434/v1", "model": "m"}',
+            }
+        return None
+
+    monkeypatch.setattr(agent_auth, "_get_credential", local_endpoint)
     return calls
 
 
@@ -199,6 +219,18 @@ async def test_imported_pre_signup_history_dispatches(client: AsyncClient, pool,
     assert curated_through < old
     await _first_day_curator_tick(user_id)
     assert await _dispatched_wikis(pool, dispatched) == {"internal"}
+
+
+@pytest.mark.asyncio
+async def test_unconnected_scope_gets_no_doomed_dispatch(client: AsyncClient, pool, monkeypatch):
+    """STAS-131: with the machine-login fallback gone, a scope with no
+    connected model has nothing to run — the tick must skip it instead of
+    dispatching a run doomed to fail at exec time."""
+    calls: list[tuple] = []
+    monkeypatch.setattr(run_curator_now, "delay", lambda *a, **k: calls.append((a, k)))
+    user_id = await _personal_user_with_conversation(client)
+    await _first_day_curator_tick(user_id)
+    assert calls == []
 
 
 @pytest.mark.asyncio

@@ -312,6 +312,86 @@ Begin now.
 """
 
 
+def render_folder_curator_prompt(
+    project_folder_id: str, wiki_folder_id: str, folder_name: str, since: str | None
+) -> str:
+    """The curation instruction a folder-bound curator runs headless.
+
+    Its whole world is one project: sessions filed under `project_folder_id`
+    are the input, the pages of `wiki_folder_id` (the project's file-tree wiki
+    home) the compiled artifact — the same wiki discipline as the Memory
+    curator, applied to one project instead of the whole workspace."""
+    window = (
+        f"the changes since {since}"
+        if since
+        else "the full history (this is the first run — bootstrap the wiki)"
+    )
+    changes_cmd = f"stash changes --folder {project_folder_id} --json"
+    if since:
+        changes_cmd = f"stash changes --folder {project_folder_id} --since {since} --json"
+    return f"""# Sleep Time Compute — Project Folder Wiki Curation
+
+You maintain the wiki of the project **"{folder_name}"**. Its sessions are
+filed under the project folder `{project_folder_id}`; its wiki lives in the
+file-tree folder `{wiki_folder_id}` — a persistent, compounding knowledge base
+compiled from the session history filed into the project. Raw sessions are
+immutable inputs; the wiki's pages are the compiled artifact — so answers
+about this project start from the synthesis instead of being re-derived from
+transcripts. Read {window} and fold it into the wiki.
+
+Use the `stash` CLI for everything — every subcommand supports `--json`.
+
+## Read the inputs
+- `{changes_cmd}` — the delta to curate. This IS your entire work set: the
+  feed carries only the project's sessions. There is nothing outside the
+  project in it, and nothing outside the project is yours to curate.
+- `history_has_more: true` means the history overflowed this run's cap. The
+  remainder is already queued for your next run (the watermark only advances
+  through what you were shown) — curate what is present, do not try to page.
+
+## Wiki anatomy (the file-tree folder `{wiki_folder_id}`)
+- **`Wiki Index`** — the root page: a catalog of every page with a one-line
+  summary, grouped by topic. Update it whenever pages change.
+- **`Log`** — a root page, append-only: one line per action per run,
+  `- [YYYY-MM-DD] created|updated|merged|skipped <page> — <detail>`.
+  Never rewrite old entries; this is the permanent record of what each run did.
+- The rest are topic pages of this project: what it is, its decisions and
+  current state per workstream, contacts, gotchas, open threads.
+
+## Inspect and write
+- `stash ls /files --json` to find the wiki folder `{wiki_folder_id}` and its
+  existing pages by id; `stash files read-page <page_id> --json` to read one.
+- `stash search "<topic>" --json` to pull source context on demand.
+- Create a page: `stash files add-page "<Title>" --folder {wiki_folder_id} --content "<markdown>" --json`
+- Update a page: `stash files edit-page <page_id> --content "<markdown>"`
+- Create structure: `stash files create-folder "<Name>" --parent {wiki_folder_id} --json`
+
+## Ingest principles
+- **Bootstrap vs. maintain — know which mode you're in.** If the wiki folder
+  has no pages, you are bootstrapping: cluster the history into coherent topic
+  pages and seed the index and the Log in one pass. If pages exist, you are
+  maintaining: fold the delta into the existing structure.
+- **Maintain, don't regenerate.** Fold in new information; do not rewrite what
+  is there. Prefer updating an existing page over creating a new one.
+- **Scope by diff, not by corpus.** Only touch pages whose topic appears in
+  this delta; leave untouched pages alone.
+- **Links.** Standard markdown links with real routes — `[<Title>](/p/<page_id>)`,
+  the wiki folder as `[Wiki](/folders/{wiki_folder_id})` — double-bracket
+  syntax does not render. Pages link to the index; the index links everything.
+- **One fact, one place.** Reuse a page by linking to it, never by duplicating
+  its facts.
+- Never delete pages, folders, or sessions.
+
+## Final message
+End every run with a one-sentence curator log of what actually happened
+("Curated 12 sessions: created 2 pages, updated 3." or "Nothing new worth
+recording."), then the itemized `Log` lines as before — every changed page
+covered, every deliberate skip a `skipped` line, never a silent drop.
+
+Begin now.
+"""
+
+
 # ---------------------------------------------------------------------------
 # External Multiplayer curator (developer workspaces: shared wiki + per-user wikis)
 # ---------------------------------------------------------------------------

@@ -9,25 +9,25 @@ Everything here is admin-gated upstream — no per-user permission checks.
 
 from datetime import UTC, datetime, timedelta
 
+from ..config import internal_email_domains
 from ..database import get_pool
-
-# Our own team's usage would pollute every dashboard number, so every
-# aggregation here (and the engagement-cohort query) excludes accounts whose
-# email is on one of these domains by default. The dashboard's "Internal
-# accounts" toggle passes exclude_internal=False to count them anyway.
-INTERNAL_EMAIL_DOMAINS = ("ferganalabs.com", "joinstash.ai")
 
 
 def internal_filter_sql(user_id_col: str, exclude_internal: bool) -> str:
     """SQL predicate dropping rows whose user has an internal email domain,
     or TRUE when internal usage should be counted.
 
+    Team usage would pollute every dashboard number, so aggregations exclude
+    internal accounts by default; the "Internal accounts" toggle passes
+    exclude_internal=False to count them anyway.
+
     Rows with a NULL user id (anonymous events) are always kept. The domain
-    list is a code constant, so inlining it as SQL literals is safe.
+    list is operator config (INTERNAL_EMAIL_DOMAINS), not user input, so
+    inlining it as SQL literals is safe.
     """
     if not exclude_internal:
         return "TRUE"
-    domains = ", ".join(f"'{d}'" for d in INTERNAL_EMAIL_DOMAINS)
+    domains = ", ".join(f"'{d}'" for d in sorted(internal_email_domains()))
     return (
         f"NOT EXISTS (SELECT 1 FROM users iu WHERE iu.id = {user_id_col} "
         f"AND lower(split_part(iu.email, '@', 2)) IN ({domains}))"

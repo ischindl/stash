@@ -317,6 +317,15 @@ class Settings:
     INTERNAL_DOMAINS_FREE_PRO: bool = (
         os.getenv("INTERNAL_DOMAINS_FREE_PRO", "true").lower() == "true"
     )
+    # Comma-separated domains granted free Pro (and internal analytics
+    # classification). Self-hosters point this at their own domain.
+    INTERNAL_EMAIL_DOMAINS: str = os.getenv(
+        "INTERNAL_EMAIL_DOMAINS", "ferganalabs.com,joinstash.ai"
+    )
+    # Comma-separated email domains that keep the Tools + Chat surface (the
+    # rail entry and the /agents chat). Default keeps only the deployments
+    # that still depend on it; self-hosters add their own domain here.
+    TOOLS_AND_CHAT_DOMAINS: str = os.getenv("TOOLS_AND_CHAT_DOMAINS", "heaviai.com,ferganalabs.com")
 
     # ScrapeCreators (public social-content scraping, product-level key —
     # hydrates Instagram saves server-side; users never bring their own).
@@ -369,7 +378,27 @@ class Settings:
     SPRITES_STASH_API_URL: str | None = parse_required_when_enabled(
         "SPRITES_STASH_API_URL", AGENT_EXEC_MODE == "sprites", "AGENT_EXEC_MODE=sprites"
     )
+    # What the `stash` CLI inside a locally exec'd agent turn calls back to.
+    # The localhost default is right when the backend and the harness share a
+    # machine (the dev-laptop case); a containerized deployment must set this
+    # to the backend service's hostname — localhost in a worker container is
+    # not the backend.
+    LOCAL_STASH_API_URL: str = os.getenv(
+        "LOCAL_STASH_API_URL", f"http://localhost:{os.getenv('PORT', '3456')}"
+    )
     AGENT_TURN_TIMEOUT_SECONDS: int = int(os.getenv("AGENT_TURN_TIMEOUT_SECONDS", "600"))
 
 
 settings = Settings()
+
+
+def internal_email_domains() -> set[str]:
+    """The parsed INTERNAL_EMAIL_DOMAINS list — one config source for the
+    billing pro gate and the admin analytics internal filter."""
+    return {d.strip().lower() for d in settings.INTERNAL_EMAIL_DOMAINS.split(",") if d.strip()}
+
+
+def tools_and_chat_domains() -> set[str]:
+    """The parsed TOOLS_AND_CHAT_DOMAINS list — /users/me turns it into the
+    show_tools_and_chat flag the frontend rail and gates read."""
+    return {d.strip().lower() for d in settings.TOOLS_AND_CHAT_DOMAINS.split(",") if d.strip()}

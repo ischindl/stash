@@ -191,6 +191,41 @@ async def list_developer_sessions(scope_user_id: UUID = Depends(get_scope)):
     return {"sessions": await end_user_service.workspace_sessions(workspace)}
 
 
+@router.get("/projects")
+async def list_developer_projects(
+    current_user: dict = Depends(get_current_user),
+    scope_user_id: UUID = Depends(get_scope),
+):
+    """The workspace's projects (session folders) with each one's shared-memory
+    opt-in — the console's routing board."""
+    workspace = await _require_active_workspace(scope_user_id)
+    folders = await session_folder_service.list_folders(
+        workspace["scope_user_id"], current_user["id"]
+    )
+    return {"projects": folders}
+
+
+@router.patch("/projects/{folder_id}")
+async def update_developer_project(
+    folder_id: UUID,
+    req: ProjectShareWikiRequest,
+    scope_user_id: UUID = Depends(get_scope),
+):
+    """Opt a project into (or out of) the shared-memory feed, by project id.
+
+    The console's route; `/session-folders/{folder_id}` is the same toggle
+    under its storage name. Both call the one service function, so the
+    routing rules there — scope-local, Default folder has no toggle — cannot
+    drift between the two spellings."""
+    await _require_active_workspace(scope_user_id)
+    folder = await session_folder_service.set_folder_share_wiki(
+        scope_user_id=scope_user_id, folder_id=folder_id, share_wiki=req.share_wiki
+    )
+    if folder is None:
+        raise HTTPException(status_code=404, detail="Project not found in this workspace")
+    return folder
+
+
 @router.patch("/session-folders/{folder_id}")
 async def set_project_wiki_routing(
     folder_id: UUID,
@@ -325,7 +360,7 @@ async def _runnable_curator(scope_user_id: UUID, user_id: UUID) -> dict:
         raise HTTPException(status_code=403, detail="Not a workspace member")
     curator = await agent_service.get_or_create_curator(scope_user_id, wiki="external")
     try:
-        await agent_auth.resolve(scope_user_id, curator["model_provider"])
+        await agent_auth.resolve(scope_user_id, curator["model_provider"], curator.get("model_id"))
     except agent_auth.NeedsAuth:
         raise HTTPException(
             status_code=402,

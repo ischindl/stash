@@ -410,6 +410,12 @@ async def assign_sessions(
         folder_id,
         owner_user_id,
     )
+    if folder_id is not None:
+        from . import agent_service
+
+        await agent_service.rewind_folder_curator_for_sessions(
+            owner_user_id, folder_id, session_row_ids
+        )
     return True
 
 

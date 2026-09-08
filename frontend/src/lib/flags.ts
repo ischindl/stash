@@ -1,16 +1,9 @@
 import type { User } from "./types";
 
-// Tools and Chat are cut from the product surface (Aug 2026 focus pass):
-// Stash does two things — memory for internal coding agents, and the
-// Developer Platform for external agents. Heavi's deployment still depends on
-// Tools + Chat, so their org keeps both; ferganalabs keeps them to support
-// Heavi.
-const TOOLS_AND_CHAT_DOMAINS = new Set(["heaviai.com", "ferganalabs.com"]);
-
+// Tools and Chat are cut from the product surface (Aug 2026 focus pass); the
+// surviving domains are operator config (backend TOOLS_AND_CHAT_DOMAINS).
+// /users/me computes `show_tools_and_chat`, so the rail here and the route
+// gates can never disagree with the server.
 export function showToolsAndChat(user: User | null | undefined): boolean {
-  const email = user?.email;
-  if (!email) return false;
-  const domain = email.split("@").pop();
-  if (!domain) return false;
-  return TOOLS_AND_CHAT_DOMAINS.has(domain.toLowerCase());
+  return user?.show_tools_and_chat ?? false;
 }

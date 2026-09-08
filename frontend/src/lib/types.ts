@@ -6,6 +6,8 @@ export interface User {
   description: string;
   created_at: string;
   last_seen: string;
+  // Server-decided (TOOLS_AND_CHAT_DOMAINS); drives the rail + /agents gate.
+  show_tools_and_chat: boolean;
 }
 
 export interface RegisterResponse {

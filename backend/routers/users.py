@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
 
 from ..auth import create_api_key, get_current_user, hash_api_key
-from ..config import settings
+from ..config import settings, tools_and_chat_domains
 from ..database import get_pool
 from ..middleware import limiter
 from ..models import (
@@ -24,6 +24,15 @@ from ..services.email_service import send_enterprise_lead_email
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/users", tags=["users"])
+
+
+def _profile(user: dict) -> UserProfile:
+    """UserProfile + the computed Tools + Chat flag, so every route that
+    hands the caller their own profile decides visibility the same way."""
+    email = user.get("email") or ""
+    domain = email.rsplit("@", 1)[-1].lower()
+    return UserProfile(**user, show_tools_and_chat=domain in tools_and_chat_domains())
+
 
 _CLI_AUTH_TTL_INTERVAL = user_service.CLI_AUTH_TTL_INTERVAL
 
@@ -121,7 +130,7 @@ async def login(request: Request, req: LoginRequest):
 
 @router.get("/me", response_model=UserProfile)
 async def get_me(current_user: dict = Depends(get_current_user)):
-    return UserProfile(**current_user)
+    return _profile(current_user)
 
 
 @router.post("/logout", status_code=204)
@@ -167,7 +176,7 @@ async def update_me(req: UserUpdateRequest, current_user: dict = Depends(get_cur
             send_enterprise_lead_email(updated["name"], updated.get("email"))
         except Exception as exc:
             logger.warning("enterprise lead email failed exception_type=%s", type(exc).__name__)
-    return UserProfile(**updated)
+    return _profile(updated)
 
 
 class RedeemCodeRequest(BaseModel):

@@ -8,7 +8,9 @@ The rule (mirrors Fleet's resolveUserKey, adapted to per-user sprites):
      billed to us. No Anthropic key involved.
   3. Neither: raise NeedsAuth — connect a key or upgrade.
 
-Local dev short-circuits to the machine's own harness login (no injection).
+Local exec mode: a connected local endpoint runs the machine's own pi (no
+injection); none connected raises NeedsAuth; a connected endpoint under a
+foreign pin keeps the machine's own harness login (no injection).
 
 Credential injection differs by kind:
   - api_key → an env var the CLI reads (ANTHROPIC_API_KEY / OPENAI_API_KEY).
@@ -22,7 +24,10 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
+from urllib.parse import urlparse
 from uuid import UUID
+
+import httpx
 
 from ..config import settings
 from ..database import get_pool
@@ -83,25 +88,155 @@ class RunAuth:
     model: str | None = None
 
 
+# What a user typed into the base URL field, refused. The test-connection route
+# answers with this same string so the form cannot learn two different messages
+# for one mistake.
+LOCAL_BASE_URL_HINT = (
+    "base_url must be an absolute http(s) URL your cloud computer can reach "
+    "(e.g. http://your-host:11434/v1)"
+)
+
+# The local endpoint probe: one GET of the endpoint's own model listing proves
+# the server answers and, with a key attached, that the key is accepted. Both
+# probes — the sprite's turn-time preflight and the Settings pre-save test —
+# share this URL shape and this time budget.
+LOCAL_PROBE_SUFFIX = "/models"
+LOCAL_PROBE_TIMEOUT_S = 5.0
+
+
+def local_probe_url(base_url: str) -> str:
+    """The model listing for a base URL (http://host:11434/v1 → …/v1/models)."""
+    return base_url.rstrip("/") + LOCAL_PROBE_SUFFIX
+
+
+def local_endpoint_doc(base_url: str, model: str, api_key: str | None = None) -> dict:
+    """The validated local endpoint form as a doc: the base URL the box dials,
+    the model id on it, and an optional key.
+
+    One validation surface for every place that takes these values — the
+    personal connect, the workspace connect, and the pre-save test — so all of
+    them refuse bad input with the same words.
+
+    Raises ValueError with a user-facing detail on bad input; the endpoints map
+    it to a 400.
+    """
+    base_url = base_url.strip()
+    model = model.strip()
+    parsed = urlparse(base_url)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        raise ValueError(LOCAL_BASE_URL_HINT)
+    if not model:
+        raise ValueError("model is required for the local endpoint")
+    return {
+        "base_url": base_url,
+        "model": model,
+        "api_key": (api_key or "").strip() or None,  # keyless endpoints are common
+    }
+
+
+def local_endpoint_secret(base_url: str, model: str, api_key: str | None = None) -> str:
+    """The stored doc for a local endpoint credential — an endpoint, not a bare
+    key. Shared by the personal and the workspace connect endpoints so both
+    validate and store one shape.
+    """
+    return json.dumps(local_endpoint_doc(base_url, model, api_key))
+
+
+def _probe_models(body: str) -> list[str] | None:
+    """The model ids of an OpenAI-shaped /models body, or None when the body is
+    not that shape — a proxy's HTML landing page answers 200 and must not be
+    reported as a working endpoint."""
+    try:
+        payload = json.loads(body)
+    except ValueError:
+        return None
+    data = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(data, list):
+        return None
+    return [m["id"] for m in data if isinstance(m, dict) and isinstance(m.get("id"), str)]
+
+
+def _probe_snippet(text: str, limit: int) -> str:
+    """The provider's answer, whitespace-collapsed and capped, so a proxy's full
+    HTML page never lands in the Settings form."""
+    return " ".join(text.split())[:limit] or "(empty body)"
+
+
+async def probe_local_endpoint(base_url: str, api_key: str | None) -> dict:
+    """Dial the user's endpoint from the backend and report what it answered.
+
+    The same request the sprite's turn-time preflight makes, with the candidate
+    key attached — which is why it exists: the preflight can only prove reachability
+    after a sprite exists, one turn too late. The endpoint's own words are returned
+    because they are the only part that names the failure (LiteLLM says
+    token_not_found_in_db where the HTTP layer says merely 401).
+
+    Never reads or writes a stored credential: it tests exactly what it is given.
+    """
+    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+    try:
+        async with httpx.AsyncClient(timeout=LOCAL_PROBE_TIMEOUT_S, follow_redirects=False) as http:
+            response = await http.get(local_probe_url(base_url), headers=headers)
+    except httpx.TimeoutException:
+        return {
+            "ok": False,
+            "http_status": None,
+            "error_detail": f"timed out after {LOCAL_PROBE_TIMEOUT_S:g}s",
+        }
+    except httpx.HTTPError as e:
+        return {
+            "ok": False,
+            "http_status": None,
+            "error_detail": f"connection failed: {e}",
+        }
+
+    status = response.status_code
+    body = response.text
+    if 300 <= status < 400:
+        return {
+            "ok": False,
+            "http_status": status,
+            "error_detail": f"redirected to {response.headers.get('location', '?')} — a "
+            "model endpoint must answer directly",
+        }
+    if 200 <= status < 300:
+        models = _probe_models(body)
+        if models is not None:
+            return {"ok": True, "http_status": status, "models": models}
+        return {
+            "ok": False,
+            "http_status": status,
+            "error_detail": 'expected an OpenAI model list ({"data": [...]}), got: '
+            + _probe_snippet(body, 400),
+        }
+    return {"ok": False, "http_status": status, "error_detail": _probe_snippet(body, 500)}
+
+
 async def _get_credential(user_id: UUID, provider: str | None = None) -> dict | None:
     """The user's connected credential. With `provider`, only that one (so an
     agent's model override selects a specific connected harness)."""
     if provider is not None:
         row = await get_pool().fetchrow(
-            "SELECT provider, kind, secret_enc FROM user_agent_credentials "
+            "SELECT provider, kind, secret_enc, models_json_enc FROM user_agent_credentials "
             "WHERE user_id = $1 AND provider = $2",
             user_id,
             provider,
         )
     else:
         row = await get_pool().fetchrow(
-            "SELECT provider, kind, secret_enc FROM user_agent_credentials "
+            "SELECT provider, kind, secret_enc, models_json_enc FROM user_agent_credentials "
             "WHERE user_id = $1 ORDER BY created_at LIMIT 1",
             user_id,
         )
     if row is None:
         return None
-    return {"provider": row["provider"], "kind": row["kind"], "secret": _decrypt(row["secret_enc"])}
+    return {
+        "provider": row["provider"],
+        "kind": row["kind"],
+        "secret": _decrypt(row["secret_enc"]),
+        # NULL until the user stores their own pi models.json in Settings.
+        "models_json": _decrypt(row["models_json_enc"]),
+    }
 
 
 async def store_credential(user_id: UUID, provider: str, kind: str, secret: str) -> None:
@@ -134,6 +269,22 @@ async def list_connected(user_id: UUID) -> list[str]:
     return [r["provider"] for r in rows]
 
 
+async def local_credential(user_id: UUID) -> dict | None:
+    """The user's stored local endpoint doc, or None when none is connected.
+
+    The one credential the API hands back: the doc is the user's own endpoint
+    config — base URL, model id, and the key to their own server — which the
+    Settings form needs to show the key it holds and to prefill a reconnect.
+    Another provider's secret never travels this path.
+    """
+    cred = await _get_credential(user_id, "local")
+    if cred is None:
+        return None
+    if cred["kind"] != "endpoint":
+        raise ValueError(f"local credential has unexpected kind: {cred['kind']}")
+    return _local_credential_doc(cred)
+
+
 async def delete_credential(user_id: UUID, provider: str) -> None:
     await get_pool().execute(
         "DELETE FROM user_agent_credentials WHERE user_id = $1 AND provider = $2",
@@ -142,29 +293,47 @@ async def delete_credential(user_id: UUID, provider: str) -> None:
     )
 
 
-async def resolve(user_id: UUID, prefer_provider: str | None = None) -> RunAuth:
+async def resolve(
+    user_id: UUID,
+    prefer_provider: str | None = None,
+    model_id: str | None = None,
+) -> RunAuth:
     """The harness + credential injection for this user's next turn.
 
     `prefer_provider` is an agent's model override: if the user has that
     provider's credential, run it; a managed OpenRouter preference on Pro uses
     the managed GLM. Falls back to the user's default resolution otherwise.
+    `model_id` picks a model *within* the local provider's endpoint (the
+    connect doc carries the default); naming one for any other provider fails
+    loud — non-local credentials are a key, not an endpoint with a model list.
 
     In local exec mode a connected local endpoint still resolves to pi: its
     credential is self-contained (base URL + model), so no sprite is needed —
     and the turn runs against the simulated box's home, isolated from the
     developer's own pi config.
     """
-    # Local dev: the machine's own harness login; inject nothing.
+    # Local mode: a connected local endpoint runs on the machine's own pi —
+    # its credential is self-contained. With nothing connected, fail loud
+    # (STAS-131) instead of riding the machine's unauthenticated login; a
+    # connected local endpoint under a foreign pin keeps that machine login.
     if settings.AGENT_EXEC_MODE == "local":
         local_cred = await _get_credential(user_id, "local")
-        if local_cred is not None and prefer_provider in (None, "local"):
-            return _local_auth(local_cred, home=str(sprite_service.local_box_home()))
+        if local_cred is None:
+            # The old silent CLAUDE fallback crashed on boxes without the
+            # binary and masked the missing credential row (STAS-131).
+            raise NeedsAuth
+        if prefer_provider in (None, "local"):
+            return _local_auth(
+                local_cred, home=str(sprite_service.local_box_home()), model_override=model_id
+            )
+        if model_id:
+            raise ValueError("model_id only applies to the local provider")
         return RunAuth(harness=harness_mod.CLAUDE)
 
     if prefer_provider:
         cred = await _get_credential(user_id, prefer_provider)
         if cred is not None:
-            return _byo_auth(cred)
+            return _byo_auth(cred, model_id=model_id)
         # Preferred managed OpenRouter with no BYO key → managed GLM (Pro gate).
         if prefer_provider == "openrouter":
             return await _managed(user_id)
@@ -174,7 +343,7 @@ async def resolve(user_id: UUID, prefer_provider: str | None = None) -> RunAuth:
 
     cred = await _get_credential(user_id)
     if cred is not None:
-        return _byo_auth(cred)
+        return _byo_auth(cred, model_id=model_id)
     return await _managed(user_id)
 
 
@@ -192,9 +361,11 @@ async def _managed(user_id: UUID) -> RunAuth:
     )
 
 
-def _byo_auth(cred: dict) -> RunAuth:
+def _byo_auth(cred: dict, model_id: str | None = None) -> RunAuth:
     if cred["provider"] == "local":
-        return _local_auth(cred)
+        return _local_auth(cred, model_override=model_id)
+    if model_id:
+        raise ValueError("model_id only applies to the local provider")
     harness = _PROVIDER_HARNESS[cred["provider"]]
     if cred["kind"] == "api_key":
         return RunAuth(harness=harness, env={harness.provider.env_var: cred["secret"]})
@@ -218,33 +389,20 @@ def _byo_auth(cred: dict) -> RunAuth:
 _SPRITE_HOME = "/home/sprite"
 
 
-def _local_auth(cred: dict, home: str = _SPRITE_HOME) -> RunAuth:
-    """Local model: the credential is a JSON doc describing the user's own
-    OpenAI-compatible endpoint (base_url, model, optional api_key). pi reads a
-    provider config file; the key, when set, rides only in the STASH_LOCAL_KEY
-    env var that the file's $STASH_LOCAL_KEY interpolation expands.
-
-    The key is never in argv, and a keyless endpoint gets a literal dummy so
-    the file shape stays one codepath.
-
-    `home` is the box's home dir: the real /home/sprite on a sprites box, or
-    the simulated box home in local exec mode. pi resolves its config from
-    $HOME, so the HOME override keeps a locally exec'd turn on the box config
-    that carries this endpoint — never the developer's machine config.
-    """
+def _local_credential_doc(cred: dict) -> dict:
     doc = json.loads(cred["secret"])
     base_url = doc.get("base_url")
     model = doc.get("model")
     if not base_url or not model:
         raise ValueError("local credential is missing base_url or model")
-    env = {"PI_OFFLINE": "1", "HOME": home}  # no pi startup network calls
-    api_key = doc.get("api_key")
-    if api_key:
-        env[model_provider.LOCAL.env_var] = api_key
-        key_ref = "$STASH_LOCAL_KEY"
-    else:
-        key_ref = "local"
-    models_json = json.dumps(
+    return doc
+
+
+def _synthesized_models_json(base_url: str, model: str, key_ref: str) -> str:
+    """The default pi provider config for a connected local endpoint — the
+    single synthesis path, used by every turn and by the Settings reader when
+    the user has not stored their own models.json."""
+    return json.dumps(
         {
             "providers": {
                 "local": {
@@ -263,12 +421,109 @@ def _local_auth(cred: dict, home: str = _SPRITE_HOME) -> RunAuth:
         },
         indent=2,
     )
+
+
+def _local_auth(cred: dict, home: str = _SPRITE_HOME, model_override: str | None = None) -> RunAuth:
+    """Local model: the credential is a JSON doc describing the user's own
+    OpenAI-compatible endpoint (base_url, model, optional api_key). pi reads a
+    provider config file; the key, when set, rides only in the STASH_LOCAL_KEY
+    env var that the file's $STASH_LOCAL_KEY interpolation expands.
+
+    The key is never in argv, and a keyless endpoint gets a literal dummy so
+    the file shape stays one codepath.
+
+    `home` is the box's home dir: the real /home/sprite on a sprites box, or
+    the simulated box home in local exec mode. pi resolves its config from
+    $HOME, so the HOME override keeps a locally exec'd turn on the box config
+    that carries this endpoint — never the developer's machine config.
+
+    When the user stored their own models.json in Settings, its bytes are
+    written VERBATIM (no parse, no re-serialize) — the stored text is the
+    single source of truth. Endpoint, model, and the key env always come from
+    the connect doc. A per-agent `model_override` cannot be honored against a
+    verbatim stored file, so pairing the two fails loud rather than running a
+    model neither source named.
+    """
+    doc = _local_credential_doc(cred)
+    base_url = doc["base_url"]
+    model = model_override or doc["model"]
+    env = {"PI_OFFLINE": "1", "HOME": home}  # no pi startup network calls
+    api_key = doc.get("api_key")
+    if api_key:
+        env[model_provider.LOCAL.env_var] = api_key
+        key_ref = "$STASH_LOCAL_KEY"
+    else:
+        key_ref = "local"
+    override = cred.get("models_json")
+    if override is not None and model_override:
+        raise ValueError(
+            "agent model_id cannot be applied while a stored models.json override is set"
+        )
+    models_json = (
+        override if override is not None else _synthesized_models_json(base_url, model, key_ref)
+    )
     return RunAuth(
         harness=harness_mod.PI,
         env=env,
         files={f"{home}/.pi/agent/models.json": models_json},
         endpoint=base_url,
         model=model,
+    )
+
+
+async def get_local_models_json(user_id: UUID) -> dict:
+    """The effective models.json for the user's local endpoint: the stored
+    override when present, else the synthesized default for the connected
+    endpoint. Returns {models_json: str, stored: bool}."""
+    cred = await _get_credential(user_id, "local")
+    if cred is None:
+        raise LookupError("local endpoint is not connected")
+    doc = _local_credential_doc(cred)
+    key_ref = "$STASH_LOCAL_KEY" if doc.get("api_key") else "local"
+    stored = cred.get("models_json")
+    return {
+        "models_json": (
+            stored
+            if stored is not None
+            else _synthesized_models_json(doc["base_url"], doc["model"], key_ref)
+        ),
+        "stored": stored is not None,
+    }
+
+
+async def save_local_models_json(user_id: UUID, models_json: str) -> None:
+    """Store the user's models.json VERBATIM (the raw text, never re-serialized).
+
+    Validation is parse-don't-validate: the JSON must parse to an object with a
+    top-level "providers" object, or the save fails loud. pi itself is the
+    rest of the validator — no field patching or normalization here.
+    """
+    cred = await _get_credential(user_id, "local")
+    if cred is None:
+        raise LookupError("local endpoint is not connected")
+    try:
+        parsed = json.loads(models_json)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"models.json is not valid JSON: {e}") from None
+    if not isinstance(parsed, dict) or not isinstance(parsed.get("providers"), dict):
+        raise ValueError('models.json must be a JSON object with a top-level "providers" object')
+    await get_pool().execute(
+        "UPDATE user_agent_credentials SET models_json_enc = $1 "
+        "WHERE user_id = $2 AND provider = 'local'",
+        _encrypt(models_json),
+        user_id,
+    )
+
+
+async def reset_local_models_json(user_id: UUID) -> None:
+    """Delete the stored override; the synthesized default returns."""
+    cred = await _get_credential(user_id, "local")
+    if cred is None:
+        raise LookupError("local endpoint is not connected")
+    await get_pool().execute(
+        "UPDATE user_agent_credentials SET models_json_enc = NULL "
+        "WHERE user_id = $1 AND provider = 'local'",
+        user_id,
     )
 
 

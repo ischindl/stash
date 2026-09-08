@@ -30,6 +30,8 @@ TEST_DATABASE_URL=postgresql://stash:stash@localhost:5432/stash_test \
 |------|--------|
 | `test_auth.py` | Registration, login, API key auth, password validation |
 | `test_permissions.py` | Private-by-default access, owner read/write, share grants, publish records |
+| `test_internal_email_domains.py` | The internal-account domain list as one env setting: defaults equal the fixed company domains, the env string replaces them (normalized, empty grants nobody), the kill switch still wins, and admin analytics follows the same list |
+| `test_tools_and_chat_domains.py` | The Tools-and-Chat `/users/me` flag driven by its own env domain list — false for unlisted domains, true for the defaults and env-listed ones |
 | `test_webhooks.py` | SSRF URL validation, secret hashing, delivery logic |
 | `test_curator.py` | Curator provisioning, schedule, gate, feed, page writes, and the watermark: an advance can never lower `curated_through`, a refused advance is logged, `full_history` never clears the stored position, one run per agent at a time, and the one gap the guard leaves |
 | `test_curator_feed_scoping.py` | Which events each wiki may read — the internal wiki everything, the external wiki only sessions of end users who share — and the gate agreeing with that feed |

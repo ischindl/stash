@@ -144,7 +144,7 @@ async def test_run_due_failure_sends_alert(client: AsyncClient, sprite_exec, mon
         user_id, "test", "user_message", "hello", user_id, f"sess-{uuid.uuid4()}"
     )
 
-    async def fake_resolve(user_id, prefer_provider=None):
+    async def fake_resolve(user_id, prefer_provider=None, model_id=None):
         return None
 
     async def fake_run_scheduled(agent, stamp):
@@ -185,7 +185,7 @@ async def test_run_bookkeeping_failure_sends_alert(client: AsyncClient, sprite_e
     async def fake_run_scheduled(agent, stamp):
         return ""
 
-    async def boom(user_id, curated_through, now, wiki):
+    async def boom(user_id, curated_through, now, wiki, folder_id=None):
         raise RuntimeError("watermark write failed")
 
     monkeypatch.setattr(sprite_agent_service, "run_scheduled", fake_run_scheduled)
@@ -214,12 +214,12 @@ async def test_run_due_records_no_changes_skip(client: AsyncClient, monkeypatch)
         datetime.now(UTC) - timedelta(minutes=5),
     )
 
-    async def fake_resolve(user_id, prefer_provider=None):
+    async def fake_resolve(user_id, prefer_provider=None, model_id=None):
         return None
 
     gated_by: list[str] = []
 
-    async def no_changes(owner_user_id, user_id, since, wiki):
+    async def no_changes(owner_user_id, user_id, since, wiki, folder_id=None):
         gated_by.append(wiki)
         return False
 
@@ -247,7 +247,7 @@ async def test_run_due_records_missing_credential_skip(client: AsyncClient, monk
         datetime.now(UTC) - timedelta(minutes=5),
     )
 
-    async def no_credential(user_id, prefer_provider=None):
+    async def no_credential(user_id, prefer_provider=None, model_id=None):
         raise agent_auth.NeedsAuth
 
     monkeypatch.setattr(agent_auth, "resolve", no_credential)

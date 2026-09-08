@@ -11,10 +11,10 @@ vi.mock("next/navigation", () => ({
 }));
 
 // A stable user object — a fresh literal per render would retrigger the
-// [user]-dependent load effect and break call-count assertions. The heaviai.com
-// email matters: Tools is gated to the orgs that still use it (lib/flags.ts).
+// [user]-dependent load effect and break call-count assertions. The flag
+// matters: Tools is gated by the server-computed show_tools_and_chat.
 const authState = vi.hoisted(() => ({
-  user: { id: "u1", name: "sam", email: "sam@heaviai.com" },
+  user: { id: "u1", name: "sam", email: "sam@heaviai.com", show_tools_and_chat: true },
   loading: false,
 }));
 
@@ -162,11 +162,16 @@ describe("ToolsPage", () => {
   });
 
   // Tools is cut from the product surface for everyone but the orgs that
-  // still depend on it — a user outside those domains gets sent home, not a
-  // reachable-by-URL page.
+  // still depend on it — a user whose server flag is false gets sent home,
+  // not a reachable-by-URL page.
   it("redirects users outside the allowed orgs", async () => {
     const original = authState.user;
-    authState.user = { id: "u2", name: "vic", email: "vic@example.com" };
+    authState.user = {
+      id: "u2",
+      name: "vic",
+      email: "vic@example.com",
+      show_tools_and_chat: false,
+    };
     try {
       render(<ToolsPage />);
       await waitFor(() => expect(router.replace).toHaveBeenCalledWith("/"));

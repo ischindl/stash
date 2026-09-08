@@ -134,17 +134,46 @@ def _wiki_event_scope(wiki: str) -> str:
     raise ValueError(f"unknown wiki {wiki!r}; expected {WIKI_INTERNAL!r} or {WIKI_EXTERNAL!r}")
 
 
-def _feed_conditions(wiki: str, since: datetime | None, until: datetime | None, args: list) -> str:
+def _folder_event_scope(folder_id: UUID, args: list) -> str:
+    """The `AND` clause limiting an event query to one session folder's sessions.
+
+    An EXISTS over sessions rather than a join: the feed's hot inner query reads
+    the owner+created_at index and must keep its shape at every scope, and like
+    the sharing scope a whole session is either in the folder or not, so a
+    duplicate's identity group is never split by the clause — the gate/feed
+    equivalence survives folder scoping for the same reason it survives dedupe.
+    """
+    args.append(folder_id)
+    return (
+        "AND EXISTS (SELECT 1 FROM sessions fse "
+        "WHERE fse.owner_user_id = he.owner_user_id "
+        "AND fse.session_id = he.session_id "
+        f"AND fse.session_folder_id = ${len(args)})"
+    )
+
+
+def _feed_conditions(
+    wiki: str,
+    since: datetime | None,
+    until: datetime | None,
+    args: list,
+    folder_id: UUID | None = None,
+) -> str:
     """Build the one WHERE clause that says what one wiki's curator may read.
 
-    Owner scope, the eligibility clause, the sharing scope, and the time window,
-    in one place: the feed, the watermark boundary, and the backlog are the same
-    question asked three ways, and a hand-copied approximation of this clause is
-    how the four readers start disagreeing. `args` is appended to (params are
-    positional) and must already hold the owner id as $1. `since=None` is "never
-    curated", which bounds nothing — the whole corpus is ahead, matching
-    `has_changes_since` returning True for that case."""
+    Owner scope, the eligibility clause, the sharing scope, the folder scope,
+    and the time window, in one place: the feed, the watermark boundary, and
+    the backlog are the same question asked three ways, and a hand-copied
+    approximation of this clause is how the four readers start disagreeing.
+    `args` is appended to (params are positional) and must already hold the
+    owner id as $1. `since=None` is "never curated", which bounds nothing — the
+    whole corpus is ahead, matching `has_changes_since` returning True for that
+    case. `folder_id` narrows a folder-scoped curator's feed to its own folder;
+    None is the workspace-wide reading.
+    """
     where = f"he.owner_user_id = $1 {_CURATOR_FEED_ELIGIBILITY}{_wiki_event_scope(wiki)}"
+    if folder_id is not None:
+        where += _folder_event_scope(folder_id, args)
     if since is not None:
         args.append(since)
         where += f" AND he.created_at > ${len(args)}"
@@ -155,7 +184,11 @@ def _feed_conditions(wiki: str, since: datetime | None, until: datetime | None, 
 
 
 async def has_changes_since(
-    owner_user_id: UUID, user_id: UUID, since: datetime | None, wiki: str
+    owner_user_id: UUID,
+    user_id: UUID,
+    since: datetime | None,
+    wiki: str,
+    folder_id: UUID | None = None,
 ) -> bool:
     """True if anything this wiki's curator cares about changed after `since`.
 
@@ -165,6 +198,11 @@ async def has_changes_since(
     clause stays owner-wide: they are filtered downstream, so they can only
     over-trigger, and tightening one clause without the others is exactly how
     the gate and the feed stop agreeing.
+
+    `folder_id` scopes a folder-bound curator: then events are the whole gate —
+    the scoped feed reads nothing else (the folder's wiki pages are the
+    curator's artifact, excluded the way Memory is), so the page and
+    owner-wide branches could only fire runs with nothing to read.
 
     The event half stays an EXISTS over *rows* even though the feed now collapses
     duplicates: every row in an identity group shares one `created_at`, so a
@@ -178,33 +216,31 @@ async def has_changes_since(
         return True  # never curated → bootstrap.
     pool = get_pool()
     memory_ids = await files_tree_service.memory_subtree_folder_ids(owner_user_id)
-    event_scope = _wiki_event_scope(wiki)
+    args: list = [owner_user_id, since]
+    where = (
+        f"he.owner_user_id = $1 AND he.created_at > $2 {_CURATOR_FEED_ELIGIBILITY}"
+        f"{_wiki_event_scope(wiki)}"
+    )
+    if folder_id is not None:
+        where += _folder_event_scope(folder_id, args)
+        branches = [f"EXISTS (SELECT 1 FROM history_events he WHERE {where})"]
+    else:
+        page_scope = "AND ($3::uuid[] IS NULL OR folder_id IS NULL OR folder_id <> ALL($3))"
+        args.append(list(memory_ids) or None)
+        branches = [
+            f"EXISTS (SELECT 1 FROM history_events he WHERE {where})",
+            f"EXISTS (SELECT 1 FROM pages WHERE owner_user_id = $1 AND updated_at > $2 {page_scope})",
+            "EXISTS (SELECT 1 FROM files WHERE owner_user_id = $1 AND created_at > $2)",
+            "EXISTS (SELECT 1 FROM drive_documents WHERE owner_user_id = $1 AND updated_at > $2 "
+            "AND extraction_status = 'done' AND deleted_at IS NULL)",
+            "EXISTS (SELECT 1 FROM x_save_docs WHERE owner_user_id = $1 AND updated_at > $2 "
+            "AND hydration_status = 'done' AND deleted_at IS NULL)",
+            "EXISTS (SELECT 1 FROM instagram_save_docs WHERE owner_user_id = $1 AND updated_at > $2 "
+            "AND hydration_status = 'done' AND deleted_at IS NULL)",
+        ]
     exists = await pool.fetchval(
-        f"""
-        SELECT
-          EXISTS (SELECT 1 FROM history_events he
-                  WHERE he.owner_user_id = $1 AND he.created_at > $2
-                    {_CURATOR_FEED_ELIGIBILITY}
-                    {event_scope})
-          OR EXISTS (SELECT 1 FROM pages
-                     WHERE owner_user_id = $1 AND updated_at > $2
-                       AND ($3::uuid[] IS NULL OR folder_id IS NULL
-                            OR folder_id <> ALL($3)))
-          OR EXISTS (SELECT 1 FROM files
-                     WHERE owner_user_id = $1 AND created_at > $2)
-          OR EXISTS (SELECT 1 FROM drive_documents
-                     WHERE owner_user_id = $1 AND updated_at > $2
-                       AND extraction_status = 'done' AND deleted_at IS NULL)
-          OR EXISTS (SELECT 1 FROM x_save_docs
-                     WHERE owner_user_id = $1 AND updated_at > $2
-                       AND hydration_status = 'done' AND deleted_at IS NULL)
-          OR EXISTS (SELECT 1 FROM instagram_save_docs
-                     WHERE owner_user_id = $1 AND updated_at > $2
-                       AND hydration_status = 'done' AND deleted_at IS NULL)
-        """,
-        owner_user_id,
-        since,
-        list(memory_ids) or None,
+        f"SELECT {' OR '.join(branches)}",
+        *args,
         column=0,
     )
     return bool(exists)
@@ -227,7 +263,11 @@ def _project_share_wiki(event: dict) -> bool | None:
 
 
 async def changes_since(
-    owner_user_id: UUID, user_id: UUID, since: datetime | None, wiki: str
+    owner_user_id: UUID,
+    user_id: UUID,
+    since: datetime | None,
+    wiki: str,
+    folder_id: UUID | None = None,
 ) -> dict:
     """The delta the curator reads: history events, changed pages (excl. Memory),
     new files, changed Drive-folder documents, newly hydrated X/Instagram saves,
@@ -235,12 +275,20 @@ async def changes_since(
 
     `wiki` scopes the events only — see `_feed_events`. Pages, files, saves, and
     source pointers come from the caller's own scope and are filtered
-    downstream, so they stay owner-wide here."""
+    downstream, so they stay owner-wide here.
+
+    `folder_id` marks the folder-scoped curator: its work set is its folder's
+    events and its folder's pages, nothing else — files, Drive documents, saves,
+    and source pointers come back empty because a scoped curator has no wiki
+    outside the folder to fold them into. The scoping is in SQL, not in prose:
+    material outside the folder never reaches the scoped curator's prompt."""
     pool = get_pool()
     memory_ids = await files_tree_service.memory_subtree_folder_ids(owner_user_id)
     exclude = list(memory_ids) or None
 
-    events, history_has_more = await _feed_events(owner_user_id, since, None, _MAX_EVENTS, wiki)
+    events, history_has_more = await _feed_events(
+        owner_user_id, since, None, _MAX_EVENTS, wiki, folder_id
+    )
     history = [
         {
             "session_id": e.get("session_id"),
@@ -256,33 +304,71 @@ async def changes_since(
         for e in events
     ]
 
-    page_rows = await pool.fetch(
-        """
-        SELECT id, name, folder_id, updated_at,
-               left(coalesce(content_markdown, ''), $4) AS snippet
-        FROM pages
-        WHERE owner_user_id = $1
-          AND ($5::uuid[] IS NULL OR folder_id IS NULL OR folder_id <> ALL($5))
-          AND ($2::timestamptz IS NULL OR updated_at > $2)
-        ORDER BY updated_at DESC LIMIT $3
-        """,
-        owner_user_id,
-        since,
-        _MAX_PAGES,
-        _SNIPPET,
-        exclude,
-    )
-    pages = [
-        {
-            "id": str(r["id"]),
-            "name": r["name"],
-            "folder_id": str(r["folder_id"]) if r["folder_id"] else None,
-            "updated_at": _iso(r["updated_at"]),
-            "snippet": r["snippet"],
-        }
-        for r in page_rows
-    ]
+    if folder_id is not None:
+        # A folder curator's own wiki is its compiled artifact, not input — the
+        # same exclusion that keeps Memory out of the workspace feed. The run
+        # reads the pages it maintains through ls/read before folding in.
+        pages = []
+    else:
+        page_rows = await pool.fetch(
+            """
+            SELECT id, name, folder_id, updated_at,
+                   left(coalesce(content_markdown, ''), $4) AS snippet
+            FROM pages
+            WHERE owner_user_id = $1
+              AND ($5::uuid[] IS NULL OR folder_id IS NULL OR folder_id <> ALL($5))
+              AND ($2::timestamptz IS NULL OR updated_at > $2)
+            ORDER BY updated_at DESC LIMIT $3
+            """,
+            owner_user_id,
+            since,
+            _MAX_PAGES,
+            _SNIPPET,
+            exclude,
+        )
+        pages = [
+            {
+                "id": str(r["id"]),
+                "name": r["name"],
+                "folder_id": str(r["folder_id"]) if r["folder_id"] else None,
+                "updated_at": _iso(r["updated_at"]),
+                "snippet": r["snippet"],
+            }
+            for r in page_rows
+        ]
 
+    if folder_id is None:
+        files, source_docs, saves, sources = await _owner_wide_sections(
+            pool, owner_user_id, user_id, since
+        )
+    else:
+        files = source_docs = saves = sources = []
+
+    return {
+        "since": _iso(since),
+        "counts": {
+            "history": len(history),
+            "pages": len(pages),
+            "files": len(files),
+            "source_docs": len(source_docs),
+            "saves": len(saves),
+            "sources": len(sources),
+        },
+        "history": history,
+        "history_has_more": history_has_more,
+        "pages": pages,
+        "files": files,
+        "source_docs": source_docs,
+        "saves": saves,
+        "sources": sources,
+    }
+
+
+async def _owner_wide_sections(pool, owner_user_id: UUID, user_id: UUID, since: datetime | None):
+    """The delta halves only a workspace-wide curator reads: new files, changed
+    Drive documents, newly hydrated saves, and connected-source pointers. A
+    folder-scoped curator has no wiki outside its folder to fold them into, so
+    they are not fetched for it at all."""
     file_rows = await pool.fetch(
         """
         SELECT id, name, created_at, left(coalesce(extracted_text, ''), $4) AS snippet
@@ -381,25 +467,7 @@ async def changes_since(
         for s in all_sources
         if not str(s.get("type", "")).startswith("native_")
     ]
-
-    return {
-        "since": _iso(since),
-        "counts": {
-            "history": len(history),
-            "pages": len(pages),
-            "files": len(files),
-            "source_docs": len(source_docs),
-            "saves": len(saves),
-            "sources": len(sources),
-        },
-        "history": history,
-        "history_has_more": history_has_more,
-        "pages": pages,
-        "files": files,
-        "source_docs": source_docs,
-        "saves": saves,
-        "sources": sources,
-    }
+    return files, source_docs, saves, sources
 
 
 async def _feed_events(
@@ -408,6 +476,7 @@ async def _feed_events(
     until: datetime | None,
     limit: int,
     wiki: str,
+    folder_id: UUID | None = None,
 ) -> tuple[list[dict], bool]:
     """The curator's event feed, oldest first. Returns (events, has_more).
 
@@ -451,7 +520,7 @@ async def _feed_events(
     `limit + 1` winners are re-joined for their transcript text."""
     pool = get_pool()
     args: list = [owner_user_id]
-    where = _feed_conditions(wiki, since, until, args)
+    where = _feed_conditions(wiki, since, until, args, folder_id)
     rows = await pool.fetch(
         f"SELECT he.session_id, he.agent_name, he.event_type, he.content, he.created_at, "
         f"eu.name AS user, eu.share_wiki AS user_share_wiki, "
@@ -482,7 +551,9 @@ async def _feed_events(
     return [dict(r) for r in rows[:limit]], has_more
 
 
-async def curator_event_backlog(owner_user_id: UUID, wiki: str, position: datetime | None) -> dict:
+async def curator_event_backlog(
+    owner_user_id: UUID, wiki: str, position: datetime | None, folder_id: UUID | None = None
+) -> dict:
     """How many events this wiki's curator feed still has left to read.
 
     The figure counts history events in the curator's feed — the material a run
@@ -518,7 +589,7 @@ async def curator_event_backlog(owner_user_id: UUID, wiki: str, position: dateti
     the whole corpus is still ahead (same reading as `has_changes_since`)."""
     pool = get_pool()
     args: list = [owner_user_id]
-    where = _feed_conditions(wiki, position, None, args)
+    where = _feed_conditions(wiki, position, None, args, folder_id)
     row = await pool.fetchrow(
         f"SELECT count(*) AS distinct_events, "
         f"coalesce(sum(group_rows), 0)::bigint AS raw_rows, "
@@ -539,7 +610,11 @@ async def curator_event_backlog(owner_user_id: UUID, wiki: str, position: dateti
 
 
 async def complete_through(
-    owner_user_id: UUID, since: datetime | None, until: datetime, wiki: str
+    owner_user_id: UUID,
+    since: datetime | None,
+    until: datetime,
+    wiki: str,
+    folder_id: UUID | None = None,
 ) -> datetime:
     """How far the curator's watermark may advance after a successful run.
 
@@ -551,8 +626,9 @@ async def complete_through(
 
     `wiki` must be the value the run's feed was read with: this decides how far
     that run's watermark may move, so a wider scope here would let the watermark
-    step past events the curator was never shown."""
-    events, has_more = await _feed_events(owner_user_id, since, until, _MAX_EVENTS, wiki)
+    step past events the curator was never shown. `folder_id` likewise must be
+    the folder the scoped feed was cut by."""
+    events, has_more = await _feed_events(owner_user_id, since, until, _MAX_EVENTS, wiki, folder_id)
     if not has_more:
         return until
     return events[-1]["created_at"] - timedelta(microseconds=1)

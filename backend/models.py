@@ -45,6 +45,9 @@ class UserProfile(BaseModel):
     use_case: str | None = None
     plan: str = "free"
     plan_intent: str | None = None
+    # Server-decided Tools + Chat visibility (TOOLS_AND_CHAT_DOMAINS); the
+    # frontend must not re-derive it from the email.
+    show_tools_and_chat: bool
 
 
 class UserUpdateRequest(BaseModel):
@@ -167,6 +170,21 @@ class FolderUpdateRequest(BaseModel):
     name: str | None = Field(None, min_length=1, max_length=255)
     parent_folder_id: UUID | None = None
     move_to_root: bool = False
+
+
+class FolderCuratorCreateRequest(BaseModel):
+    folder_id: UUID
+    model_provider: str = "local"
+    model_id: str | None = None
+
+
+class FolderCuratorUpdateRequest(BaseModel):
+    # A field absent from the body stays untouched; an explicit null clears it
+    # (schedule_cron nulls only idle a folder curator — workspace ones must
+    # keep a cadence).
+    model_provider: str | None = None
+    model_id: str | None = None
+    schedule_cron: str | None = None
 
 
 class FolderResponse(BaseModel):
