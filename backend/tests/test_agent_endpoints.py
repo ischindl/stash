@@ -13,6 +13,7 @@ the probe-first connect, the endpoint listing (live-probed models, never a
 key), the delete reference guard, and the workspace mirror.
 """
 
+import asyncio
 import json
 from uuid import UUID
 
@@ -367,6 +368,40 @@ async def test_endpoint_listing_never_carries_the_key(client: AsyncClient, monke
     (entry,) = await agent_auth.list_local_endpoints(uid)
     assert entry["models"] == []
     assert entry["probe_error"] == "connection refused"
+
+
+@pytest.mark.asyncio
+async def test_endpoint_listing_probes_all_boxes_at_once(client: AsyncClient, monkeypatch):
+    """The STAS-203 Settings view cannot pay per-box probe timeouts in series:
+    with N unreachable boxes (VPN off, box powered down) the listing must cost
+    the SLOWEST box, not the SUM — so every probe is in flight at the same
+    instant, each entry still owning its own probe_error in oldest-first order.
+    """
+    _key, uid = await _register(client)
+    for i in range(3):
+        await agent_auth.store_credential(
+            uid,
+            "local",
+            "endpoint",
+            agent_auth.local_endpoint_secret(f"{BOX_ONE}-{i}", "llama", SECRET),
+            name=f"box-{i}",
+        )
+
+    in_flight = 0
+    peak = 0
+
+    async def slow_down_probe(base_url, api_key):
+        nonlocal in_flight, peak
+        in_flight += 1
+        peak = max(peak, in_flight)
+        await asyncio.sleep(0.05)
+        in_flight -= 1
+        return {"ok": False, "http_status": None, "error_detail": f"down: {base_url}"}
+
+    monkeypatch.setattr(agent_auth, "probe_local_endpoint", slow_down_probe)
+    entries = await agent_auth.list_local_endpoints(uid)
+    assert peak == 3
+    assert [entry["probe_error"] for entry in entries] == [f"down: {BOX_ONE}-{i}" for i in range(3)]
 
 
 # --- The HTTP surface: probe-first connect, listing, delete guard, mirror ---

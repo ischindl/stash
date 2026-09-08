@@ -99,6 +99,15 @@ feed is already restricted — the agent must not ask for broader data.
 - A folder curator created with no model selection stores NULL provider/model/
   credential and resolves byte-identically to the workspace curator; PATCH with
   explicit null clears a pin back to inherit.
+- An inherited curator that opted into a digest is asymmetric by design: the
+  digest turn must be `local`, so it dials the oldest LOCAL endpoint, while its
+  writer turn resolves exactly like the workspace curator — the oldest connected
+  credential of ANY provider. The two turns may ride different providers; that
+  is not a broken pin.
+- The `models_json` override rides the default endpoint row (the oldest local
+  row a NULL pin resolves to). The save names that row by id — a `provider =
+  'local'` predicate would stamp one box's models.json onto every box — so the
+  override is a per-row shape, not a merged registry.
 - UI: model dropdown from `models_json` of the connected credential, with a
   "probe again" affordance.
 

@@ -22,6 +22,7 @@ Credential injection differs by kind:
 
 from __future__ import annotations
 
+import asyncio
 import json
 from dataclasses import dataclass, field
 from urllib.parse import urlparse
@@ -381,19 +382,23 @@ async def list_local_endpoints(user_id: UUID) -> list[dict]:
     and the model ids read LIVE from the box itself. A box that is not
     answering still appears — with models: [] and a probe_error naming why —
     so a rebooting machine reads as down, not as deleted, and one silent box
-    never blanks the others' listings. The key never travels this path: it
-    stays inside the encrypted doc and only ever knocks on its own box.
+    never blanks the others' listings. Every box is knocked on at the same
+    instant, so the listing costs the slowest box, never the sum. The key
+    never travels this path: it stays inside the encrypted doc and only ever
+    knocks on its own box.
     """
     rows = await get_pool().fetch(
         "SELECT id, name, secret_enc FROM user_agent_credentials "
         "WHERE user_id = $1 AND provider = 'local' ORDER BY created_at, id",
         user_id,
     )
+    docs = [json.loads(_decrypt(row["secret_enc"])) for row in rows]
+    probes = await asyncio.gather(
+        *(probe_local_endpoint(doc["base_url"], doc["api_key"]) for doc in docs)
+    )
     entries = []
-    for row in rows:
-        doc = json.loads(_decrypt(row["secret_enc"]))
+    for row, doc, probe in zip(rows, docs, probes):
         entry = {"id": row["id"], "name": row["name"], "base_url": doc["base_url"], "models": []}
-        probe = await probe_local_endpoint(doc["base_url"], doc["api_key"])
         if probe["ok"]:
             entry["models"] = probe["models"]
         else:
