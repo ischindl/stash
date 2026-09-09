@@ -15,12 +15,12 @@ A Skill is **not** a wrapper around every single file you happen to share. One-i
 | Share one file (publicly) | `stash upload <path> --json` | the returned `app_url` |
 | Upload a folder / project into your Stash | `stash upload <path> --json` | the returned `app_url` |
 | Publish a curated bundle as one shareable thing | `stash upload <path> --skill "<title>" --json` | the returned `url` |
-| Create a fresh skill folder | `stash skills create "<name>" --public --json` | the returned folder |
+| Create a fresh skill folder | `stash skills create "<name>" --description "<what it holds>" --public --json` | the returned folder |
 | Share a coding session (transcript + files) | `stash share` (this one), or `--session "<title>"` | the returned `url` |
 | Use a public Skill in this agent | `stash skills install <slug>` | the installed `~/.claude/skills` path |
 | Sync your Stash skills with local agent skills | `stash skills sync` | runs automatically at session start; two-way |
 
-The default of `stash upload` is **no Skill** — files land in a folder in your Stash and you hand back the `app_url`. Add `--skill "<title>"` only when you're deliberately publishing a bundle.
+The default of `stash upload <path>` is **no Skill** — files land in a folder in your Stash and you hand back the `app_url`. Add `--skill "<title>"` only when you're deliberately publishing a bundle.
 
 Run `stash prompts agent-guidance` to reprint this rule mid-session.
 
@@ -77,7 +77,7 @@ stash files edit-page <page_id> --content "new content"
 ### History (Agent Event Logs)
 ```bash
 stash sessions agents                                  # List distinct agent names
-stash sessions push "text" --agent <name> --type <event_type>
+stash sessions push "text" --session "<session_id>" --agent <name> --type <event_type>
 stash vfs "cat '/me/sessions/_index.jsonl'"            # Query events
 stash search "query"                                   # Full-text search
 ```
@@ -85,7 +85,7 @@ stash search "query"                                   # Full-text search
 ### Tables
 ```bash
 stash vfs "cat '/me/tables/_index.jsonl'"   # List tables
-stash tables search <table_id> "query"      # Search rows
+stash sql "SELECT * FROM <table> LIMIT 20"  # Query rows
 ```
 
 ### Tips

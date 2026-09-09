@@ -171,3 +171,31 @@ checked the wrong branch while forking a real `uv tool install` on the host.
   `/usr/local/bin/uv`), which a `PATH` sandbox cannot neutralise. `_run` asserts those are
   absent rather than relaxing the assertion; if that guard fires, the fix belongs in
   `find_uv()`'s candidate list.
+
+### Documented commands must parse — `test_guidance_cli_invocations.py`
+
+`test_assets_in_sync.py` proves `plugins/<agent>-plugin/` and `stashai/plugin/assets/<agent>/` are
+byte-identical. Two identical copies of a command the CLI rejects satisfy it. That is how pi shipped
+`stash share` taking a session-id positional: the parser refused it at exit 2, before auth, so pi
+agents could not share a session at all while every parity check stayed green.
+
+This guard asks the real parser instead. It resolves each documented `stash ...` form to its command
+and builds a click context, asserting the parser raises nothing — and it never invokes a command
+body, so it needs no auth, no network, and no backend. The corpus is every inline-backtick span and
+fenced-block line in the plugin guidance, its shipped mirrors, and the repo's own `CLAUDE.md`. Cursor
+ships its guidance as `.mdc`, so the corpus takes that extension too; a `.md`-only glob leaves an
+agent's documented forms unguarded, which is the same blind spot that shipped the pi bug.
+
+Two ways this file goes green while checking nothing, both asserted rather than assumed:
+
+- **The group walk has to descend.** A group defers subcommand resolution until invoke, so asking
+  only the root command to judge `stash skills create …` accepts nearly anything. The nested
+  rejection assertion and `EXPECTED_GUIDANCE_FILES` fail if the walk or the corpus shrinks.
+- **Usage errors are matched by message, not class.** Past its pin, `typer` vendors a private click
+  (see [Environment integrity](#environment-integrity)), so its usage error is not a
+  `click.exceptions.UsageError`. An `except` naming the click class stops matching and every form
+  passes; both spellings report through `format_message()`, which is what the guard catches.
+
+The fix goes in the document, never the parser: when a command gains a required option, every
+guidance file that predates it is wrong. Restoring a rejected form and watching this file name both
+the document and the parser's own reason is the check that the guard still bites.
