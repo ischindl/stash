@@ -197,6 +197,17 @@ everything before it is captured in git history (`git log`), not here.
   `stash status` / `stash settings --json` report Pi upload health like every
   other agent. The restore is guarded by merge-revert and installer
   call-shape tests so a future careless merge fails the suite loudly.
+- Pi's instruction for sharing a coding session was a command that cannot run:
+  it passed a session id as a bare positional, and `stash share` accepts none,
+  so the CLI refused it before authentication and a Pi agent could not share a
+  session at all. Pi now teaches the same supported form the other agents ship.
+  The sweep that found it corrected guidance that had fallen behind the CLI
+  elsewhere too: `stash skills create` now shows its required `--description`,
+  `stash sessions push` its required `--session`, `stash upload` is written
+  with its path, and table rows are queried with `stash sql` instead of a
+  `stash tables search` that never existed. Every `stash` command documented in
+  the shipped agent guidance is now parsed in CI against the real CLI parser,
+  so instructions can no longer drift out of sync with the tool unnoticed.
 
 ## v0
 
