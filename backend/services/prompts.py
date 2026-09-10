@@ -163,19 +163,97 @@ personal Stash scope and is not shared with their team.
 # ---------------------------------------------------------------------------
 
 
-def render_curator_prompt(memory_folder_id: str, since: str | None) -> str:
+def curator_window(since: str | None) -> str:
+    """How a run names its read window — same words for both phases."""
+    return (
+        f"the changes since {since}"
+        if since
+        else "the full history (this is the first run — bootstrap the wiki)"
+    )
+
+
+def _digest_report(extracts: str) -> str:
+    """The two-phase work-set section: the digest model's report, verbatim."""
+    return (
+        "\n## Digest report (your complete work set)\n"
+        "A faster digest curator read the raw delta end to end and distilled it. "
+        "Curate the wiki from this report; open sources with `stash search` or "
+        "read commands only when an extract needs the material behind it.\n\n"
+        f"{extracts.strip()}\n"
+    )
+
+
+def render_digest_prompt(changes_cmd: str, window: str) -> str:
+    """Phase one of a two-phase curator run: the fast model's whole job is to
+    READ. It runs the feed command, absorbs every item, and reports extracts
+    for the wiki writer — it never touches the wiki or any page."""
+    return f"""# Fast Read — Digest the Curation Delta
+
+Another curator maintains the wiki. Its model is strong but slow, so you read
+its work set first: {window}. Reading is your entire job — do not write, edit,
+or delete any page, file, or folder; your final message is your only output.
+
+- Run `{changes_cmd}` — this IS your entire work set; do not scan anything
+  else. Start your final message with `history_has_more: true` if the output
+  says so, else `history_has_more: false`.
+- Read every history event, changed page, new file, changed source document,
+  and save in the delta. Keep each item's `folder` attribution. An event
+  carrying a `user` is External Multiplayer material — mark it
+  `[external-multiplayer]` in your report so the writer excludes it from
+  internal pages.
+
+Report extracts for the wiki writer:
+- Under 700 words total; bullets, not prose.
+- One block per topic, entity, or decision that deserves a wiki page or
+  updates an existing one: every durable fact — exact dates, names, numbers,
+  decisions, artifacts — each cited with the session id, page id, or file
+  path it came from.
+- One final `Ephemera:` block: one line per item that deserves no page, so
+  the writer can record it as skipped without rereading raw transcripts.
+- Keep specifics exact; never generalize away a name, date, or number. No
+  advice, no commentary, no restating these instructions.
+
+Begin now.
+"""
+
+
+def curator_changes_cmd(since: str | None, project_folder_id: str | None = None) -> str:
+    """The feed command a curator run reads. One definition: the prompt and the
+    digest prompt must order the exact same work set."""
+    args = []
+    if project_folder_id:
+        args.append(f"--folder {project_folder_id}")
+    if since:
+        args.append(f"--since {since}")
+    return "stash changes " + " ".join(args + ["--json"])
+
+
+def render_curator_prompt(
+    memory_folder_id: str, since: str | None, extracts: str | None = None
+) -> str:
     """The curation instruction the scheduled Memory-curator agent runs headless.
 
     Structured on Karpathy's LLM-wiki pattern: raw sources (the user's stash
     activity) are immutable inputs, the wiki under the Memory folder is the
     compiled, compounding artifact, and this prompt is the schema — page
-    types, linking rules, and the ingest + lint workflows."""
-    window = (
-        f"the changes since {since}"
-        if since
-        else "the full history (this is the first run — bootstrap the wiki)"
-    )
-    changes_cmd = f"stash changes --since {since} --json" if since else "stash changes --json"
+    types, linking rules, and the ingest + lint workflows.
+
+    `extracts` is the digest report of a two-phase run: when present the
+    raw-feed command was already read by the digest model, and this pass
+    curates from the report instead of the delta."""
+    window = curator_window(since)
+    changes_cmd = curator_changes_cmd(since)
+    if extracts is None:
+        delta_bullet = f"""`{changes_cmd}` — the delta to curate: recent
+  history/chats, changed pages, new files, changed source documents (docs
+  edited in a connected Drive folder), new saves (clips and X/Instagram
+  saves), and connected sources. This IS your work set; do not re-scan the
+  whole corpus."""
+    else:
+        delta_bullet = """The digest pass already read this run's delta for you —
+  its report is below. Treat the report as the delta and do not run
+  `stash changes`; `history_has_more` is reported with it."""
+    digest_report = _digest_report(extracts) if extracts is not None else ""
     return f"""# Sleep Time Compute — Memory Wiki Curation
 
 You maintain the user's **Memory wiki**: a persistent, compounding knowledge
@@ -188,11 +266,7 @@ fold it into the wiki under the Memory folder (id `{memory_folder_id}`).
 Use the `stash` CLI for everything — every subcommand supports `--json`.
 
 ## Read the inputs
-- `{changes_cmd}` — the delta to curate: recent
-  history/chats, changed pages, new files, changed source documents (docs
-  edited in a connected Drive folder), new saves (clips and X/Instagram
-  saves), and connected sources. This IS your work set; do not re-scan the
-  whole corpus.
+- {delta_bullet}
 - `history_has_more: true` means the history overflowed this run's cap. The
   remainder is already queued for your next run (the watermark only advances
   through what you were shown) — curate what's present, don't try to page.
@@ -211,7 +285,7 @@ Use the `stash` CLI for everything — every subcommand supports `--json`.
 - `stash ls /memory --json` and `stash read <page_id>` to inspect existing
   wiki pages. `stash search "<topic>" --json` to pull related source/file
   context on demand.
-
+{digest_report}
 ## Wiki anatomy (under the Memory folder)
 - **`Memory Wiki`** — the root index page: a catalog of every page with a
   one-line summary, grouped by category. Update it whenever pages change.
@@ -313,22 +387,33 @@ Begin now.
 
 
 def render_folder_curator_prompt(
-    project_folder_id: str, wiki_folder_id: str, folder_name: str, since: str | None
+    project_folder_id: str,
+    wiki_folder_id: str,
+    folder_name: str,
+    since: str | None,
+    extracts: str | None = None,
 ) -> str:
     """The curation instruction a folder-bound curator runs headless.
 
     Its whole world is one project: sessions filed under `project_folder_id`
     are the input, the pages of `wiki_folder_id` (the project's file-tree wiki
     home) the compiled artifact — the same wiki discipline as the Memory
-    curator, applied to one project instead of the whole workspace."""
-    window = (
-        f"the changes since {since}"
-        if since
-        else "the full history (this is the first run — bootstrap the wiki)"
-    )
-    changes_cmd = f"stash changes --folder {project_folder_id} --json"
-    if since:
-        changes_cmd = f"stash changes --folder {project_folder_id} --since {since} --json"
+    curator, applied to one project instead of the whole workspace.
+
+    With `extracts` (a two-phase run) the raw feed was already read by the
+    digest model and this pass curates from its report."""
+    window = curator_window(since)
+    changes_cmd = curator_changes_cmd(since, project_folder_id)
+    if extracts is None:
+        delta_bullet = f"""`{changes_cmd}` — the delta to curate. This IS your
+  entire work set: the feed carries only the project's sessions. There is
+  nothing outside the project in it, and nothing outside the project is
+  yours to curate."""
+    else:
+        delta_bullet = """The digest pass already read this run's scoped delta for you
+  — its report is below. Treat the report as the entire work set and do not
+  run `stash changes`; the feed carries only the project's sessions."""
+    digest_report = _digest_report(extracts) if extracts is not None else ""
     return f"""# Sleep Time Compute — Project Folder Wiki Curation
 
 You maintain the wiki of the project **"{folder_name}"**. Its sessions are
@@ -342,13 +427,11 @@ transcripts. Read {window} and fold it into the wiki.
 Use the `stash` CLI for everything — every subcommand supports `--json`.
 
 ## Read the inputs
-- `{changes_cmd}` — the delta to curate. This IS your entire work set: the
-  feed carries only the project's sessions. There is nothing outside the
-  project in it, and nothing outside the project is yours to curate.
+- {delta_bullet}
 - `history_has_more: true` means the history overflowed this run's cap. The
   remainder is already queued for your next run (the watermark only advances
   through what you were shown) — curate what is present, do not try to page.
-
+{digest_report}
 ## Wiki anatomy (the file-tree folder `{wiki_folder_id}`)
 - **`Wiki Index`** — the root page: a catalog of every page with a one-line
   summary, grouped by topic. Update it whenever pages change.

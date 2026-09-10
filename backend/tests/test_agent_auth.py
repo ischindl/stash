@@ -141,14 +141,16 @@ def test_openrouter_rejects_oauth():
 
     with pytest.raises(ValueError):
         asyncio.get_event_loop().run_until_complete(
-            agent_auth.store_credential(uuid.uuid4(), "openrouter", "oauth", "x")
+            agent_auth.store_credential(uuid.uuid4(), "openrouter", "oauth", "x", name="openrouter")
         )
 
 
 @pytest.mark.asyncio
 async def test_endpoint_kind_rejected_for_non_local_provider():
     with pytest.raises(ValueError):
-        await agent_auth.store_credential(uuid.uuid4(), "openrouter", "endpoint", "http://x")
+        await agent_auth.store_credential(
+            uuid.uuid4(), "openrouter", "endpoint", "http://x", name="x"
+        )
 
 
 @pytest.mark.asyncio

@@ -114,7 +114,7 @@ async def test_finish_exchanges_and_stores(monkeypatch):
 
     stored = {}
 
-    async def fake_store(user_id, provider, kind, secret):
+    async def fake_store(user_id, provider, kind, secret, name):
         stored.update(user_id=user_id, provider=provider, kind=kind, secret=secret)
 
     monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)

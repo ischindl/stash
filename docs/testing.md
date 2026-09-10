@@ -39,6 +39,7 @@ TEST_DATABASE_URL=postgresql://stash:stash@localhost:5432/stash_test \
 | `test_first_day_curator.py` | First-day curator tick, and the ingest rewind re-opening the cursor that imported history predates |
 | `test_agent_schedule_alerts.py` | Beat dispatch, designed skips, and the stale-watermark / failing-curator alerts |
 | `test_developer_platform.py` | Developer console curator run and backfill dispatch, and the ingest rewind staying inside the wiki whose feed can read the events |
+| `test_agent_endpoints.py` | Multiple local model endpoints per user: connects APPEND named rows, the default is the oldest box, `agents.credential_id` pins one box for every turn of a run (writer and digest dial the same `base_url`), the endpoint API probes before storing and refuses to delete a box a curator still points at |
 | `test_migrations.py` | Alembic upgrade/history smoke tests |
 | `test_startup_logging.py` | App startup owns root logging: one INFO handler on stderr, and the migration runner must not disable app loggers |
 | `test_collab.py` | Sharing, copy, and collaboration on user-scoped objects |

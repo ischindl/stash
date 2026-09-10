@@ -15,12 +15,14 @@ that steers them.
 """
 
 from datetime import UTC, datetime, timedelta
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
+from cryptography.fernet import Fernet
 from httpx import AsyncClient
 
-from backend.services import agent_service, curation_service, sprite_agent_service
+from backend.config import settings
+from backend.services import agent_auth, agent_service, curation_service, sprite_agent_service
 
 from .test_curator import _auth, _push_events, _register
 
@@ -417,3 +419,478 @@ async def test_filing_old_sessions_reopens_the_folder_position(client: AsyncClie
     assert wm == older - timedelta(microseconds=1)
     backlog = await curation_service.curator_event_backlog(uid, INTERNAL, wm, UUID(rozvrh))
     assert backlog["distinct_events"] == 2  # both the filed history and the fresh event
+
+
+@pytest.mark.asyncio
+async def test_digest_model_travels_with_the_curator(client: AsyncClient, _db_pool, pool):
+    """The two-phase knobs are configuration, not fate: set at create, retuned
+    by PATCH, cleared by an explicit null — and never a nonsensical pair
+    (a digest model needs a digest provider, and a folder curator's digest
+    lives on the self-hosted endpoint like its main model)."""
+    key, uid = await _register(client)
+    rozvrh = await _folder(client, key, "Rozvrh")
+    await _file_session(client, key, uid, pool, "conv-rozvrh", rozvrh, "seminars on tuesday")
+
+    r = await client.post(
+        "/api/v1/me/curators",
+        json={
+            "folder_id": rozvrh,
+            "model_provider": "local",
+            "model_id": "qwen",
+            "digest_provider": "local",
+            "digest_model_id": "qwen-fast",
+        },
+        headers=_auth(key),
+    )
+    assert r.status_code == 201, r.text
+    curator = r.json()["curator"]
+    assert curator["digest_provider"] == "local"
+    assert curator["digest_model_id"] == "qwen-fast"
+
+    r = await client.patch(
+        f"/api/v1/me/curators/{curator['id']}",
+        json={"digest_model_id": "other-fast"},
+        headers=_auth(key),
+    )
+    assert r.status_code == 200
+    assert r.json()["curator"]["digest_model_id"] == "other-fast"
+    assert r.json()["curator"]["digest_provider"] == "local"  # absent, untouched
+
+    # An explicit null drops the curator back to single-phase.
+    r = await client.patch(
+        f"/api/v1/me/curators/{curator['id']}",
+        json={"digest_provider": None},
+        headers=_auth(key),
+    )
+    assert r.status_code == 200
+    assert r.json()["curator"]["digest_provider"] is None
+
+    # Nonsensical pairs are refused at both doors.
+    r = await client.post(
+        "/api/v1/me/curators",
+        json={"folder_id": rozvrh, "digest_model_id": "orphan"},
+        headers=_auth(key),
+    )
+    assert r.status_code == 400
+    r = await client.post(
+        "/api/v1/me/curators",
+        json={"folder_id": rozvrh, "digest_provider": "anthropic"},
+        headers=_auth(key),
+    )
+    assert r.status_code == 400
+    await client.patch(
+        f"/api/v1/me/curators/{curator['id']}",
+        json={"digest_provider": None},
+        headers=_auth(key),
+    )
+    r = await client.patch(
+        f"/api/v1/me/curators/{curator['id']}",
+        json={"digest_provider": "anthropic"},
+        headers=_auth(key),
+    )
+    assert r.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_external_curator_refuses_a_second_model(client: AsyncClient, _db_pool):
+    """The external feed is end-user material: a digest model would be a
+    second processor of customer data. The API says no."""
+    key, uid = await _register(client)
+    internal = await agent_service.get_or_create_curator(uid)
+    await _db_pool.execute(
+        "UPDATE agents SET curator_wiki = 'external' WHERE id = $1", UUID(internal["id"])
+    )
+    r = await client.patch(
+        f"/api/v1/me/curators/{internal['id']}",
+        json={"digest_provider": "local"},
+        headers=_auth(key),
+    )
+    assert r.status_code == 400
+
+    # The workspace (internal, unbound) curator may use the hosters' providers.
+    await _db_pool.execute(
+        "UPDATE agents SET curator_wiki = 'internal' WHERE id = $1", UUID(internal["id"])
+    )
+    r = await client.patch(
+        f"/api/v1/me/curators/{internal['id']}",
+        json={"digest_provider": "anthropic"},
+        headers=_auth(key),
+    )
+    assert r.status_code == 200
+    assert r.json()["curator"]["digest_provider"] == "anthropic"
+
+
+@pytest.mark.asyncio
+async def test_two_phase_run_digests_then_writes_from_the_report(
+    client: AsyncClient, _db_pool, pool, monkeypatch
+):
+    """The run the founder asked for: a fast model reads the scoped feed and
+    reports extracts, then the curator's own model writes the wiki from the
+    report — never rerunning the feed command itself. The digest turn lands in
+    its own `agent-curate-` session so its transcript stays out of the feed."""
+
+    async def fake_run_chat(user_id, owner_name, uid, session_id, message, **kwargs):
+        calls.append((session_id, message, kwargs))
+        return "EXTRACT: seminars moved to thursday (conv-rozvrh)" if len(calls) == 1 else "LOG"
+
+    calls: list = []
+    monkeypatch.setattr(sprite_agent_service, "run_chat", fake_run_chat)
+
+    key, uid = await _register(client)
+    rozvrh = await _folder(client, key, "Rozvrh")
+    await _file_session(client, key, uid, pool, "conv-rozvrh", rozvrh, "seminars on tuesday")
+    curator = await agent_service.create_folder_curator(
+        uid, UUID(rozvrh), "local", "qwen", digest_provider="local", digest_model_id="qwen-fast"
+    )
+    agent = await agent_service.get_curator_by_id(UUID(curator["id"]))
+
+    result = await sprite_agent_service.run_scheduled(agent, "20260102030405")
+    assert result == "LOG"
+
+    assert len(calls) == 2
+    digest_session, digest_prompt, digest_kwargs = calls[0]
+    writer_session, writer_prompt, writer_kwargs = calls[1]
+
+    assert digest_session.startswith(f"agent-curate-{curator['id']}-")
+    assert digest_session.endswith("-digest")
+    assert not writer_session.endswith("-digest")
+    assert digest_kwargs["model_id"] == "qwen-fast"
+    assert writer_kwargs["model_id"] == "qwen"
+
+    assert "Digest the Curation Delta" in digest_prompt
+    assert f"stash changes --folder {rozvrh}" in digest_prompt  # the same feed, fast model
+
+    assert "## Digest report" in writer_prompt
+    assert "EXTRACT: seminars moved to thursday" in writer_prompt
+    assert f"stash changes --folder {rozvrh}" not in writer_prompt  # no rereading
+
+
+@pytest.mark.asyncio
+async def test_empty_digest_fails_the_run_before_the_writer(
+    client: AsyncClient, _db_pool, pool, monkeypatch
+):
+    """A digest that yields nothing must fail the run — writing a wiki from an
+    empty report would curate nothing and advance the watermark over
+    everything, silently dropping the backlog."""
+
+    async def fake_run_chat(user_id, owner_name, uid, session_id, message, **kwargs):
+        calls.append(session_id)
+        return "   "
+
+    calls: list = []
+    monkeypatch.setattr(sprite_agent_service, "run_chat", fake_run_chat)
+
+    key, uid = await _register(client)
+    rozvrh = await _folder(client, key, "Rozvrh")
+    await _file_session(client, key, uid, pool, "conv-rozvrh", rozvrh, "seminars on tuesday")
+    curator = await agent_service.create_folder_curator(
+        uid, UUID(rozvrh), "local", "qwen", digest_provider="local", digest_model_id="qwen-fast"
+    )
+    agent = await agent_service.get_curator_by_id(UUID(curator["id"]))
+
+    with pytest.raises(RuntimeError, match="no extracts"):
+        await sprite_agent_service.run_scheduled(agent, "20260102030406")
+    assert len(calls) == 1  # the writer never ran
+
+
+@pytest.mark.asyncio
+async def test_folder_curator_without_model_selection_inherits(client: AsyncClient, _db_pool, pool):
+    """Scope B's promise: a curator created with no model selection stores
+    NULL/NULL/NULL — the same row shape the workspace curators carry — so its
+    turns resolve on the shared path (the default curator model), not through
+    a folder-curator branch. A selection without a provider is refused: the
+    row would carry a pin that decides nothing and silently reads as someone
+    having un-inherited it."""
+    key, uid = await _register(client)
+    rozvrh = await _folder(client, key, "Rozvrh")
+
+    r = await client.post("/api/v1/me/curators", json={"folder_id": rozvrh}, headers=_auth(key))
+    assert r.status_code == 201, r.text
+    curator = r.json()["curator"]
+    assert curator["model_provider"] is None
+    assert curator["model_id"] is None
+    assert curator["credential_id"] is None
+    stored = await pool.fetchrow(
+        "SELECT model_provider, model_id, credential_id FROM agents WHERE id = $1",
+        UUID(curator["id"]),
+    )
+    assert stored["model_provider"] is None
+    assert stored["model_id"] is None
+    assert stored["credential_id"] is None
+
+    # The provisioned workspace curator carries the identical shape — this is
+    # the same resolution path, demonstrably not a new special case.
+    workspace = await agent_service.get_or_create_curator(uid)
+    assert workspace["model_provider"] is None
+
+    # A dangling selection is refused at PATCH time too, and nothing lands.
+    r = await client.patch(
+        f"/api/v1/me/curators/{curator['id']}", json={"model_id": "qwen"}, headers=_auth(key)
+    )
+    assert r.status_code == 400
+    r = await client.patch(
+        f"/api/v1/me/curators/{curator['id']}",
+        json={"credential_id": str(uuid4())},
+        headers=_auth(key),
+    )
+    assert r.status_code == 400
+    stored = await pool.fetchrow(
+        "SELECT model_provider, model_id, credential_id FROM agents WHERE id = $1",
+        UUID(curator["id"]),
+    )
+    assert stored["model_id"] is None
+    assert stored["credential_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_folder_curator_pin_and_digest_round_trip(
+    client: AsyncClient, _db_pool, pool, monkeypatch
+):
+    """Explicit local + credential_id + digest fields: the pin survives later
+    PATCHes (digest retunes must not silently drop the curator's box), and
+    moving the pin moves the box."""
+    monkeypatch.setattr(settings, "INTEGRATIONS_ENCRYPTION_KEY", Fernet.generate_key().decode())
+    key, uid = await _register(client)
+    rozvrh = await _folder(client, key, "Rozvrh")
+    box_a = await agent_auth.store_credential(
+        uid,
+        "local",
+        "endpoint",
+        agent_auth.local_endpoint_secret("http://box-a:11434/v1", "llama"),
+        name="box-a",
+    )
+    box_b = await agent_auth.store_credential(
+        uid,
+        "local",
+        "endpoint",
+        agent_auth.local_endpoint_secret("http://box-b:11434/v1", "qwen"),
+        name="box-b",
+    )
+
+    r = await client.post(
+        "/api/v1/me/curators",
+        json={
+            "folder_id": rozvrh,
+            "model_provider": "local",
+            "model_id": "llama",
+            "credential_id": str(box_a),
+        },
+        headers=_auth(key),
+    )
+    assert r.status_code == 201, r.text
+    curator = r.json()["curator"]
+    assert curator["credential_id"] == str(box_a)
+    assert curator["model_id"] == "llama"
+
+    # Retuning the digest leaves the endpoint pin exactly where it was.
+    r = await client.patch(
+        f"/api/v1/me/curators/{curator['id']}",
+        json={"digest_provider": "local", "digest_model_id": "cheap"},
+        headers=_auth(key),
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["curator"]["credential_id"] == str(box_a)
+    assert r.json()["curator"]["digest_model_id"] == "cheap"
+
+    # Moving the pin moves the box — the id, not the model name, decides.
+    r = await client.patch(
+        f"/api/v1/me/curators/{curator['id']}",
+        json={"credential_id": str(box_b)},
+        headers=_auth(key),
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["curator"]["credential_id"] == str(box_b)
+
+
+@pytest.mark.asyncio
+async def test_folder_curator_refuses_dangling_and_foreign_pins(
+    client: AsyncClient, _db_pool, monkeypatch
+):
+    """Create-time refusals: credential_id without a model_provider, and a pin
+    pointing at someone else's endpoint — saving either would only blow up at
+    the next run, when the cause is hardest to see."""
+    monkeypatch.setattr(settings, "INTEGRATIONS_ENCRYPTION_KEY", Fernet.generate_key().decode())
+    key, uid = await _register(client)
+    other_key, other_uid = await _register(client)
+    rozvrh = await _folder(client, key, "Rozvrh")
+    foreign = await agent_auth.store_credential(
+        other_uid,
+        "local",
+        "endpoint",
+        agent_auth.local_endpoint_secret("http://not-yours:11434/v1", "llama"),
+        name="not-yours",
+    )
+
+    r = await client.post(
+        "/api/v1/me/curators",
+        json={"folder_id": rozvrh, "credential_id": str(foreign)},
+        headers=_auth(key),
+    )
+    assert r.status_code == 400  # dangling AND foreign
+
+    r = await client.post(
+        "/api/v1/me/curators",
+        json={"folder_id": rozvrh, "model_provider": "local", "credential_id": str(foreign)},
+        headers=_auth(key),
+    )
+    assert r.status_code == 400  # foreign, even with a provider
+
+    r = await client.post(
+        "/api/v1/me/curators",
+        json={"folder_id": rozvrh, "model_id": "qwen"},
+        headers=_auth(key),
+    )
+    assert r.status_code == 400  # model_id without a provider
+
+    # Nothing half-saved: no curator row exists for the folder.
+    listed = await client.get("/api/v1/me/curators", headers=_auth(key))
+    assert listed.status_code == 200
+    assert all(c["curator_folder_id"] is None for c in listed.json()["curators"])
+
+
+async def _run_once_auth(uid, agent: dict, monkeypatch) -> agent_auth.RunAuth:
+    """The RunAuth one scheduled run resolves, captured from the run itself.
+
+    The resolver is spyred so the turn never executes: the spy records the
+    selection the run actually passed and aborts the run the way a user with no
+    credential would. A digest-less curator must make exactly one resolve — a
+    second lookup would mean the plumbing was still paying for a phase the row
+    never asked for. The recorded selection is then replayed through the REAL
+    resolver, so the assertion lands on RunAuth bytes and not on kwargs."""
+    calls: list[dict] = []
+    real = agent_auth.resolve
+
+    async def spy(user_id, prefer_provider=None, model_id=None, credential_id=None):
+        calls.append(
+            {
+                "prefer_provider": prefer_provider,
+                "model_id": model_id,
+                "credential_id": credential_id,
+            }
+        )
+        raise agent_auth.NeedsAuth
+
+    monkeypatch.setattr(agent_auth, "resolve", spy)
+    with pytest.raises(sprite_agent_service.NeedsAuth):
+        await sprite_agent_service.run_scheduled(agent, "202601011200")
+    monkeypatch.setattr(agent_auth, "resolve", real)
+    assert len(calls) == 1  # digest NULL: one phase, one resolve
+    return await agent_auth.resolve(uid, **calls[0])
+
+
+@pytest.mark.asyncio
+async def test_an_inherited_curator_resolves_byte_equal_to_the_workspace_curator(
+    client: AsyncClient, pool, monkeypatch
+):
+    """The founder's ruling as an assertion: a folder curator created with no
+    model selection carries NULL/NULL/NULL — the workspace curator's own row
+    shape — so its run must produce the identical RunAuth: harness, env, files,
+    endpoint and model all equal. Both are captured through the scheduled-run
+    entry point, so a folder-curator branch reintroduced later breaks here
+    rather than silently shipping a second resolution path."""
+    monkeypatch.setattr(settings, "AGENT_EXEC_MODE", "sprites")
+    monkeypatch.setattr(settings, "INTEGRATIONS_ENCRYPTION_KEY", Fernet.generate_key().decode())
+    key, uid = await _register(client)
+    rozvrh = await _folder(client, key, "Rozvrh")
+    r = await client.post("/api/v1/me/curators", json={"folder_id": rozvrh}, headers=_auth(key))
+    assert r.status_code == 201, r.text
+    inherited = await agent_service.get_curator_by_id(UUID(r.json()["curator"]["id"]))
+    assert (inherited["model_provider"], inherited["model_id"], inherited["credential_id"]) == (
+        None,
+        None,
+        None,
+    )
+    workspace = await agent_service.get_or_create_curator(uid)
+
+    await agent_auth.store_credential(
+        uid,
+        "local",
+        "endpoint",
+        agent_auth.local_endpoint_secret("http://box-one:11434/v1", "llama"),
+        name="box-one",
+    )
+
+    inherited_auth = await _run_once_auth(uid, inherited, monkeypatch)
+    workspace_auth = await _run_once_auth(uid, workspace, monkeypatch)
+    assert inherited_auth == workspace_auth
+    assert inherited_auth.harness is workspace_auth.harness
+    assert inherited_auth.endpoint == "http://box-one:11434/v1"
+
+    # An anthropic key aged to be the OLDEST credential wins for both rows: the
+    # inherited curator special-cases no provider, least of all the self-hosted
+    # endpoint folder curation was dogfooded against.
+    anthropic = await agent_auth.store_credential(
+        uid, "anthropic", "api_key", "sk-ant-test", name="anthropic"
+    )
+    await pool.execute(
+        "UPDATE user_agent_credentials SET created_at = created_at - interval '1 day' "
+        "WHERE id = $1",
+        anthropic,
+    )
+
+    inherited_auth = await _run_once_auth(uid, inherited, monkeypatch)
+    workspace_auth = await _run_once_auth(uid, workspace, monkeypatch)
+    assert inherited_auth == workspace_auth
+    assert inherited_auth.endpoint is None  # a key provider dials no box
+    assert inherited_auth.env == {"ANTHROPIC_API_KEY": "sk-ant-test"}
+
+
+@pytest.mark.asyncio
+async def test_patching_every_selection_away_returns_a_curator_to_inheritance(
+    client: AsyncClient, monkeypatch
+):
+    """The founder's escape hatch is a round trip, not a theory: pin a folder
+    curator to one box and one model, then PATCH explicit nulls over all three
+    and the run resolves exactly like the workspace curator's again. The digest
+    gate survives the clear — a folder curator's second model still has to live
+    on the local endpoint."""
+    monkeypatch.setattr(settings, "AGENT_EXEC_MODE", "sprites")
+    monkeypatch.setattr(settings, "INTEGRATIONS_ENCRYPTION_KEY", Fernet.generate_key().decode())
+    key, uid = await _register(client)
+    box = await agent_auth.store_credential(
+        uid,
+        "local",
+        "endpoint",
+        agent_auth.local_endpoint_secret("http://box-one:11434/v1", "llama"),
+        name="box-one",
+    )
+    rozvrh = await _folder(client, key, "Rozvrh")
+    r = await client.post(
+        "/api/v1/me/curators",
+        json={
+            "folder_id": rozvrh,
+            "model_provider": "local",
+            "model_id": "qwen",
+            "credential_id": str(box),
+        },
+        headers=_auth(key),
+    )
+    assert r.status_code == 201, r.text
+    curator_id = r.json()["curator"]["id"]
+
+    r = await client.patch(
+        f"/api/v1/me/curators/{curator_id}",
+        json={"model_provider": None, "model_id": None, "credential_id": None},
+        headers=_auth(key),
+    )
+    assert r.status_code == 200, r.text
+    cleared = r.json()["curator"]
+    assert (cleared["model_provider"], cleared["model_id"], cleared["credential_id"]) == (
+        None,
+        None,
+        None,
+    )
+
+    agent = await agent_service.get_curator_by_id(UUID(curator_id))
+    workspace = await agent_service.get_or_create_curator(uid)
+    assert await _run_once_auth(uid, agent, monkeypatch) == await _run_once_auth(
+        uid, workspace, monkeypatch
+    )
+
+    # Clearing the selection does not loosen the digest rule.
+    r = await client.patch(
+        f"/api/v1/me/curators/{curator_id}",
+        json={"digest_provider": "anthropic"},
+        headers=_auth(key),
+    )
+    assert r.status_code == 400

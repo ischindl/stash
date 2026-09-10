@@ -149,7 +149,7 @@ async def finish(user_id: UUID, provider: str, pasted: str, state: str) -> None:
 
     token = await _exchange(cfg, code, code_state or state, payload["v"])
     secret = _credential_blob(cfg, token)
-    await agent_auth.store_credential(user_id, provider, "oauth", secret)
+    await agent_auth.store_credential(user_id, provider, "oauth", secret, name=provider)
 
 
 async def _exchange(cfg: OAuthProvider, code: str, state: str, verifier: str) -> dict:

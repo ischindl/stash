@@ -190,7 +190,12 @@ async def _maybe_dispatch_first_day_run(scope_user_id: UUID, agent: dict, now: d
     ):
         return
     try:
-        await agent_auth.resolve(scope_user_id, agent["model_provider"], agent.get("model_id"))
+        await agent_auth.resolve(
+            scope_user_id,
+            agent["model_provider"],
+            model_id=agent.get("model_id"),
+            credential_id=agent.get("credential_id"),
+        )
     except (agent_auth.NeedsAuth, agent_auth.ProviderNotConfigured):
         return
     if not await curation_service.has_changes_since(
@@ -234,7 +239,12 @@ async def _run_due() -> int:
             continue
         # No runnable credential (unconnected free user) → nothing can run.
         try:
-            await agent_auth.resolve(user_id, agent["model_provider"], agent.get("model_id"))
+            await agent_auth.resolve(
+                user_id,
+                agent["model_provider"],
+                model_id=agent.get("model_id"),
+                credential_id=agent.get("credential_id"),
+            )
         except (agent_auth.NeedsAuth, agent_auth.ProviderNotConfigured):
             logger.info("agent schedule: no credential for agent %s — skipping", agent["id"])
             await agent_service.mark_run_skipped(agent["id"], "no_credential")

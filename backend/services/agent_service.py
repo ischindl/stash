@@ -15,6 +15,7 @@ from uuid import UUID
 from fastapi import HTTPException
 
 from ..database import get_pool
+from . import agent_auth
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +23,8 @@ _COLUMNS = (
     "id, user_id, name, model_provider, system_prompt, run_mode, "
     "schedule_cron, schedule_prompt, is_default, is_curator, slack_bound, "
     "telegram_bound, last_run_at, last_run_error, last_run_outcome, curated_through, "
-    "curator_wiki, curator_folder_id, model_id, month_run_count, month_run_anchor, created_at"
+    "curator_wiki, curator_folder_id, model_id, credential_id, digest_provider, digest_model_id, "
+    "month_run_count, month_run_anchor, created_at"
 )
 
 
@@ -181,7 +183,13 @@ async def list_curators(user_id: UUID) -> list[dict]:
 
 
 async def create_folder_curator(
-    user_id: UUID, folder_id: UUID, model_provider: str, model_id: str | None = None
+    user_id: UUID,
+    folder_id: UUID,
+    model_provider: str | None = None,
+    model_id: str | None = None,
+    credential_id: UUID | None = None,
+    digest_provider: str | None = None,
+    digest_model_id: str | None = None,
 ) -> dict:
     """A curator bound to one session folder: it reads that folder's feed and
     writes that folder's wiki.
@@ -189,8 +197,13 @@ async def create_folder_curator(
     Idempotent like the workspace curators — the per-scope unique index absorbs
     the race. Its watermark seeds at the folder's first event; a folder with no
     events yet seeds NULL, which reads as "never curated" and bootstraps from
-    whatever appears. The local provider is required while folder scoping is
-    dogfooded against a self-hosted endpoint.
+    whatever appears.
+
+    With no model selection the curator stores NULL/NULL/NULL and resolves
+    exactly like the workspace curator — the same resolver, the oldest connected
+    credential, no folder-curator branch. An explicit selection is restricted to
+    the local provider while folder scoping is dogfooded against a self-hosted
+    endpoint, and may pin one of the user's endpoints by id.
 
     The project's wiki home is a file-tree folder (pages only hang off
     `folders`): the first curator a project gets opens it under the project's
@@ -209,8 +222,15 @@ async def create_folder_curator(
     )
     if folder is None:
         raise HTTPException(status_code=404, detail="folder not found")
-    if model_provider != "local":
+    if model_provider is not None and model_provider != "local":
         raise HTTPException(status_code=400, detail="folder curators run on the local provider")
+    await _validate_pin(user_id, model_provider, model_id, credential_id)
+    if digest_model_id is not None and digest_provider is None:
+        raise HTTPException(status_code=400, detail="digest_model_id needs a digest_provider")
+    if digest_provider is not None and digest_provider != "local":
+        raise HTTPException(
+            status_code=400, detail="folder curator digest models run on the local provider"
+        )
     wiki_folder_id = folder["wiki_folder_id"]
     if wiki_folder_id is None:
         home = await pool.fetchrow(
@@ -229,9 +249,11 @@ async def create_folder_curator(
         f"""
         INSERT INTO agents (user_id, name, run_mode, schedule_cron, is_curator,
                             curator_wiki, curator_folder_id, model_provider, model_id,
+                            credential_id, digest_provider, digest_model_id,
                             last_run_at, curated_through)
         SELECT $1, 'Wiki curator — ' || $4, 'scheduled', $2, true,
                'internal', $3, $5, $6,
+               $7, $8, $9,
                now(),
                (SELECT min(he.created_at)
                 FROM history_events he
@@ -250,6 +272,9 @@ async def create_folder_curator(
         folder["name"],
         model_provider,
         model_id,
+        credential_id,
+        digest_provider,
+        digest_model_id,
     )
     if row is None:  # lost the race (or already existed) — read the winner.
         row = await pool.fetchrow(
@@ -261,6 +286,25 @@ async def create_folder_curator(
     curator = _row(row)
     curator["wiki_folder_id"] = str(wiki_folder_id)
     return curator
+
+
+async def disconnect_local_endpoint(user_id: UUID, credential_id: UUID) -> list[dict]:
+    """Disconnect a local endpoint — unless one of the user's agents pins it.
+
+    Deleting a pinned box would strand every run that points at it, so the
+    referencing agents (id + name) are returned and NOTHING is deleted; the
+    caller turns that list into a 409 that names them. An empty list means the
+    endpoint is gone.
+    """
+    refs = await get_pool().fetch(
+        "SELECT id, name FROM agents WHERE user_id = $1 AND credential_id = $2 ORDER BY name",
+        user_id,
+        credential_id,
+    )
+    if refs:
+        return [{"id": str(r["id"]), "name": r["name"]} for r in refs]
+    await agent_auth.delete_endpoint(user_id, credential_id)
+    return []
 
 
 async def get_curator_by_id(agent_id: UUID) -> dict | None:
@@ -275,8 +319,11 @@ async def update_curator(
     agent_id: UUID,
     model_provider: str | None = ...,
     model_id: str | None = ...,
+    credential_id: UUID | None = ...,
     schedule_cron: str | None = ...,
     curated_through: datetime | None = ...,
+    digest_provider: str | None = ...,
+    digest_model_id: str | None = ...,
 ) -> dict:
     """PATCH semantics: `...` means leave the field alone, None clears it."""
     fields: dict = {}
@@ -286,6 +333,65 @@ async def update_curator(
         fields["model_provider"] = model_provider
     if model_id is not ...:
         fields["model_id"] = model_id
+    if credential_id is not ...:
+        fields["credential_id"] = credential_id
+    if digest_provider is not ...:
+        if digest_provider is not None and digest_provider not in _VALID_PROVIDERS:
+            raise HTTPException(
+                status_code=400, detail=f"invalid digest_provider: {digest_provider}"
+            )
+        fields["digest_provider"] = digest_provider
+    if digest_model_id is not ...:
+        fields["digest_model_id"] = digest_model_id
+    touches_pin = any(k in fields for k in ("model_provider", "model_id", "credential_id"))
+    wants_digest_check = (
+        fields.get("digest_provider") is not None or fields.get("digest_model_id") is not None
+    )
+    if touches_pin or wants_digest_check:
+        row = await get_curator_by_id(agent_id) or _raise_missing(agent_id)
+        if touches_pin:
+            # The create-time folder rule applies to PATCH too: an API that
+            # could move a folder curator onto Claude after the fact would make
+            # the create-time refusal decorative.
+            if (
+                row["curator_folder_id"] is not None
+                and fields.get("model_provider") is not None
+                and fields.get("model_provider") != "local"
+            ):
+                raise HTTPException(
+                    status_code=400, detail="folder curators run on the local provider"
+                )
+            await _validate_pin(
+                UUID(str(row["user_id"])),
+                fields.get("model_provider", row["model_provider"]),
+                fields.get("model_id", row["model_id"]),
+                fields.get("credential_id", row["credential_id"]),
+            )
+        if wants_digest_check:
+            # A digest model reads the raw feed before the curator's own model —
+            # on the external curator that feed is end-user material, and a
+            # second model on it is a second processor of customer data. Not this
+            # knob's call to make silently. Folder curators keep the create-time
+            # rule: the self-hosted endpoint only.
+            if row["curator_wiki"] == "external":
+                raise HTTPException(
+                    status_code=400,
+                    detail="the external curator runs a single model (its feed is end-user material)",
+                )
+            effective_provider = fields.get("digest_provider", row["digest_provider"])
+            if fields.get("digest_model_id") is not None and effective_provider is None:
+                raise HTTPException(
+                    status_code=400, detail="digest_model_id needs a digest_provider"
+                )
+            if (
+                row["curator_folder_id"] is not None
+                and effective_provider is not None
+                and effective_provider != "local"
+            ):
+                raise HTTPException(
+                    status_code=400,
+                    detail="folder curator digest models run on the local provider",
+                )
     if schedule_cron is not ...:
         if schedule_cron is None:
             # The runtime has no enabled column: a folder curator is idled by
@@ -371,6 +477,40 @@ def _validate(model_provider, run_mode, schedule_cron) -> None:
         raise HTTPException(status_code=400, detail=f"invalid run_mode: {run_mode}")
     if run_mode == "scheduled" and not schedule_cron:
         raise HTTPException(status_code=400, detail="scheduled agents need a schedule_cron")
+
+
+async def _validate_pin(
+    user_id: UUID,
+    model_provider: str | None,
+    model_id: str | None,
+    credential_id: UUID | None,
+) -> None:
+    """A pin must be coherent and must point at something the user owns.
+
+    model_id and credential_id are selections *within* a provider, so an
+    inherited row (no model_provider) cannot carry either — a dangling model
+    name would silently decide nothing and a dangling endpoint id would read as
+    an accidental inheritance change. And credential_id must be one of this
+    user's local endpoint rows: a row whose pin cannot resolve would only fail
+    at the next turn, when the cause is hardest to see. A pin is the local
+    provider's shape — an agent moved to a key provider must shed the pin in
+    the same write, or the stale id would kill every later turn in resolve.
+    """
+    if model_provider is None and (model_id is not None or credential_id is not None):
+        raise HTTPException(
+            status_code=400,
+            detail="model_id/credential_id require a model_provider; without one the agent inherits",
+        )
+    if credential_id is not None:
+        if model_provider != "local":
+            raise HTTPException(
+                status_code=400,
+                detail="credential_id pins a local endpoint; model_provider must be local",
+            )
+        if await agent_auth.get_local_endpoint(user_id, credential_id) is None:
+            raise HTTPException(
+                status_code=400, detail="credential_id is not one of your local endpoints"
+            )
 
 
 async def create_agent(user_id: UUID, fields: dict) -> dict:

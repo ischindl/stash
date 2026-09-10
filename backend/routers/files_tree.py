@@ -316,7 +316,12 @@ async def recompute_memory(
                 "curator runs per month; Pro is unlimited.",
             )
     try:
-        await agent_auth.resolve(user_id, curator["model_provider"], curator.get("model_id"))
+        await agent_auth.resolve(
+            user_id,
+            curator["model_provider"],
+            model_id=curator.get("model_id"),
+            credential_id=curator.get("credential_id"),
+        )
     except agent_auth.NeedsAuth:
         raise HTTPException(
             status_code=402,
@@ -379,14 +384,24 @@ async def create_scope_folder_curator(
 ):
     """Bind a curator to one session folder: it reads that folder's scoped feed
     and writes that folder's wiki. Idempotent — re-posting the same folder
-    returns the existing curator. Runs on the local provider while folder
-    curation is dogfooded against a self-hosted endpoint; `model_id` picks
-    which model on it."""
+    returns the existing curator. With no model selection it inherits the
+    workspace curator's resolution (the default curator model); an explicit
+    `model_provider` is restricted to `local` while folder curation is
+    dogfooded against a self-hosted endpoint, `model_id` picks which model on
+    it, and `credential_id` pins which connected endpoint to dial.
+    `digest_provider`/`digest_model_id` optionally split the run: a second
+    model reads the raw feed first, the curator writes from its report."""
     from ..services import agent_service
 
     await _check_scope_access(scope_user_id, current_user["id"])
     curator = await agent_service.create_folder_curator(
-        scope_user_id, req.folder_id, req.model_provider, req.model_id
+        scope_user_id,
+        req.folder_id,
+        req.model_provider,
+        req.model_id,
+        req.credential_id,
+        req.digest_provider,
+        req.digest_model_id,
     )
     return {"curator": curator}
 
@@ -398,8 +413,8 @@ async def update_scope_curator(
     current_user: dict = Depends(get_current_user),
     scope_user_id: UUID = Depends(get_scope),
 ):
-    """Retune one of this scope's curators: its model pick, provider, or
-    schedule cadence. Only fields present in the body change."""
+    """Retune one of this scope's curators: its model pick, provider, digest
+    model, or schedule cadence. Only fields present in the body change."""
     from ..services import agent_service
 
     curator = await agent_service.get_curator_by_id(agent_id)
@@ -407,7 +422,14 @@ async def update_scope_curator(
         raise HTTPException(status_code=404, detail="curator not found")
     fields = {
         name: getattr(req, name)
-        for name in ("model_provider", "model_id", "schedule_cron")
+        for name in (
+            "model_provider",
+            "model_id",
+            "credential_id",
+            "schedule_cron",
+            "digest_provider",
+            "digest_model_id",
+        )
         if name in req.model_fields_set
     }
     return {"curator": await agent_service.update_curator(agent_id, **fields)}
