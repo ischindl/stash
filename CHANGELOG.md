@@ -205,8 +205,13 @@ everything before it is captured in git history (`git log`), not here.
   elsewhere too: `stash skills create` now shows its required `--description`,
   `stash sessions push` its required `--session`, `stash upload` is written
   with its path, and table rows are queried with `stash sql` instead of a
-  `stash tables search` that never existed. Every `stash` command documented in
-  the shipped agent guidance is now parsed in CI against the real CLI parser,
+  `stash tables search` that never existed. Pi was also the last agent still
+  being taught to read a file by piping it through `sed` to keep only the first
+  eighty lines — a habit the VFS stopped documenting everywhere else because
+  silently dropped lines go unnoticed, and one that survived here only because
+  Pi's guidance was carried in from a branch that missed that cleanup. Pi now
+  reads the file whole like every other agent. Every `stash` command documented
+  in the shipped agent guidance is now parsed in CI against the real CLI parser,
   so instructions can no longer drift out of sync with the tool unnoticed.
 
 ## v0
