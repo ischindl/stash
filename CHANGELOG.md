@@ -5,6 +5,31 @@ everything before it is captured in git history (`git log`), not here.
 
 ## Unreleased
 
+- Your local model setup in Settings is a list of endpoints now, not one box at a
+  time. Add one by its base URL and test it before storing it: the test lists exactly
+  the models that endpoint answers with, and those are the only ones you can then pick,
+  so a mistyped address or a model the box does not serve is caught before anything is
+  saved — and if a reachable endpoint refuses the key you gave it, it says so rather
+  than pretending the box is broken. Retyping retires a test result, and a failed test
+  or a refused save keeps what you typed instead of throwing it away. The stored key is
+  masked, and can be revealed only on the endpoint that actually holds it. Deleting an
+  endpoint that agents still pin no longer strands them: the refusal names them
+  (`Wiki curator — Project Atlas` and the rest) so you can move them first. And an endpoint a
+  probe cannot reach stays on the page with the error beside it — it used to disappear
+  entirely, because the old list was drawn from whatever a probe happened to answer.
+- A new Curators section in Settings shows the agents that write your wiki and lets you
+  aim each one at a model you choose. The workspace curator reads everything you do;
+  each project curator reads only its own project. Every curator gets a model picker
+  grouped by local endpoint, defaulting to the oldest connected one, and a model whose
+  endpoint stops serving it stays listed instead of quietly falling back somewhere else.
+  A project curator can also run a second model as a digest pass, which pre-reads its
+  feed before the main run: it runs on the same endpoint the curator is pinned to, and it
+  is offered nowhere else — the workspace and shared-wiki curators deliberately stay
+  single-model, the latter because its feed is other people's material. Edit any
+  curator's schedule, switch a project curator to idle so it only runs when asked (the
+  workspace curators always keep a schedule), add a curator for a project that has none,
+  and delete a project curator when you are done with it — the wiki pages it wrote stay.
+
 - Self-hosters and containerized deployments get the features that until now only
   worked when someone built a custom image by hand. The backend image now ships the
   local embedding model, so semantic search answers immediately after a deploy

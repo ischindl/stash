@@ -103,10 +103,17 @@ export async function getAuthToken(): Promise<string | null> {
 
 export class ApiError extends Error {
   status: number;
-  constructor(status: number, message: string) {
+  /** The parsed JSON error body (`{detail: …}`) whenever the response carried one.
+   *  FastAPI answers some refusals with an OBJECT detail — the 409 that lists the
+   *  agents still pinning a local endpoint is one — and `message` can only flatten
+   *  it, so a caller that has to name those agents reads them here. Every other
+   *  consumer keeps using `message`, whose behaviour is unchanged. */
+  body?: unknown;
+  constructor(status: number, message: string, body?: unknown) {
     super(message);
     this.status = status;
     this.name = "ApiError";
+    this.body = body;
   }
 }
 
@@ -151,7 +158,7 @@ export async function apiFetch<T>(
         : Array.isArray(detail) && detail[0]?.msg
         ? String(detail[0].msg)
         : `API error ${res.status}`;
-    throw new ApiError(res.status, msg);
+    throw new ApiError(res.status, msg, body);
   }
   if (res.status === 204) return undefined as T;
   return res.json();
@@ -2455,17 +2462,94 @@ export async function connectAgentKey(provider: string, apiKey: string): Promise
   return data.connected;
 }
 
+/** One connected local endpoint, as `GET /agent-credentials` lists it. `name` is
+ *  derived by the server from the base URL's host — `ConnectRequest` has no name
+ *  field, so there is nothing to type. An unreachable box keeps its row with an
+ *  empty `models` and the probe's own `probe_error`. The key never travels here. */
+export type ModelEndpoint = {
+  id: string;
+  name: string;
+  base_url: string;
+  models: string[];
+  probe_error?: string;
+};
+
+/** The stored document of the endpoint a run resolves to when nothing is pinned:
+ *  the OLDEST connected one. It carries no id, so a key-reveal control can only be
+ *  attributed to a list row by base_url equality. */
+export type LocalEndpointDoc = { base_url: string; model: string; api_key: string };
+
+export type ModelEndpointsStatus = {
+  connected: string[];
+  endpoints: ModelEndpoint[];
+  local: LocalEndpointDoc | null;
+};
+
+export async function listModelEndpoints(): Promise<ModelEndpointsStatus> {
+  return apiFetch<ModelEndpointsStatus>("/api/v1/me/agent-credentials");
+}
+
+/** The only `model` literal this UI may put on `POST /local/test`.
+ *
+ *  That route demands a non-blank `model` and then throws it away:
+ *  `LocalTestRequest.model` has no default (routers/agent_credentials.py), so an
+ *  omitted one is a 422, and `local_endpoint_doc` rejects a blank one before
+ *  `probe_local_endpoint(base_url, api_key)` is called without it. The backend
+ *  pins both halves — `test_local_test_requires_model` for the requirement and
+ *  `test_local_test_is_a_pure_probe` for the purity (a probe neither reads nor
+ *  overwrites a stored endpoint). So a placeholder is what the contract asks for,
+ *  and the parameter type below makes any other value a compile error.
+ *
+ *  It is never stored: the store request carries only the model the user chose out
+ *  of the probe's `models`. When the backend drops the field (follow-up filed as a
+ *  recommendation at completion of STAS-203), delete this constant together with
+ *  its two pinning tests in AgentModelSection.test.tsx. */
+export const PROBE_ONLY_MODEL = "probe";
+
+export type LocalProbeResult = {
+  ok: boolean;
+  http_status: number;
+  /** Served models, on success. */
+  models?: string[];
+  /** What the dial actually hit, on failure — rendered verbatim. */
+  error_detail?: string;
+};
+
+/** Dial the box and report what it serves, touching nothing that is stored. */
+export async function probeLocalEndpoint(
+  baseUrl: string,
+  apiKey?: string | null,
+  model: typeof PROBE_ONLY_MODEL = PROBE_ONLY_MODEL,
+): Promise<LocalProbeResult> {
+  return apiFetch<LocalProbeResult>("/api/v1/me/agent-credentials/local/test", {
+    method: "POST",
+    body: JSON.stringify({ base_url: baseUrl, model, api_key: apiKey ?? null }),
+  });
+}
+
+/** Store one more local endpoint. The server probes before it saves and answers
+ *  400 `endpoint probe failed: <detail>` when the box does not answer, so a stored
+ *  row is always a live one. `model` is the model the user picked, and it is what
+ *  runs by default on this endpoint afterwards. */
 export async function connectLocalEndpoint(
   baseUrl: string,
   model: string,
   apiKey?: string | null,
-): Promise<string[]> {
-  const data = await apiFetch<{ connected: string[] }>("/api/v1/me/agent-credentials", {
+): Promise<{ id: string; connected: string[] }> {
+  return apiFetch("/api/v1/me/agent-credentials", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ provider: "local", base_url: baseUrl, model, api_key: apiKey ?? null }),
   });
-  return data.connected;
+}
+
+/** Remove one endpoint by id. A 409 means agents still pin it and NOTHING was
+ *  deleted; its object detail (`{message, agents: [{id, name}]}`) survives only on
+ *  `ApiError.body`, because an object detail flattens to `API error 409` in
+ *  `message`. */
+export async function deleteLocalEndpoint(
+  credentialId: string,
+): Promise<{ ok: boolean; connected: string[] }> {
+  return apiFetch(`/api/v1/me/agent-credentials/endpoints/${credentialId}`, { method: "DELETE" });
 }
 
 export async function disconnectAgentCredential(provider: string): Promise<string[]> {
@@ -2500,6 +2584,94 @@ export async function finishAgentOAuth(
     },
   );
   return data.connected;
+}
+
+// ── Curators (the workspace default plus one per project folder; routers/files_tree) ──
+
+/** One curator row from `GET /curators`.
+ *
+ *  `curator_folder_id === null` means a workspace curator: every account has its
+ *  default one, and the developer platform adds a second for the shared wiki
+ *  (`curator_wiki` "external"). A set `curator_folder_id` means a project's curator,
+ *  and then `folder_name` is its session folder's name — null when that folder is
+ *  gone. `next_run_at` is the beat's own next tick (null when idle), and
+ *  `event_backlog` counts what the curator's feed still has left to read. */
+export type Curator = {
+  id: string;
+  name: string;
+  model_provider: string | null;
+  model_id: string | null;
+  credential_id: string | null;
+  digest_provider: string | null;
+  digest_model_id: string | null;
+  run_mode: string;
+  schedule_cron: string | null;
+  curator_wiki: string;
+  curator_folder_id: string | null;
+  curated_through: string | null;
+  last_run_at: string | null;
+  last_run_outcome: string | null;
+  last_run_error: string | null;
+  next_run_at: string | null;
+  folder_name?: string | null;
+  wiki_folder_id?: string | null;
+  event_backlog?: { distinct_events: number; raw_rows: number; distinct_sessions: number } | null;
+};
+
+export async function listCurators(): Promise<Curator[]> {
+  const data = await apiFetch<{ curators: Curator[] }>(`${ME}/curators`);
+  return data.curators;
+}
+
+/** `folder_id` is a `session_folders.id` — what `listSessionFolders` returns. A
+ *  file-tree folder id from `listFolders` is a different id space: it renders fine
+ *  and then 404s here. Binding is idempotent per folder, and a new curator is
+ *  created already scheduled (a staggered nightly), never idle. An explicit
+ *  `model_provider` is restricted to "local" while folder curation is dogfooded
+ *  against a self-hosted box. */
+export type CuratorCreate = {
+  folder_id: string;
+  model_provider?: string | null;
+  model_id?: string | null;
+  credential_id?: string | null;
+  digest_provider?: string | null;
+  digest_model_id?: string | null;
+};
+
+export async function createCurator(body: CuratorCreate): Promise<Curator> {
+  const data = await apiFetch<{ curator: Curator }>(`${ME}/curators`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+  return data.curator;
+}
+
+/** A patch changes ONLY the keys present in it, so clearing a pin means sending that
+ *  key with an explicit null — omitting it leaves the stored value alone. Two
+ *  refusals shape the controls: a workspace curator rejects `schedule_cron: null`
+ *  ("workspace curators must keep a schedule"), and the shared-wiki one rejects any
+ *  digest change at all. */
+export type CuratorPatch = {
+  model_provider?: string | null;
+  model_id?: string | null;
+  credential_id?: string | null;
+  digest_provider?: string | null;
+  digest_model_id?: string | null;
+  schedule_cron?: string | null;
+};
+
+export async function patchCurator(agentId: string, patch: CuratorPatch): Promise<Curator> {
+  const data = await apiFetch<{ curator: Curator }>(`${ME}/curators/${agentId}`, {
+    method: "PATCH",
+    body: JSON.stringify(patch),
+  });
+  return data.curator;
+}
+
+/** Project curators only — a workspace curator answers 400 "workspace curators are
+ *  permanent; clear their schedule to idle them". */
+export async function deleteCurator(agentId: string): Promise<{ ok: boolean }> {
+  return apiFetch(`${ME}/curators/${agentId}`, { method: "DELETE" });
 }
 
 // ── Named agents (config: model, persona, schedule, channel binding) ──

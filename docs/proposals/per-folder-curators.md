@@ -197,3 +197,51 @@ the whole capped feed to change three pages. A two-phase run splits the work.
   self-hosted-endpoint rule for both models.
 - Watermark semantics are unchanged: `complete_through` advances through the
   feed the digest read — the two phases are one delivery.
+
+## Shipped surface (STAS-201 / 202 / 203)
+
+The curator controls landed in the **product Settings page**, not the developer
+console, and on the owner-facing routes rather than the developer router sketched
+under "API + UI" above.
+
+Routes (`backend/routers/files_tree.py:340-438`, dual-mounted so the canonical
+`/api/v1/curators` works too):
+
+- `GET    /api/v1/me/curators` — rows carry `curator_folder_id`, `curator_wiki`,
+  both models, `credential_id`, `schedule_cron`, watermark, last outcome, and
+  `event_backlog` (unread depth).
+- `POST   /api/v1/me/curators` — `{folder_id}` scopes it to that project.
+- `PATCH  /api/v1/me/curators/{agent_id}`
+- `DELETE /api/v1/me/curators/{agent_id}`
+
+UI: `frontend/src/components/settings/CuratorsSection.tsx`, mounted in
+`frontend/src/app/settings/page.tsx` under the model section. Typed helpers are
+`listCurators` / `createCurator` / `patchCurator` / `deleteCurator` in
+`frontend/src/lib/api.ts`.
+
+Where the shipped UI departs from the design above, on purpose:
+
+- **No wiki-kind radio.** A row's scope comes from the server
+  (`curator_folder_id` / `curator_wiki`); a person adding a curator picks a
+  project, never a wiki.
+- **One grouped model picker per row, not provider-then-model.** Its empty option
+  writes an explicit-null patch (a field omitted from a PATCH is unchanged), so
+  clearing a model actually clears it. A row with no pin resolves to the oldest
+  connected endpoint and the picker shows it that way; choosing a model writes the
+  endpoint id explicitly.
+- **Digest on folder rows only**, fed by the box the row already pins. There is no
+  `digest_credential_id` column, so a local digest inherits the row's pin — which
+  is also why the digest list cannot offer models from a different box.
+- **Idle switch on folder rows only**; workspace rows refuse a null schedule.
+- **Folder picker excludes `is_default` and already-curated projects.** The
+  workspace curator already reads the Default catch-all's material, so a curator
+  scoped to it would duplicate it.
+- **Delete is confirm-gated**, matching the repo's other destructive controls.
+
+The endpoints the pickers read come from `GET /api/v1/me/agent-credentials`
+(`listModelEndpoints`), whose `local` doc now lists every connected endpoint; a
+row unreachable to the last probe arrives with `probe_error` and no model list.
+Connect and probe are `POST /api/v1/me/agent-credentials` and
+`POST .../local/test`; one endpoint is removed by
+`DELETE .../endpoints/{credential_id}`, and a 409 there names the agents still
+pinning it.
