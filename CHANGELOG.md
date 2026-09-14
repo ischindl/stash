@@ -5,6 +5,31 @@ everything before it is captured in git history (`git log`), not here.
 
 ## Unreleased
 
+- Your local model setup in Settings is a list of endpoints now, not one box at a
+  time. Add one by its base URL and test it before storing it: the test lists exactly
+  the models that endpoint answers with, and those are the only ones you can then pick,
+  so a mistyped address or a model the box does not serve is caught before anything is
+  saved — and if a reachable endpoint refuses the key you gave it, it says so rather
+  than pretending the box is broken. Retyping retires a test result, and a failed test
+  or a refused save keeps what you typed instead of throwing it away. The stored key is
+  masked, and can be revealed only on the endpoint that actually holds it. Deleting an
+  endpoint that agents still pin no longer strands them: the refusal names them
+  (`Wiki curator — Project Atlas` and the rest) so you can move them first. And an endpoint a
+  probe cannot reach stays on the page with the error beside it — it used to disappear
+  entirely, because the old list was drawn from whatever a probe happened to answer.
+- A new Curators section in Settings shows the agents that write your wiki and lets you
+  aim each one at a model you choose. The workspace curator reads everything you do;
+  each project curator reads only its own project. Every curator gets a model picker
+  grouped by local endpoint, defaulting to the oldest connected one, and a model whose
+  endpoint stops serving it stays listed instead of quietly falling back somewhere else.
+  A project curator can also run a second model as a digest pass, which pre-reads its
+  feed before the main run: it runs on the same endpoint the curator is pinned to, and it
+  is offered nowhere else — the workspace and shared-wiki curators deliberately stay
+  single-model, the latter because its feed is other people's material. Edit any
+  curator's schedule, switch a project curator to idle so it only runs when asked (the
+  workspace curators always keep a schedule), add a curator for a project that has none,
+  and delete a project curator when you are done with it — the wiki pages it wrote stay.
+
 - Self-hosters and containerized deployments get the features that until now only
   worked when someone built a custom image by hand. The backend image now ships the
   local embedding model, so semantic search answers immediately after a deploy
@@ -197,6 +222,22 @@ everything before it is captured in git history (`git log`), not here.
   `stash status` / `stash settings --json` report Pi upload health like every
   other agent. The restore is guarded by merge-revert and installer
   call-shape tests so a future careless merge fails the suite loudly.
+- Pi's instruction for sharing a coding session was a command that cannot run:
+  it passed a session id as a bare positional, and `stash share` accepts none,
+  so the CLI refused it before authentication and a Pi agent could not share a
+  session at all. Pi now teaches the same supported form the other agents ship.
+  The sweep that found it corrected guidance that had fallen behind the CLI
+  elsewhere too: `stash skills create` now shows its required `--description`,
+  `stash sessions push` its required `--session`, `stash upload` is written
+  with its path, and table rows are queried with `stash sql` instead of a
+  `stash tables search` that never existed. Pi was also the last agent still
+  being taught to read a file by piping it through `sed` to keep only the first
+  eighty lines — a habit the VFS stopped documenting everywhere else because
+  silently dropped lines go unnoticed, and one that survived here only because
+  Pi's guidance was carried in from a branch that missed that cleanup. Pi now
+  reads the file whole like every other agent. Every `stash` command documented
+  in the shipped agent guidance is now parsed in CI against the real CLI parser,
+  so instructions can no longer drift out of sync with the tool unnoticed.
 
 ## v0
 

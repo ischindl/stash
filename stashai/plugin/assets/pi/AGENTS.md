@@ -14,8 +14,8 @@ A Skill is **not** a wrapper to slap on every single file you happen to share. O
 
 - **One file someone should look at** → `stash upload <path> --json` and hand them the returned `app_url`. No Skill needed.
 - **A folder / project into your Stash** → `stash upload <path> --json`. Returns the folder `app_url`. No Skill created by default.
-- **A curated bundle as one shareable thing** → `stash upload <path> --skill "<title>" --json`, or `stash skills create "<name>" --public` to start a fresh one. Returns the Skill `url`.
-- **A coding session (transcript + touched files)** → `stash share <session_id>`. Sessions are inherently a bundle.
+- **A curated bundle as one shareable thing** → `stash upload <path> --skill "<title>" --json`, or `stash skills create "<name>" --description "<what it holds>" --public` to start a fresh one. Returns the Skill `url`.
+- **A coding session (transcript + touched files)** → `stash share`, or `stash share --session "<title>"` for another. Sessions are inherently a bundle.
 
 Run `stash prompts agent-guidance` any time you want this guidance reprinted in full.
 
@@ -27,7 +27,7 @@ Use `stash vfs` when you want to browse Stash like a filesystem without mounting
 - `stash vfs ls /me`
 - `stash vfs "find /me -maxdepth 3 -type f"`
 - `stash vfs "rg \"query\" /me"`
-- `stash vfs "cat '/me/README.md' | sed -n '1,80p'"`
+- `stash vfs "cat '/me/README.md'"`
 
 ## Common reads (all support `--json`)
 

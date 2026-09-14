@@ -6,7 +6,8 @@ What matters here:
   account — never on the caller's personal scope, which a bare headerless
   call must not reach.
 - Validation and doc shape are the personal local flow's one shared helper:
-  same 400s, same stored doc, so the resolver needs no change to run the
+  same 400s, same stored doc, same probe-before-store + append-a-named-box +
+  disconnect-by-id contract, so the resolver needs no change to run the
   workspace's agents (the developer-wiki curator) on PI against the endpoint.
 - A non-activated scope 400s "activate first" — there is no silent write.
 """
@@ -31,6 +32,18 @@ from .test_permissions import _auth, _register
 def _fernet(monkeypatch):
     """Credential storage is Fernet-encrypted; CI has no INTEGRATIONS_ENCRYPTION_KEY."""
     monkeypatch.setattr(settings, "INTEGRATIONS_ENCRYPTION_KEY", Fernet.generate_key().decode())
+
+
+@pytest.fixture
+def _stub_probe(monkeypatch):
+    """The console connect dials the box before storing it; these tests name a
+    host that does not exist (my-host), so the dial is answered with a healthy
+    endpoint. Probe behaviour itself is test_agent_credentials.py's subject."""
+
+    async def probe(base_url, api_key):
+        return {"ok": True, "http_status": 200, "models": ["stub-model"]}
+
+    monkeypatch.setattr(agent_auth, "probe_local_endpoint", probe)
 
 
 def _scope_headers(api_key: str, scope_user_id: str) -> dict:
@@ -69,21 +82,28 @@ async def test_list_before_connect_is_empty(client: AsyncClient):
         headers=_scope_headers(api_key, workspace["scope_user_id"]),
     )
     assert r.status_code == 200, r.text
-    assert r.json() == {"connected": []}
+    assert r.json() == {"connected": [], "endpoints": []}
 
 
 @pytest.mark.asyncio
-async def test_connect_keyless_stores_endpoint_doc(client: AsyncClient):
+async def test_connect_keyless_stores_endpoint_doc(client: AsyncClient, _stub_probe):
     api_key, _, workspace = await _developer(client)
     scope = workspace["scope_user_id"]
     r = await _connect(client, api_key, scope, "llama3.1:8b")
     assert r.status_code == 200, r.text
-    assert r.json() == {"ok": True, "connected": ["local"]}
+    assert r.json() == {"ok": True, "id": r.json()["id"], "connected": ["local"]}
+    assert UUID(r.json()["id"])
 
     r = await client.get(
         "/api/v1/me/developer/agent-credentials", headers=_scope_headers(api_key, scope)
     )
-    assert r.json() == {"connected": ["local"]}
+    body = r.json()
+    assert body["connected"] == ["local"]
+    # The listing names the box and carries no secret.
+    assert [(e["name"], e["base_url"], e["models"]) for e in body["endpoints"]] == [
+        ("my-host", "http://my-host:11434/v1", ["stub-model"])
+    ]
+    assert "api_key" not in str(body["endpoints"])
     # The stored doc is exactly the personal flow's shape — no key when keyless.
     assert await _stored_doc(scope) == {
         "base_url": "http://my-host:11434/v1",
@@ -93,7 +113,7 @@ async def test_connect_keyless_stores_endpoint_doc(client: AsyncClient):
 
 
 @pytest.mark.asyncio
-async def test_connect_with_key_round_trips(client: AsyncClient):
+async def test_connect_with_key_round_trips(client: AsyncClient, _stub_probe):
     api_key, _, workspace = await _developer(client)
     scope = workspace["scope_user_id"]
     r = await _connect(client, api_key, scope, "qwen2:7b", api_key_secret="ws-local-secret")
@@ -131,16 +151,24 @@ async def test_connect_requires_model(client: AsyncClient):
     assert await _stored_doc(scope) is None
 
 
-# --- Disconnect + upsert ---
+# --- Disconnect + append ---
 
 
 @pytest.mark.asyncio
-async def test_disconnect_removes_credential(client: AsyncClient):
+async def test_disconnect_removes_credential(client: AsyncClient, _stub_probe):
     api_key, _, workspace = await _developer(client)
     scope = workspace["scope_user_id"]
-    assert (await _connect(client, api_key, scope, "llama3.1:8b")).status_code == 200
-    r = await client.delete(
+    connected = await _connect(client, api_key, scope, "llama3.1:8b")
+    assert connected.status_code == 200
+    # The provider-name route no longer deletes a box — it refuses and points.
+    refused = await client.delete(
         "/api/v1/me/developer/agent-credentials/local", headers=_scope_headers(api_key, scope)
+    )
+    assert refused.status_code == 400
+    assert "endpoints/{credential_id}" in refused.json()["detail"]
+    r = await client.delete(
+        f"/api/v1/me/developer/agent-credentials/endpoints/{connected.json()['id']}",
+        headers=_scope_headers(api_key, scope),
     )
     assert r.status_code == 200, r.text
     assert r.json() == {"ok": True, "connected": []}
@@ -148,26 +176,29 @@ async def test_disconnect_removes_credential(client: AsyncClient):
 
 
 @pytest.mark.asyncio
-async def test_second_connect_upserts_one_row(client: AsyncClient, pool):
+async def test_second_connect_appends_a_second_row(client: AsyncClient, _stub_probe, pool):
+    """Two consoles connects are two boxes; the default (what a bare resolve
+    picks) stays the oldest one."""
     api_key, _, workspace = await _developer(client)
     scope = workspace["scope_user_id"]
     assert (await _connect(client, api_key, scope, "model-a")).status_code == 200
-    r = await _connect(client, api_key, scope, "model-b")
+    r = await _connect(client, api_key, scope, "model-b", base_url="http://other:11434/v1")
     assert r.status_code == 200, r.text
-    assert (await _stored_doc(scope))["model"] == "model-b"
+    assert await _stored_doc(scope) is not None
+    assert (await _stored_doc(scope))["model"] == "model-a"  # oldest = default
     row = await pool.fetchrow(
         "SELECT count(*) AS n FROM user_agent_credentials "
         "WHERE user_id = $1 AND provider = 'local'",
         UUID(scope),
     )
-    assert row["n"] == 1
+    assert row["n"] == 2
 
 
 # --- Separation: personal and workspace scopes never mix ---
 
 
 @pytest.mark.asyncio
-async def test_personal_and_workspace_credentials_stay_separate(client: AsyncClient):
+async def test_personal_and_workspace_credentials_stay_separate(client: AsyncClient, _stub_probe):
     personal_key, personal_body = await _register(client)
     api_key, _, workspace = await _developer(client)
     scope = workspace["scope_user_id"]
@@ -187,7 +218,7 @@ async def test_personal_and_workspace_credentials_stay_separate(client: AsyncCli
         await client.get(
             "/api/v1/me/developer/agent-credentials", headers=_scope_headers(api_key, scope)
         )
-    ).json() == {"connected": []}
+    ).json() == {"connected": [], "endpoints": []}
     assert await _stored_doc(scope) is None
 
     # The workspace connect leaves the personal endpoint untouched — and the
@@ -203,9 +234,14 @@ async def test_personal_and_workspace_credentials_stay_separate(client: AsyncCli
         "model": "personal-model",
         "api_key": None,
     }
-    assert (
+    personal_body_json = (
         await client.get("/api/v1/me/agent-credentials", headers=_auth(personal_key))
-    ).json() == {"connected": ["local"], "local": personal_doc}
+    ).json()
+    assert personal_body_json["connected"] == ["local"]
+    assert personal_body_json["local"] == personal_doc
+    assert [e["base_url"] for e in personal_body_json["endpoints"]] == [
+        "http://personal-host:11434/v1"
+    ]
     assert (await _stored_doc(scope))["model"] == "ws-model"
 
 
@@ -266,7 +302,7 @@ async def test_inactive_scope_and_bare_personal_call_activate_first(client: Asyn
 
 
 @pytest.mark.asyncio
-async def test_workspace_credential_resolves_to_pi(client: AsyncClient):
+async def test_workspace_credential_resolves_to_pi(client: AsyncClient, _stub_probe):
     api_key, _, workspace = await _developer(client)
     scope = UUID(workspace["scope_user_id"])
 

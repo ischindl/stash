@@ -7,6 +7,7 @@ import WorkspaceShell from "@/components/workspace/workspace-shell";
 import IntegrationsSettings from "../../components/integrations/IntegrationsSettings";
 import SubscriptionSection from "../../components/settings/SubscriptionSection";
 import AgentModelSection from "../../components/settings/AgentModelSection";
+import CuratorsSection from "../../components/settings/CuratorsSection";
 import ExportSection from "../../components/settings/ExportSection";
 import { AccountSettingsSkeleton, ApiKeysSkeleton } from "../../components/SkeletonStates";
 import { useAuth } from "../../hooks/useAuth";
@@ -56,6 +57,7 @@ export default function SettingsPage() {
           <Profile user={user} onUpdated={refresh} />
           <SubscriptionSection />
           <AgentModelSection />
+          <CuratorsSection />
           <IntegrationsSettings embedded />
           <ActiveSessions />
           <ExportSection />

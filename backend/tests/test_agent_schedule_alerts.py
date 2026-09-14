@@ -144,7 +144,7 @@ async def test_run_due_failure_sends_alert(client: AsyncClient, sprite_exec, mon
         user_id, "test", "user_message", "hello", user_id, f"sess-{uuid.uuid4()}"
     )
 
-    async def fake_resolve(user_id, prefer_provider=None, model_id=None):
+    async def fake_resolve(user_id, prefer_provider=None, model_id=None, credential_id=None):
         return None
 
     async def fake_run_scheduled(agent, stamp):
@@ -214,7 +214,7 @@ async def test_run_due_records_no_changes_skip(client: AsyncClient, monkeypatch)
         datetime.now(UTC) - timedelta(minutes=5),
     )
 
-    async def fake_resolve(user_id, prefer_provider=None, model_id=None):
+    async def fake_resolve(user_id, prefer_provider=None, model_id=None, credential_id=None):
         return None
 
     gated_by: list[str] = []
@@ -247,7 +247,7 @@ async def test_run_due_records_missing_credential_skip(client: AsyncClient, monk
         datetime.now(UTC) - timedelta(minutes=5),
     )
 
-    async def no_credential(user_id, prefer_provider=None, model_id=None):
+    async def no_credential(user_id, prefer_provider=None, model_id=None, credential_id=None):
         raise agent_auth.NeedsAuth
 
     monkeypatch.setattr(agent_auth, "resolve", no_credential)
