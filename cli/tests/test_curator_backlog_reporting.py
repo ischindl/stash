@@ -107,9 +107,7 @@ def test_missing_event_backlog_raises_instead_of_fabricating_zero(monkeypatch, c
     assert "0 rows across 0 sessions" not in out
 
 
-def test_backlog_missing_one_field_raises_instead_of_printing_a_partial_zero(
-    monkeypatch, capsys
-):
+def test_backlog_missing_one_field_raises_instead_of_printing_a_partial_zero(monkeypatch, capsys):
     """A half-present payload is as dangerous as an absent one.
 
     `raw_rows` alone would render "1204 distinct events still unread (0 rows
