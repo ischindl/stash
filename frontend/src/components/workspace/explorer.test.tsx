@@ -67,10 +67,13 @@ vi.mock("@/lib/api", () => ({
 beforeEach(() => {
   // /me/sessions spans every scope the viewer can read, so a teammate's shared
   // session arrives in the same flat list as your own.
-  vi.mocked(listMySessions).mockResolvedValue([
-    { session_id: "s-1", title: "My session", last_event_at: "2026-07-24T18:00:00Z" },
-    { session_id: "s-2", title: "Henry's session", last_event_at: "2026-07-24T19:00:00Z" },
-  ] as never);
+  vi.mocked(listMySessions).mockResolvedValue({
+    sessions: [
+      { session_id: "s-1", title: "My session", last_event_at: "2026-07-24T18:00:00Z" },
+      { session_id: "s-2", title: "Henry's session", last_event_at: "2026-07-24T19:00:00Z" },
+    ],
+    hasMore: false,
+  } as never);
 });
 
 afterEach(() => {

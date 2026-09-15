@@ -2,7 +2,15 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
+import { ChevronDown } from "lucide-react";
 import { useBreadcrumbs } from "@/components/BreadcrumbContext";
 import { useConfirm } from "@/components/ConfirmDialog";
 import CopyableCommandBlock from "@/components/CopyableCommandBlock";
@@ -10,10 +18,21 @@ import SessionUpload from "@/components/SessionUpload";
 import { SessionsListSkeleton } from "@/components/SkeletonStates";
 import { PinIcon } from "@/components/SkillIcons";
 import { SelectBox } from "@/components/content/file-browser/ItemsList";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { useAuth } from "@/hooks/useAuth";
 import {
   deleteSession,
+  listAgentNames,
   listMySessions,
+  listSessionFolders,
+  type SessionFolder,
+  type SessionListFilters,
   type SessionSummary,
 } from "@/lib/api";
 import { usePins } from "@/lib/pins";
@@ -31,6 +50,11 @@ type ViewKey = "list" | "day" | "user" | "agent" | "ticket";
 type SortKey = "recent" | "oldest" | "events" | "name";
 
 const VIEW_STORAGE_KEY = "stash_sessions_view";
+const HIDE_CURATOR_STORAGE_KEY = "stash_sessions_hide_curator";
+
+// One page of sessions. The list used to ask for 200 rows in one shot and stop,
+// so anyone with real history silently never saw past the newest 200.
+const PAGE_SIZE = 50;
 
 
 const VIEWS: { key: ViewKey; label: string }[] = [
@@ -59,6 +83,26 @@ export default function SkillSessionsPage() {
   const [view, setView] = useState<ViewKey>("list");
   const [sort, setSort] = useState<SortKey>("recent");
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [reloadToken, setReloadToken] = useState(0);
+
+  const [folders, setFolders] = useState<SessionFolder[]>([]);
+  const [agentNames, setAgentNames] = useState<string[]>([]);
+  // `query` is what has been typed, `debouncedQuery` what has been sent: every
+  // filter change re-queries, so typing is given a moment to settle first.
+  const [query, setQuery] = useState("");
+  const [debouncedQuery, setDebouncedQuery] = useState("");
+  const [folderId, setFolderId] = useState("");
+  const [agent, setAgent] = useState("");
+  const [hideCurator, setHideCurator] = useState(false);
+  // The persisted curator preference lands a tick after the first render, so the
+  // list waits for it rather than fetching an unfiltered page one moment and a
+  // filtered one the next.
+  const [prefsReady, setPrefsReady] = useState(false);
+  // Bumped by every page-1 load so an in-flight append can tell that the list it
+  // was about to extend has since been replaced.
+  const queryToken = useRef(0);
 
   function toggleSelect(sessionId: string) {
     setSelectedIds((current) => {
@@ -71,30 +115,98 @@ export default function SkillSessionsPage() {
 
   useBreadcrumbs([{ label: "Sessions" }], "sessions");
 
-  // Restore last-used view from localStorage on mount. Sort + search are
-  // intentionally not persisted — they read more like ad-hoc filters than
-  // long-lived preferences.
+  // Restore last-used view and curator preference from localStorage on mount.
+  // Sort and the text search are intentionally not persisted — they read as
+  // ad-hoc filters, whereas hiding curator runs is a standing preference.
   useEffect(() => {
     if (typeof window === "undefined") return;
     const saved = window.localStorage.getItem(VIEW_STORAGE_KEY) as ViewKey | null;
     if (saved && VIEWS.some((v) => v.key === saved)) setView(saved);
+    setHideCurator(window.localStorage.getItem(HIDE_CURATOR_STORAGE_KEY) === "true");
+    setPrefsReady(true);
   }, []);
 
-  const load = useCallback(async () => {
-    try {
-      setSessions(await listMySessions(200));
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to load sessions");
-    }
-  }, []);
-
-  // Fire on mount, in parallel with useAuth's /users/me — apiFetch resolves
-  // its own token, and serializing behind auth doubled time-to-content. A
-  // signed-out visitor's 401 is invisible: the !user guard below keeps the
-  // error from rendering while the login redirect happens.
   useEffect(() => {
-    load();
-  }, [load]);
+    const timer = setTimeout(() => setDebouncedQuery(query.trim()), 250);
+    return () => clearTimeout(timer);
+  }, [query]);
+
+  const filters = useMemo<SessionListFilters>(
+    () => ({
+      limit: PAGE_SIZE,
+      folderId: folderId || undefined,
+      agent: agent || undefined,
+      query: debouncedQuery || undefined,
+      hideCurator,
+    }),
+    [folderId, agent, debouncedQuery, hideCurator],
+  );
+
+  // The dropdown's options are scope-wide, so one fetch covers every page. A
+  // failure lands in the shared banner: empty dropdowns with no explanation
+  // would read as "you have no folders".
+  useEffect(() => {
+    async function loadFilterOptions() {
+      try {
+        const [{ folders: nextFolders }, nextAgentNames] = await Promise.all([
+          listSessionFolders(),
+          listAgentNames(),
+        ]);
+        setFolders(nextFolders);
+        setAgentNames(nextAgentNames);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Failed to load filter options");
+      }
+    }
+    loadFilterOptions();
+  }, []);
+
+  // Page 1 of the current filters. Every filter change restarts here, because an
+  // offset into a result set that just changed is not a page of anything.
+  //
+  // Fires on mount in parallel with useAuth's /users/me — apiFetch resolves its
+  // own token, and serializing behind auth doubled time-to-content. A signed-out
+  // visitor's 401 is invisible: the !user guard below keeps the error from
+  // rendering while the login redirect happens.
+  useEffect(() => {
+    if (!prefsReady) return;
+    const token = ++queryToken.current;
+    setSessions(null);
+    setHasMore(false);
+    setError("");
+
+    async function loadFirstPage() {
+      try {
+        const page = await listMySessions(filters);
+        if (token !== queryToken.current) return;
+        setSessions(page.sessions);
+        setHasMore(page.hasMore);
+      } catch (e) {
+        if (token === queryToken.current) {
+          setError(e instanceof Error ? e.message : "Failed to load sessions");
+        }
+      }
+    }
+    loadFirstPage();
+  }, [prefsReady, filters, reloadToken]);
+
+  const loadMore = useCallback(async () => {
+    if (!sessions || !hasMore || loadingMore) return;
+    const token = queryToken.current;
+    setLoadingMore(true);
+    try {
+      const page = await listMySessions({ ...filters, offset: sessions.length });
+      if (token !== queryToken.current) return;
+      setSessions((current) => [...(current ?? []), ...page.sessions]);
+      setHasMore(page.hasMore);
+    } catch (e) {
+      if (token === queryToken.current) {
+        setError(e instanceof Error ? e.message : "Failed to load more sessions");
+      }
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [sessions, hasMore, loadingMore, filters]);
 
   useEffect(() => {
     if (!loading && !user) router.push("/login");
@@ -121,6 +233,9 @@ export default function SkillSessionsPage() {
   const selectedSessions = (sorted ?? []).filter((s) =>
     selectedIds.has(s.session_id),
   );
+  // How many ad-hoc filters are narrowing the list. The search counts by its
+  // debounced value, because that is the one the server actually saw.
+  const activeFilterCount = [debouncedQuery, folderId, agent].filter(Boolean).length;
   function clearSelection() {
     setSelectedIds(new Set());
   }
@@ -139,10 +254,29 @@ export default function SkillSessionsPage() {
         await deleteSession(session.id!);
       }
       clearSelection();
-      await load();
+      setReloadToken((n) => n + 1);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Delete failed");
     }
+  }
+
+  function setHideCuratorPersisted(next: boolean) {
+    setHideCurator(next);
+    try {
+      window.localStorage.setItem(HIDE_CURATOR_STORAGE_KEY, String(next));
+    } catch {
+      /* localStorage unavailable */
+    }
+  }
+
+  // Clears everything, the standing curator preference included: the least
+  // surprising reading of "show me the whole list again".
+  function clearFilters() {
+    setQuery("");
+    setDebouncedQuery("");
+    setFolderId("");
+    setAgent("");
+    setHideCuratorPersisted(false);
   }
 
   function setViewPersisted(next: ViewKey) {
@@ -164,7 +298,7 @@ export default function SkillSessionsPage() {
         )}
 
         <div className="mt-5 mb-4">
-          <SessionUpload onUploaded={load} />
+          <SessionUpload onUploaded={() => setReloadToken((n) => n + 1)} />
         </div>
 
         {pinnedSessions.length > 0 && (
@@ -196,6 +330,54 @@ export default function SkillSessionsPage() {
             options={SORTS}
             onChange={(v) => setSort(v as SortKey)}
           />
+
+          <label className="inline-flex items-center gap-1.5">
+            <span className="sys-label" style={{ fontSize: 10 }}>
+              Search
+            </span>
+            <input
+              type="search"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Title contains…"
+              className="w-44 rounded-full border border-border bg-surface px-2.5 py-1 text-[12px] text-foreground placeholder:text-muted-foreground focus:border-brand focus:outline-none"
+            />
+          </label>
+
+          <FilterSelect
+            label="Folder"
+            value={folderId}
+            allLabel="All folders"
+            options={folders.map((f) => ({ value: f.id, label: f.name }))}
+            onChange={setFolderId}
+          />
+          <FilterSelect
+            label="Agent"
+            value={agent}
+            allLabel="All agents"
+            options={agentNames.map((name) => ({ value: name, label: name }))}
+            onChange={setAgent}
+          />
+
+          <label className="inline-flex cursor-pointer items-center gap-1.5 text-[12px] text-muted-foreground hover:text-foreground">
+            <input
+              type="checkbox"
+              checked={hideCurator}
+              onChange={(e) => setHideCuratorPersisted(e.target.checked)}
+              className="cursor-pointer accent-brand"
+            />
+            Hide curator runs
+          </label>
+
+          {(activeFilterCount > 0 || hideCurator) && (
+            <button
+              type="button"
+              onClick={clearFilters}
+              className="cursor-pointer text-[12px] text-muted-foreground underline hover:text-foreground"
+            >
+              Clear filters
+            </button>
+          )}
         </div>
 
         <SessionsView
@@ -205,7 +387,27 @@ export default function SkillSessionsPage() {
           onTogglePin={pins.toggle}
           selectedIds={selectedIds}
           onToggleSelect={toggleSelect}
+          empty={
+            activeFilterCount > 0 || hideCurator ? (
+              <NoMatchesFound onClear={clearFilters} />
+            ) : (
+              <SessionsEmptyState />
+            )
+          }
         />
+
+        {hasMore && (
+          <div className="flex justify-center py-4">
+            <button
+              type="button"
+              onClick={() => void loadMore()}
+              disabled={loadingMore}
+              className="cursor-pointer rounded-md border border-border px-3 py-1.5 text-[12.5px] text-muted-foreground hover:text-foreground disabled:cursor-default disabled:opacity-60"
+            >
+              {loadingMore ? "Loading…" : `Load more (${PAGE_SIZE})`}
+            </button>
+          </div>
+        )}
       </div>
 
       {selectedSessions.length > 0 && (
@@ -261,6 +463,7 @@ function SessionsView({
   onTogglePin,
   selectedIds,
   onToggleSelect,
+  empty,
 }: {
   view: ViewKey;
   sessions: SessionSummary[];
@@ -268,9 +471,10 @@ function SessionsView({
   onTogglePin: (sessionId: string) => void;
   selectedIds: Set<string>;
   onToggleSelect: (sessionId: string) => void;
+  empty: ReactNode;
 }) {
   if (sessions.length === 0) {
-    return <SessionsEmptyState />;
+    return <>{empty}</>;
   }
 
   if (view === "list") {
@@ -460,6 +664,76 @@ function SegmentedControl<T extends string>({
   );
 }
 
+// The empty selection needs a value of its own: a radio item's value cannot be
+// the empty string, so the page's "no filter" "" and the menu's sentinel are
+// translated at this boundary.
+const ALL_VALUE = "all";
+
+function FilterSelect({
+  label,
+  value,
+  allLabel,
+  options,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  allLabel: string;
+  options: { value: string; label: string }[];
+  onChange: (next: string) => void;
+}) {
+  const selectedLabel = value
+    ? (options.find((option) => option.value === value)?.label ?? value)
+    : allLabel;
+
+  return (
+    <div className="inline-flex items-center gap-1.5 text-[12px]">
+      <span className="sys-label" style={{ fontSize: 10 }}>
+        {label}
+      </span>
+      <DropdownMenu>
+        <DropdownMenuTrigger
+          aria-label={label}
+          className="flex h-7 max-w-[190px] cursor-pointer items-center gap-1.5 rounded-full border border-border bg-surface px-3 text-[12px] text-foreground hover:border-[var(--color-brand-300)]"
+        >
+          <span className="truncate">{selectedLabel}</span>
+          <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
+        </DropdownMenuTrigger>
+        <DropdownMenuContent className="w-56 text-[12.5px]">
+          <DropdownMenuRadioGroup
+            value={value || ALL_VALUE}
+            onValueChange={(next) => onChange(next === ALL_VALUE ? "" : next)}
+          >
+            <DropdownMenuRadioItem value={ALL_VALUE}>{allLabel}</DropdownMenuRadioItem>
+            {options.map((option) => (
+              <DropdownMenuRadioItem key={option.value} value={option.value} className="truncate">
+                {option.label}
+              </DropdownMenuRadioItem>
+            ))}
+          </DropdownMenuRadioGroup>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </div>
+  );
+}
+
+function NoMatchesFound({ onClear }: { onClear: () => void }) {
+  return (
+    <div className="rounded-lg border border-dashed border-border bg-surface/30 px-4 py-6 text-center">
+      <p className="m-0 text-[12.5px] text-muted-foreground">
+        No sessions match these filters.
+      </p>
+      <button
+        type="button"
+        onClick={onClear}
+        className="mt-2 cursor-pointer text-[12.5px] text-foreground underline hover:no-underline"
+      >
+        Clear filters
+      </button>
+    </div>
+  );
+}
+
 function Chev({ open }: { open: boolean }) {
   return (
     <svg
@@ -499,7 +773,7 @@ function SessionsTable({
   const showFolder = sessions.some((s) => s.session_folder_name);
 
   return (
-    <div className="overflow-hidden rounded-lg border border-border bg-surface">
+    <div className="scroll-thin overflow-x-auto rounded-lg border border-border bg-surface">
       <div
         className={
           "hidden gap-3 border-b border-border bg-base/70 px-3 py-2 text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground md:grid " +
@@ -531,10 +805,19 @@ function SessionsTable({
   );
 }
 
+// The folder layout at its narrowest: 896px of column minimums + 96px of gap-3
+// gutters + 24px of row padding. Below this the grid would overflow the table
+// box, which is exactly what used to clip the Updated and pin columns off the
+// right edge — now the table scrolls sideways instead. Only applies at md+, where
+// the grid layout takes over from the two-column mobile row.
+const TABLE_MIN_WIDTH = "md:min-w-[1016px]";
+
 const GRID_COLS =
-  "md:grid-cols-[minmax(128px,0.68fr)_minmax(240px,1.7fr)_86px_58px_minmax(104px,0.62fr)_94px_88px_28px]";
+  TABLE_MIN_WIDTH +
+  " md:grid-cols-[minmax(128px,0.68fr)_minmax(240px,1.7fr)_86px_58px_minmax(104px,0.62fr)_94px_88px_28px]";
 const GRID_COLS_WITH_FOLDER =
-  "md:grid-cols-[minmax(128px,0.68fr)_minmax(200px,1.4fr)_minmax(110px,0.6fr)_86px_58px_minmax(104px,0.62fr)_94px_88px_28px]";
+  TABLE_MIN_WIDTH +
+  " md:grid-cols-[minmax(128px,0.68fr)_minmax(200px,1.4fr)_minmax(110px,0.6fr)_86px_58px_minmax(104px,0.62fr)_94px_88px_28px]";
 
 function SessionTableRow({
   session,

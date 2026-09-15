@@ -1562,19 +1562,38 @@ export interface LinearTicketLabel {
   enriched_at: string | null;
 }
 
+export interface SessionListFilters {
+  limit?: number;
+  offset?: number;
+  sessionIdPrefix?: string;
+  folderId?: string;
+  agent?: string;
+  query?: string;
+  hideCurator?: boolean;
+}
+
+export interface SessionPage {
+  sessions: SessionSummary[];
+  // Whether another page exists past what was returned. The backend answers it
+  // with a lookahead row rather than a count query.
+  hasMore: boolean;
+}
+
 export async function listMySessions(
-  limit = 50,
-  offset = 0,
-  sessionIdPrefix?: string
-): Promise<SessionSummary[]> {
+  filters: SessionListFilters = {}
+): Promise<SessionPage> {
   const qs = new URLSearchParams();
-  qs.set("limit", String(limit));
-  if (offset) qs.set("offset", String(offset));
-  if (sessionIdPrefix) qs.set("session_id_prefix", sessionIdPrefix);
-  const data = await apiFetch<{ sessions: SessionSummary[] }>(
+  qs.set("limit", String(filters.limit ?? 50));
+  if (filters.offset) qs.set("offset", String(filters.offset));
+  if (filters.sessionIdPrefix) qs.set("session_id_prefix", filters.sessionIdPrefix);
+  if (filters.folderId) qs.set("folder_id", filters.folderId);
+  if (filters.agent) qs.set("agent", filters.agent);
+  if (filters.query) qs.set("q", filters.query);
+  if (filters.hideCurator) qs.set("hide_curator", "true");
+  const data = await apiFetch<{ sessions: SessionSummary[]; has_more: boolean }>(
     `${ME}/sessions?${qs.toString()}`
   );
-  return data.sessions;
+  return { sessions: data.sessions, hasMore: data.has_more };
 }
 
 export interface SessionArtifact {

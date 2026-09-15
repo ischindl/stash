@@ -307,7 +307,7 @@ export default function Explorer({ section }: { section: ExplorerSection }) {
   const sessionLabel = (s: SessionSummary) => s.title || s.agent_name || "Session";
 
   const sessionsRoot = useCallback(async (): Promise<Item[]> => {
-    const sessions = await listMySessions(100);
+    const { sessions } = await listMySessions({ limit: 100 });
     return sessions.map((s) => ({
       kind: "session" as const,
       id: s.session_id,

@@ -452,11 +452,17 @@ def _system_prompt(owner_name: str, persona: str | None) -> str:
     return f"{base}\n\n{persona}" if persona else base
 
 
+# Every session id the curator's runs mint starts with this, whichever wiki it
+# writes. Sessions have no agent foreign key, so this prefix is the only signal
+# that a session belongs to the curator rather than to a person.
+CURATOR_SESSION_ID_PREFIX = "agent-curate-"
+
+
 def scheduled_session_prefix(agent: dict) -> str:
     """Prefix of every per-run session id build_scheduled_turn mints for this
     agent — the runs API groups stored history by it."""
-    kind = "curate" if agent.get("is_curator") else "sched"
-    return f"agent-{kind}-{agent['id']}-"
+    base = CURATOR_SESSION_ID_PREFIX if agent.get("is_curator") else "agent-sched-"
+    return f"{base}{agent['id']}-"
 
 
 async def build_scheduled_turn(

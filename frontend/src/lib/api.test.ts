@@ -247,3 +247,75 @@ describe("workspace scope header", () => {
     });
   });
 });
+
+describe("listMySessions", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    localStorage.clear();
+    localStorage.setItem("stash_token", "tok");
+    vi.stubGlobal("fetch", vi.fn());
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function sentQuery() {
+    const url = String(vi.mocked(fetch).mock.calls[0][0]);
+    return new URL(url, "http://localhost").searchParams;
+  }
+
+  beforeEach(() => {
+    vi.mocked(fetch).mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: () =>
+        Promise.resolve({
+          sessions: [{ session_id: "s-1", last_event_at: null, event_count: 0 }],
+          has_more: true,
+        }),
+    } as Response);
+  });
+
+  it("sends the filter names the /me/sessions endpoint reads", async () => {
+    const { listMySessions } = await import("./api");
+    await listMySessions({
+      limit: 50,
+      offset: 50,
+      folderId: "f-1",
+      agent: "claude",
+      query: "quarterly",
+      hideCurator: true,
+    });
+
+    const params = sentQuery();
+    expect(params.get("limit")).toBe("50");
+    expect(params.get("offset")).toBe("50");
+    expect(params.get("folder_id")).toBe("f-1");
+    expect(params.get("agent")).toBe("claude");
+    expect(params.get("q")).toBe("quarterly");
+    expect(params.get("hide_curator")).toBe("true");
+  });
+
+  it("omits unset filters instead of sending them blank", async () => {
+    // A blank `folder_id=` is a malformed UUID to the endpoint, so an unset
+    // filter has to be left off the query string entirely, not sent empty.
+    const { listMySessions } = await import("./api");
+    await listMySessions({ limit: 50 });
+
+    const params = sentQuery();
+    expect(params.get("folder_id")).toBeNull();
+    expect(params.get("agent")).toBeNull();
+    expect(params.get("q")).toBeNull();
+    expect(params.get("hide_curator")).toBeNull();
+    expect(params.get("session_id_prefix")).toBeNull();
+  });
+
+  it("maps has_more onto hasMore so the client knows to offer another page", async () => {
+    const { listMySessions } = await import("./api");
+    const page = await listMySessions({ limit: 50 });
+
+    expect(page.hasMore).toBe(true);
+    expect(page.sessions.map((s) => s.session_id)).toEqual(["s-1"]);
+  });
+});

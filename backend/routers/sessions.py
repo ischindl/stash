@@ -26,6 +26,7 @@ from ..services import (
     session_ref_service,
     session_service,
     session_title_service,
+    sprite_agent_service,
     storage_service,
 )
 
@@ -89,35 +90,22 @@ async def _session_artifacts(session_row_id: UUID) -> list[dict]:
     return artifacts
 
 
-@router.get("/me/sessions")
-async def list_my_sessions(
-    owner_user_id: UUID | None = Query(None),
-    session_id_prefix: str | None = Query(None, max_length=64),
-    limit: int = Query(50, ge=1, le=200),
-    offset: int = Query(0, ge=0),
-    current_user: dict = Depends(get_current_user),
-    scope_user_id: UUID = Depends(get_scope),
-):
-    """Recent sessions across the user's accessible scopes, grouped by
-    session_id. Each row carries the agent name, event count, first & last
-    timestamps, and a preview of the first prompt.
+def _session_list_conditions(
+    args: list,
+    *,
+    owner_user_id: UUID | None,
+    session_id_prefix: str | None = None,
+    folder_id: UUID | None = None,
+    agent: str | None = None,
+    title_query: str | None = None,
+    hide_curator: bool = False,
+) -> list[str]:
+    """WHERE clauses for the sessions list, appending each value to `args` so
+    placeholder numbers keep matching. Callers start `args` with the requesting
+    user, which is what makes $1 in the access predicates below correct.
 
-    `session_id_prefix` narrows to one family of sessions by id — the chat
-    sidebar asks for `agent-` so a user whose recent window is full of recorded
-    CLI transcripts still sees their web chats; filtering client-side loses
-    every chat that falls outside the window.
-    `offset` pages through the (last_event_at DESC) order for infinite scroll."""
-    # The personal view spans every accessible scope (own + shared + workspace);
-    # switching into a workspace narrows the window to that scope's sessions.
-    if owner_user_id is None and scope_user_id != current_user["id"]:
-        owner_user_id = scope_user_id
-    pool = get_pool()
-    args: list = [current_user["id"]]
-    # Sessions rows are the unit here, not events: pick the page of sessions
-    # first (ordered by the last_event_at column ingest maintains), then read
-    # only that page's events for counts and title previews. The old shape
-    # aggregated every accessible history_events row before applying the
-    # limit, so an empty page still paid for the user's whole event history.
+    Every filter runs here rather than in the browser because the list pages: a
+    client-side filter would only ever see the page already loaded."""
     accessible_ws = permission_service.accessible_scope_ids_sql(1)
     where = [
         "s.deleted_at IS NULL",
@@ -138,7 +126,75 @@ async def list_my_sessions(
         # starts_with, not LIKE: the prefix is caller-supplied and LIKE would
         # read '%' and '_' in it as wildcards.
         where.append(f"starts_with(s.session_id, ${len(args)})")
+    if folder_id is not None:
+        args.append(folder_id)
+        where.append(f"s.session_folder_id = ${len(args)}")
+    if agent is not None:
+        args.append(agent)
+        where.append(f"s.agent_name = ${len(args)}")
+    if title_query is not None:
+        args.append(title_query)
+        # strpos over lower(), not LIKE: a searcher's '%' or '_' is literal text
+        # they typed, not a wildcard. A session whose title has not been
+        # generated yet has NULL title, so it cannot match — the honest cost of
+        # searching the stored title instead of every event body.
+        where.append(f"strpos(lower(s.title), lower(${len(args)})) > 0")
+    if hide_curator:
+        args.append(sprite_agent_service.CURATOR_SESSION_ID_PREFIX)
+        where.append(f"NOT starts_with(s.session_id, ${len(args)})")
+    return where
 
+
+@router.get("/me/sessions")
+async def list_my_sessions(
+    owner_user_id: UUID | None = Query(None),
+    session_id_prefix: str | None = Query(None, max_length=64),
+    folder_id: UUID | None = Query(None),
+    agent: str | None = Query(None, max_length=64),
+    q: str | None = Query(None, max_length=200),
+    hide_curator: bool = Query(False),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    current_user: dict = Depends(get_current_user),
+    scope_user_id: UUID = Depends(get_scope),
+):
+    """Recent sessions across the user's accessible scopes, grouped by
+    session_id. Each row carries the agent name, event count, first & last
+    timestamps, and a preview of the first prompt.
+
+    `session_id_prefix` narrows to one family of sessions by id — the chat
+    sidebar asks for `agent-` so a user whose recent window is full of recorded
+    CLI transcripts still sees their web chats; filtering client-side loses
+    every chat that falls outside the window.
+    `folder_id`, `agent` and `q` are the Sessions list's prefilters; they run in
+    SQL rather than in the browser because the list pages, so a client-side
+    filter would only ever see the page already loaded.
+    `hide_curator` drops the curator's own run transcripts, which otherwise
+    bury a person's sessions a night after the curator first runs.
+    `offset` pages through the (last_event_at DESC) order; `has_more` in the
+    response says whether another page exists."""
+    # The personal view spans every accessible scope (own + shared + workspace);
+    # switching into a workspace narrows the window to that scope's sessions.
+    if owner_user_id is None and scope_user_id != current_user["id"]:
+        owner_user_id = scope_user_id
+    pool = get_pool()
+    args: list = [current_user["id"]]
+    where = _session_list_conditions(
+        args,
+        owner_user_id=owner_user_id,
+        session_id_prefix=session_id_prefix,
+        folder_id=folder_id,
+        agent=agent,
+        title_query=q,
+        hide_curator=hide_curator,
+    )
+    # Sessions rows are the unit here, not events: pick the page of sessions
+    # first (ordered by the last_event_at column ingest maintains), then read
+    # only that page's events for counts and title previews. The old shape
+    # aggregated every accessible history_events row before applying the
+    # limit, so an empty page still paid for the user's whole event history.
+    #
+    # One row past the page is fetched so `has_more` needs no count query.
     rows = await pool.fetch(
         f"""
         WITH page AS (
@@ -147,7 +203,7 @@ async def list_my_sessions(
           FROM sessions s
           WHERE {" AND ".join(where)}
           ORDER BY s.last_event_at DESC, s.session_id ASC, s.owner_user_id ASC
-          LIMIT {int(limit)} OFFSET {int(offset)}
+          LIMIT {int(limit) + 1} OFFSET {int(offset)}
         )
         SELECT
           p.session_id,
@@ -186,11 +242,14 @@ async def list_my_sessions(
             he.id
           LIMIT 1
         ) title ON TRUE
-        ORDER BY p.last_event_at DESC, user_name ASC, p.session_id ASC
+        ORDER BY p.last_event_at DESC, p.session_id ASC, p.owner_user_id ASC
         """,
         *args,
     )
     sessions = [dict(r) for r in rows]
+    has_more = len(sessions) > limit
+    # Dropped before enrichment so the lookahead row pays for no title work.
+    sessions = sessions[:limit]
     for session in sessions:
         if not session["user_name"]:
             raise RuntimeError(f"Session {session['session_id']} has no author display_name")
@@ -208,7 +267,7 @@ async def list_my_sessions(
             session["linear_tickets"] = linear_ticket_service.tickets_response(
                 session.get("linear_tickets")
             )
-    return {"sessions": sessions}
+    return {"sessions": sessions, "has_more": has_more}
 
 
 @router.post("/me/sessions", status_code=201)
