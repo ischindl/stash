@@ -25,6 +25,12 @@ If you are about to ask the user to do something for you, think about whether yo
 - **Never ask permission to kill/restart local processes.** If you need to restart uvicorn, ngrok, or any dev server to make progress, just do it. But scope kills to this worktree: several worktrees run the same stack on this machine, so kill by specific PID or port (`kill <pid>`, `pkill -f "next dev -p 3457"`) — never by bare command pattern (`pkill -f "next dev"`, `pkill -f uvicorn`), which takes down other worktrees' servers.
 
 
+### PR creation is operator-gated (operator directive 2026-08-30)
+No agent may open a GitHub PR without the operator's explicit knowledge. Work that
+is done merges to local main and stops there: write a PR proposal into the task log,
+never run `gh pr create`, unless the operator ordered it for that named task. Closing
+or commenting on existing PRs is likewise only on operator order.
+
 ### PR hygiene
 
 PR screenshots are optional (requirement waived 2026-08-10). Include them when they genuinely help review; skip the live-stack dance when they don't.
