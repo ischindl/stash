@@ -49,6 +49,7 @@ WIKI_INTERNAL = "internal"
 WIKI_EXTERNAL = "external"
 WIKI_VALUES = (WIKI_INTERNAL, WIKI_EXTERNAL)
 
+
 # An event reaches the shared, anonymized wiki only through the end user its
 # session belongs to — the privacy rule the prompt used to be trusted to
 # enforce. The fragment names `he`, the `history_events` alias every reader
@@ -58,15 +59,37 @@ WIKI_VALUES = (WIKI_INTERNAL, WIKI_EXTERNAL)
 # dispatches a curator whose feed is empty (a sprite wake and a metered run
 # burned on nothing) or stays silent while the feed has work.
 #
+def cleared_project_clause(sessions_alias: str) -> str:
+    """The predicate that withholds a project the developer has not cleared.
+
+    Per-project clearance is the developer's own veto over their workspace: an
+    event filed in a project that is not cleared reaches no shared completion,
+    even from an end user who shares their own history. The Default folder is
+    the unfiled catch-all and carries no routing decision either way (see
+    `_project_share_wiki`), so it is never the veto.
+
+    One definition, spliced under whichever `sessions` alias a reader already
+    uses: the beat's gate and the backlog have to mean what a shared completion
+    will actually read, or the beat burns a sprite wake and a metered run on an
+    empty completion.
+    """
+    return (
+        f"NOT EXISTS (SELECT 1 FROM session_folders cf "
+        f"WHERE cf.id = {sessions_alias}.session_folder_id "
+        f"AND NOT cf.is_default AND NOT cf.share_wiki)"
+    )
+
+
 # An event the wiki cannot attribute to a sharing end user — a session with no
-# end user, or an event whose session row is gone — does not reach it. The
-# owner's own wiki filters nothing: it is the owner's own memory.
+# end user, or an event whose session row is gone — does not reach it, and
+# neither does one filed in a project the developer has not cleared. The owner's
+# own wiki filters nothing: it is the owner's own memory.
 _SHARE_WIKI_EVENT_SCOPE = (
     "AND EXISTS (SELECT 1 FROM sessions wse "
     "JOIN end_users we ON we.id = wse.end_user_id "
     "WHERE wse.owner_user_id = he.owner_user_id "
     "AND wse.session_id = he.session_id "
-    "AND we.share_wiki)"
+    f"AND we.share_wiki AND {cleared_project_clause('wse')})"
 )
 
 # What the curator is permitted to read, as one clause. Its own run transcripts

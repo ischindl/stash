@@ -310,20 +310,6 @@ async def set_folder_share_wiki(
     return await get_folder(folder_id)
 
 
-async def sharing_project_names(owner_user_id: UUID) -> list[str]:
-    """Names of the projects whose history is cleared for the shared wiki.
-
-    The external curator prompt lists these so the developer can see, in the run
-    they are about to send, exactly which projects may contribute."""
-    rows = await get_pool().fetch(
-        "SELECT name FROM session_folders "
-        "WHERE owner_user_id = $1 AND share_wiki AND NOT is_default "
-        "ORDER BY name",
-        owner_user_id,
-    )
-    return [r["name"] for r in rows]
-
-
 async def delete_folder(folder_id: UUID, user_id: UUID) -> bool:
     """Delete a folder. The Default folder can't be deleted; sessions inside a
     deleted folder fall back to unfiled (ON DELETE SET NULL)."""

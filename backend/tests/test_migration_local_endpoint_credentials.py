@@ -1,6 +1,6 @@
-"""Data-level test for the multi-endpoint credential migration (0208 -> 0209).
+"""Data-level test for the multi-endpoint credential migration (0215 -> 0216).
 
-0209 reshapes `user_agent_credentials` while it holds live data: the
+0216 reshapes `user_agent_credentials` while it holds live data: the
 (user_id, provider) primary key becomes an `id` primary key plus a partial
 unique index, and every pre-existing row has to arrive with a name its owner
 will recognise. `test_migrations.py` only proves `alembic upgrade head` does not
@@ -42,7 +42,7 @@ _MIG_URL = _BASE_URL.rsplit("/", 1)[0] + "/" + _MIG_DB
 # backfill needs in order to read a base_url out of them.
 _KEY = Fernet.generate_key().decode()
 _BOX_ONE = Fernet(_KEY.encode())
-_PREVIOUS_REVISION = "0208"
+_PREVIOUS_REVISION = "0215"
 
 _LEGACY_DOC = {"base_url": "http://box-one.lan:11434/v1", "model": "qwen2.5:7b", "api_key": None}
 # Encrypted ONCE, here, so the post-migration bytes can be compared to it.
@@ -89,7 +89,7 @@ async def _drop_db() -> None:
 
 
 async def _seed_legacy_rows() -> uuid.UUID:
-    """The world exactly as 0208 left it: at most one row per provider, the
+    """The world exactly as 0215 left it: at most one row per provider, the
     local one an encrypted endpoint doc, no id and no name column."""
     conn = await asyncpg.connect(_MIG_URL)
     user = await conn.fetchval(

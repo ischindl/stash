@@ -11,14 +11,14 @@ turn onto it, and that outcome needs to be storable.
 
 The existing values stay untouched; this only widens the set by one.
 
-Revision ID: 0204
-Revises: 0203
+Revision ID: 0211
+Revises: 0210
 """
 
 from alembic import op
 
-revision = "0204"
-down_revision = "0203"
+revision = "0211"
+down_revision = "0210"
 branch_labels = None
 depends_on = None
 

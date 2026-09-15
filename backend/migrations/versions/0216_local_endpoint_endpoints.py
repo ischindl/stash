@@ -18,8 +18,8 @@ Backfill reads every existing row once: an endpoint row is named from the
 host in its own (encrypted) base_url, a key row from its provider. An empty
 database therefore never touches the encryption keyring at all.
 
-Revision ID: 0209
-Revises: 0208
+Revision ID: 0216
+Revises: 0215
 """
 
 import json
@@ -28,8 +28,8 @@ from urllib.parse import urlparse
 import sqlalchemy as sa
 from alembic import op
 
-revision = "0209"
-down_revision = "0208"
+revision = "0216"
+down_revision = "0215"
 branch_labels = None
 depends_on = None
 

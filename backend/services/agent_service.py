@@ -691,7 +691,7 @@ async def mark_run_skipped(agent_id: UUID, reason: str) -> None:
     """Resolve a consumed tick that stopped at a designed scheduler gate.
 
     The outcome is stored as `skipped_{reason}`, and `agents_last_run_outcome`
-    is a CHECK-constrained set (created in migration 0184, widened by 0204) — a
+    is a CHECK-constrained set (created in migration 0184, widened by 0211) — a
     new gate has to add its value there or the write is rejected."""
     await get_pool().execute(
         "UPDATE agents SET last_run_outcome = $2 WHERE id = $1",

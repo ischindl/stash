@@ -8,14 +8,14 @@ instead of rereading transcripts. When it is NULL the curator runs the single
 phase it always has. The split pays on a long window — the expensive model
 sees compressed extracts, not 500 raw events.
 
-Revision ID: 0208
-Revises: 0207
+Revision ID: 0215
+Revises: 0214
 """
 
 from alembic import op
 
-revision = "0208"
-down_revision = "0207"
+revision = "0215"
+down_revision = "0214"
 branch_labels = None
 depends_on = None
 

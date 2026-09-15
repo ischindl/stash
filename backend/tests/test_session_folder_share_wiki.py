@@ -85,24 +85,6 @@ async def test_toggle_round_trips_both_ways(client: AsyncClient):
 
 
 @pytest.mark.asyncio
-async def test_sharing_project_names_lists_only_opted_in_projects(client: AsyncClient):
-    """The prompt section names exactly the cleared projects: the Default folder
-    is never one of them, an untouched project is never one of them."""
-    key, uid = await _register(client, "sw-names")
-    await _create_folder(client, key, "beta-repair")
-    cleared = await _create_folder(client, key, "acme-diesel")
-    # Listing ensures the scope's Default folder exists, like any console visit.
-    default = {f["name"]: f for f in await _listed_folders(client, key)}["Default"]
-    assert default["is_default"] is True
-
-    await session_folder_service.set_folder_share_wiki(
-        scope_user_id=uid, folder_id=UUID(cleared["id"]), share_wiki=True
-    )
-
-    assert await session_folder_service.sharing_project_names(uid) == ["acme-diesel"]
-
-
-@pytest.mark.asyncio
 async def test_default_folder_has_no_toggle(client: AsyncClient, pool):
     """D5: Default is the unfiled catch-all, not a routing decision. The write
     refuses it and the row keeps its default."""

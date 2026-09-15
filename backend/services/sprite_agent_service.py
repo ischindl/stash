@@ -472,12 +472,23 @@ async def build_scheduled_turn(
     `extracts` is the digest report of a two-phase curator run: the wiki
     prompt then works from the report instead of telling the model to read
     the raw feed itself."""
-    from . import end_user_service, files_tree_service, prompts
+    from . import files_tree_service, prompts, scoped_curation_service
 
     user_id = UUID(str(agent["user_id"]))
     session_id = f"{scheduled_session_prefix(agent)}{run_stamp}"
     if agent.get("is_curator"):
         since = agent["curated_through"].isoformat() if agent.get("curated_through") else None
+        # A developer-platform workspace curates through the backend's scoped
+        # path and never reaches a sprite here: a sprite runs with the
+        # workspace's own credentials and a shell, so it can read every end
+        # user's material in the workspace — the customers who opted out
+        # included. The gate is that isolation, which is why it also covers a
+        # workspace's own internal curator, not only the cross-user one.
+        if (
+            agent["curator_wiki"] == "external"
+            or await scoped_curation_service.workspace_for_agent(agent) is not None
+        ):
+            raise PermissionError("Developer curators must use scoped backend curation")
         # A folder-bound curator gets neither workspace prompt: its whole world
         # is one project folder — the scoped feed as input, the folder's pages
         # as the artifact.
@@ -498,16 +509,6 @@ async def build_scheduled_turn(
                 folder["name"],
                 since,
                 extracts,
-            )
-        # Which wiki this curator writes decides its prompt. A developer
-        # workspace runs both: the internal pass over its own Memory wiki, and
-        # the external pass compiling the cross-user wiki plus per-user wikis.
-        if agent.get("curator_wiki") == "external":
-            workspace = await end_user_service.workspace_for_scope(user_id)
-            if workspace is None or workspace["external_wiki_folder_id"] is None:
-                raise ValueError("external curator on a scope with no active developer platform")
-            return session_id, await end_user_service.external_curator_prompt(
-                workspace, agent.get("curated_through")
             )
         memory = await files_tree_service.get_or_create_memory_folder(user_id, user_id)
         return session_id, prompts.render_curator_prompt(memory["id"], since, extracts)
@@ -541,14 +542,31 @@ async def run_scheduled(agent: dict, run_stamp: str) -> str:
     """Run a scheduled agent headless — one turn into a fresh per-run session —
     and return the result text.
 
+    A developer-platform workspace's curator never reaches a sprite at all — it
+    runs the backend's scoped curation, which is why the workspace is checked
+    before credentials, prompts, or the digest phase below.
+
     A curator with a digest model runs in two phases: the digest model
     reads the raw feed and reports extracts, then the curator's own model
     writes the wiki from the report. The split is what makes a long backlog
     affordable — the expensive model never rereads transcripts. A digest that
     yields nothing fails the run rather than spending the writer on emptiness."""
-    from . import user_service
+    from . import scoped_curation_service, user_service
 
     user_id = UUID(str(agent["user_id"]))
+    workspace = await scoped_curation_service.workspace_for_agent(agent)
+    if workspace is not None:
+        # One run per agent is the dispatcher's `agent_run_lock`, taken before
+        # this call; the sprite path gets this session lock from `run_chat`,
+        # which a scoped run does not go through.
+        async with _turn_lock(f"{scheduled_session_prefix(agent)}{run_stamp}"):
+            try:
+                return await asyncio.wait_for(
+                    scoped_curation_service.run(agent, workspace, run_stamp),
+                    timeout=settings.AGENT_TURN_TIMEOUT_SECONDS,
+                )
+            except TimeoutError as exc:
+                raise RuntimeError("Scoped curation exceeded its run time limit") from exc
     user = await user_service.get_user_by_id(user_id)
     if user is None:
         return ""

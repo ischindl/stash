@@ -769,25 +769,15 @@ async def test_curator_instructions_roundtrip(client: AsyncClient):
     assert resp.status_code == 200
     assert resp.json()["instructions"] is None
 
-    # The same read also proves the prompt's project section is live: clearing a
-    # project must name it in the preview the developer is shown, because that
-    # preview is built by the one builder the run itself uses.
-    folder = await _project_folder(client, api_key, workspace, "acme-diesel")
-    cleared = await client.patch(
-        f"/api/v1/me/developer/session-folders/{folder['id']}",
-        json={"share_wiki": True},
-        headers=scope,
-    )
-    assert cleared.status_code == 200
-
-    preview = await client.get("/api/v1/me/developer/curator", headers=scope)
-    assert "`acme-diesel`" in preview.json()["prompt"]
-    assert "- none" not in preview.json()["prompt"]
+    # What clearing a project changes is which documents a run reads, not the
+    # text of its instructions: the scoped run is told its purpose and the
+    # backend chooses the inputs. That selection is what
+    # test_project_toggle_moves_the_feed_and_the_project_list_together proves.
 
 
 @pytest.mark.asyncio
 async def test_backfill_dispatches_full_history_without_touching_watermark(
-    client: AsyncClient, monkeypatch
+    client: AsyncClient, monkeypatch, sprite_exec
 ):
     """Backfill means 'read everything again' — but only the run itself works
     from the empty watermark. The stored watermark must survive the dispatch
@@ -1119,93 +1109,27 @@ async def test_console_member_cannot_file_sessions(client: AsyncClient, pool):
     )
 
 
-# --- The curator prompt routes on the project signal ---
-
-
-def _external_prompt(since: str | None, sharing_projects: list[str]) -> str:
-    from backend.services import prompts
-
-    return prompts.render_external_curator_prompt(
-        "wiki-folder-id",
-        [
-            {"name": "Acme Diesel", "wiki_folder_id": "f-one", "share_wiki": True},
-            {"name": "Beta Repair", "wiki_folder_id": "f-two", "share_wiki": False},
-        ],
-        since,
-        sharing_projects,
-    )
-
-
-def test_external_prompt_states_the_project_clearance_fields():
-    """The curator applies the routing rules event by event, so the prompt has
-    to name the fields it reads them from and say what a false one means: the
-    developer's own inaction, not an absence of data. Prose is asserted with
-    whitespace collapsed — the prompt wraps for readability."""
-    prompt = _external_prompt(None, ["Acme Parts"])
-    prose = " ".join(prompt.split())
-
-    assert "session_folder_share_wiki" in prompt
-    assert "`session_folder`" in prompt
-    assert "the developer has not cleared this project" in prose
-    # A project that is off stops even a sharing user's event. The developer's
-    # own sessions are no longer the case to police in this prose: a session
-    # with no end user is outside the external feed entirely now, so what their
-    # project clearance still governs is the workspace-wide half of the delta.
-    assert "even from a user who shares" in prose
-
-
-def test_external_prompt_lists_cleared_projects_and_says_none():
-    """The heading is the developer's confirmation, in the run they are about to
-    send, of which projects may contribute — an empty list must read as none,
-    not as a silent omission."""
-    assert "- `Acme Parts`" in _external_prompt(None, ["Acme Parts"])
-    empty = _external_prompt("2026-01-01T00:00:00+00:00", [])
-    assert "## Projects that feed the shared wiki" in empty
-    assert "- none" in empty
-
-
-def test_external_prompt_names_its_wiki_on_the_feed_command():
-    """The feed is scoped in SQL, but only for a reader that asks for the
-    external wiki: a `stash changes` without `--wiki` answers for the owner's
-    internal feed, which is everything. The flag is therefore load-bearing for
-    this curator's whole privacy story, asserted in both command shapes."""
-    bootstrap = _external_prompt(None, ["Acme Parts"])
-    maintenance = _external_prompt("2026-01-01T00:00:00+00:00", ["Acme Parts"])
-
-    assert "stash changes --wiki external --json" in bootstrap
-    assert "stash changes --wiki external --since 2026-01-01T00:00:00+00:00 --json" in maintenance
-
-
-def test_external_prompt_says_what_the_feed_filters_and_what_it_does_not():
-    """Two truths the curator has to hold: it can stop filtering events by hand,
-    because the feed already excludes opted-out users and userless sessions; and
-    it must keep routing the owner-wide half of the delta, because pages, files
-    and saves were never scoped by the wiki and still need judgement."""
-    prose = " ".join(_external_prompt(None, ["Acme Parts"]).split())
-
-    assert "covers only sessions of users who share" in prose
-    assert "neither does history from a session with no end user" in prose
-    assert "Pages, files, saves and sources are NOT scoped" in prose
-    # The by-hand event routing the SQL predicate replaced. Left in place it
-    # would be a second, weaker copy of a rule the feed now enforces itself.
-    assert "Only events from users WITHOUT the opt-out marker" not in prose
-
-
 @pytest.mark.asyncio
-async def test_project_toggle_moves_the_feed_and_the_preview_together(client: AsyncClient, pool):
+async def test_project_toggle_moves_the_feed_and_the_project_list_together(
+    client: AsyncClient, pool
+):
     """The delivery proof for the per-project control. One switch, and the two
-    things a developer can actually look at agree on it in the same breath: the
-    feed a curator run reads, and the console's preview of that run.
+    surfaces a developer can look at agree on it in the same breath: the feed a
+    shared curation run reads, and the project list the console draws the switch
+    from.
 
-    Asserting the stored column would let a routing rule that ignores it ship
-    green, so the pair is walked through the HTTP routes the GUI calls: a fresh
-    project contributes nothing, clearing it moves both surfaces, and closing it
-    again moves both back."""
+    Asserting the stored column would let a rule that ignores it ship green, so
+    both halves are walked through the HTTP routes the GUI calls: a project that
+    was never opened contributes nothing to the shared feed, clearing it moves
+    both surfaces, and closing it moves both back."""
     api_key, _, workspace = await _developer(client)
     scope = {**_auth(api_key), "X-Stash-Scope": workspace["scope_user_id"]}
     machine_key = await _mint_workspace_key(client, api_key, workspace)
     folder = await _project_folder(client, api_key, workspace, "acme-diesel")
-    await _push(client, machine_key, [_event("s-routing")])
+    # The session must belong to an end user who shares their own history: a
+    # session with no end user never reaches the shared feed whatever the project
+    # says, which would let this test prove the veto while the veto did nothing.
+    await _push(client, machine_key, [_event("s-routing", user_id="u-routing", user_name="Ru")])
     row_id = await pool.fetchval(
         "SELECT id FROM sessions WHERE owner_user_id = $1 AND session_id = $2",
         uuid.UUID(workspace["scope_user_id"]),
@@ -1218,18 +1142,19 @@ async def test_project_toggle_moves_the_feed_and_the_preview_together(client: As
     )
     assert filed.status_code == 200, filed.text
 
-    async def feed_clearance() -> object:
+    async def shared_feed_reads_event() -> bool:
         feed = await client.get(
-            "/api/v1/me/changes", params={"since": "2020-01-01T00:00:00+00:00"}, headers=scope
+            "/api/v1/me/changes",
+            params={"since": "2020-01-01T00:00:00+00:00", "wiki": "external"},
+            headers=scope,
         )
         assert feed.status_code == 200, feed.text
-        entry = next(h for h in feed.json()["history"] if h["session_id"] == "s-routing")
-        return entry["session_folder_share_wiki"]
+        return any(h["session_id"] == "s-routing" for h in feed.json()["history"])
 
-    async def preview() -> str:
-        resp = await client.get("/api/v1/me/developer/curator", headers=scope)
-        assert resp.status_code == 200, resp.text
-        return resp.json()["prompt"]
+    async def listed_clearance() -> object:
+        listed = await client.get("/api/v1/me/session-folders", headers=scope)
+        assert listed.status_code == 200, listed.text
+        return next(f["share_wiki"] for f in listed.json()["folders"] if f["id"] == folder["id"])
 
     async def toggle(share_wiki: bool) -> None:
         resp = await client.patch(
@@ -1239,24 +1164,16 @@ async def test_project_toggle_moves_the_feed_and_the_preview_together(client: As
         )
         assert resp.status_code == 200, resp.text
 
-    # Filed under a project that was never opened: the event says so, and the
-    # preview says no project is cleared.
-    assert await feed_clearance() is False
-    closed = await preview()
-    assert "`acme-diesel`" not in closed
-    assert "- none" in closed
+    assert await shared_feed_reads_event() is False
+    assert await listed_clearance() is False
 
     await toggle(True)
-    assert await feed_clearance() is True
-    opened = await preview()
-    assert "`acme-diesel`" in opened
-    assert "- none" not in opened
+    assert await shared_feed_reads_event() is True
+    assert await listed_clearance() is True
 
     await toggle(False)
-    assert await feed_clearance() is False
-    reclosed = await preview()
-    assert "`acme-diesel`" not in reclosed
-    assert "- none" in reclosed
+    assert await shared_feed_reads_event() is False
+    assert await listed_clearance() is False
 
 
 @pytest.mark.asyncio

@@ -100,7 +100,12 @@ async def _run_curator_now(
     and is not a failure — the run in flight advances the watermark past
     exactly what it read, so a skipped dispatch discards no work, and it never
     charges the allowance because the skip happens before the run is metered."""
-    from ..services import agent_service, curation_service, sprite_agent_service
+    from ..services import (
+        agent_service,
+        curation_service,
+        scoped_curation_service,
+        sprite_agent_service,
+    )
 
     lock = sprite_agent_service.agent_run_lock(agent_id, AGENT_RUN_LOCK_TTL)
     try:
@@ -111,6 +116,11 @@ async def _run_curator_now(
         return
     try:
         agent = await agent_service.get_agent_by_id(agent_id)
+        # An unmetered run is a platform trigger (the first-day tick). A curator
+        # the user parked as chat-only must stay parked: the platform may not
+        # run an agent the user turned off, metered or not.
+        if not metered and agent["run_mode"] != "scheduled":
+            return
         if full_history:
             agent = {**agent, "curated_through": None}
         now = datetime.now(UTC)
@@ -120,14 +130,18 @@ async def _run_curator_now(
             # with the beat's minute-stamped run. The stamp separates history
             # only — single flight is `lock` above, not this.
             await sprite_agent_service.run_scheduled(agent, now.strftime("%Y%m%d%H%M%S"))
-            through = await curation_service.complete_through(
-                UUID(str(agent["user_id"])),
-                agent["curated_through"],
-                now,
-                agent["curator_wiki"],
-                agent.get("curator_folder_id"),
-            )
-            await agent_service.mark_curated(agent_id, through)
+            # A scoped workspace run commits its own watermark under the same
+            # permission lock as its writes, so a concurrent opt-out's reset
+            # cannot be overwritten by this stamp.
+            if await scoped_curation_service.workspace_for_agent(agent) is None:
+                through = await curation_service.complete_through(
+                    UUID(str(agent["user_id"])),
+                    agent["curated_through"],
+                    now,
+                    agent["curator_wiki"],
+                    agent.get("curator_folder_id"),
+                )
+                await agent_service.mark_curated(agent_id, through)
             await agent_service.mark_run_succeeded(agent_id)
         except Exception as e:
             await agent_service.mark_run_failed(agent_id, str(e), metered=metered)
@@ -177,9 +191,37 @@ async def _first_day_curator_tick(scope_user_id: UUID) -> None:
         await _maybe_dispatch_first_day_run(scope_user_id, agent, now)
 
 
+async def _require_run_auth(scope_user_id: UUID, agent: dict) -> None:
+    """Preflight the credential a run needs, raising NeedsAuth/ProviderNotConfigured.
+
+    A developer-platform workspace curates through the backend's own key with no
+    user credential in play, so its gate is that key. Everything else — personal
+    Memory, project-folder curators, scheduled non-curator agents — runs on the
+    scope's credential, and that credential is a *pinned local endpoint* as much
+    as a key provider: resolving without `model_id`/`credential_id` would send
+    the run to a provider the row never chose (or fail it as a mismatch).
+
+    `scope_user_id` is the owner of the feed, which for a folder curator is not
+    necessarily `agent["user_id"]`.
+    """
+    from ..services import agent_auth, scoped_curation_service
+
+    if await scoped_curation_service.workspace_for_agent(agent) is not None:
+        scoped_curation_service.require_configured()
+        return
+    await agent_auth.resolve(
+        scope_user_id,
+        agent["model_provider"],
+        model_id=agent.get("model_id"),
+        credential_id=agent.get("credential_id"),
+    )
+
+
 async def _maybe_dispatch_first_day_run(scope_user_id: UUID, agent: dict, now: datetime) -> None:
     from ..services import agent_auth, curation_service
 
+    if agent["run_mode"] != "scheduled":
+        return
     # A curator that has never run skips the debounce: its seeded last_run_at
     # is the backfill point (~account creation), which would otherwise mute
     # the very first conversations after signup.
@@ -190,12 +232,7 @@ async def _maybe_dispatch_first_day_run(scope_user_id: UUID, agent: dict, now: d
     ):
         return
     try:
-        await agent_auth.resolve(
-            scope_user_id,
-            agent["model_provider"],
-            model_id=agent.get("model_id"),
-            credential_id=agent.get("credential_id"),
-        )
+        await _require_run_auth(scope_user_id, agent)
     except (agent_auth.NeedsAuth, agent_auth.ProviderNotConfigured):
         return
     if not await curation_service.has_changes_since(
@@ -213,7 +250,12 @@ async def _maybe_dispatch_first_day_run(scope_user_id: UUID, agent: dict, now: d
 
 async def _run_due() -> int:
     from ..config import settings
-    from ..services import agent_auth, agent_service, billing_service, curation_service
+    from ..services import (
+        agent_auth,
+        agent_service,
+        billing_service,
+        curation_service,
+    )
 
     now = datetime.now(UTC)
     stamp = now.strftime("%Y%m%d%H%M")
@@ -239,12 +281,7 @@ async def _run_due() -> int:
             continue
         # No runnable credential (unconnected free user) → nothing can run.
         try:
-            await agent_auth.resolve(
-                user_id,
-                agent["model_provider"],
-                model_id=agent.get("model_id"),
-                credential_id=agent.get("credential_id"),
-            )
+            await _require_run_auth(user_id, agent)
         except (agent_auth.NeedsAuth, agent_auth.ProviderNotConfigured):
             logger.info("agent schedule: no credential for agent %s — skipping", agent["id"])
             await agent_service.mark_run_skipped(agent["id"], "no_credential")
@@ -269,7 +306,13 @@ async def _run_due() -> int:
 
 async def _run_scheduled_agent(agent_id: UUID, stamp: str) -> None:
     from ..database import get_pool
-    from ..services import agent_service, alert_service, curation_service, sprite_agent_service
+    from ..services import (
+        agent_service,
+        alert_service,
+        curation_service,
+        scoped_curation_service,
+        sprite_agent_service,
+    )
 
     try:
         agent = await agent_service.get_agent_by_id(agent_id)
@@ -277,6 +320,8 @@ async def _run_scheduled_agent(agent_id: UUID, stamp: str) -> None:
         # Deleted between the beat tick and this run — nothing to do, and no
         # agent row left to record a failure on.
         logger.info("agent schedule: agent %s deleted before its run", agent_id)
+        return
+    if agent["run_mode"] != "scheduled":
         return
     user_id = UUID(str(agent["user_id"]))
     now = datetime.now(UTC)
@@ -292,7 +337,7 @@ async def _run_scheduled_agent(agent_id: UUID, stamp: str) -> None:
         return
     try:
         await sprite_agent_service.run_scheduled(agent, stamp)
-        if agent["is_curator"]:
+        if agent["is_curator"] and await scoped_curation_service.workspace_for_agent(agent) is None:
             # `now` predates the run, so changes made during it stay ahead of
             # the watermark and are picked up next time. If the delta
             # overflowed the event cap, the watermark stops at the last event

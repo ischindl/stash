@@ -22,14 +22,22 @@ from .test_permissions import _register_with_email
 
 @pytest.fixture
 def dispatched(monkeypatch):
-    """Capture dispatches for a scope that HAS a connected model.
+    """Capture dispatches for a scope whose curators can actually run.
 
-    The tick resolves the scope's credential before dispatching, and STAS-131
-    removed the no-credential machine-login fallback, so every dispatching
-    test needs a resolvable credential — a connected local endpoint, like the
-    founder's own stack. Without one, the honest answer is no dispatch at all
-    (see test_unconnected_scope_gets_no_doomed_dispatch).
+    Two credentials are in play, and a dispatch needs whichever one its own run
+    uses: a developer-platform workspace curates through the backend's key (no
+    user credential), so ANTHROPIC_API_KEY must be set; every other curator
+    — personal Memory, project folders — runs on the scope's credential, and
+    STAS-131 removed the no-credential machine-login fallback, so it needs a
+    resolvable endpoint (a connected local box, like the founder's own stack).
+    Without the one that applies, the honest answer is no dispatch at all (see
+    test_unconnected_scope_gets_no_doomed_dispatch).
     """
+    from backend.config import settings
+    from backend.tasks.session_titles import generate_session_title
+
+    monkeypatch.setattr(settings, "ANTHROPIC_API_KEY", "sk-ant-test-key")
+    monkeypatch.setattr(generate_session_title, "delay", lambda *a, **k: None)
     calls: list[tuple] = []
     monkeypatch.setattr(run_curator_now, "delay", lambda *a, **k: calls.append((a, k)))
 
@@ -96,6 +104,19 @@ async def test_external_curator_is_gated_by_its_own_scope(client: AsyncClient, p
 
     await _first_day_curator_tick(scope_id)
     assert await _dispatched_wikis(pool, dispatched) == {"internal"}
+
+
+@pytest.mark.asyncio
+async def test_paused_curator_stays_paused_on_first_day(client, pool, dispatched):
+    """The first-day tick is a platform trigger, so it may never run a curator
+    the user parked: `metered=False` says the platform pays, not that the
+    platform overrides the user's own switch."""
+    scope_id = await _workspace_with_conversation(client)
+    await pool.execute(
+        "UPDATE agents SET run_mode='chat' WHERE user_id=$1 AND is_curator", scope_id
+    )
+    await _first_day_curator_tick(scope_id)
+    assert dispatched == []
 
 
 @pytest.mark.asyncio

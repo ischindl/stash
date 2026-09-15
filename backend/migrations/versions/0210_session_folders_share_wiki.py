@@ -10,15 +10,15 @@ personal.
 Default FALSE is deliberate — a new project contributes nothing to the shared
 wiki until the developer clears it on purpose.
 
-Revision ID: 0203
-Revises: 0202
+Revision ID: 0210
+Revises: 0204
 """
 
 import sqlalchemy as sa
 from alembic import op
 
-revision = "0203"
-down_revision = "0202"
+revision = "0210"
+down_revision = "0204"
 branch_labels = None
 depends_on = None
 

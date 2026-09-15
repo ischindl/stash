@@ -131,6 +131,15 @@ everything before it is captured in git history (`git log`), not here.
   transcripts GUI-side, and moves sessions between projects. A project's
   opt-in only widens an opted-in user's material — a user's own opt-out stays
   the hard floor. Newly created projects start dark.
+
+- Developer curation enforces sharing in backend tools: opted-out inputs stay
+  in separate private runs that cannot write to the shared wiki. Developer
+  curators use the backend Anthropic model without workspace credentials or
+  shell access. Opting out archives the previous shared corpus privately and
+  rebuilds from permitted inputs; existing opt-outs are migrated on deployment.
+- External curator audit details now stay in run transcripts. Existing shared
+  `Log` and `changelog` pages move to a private workspace archive, with public
+  and explicit page shares removed.
 - CLI onboarding redesigned (#940). `stash signin` walks a first-run wizard
   that can be re-run anytime with the new `stash setup` — no answer is final.
   Session recording is framed as private-by-default and on by default

@@ -24,7 +24,7 @@ from uuid import UUID
 import pytest
 from httpx import AsyncClient
 
-from backend.services import curation_service, prompts, session_folder_service
+from backend.services import curation_service, session_folder_service
 
 from .conftest import unique_name
 from .test_developer_platform import _developer, _event, _push
@@ -137,17 +137,3 @@ async def test_feed_events_carry_the_project_flag(client: AsyncClient, pool):
     )
     row = next(e for e in events if e["session_id"] == "s-routing")
     assert row["session_folder_share_wiki"] is True
-
-
-def test_prompt_states_the_project_gate_and_user_floor():
-    """The external curator prompt must name the project clearance and keep
-    the user's own decision as the floor under it."""
-    prompt = prompts.render_external_curator_prompt(
-        "wiki-folder",
-        [{"name": "acme", "wiki_folder_id": "wf-1", "share_wiki": True}],
-        None,
-        ["acme"],
-    )
-    assert "session_folder_share_wiki" in prompt
-    assert "per-project clearance" in prompt
-    assert "covers only sessions of users who share" in prompt

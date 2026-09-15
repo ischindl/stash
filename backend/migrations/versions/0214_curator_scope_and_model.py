@@ -14,14 +14,14 @@ Wiki home: a project's wiki is a file-tree folder (pages only hang off
 `folders`), so session_folders grows the link to it — wiki_folder_id — which
 the first folder curator of a project creates and every later one reuses.
 
-Revision ID: 0207
-Revises: 0206
+Revision ID: 0214
+Revises: 0213
 """
 
 from alembic import op
 
-revision = "0207"
-down_revision = "0206"
+revision = "0214"
+down_revision = "0213"
 branch_labels = None
 depends_on = None
 
