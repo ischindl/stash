@@ -11,14 +11,14 @@ Default FALSE is deliberate — a new project contributes nothing to the shared
 wiki until the developer clears it on purpose.
 
 Revision ID: 0210
-Revises: 0204
+Revises: 0205
 """
 
 import sqlalchemy as sa
 from alembic import op
 
 revision = "0210"
-down_revision = "0204"
+down_revision = "0205"
 branch_labels = None
 depends_on = None
 
