@@ -27,6 +27,7 @@ from rich.text import Text
 from typer import rich_utils
 
 from stashai.plugin.doctor import shadow_install_warning
+from stashai.plugin.guidance import SKILL_MODEL
 from stashai.plugin.upload_status import read_upload_status
 
 from . import __version__, telemetry
@@ -4974,20 +4975,9 @@ def _auto_connect_repo(repo_root: Path, cfg: dict, use_json: bool = False) -> No
         )
 
 
-def _append_claude_md(repo_root: Path, use_json: bool = False) -> None:
-    """Append Stash context block to CLAUDE.md in the repo."""
-    claude_md = repo_root / "CLAUDE.md"
-    marker = "<!-- stash-context -->"
-
-    if claude_md.exists():
-        existing = claude_md.read_text()
-        if marker in existing:
-            return
-    else:
-        existing = ""
-
-    block = f"""
-{marker}
+_CLAUDE_STASH_CONTEXT = (
+    """
+<!-- stash-context -->
 ## Stash
 
 This repo uses [Stash](https://joinstash.ai) for shared agent sessions.
@@ -4999,21 +4989,9 @@ search Stash first — it has the full session record and human decisions across
 
 ### What a Skill is
 
-A Skill is a *special folder* — one containing a SKILL.md — holding related artifacts
-(pages, files, tables) that shares like any folder and gains a public URL when
-published. Use one when you're publishing a *collection* of related things together — a
-project writeup with its supporting files, a research thread with its sources, a session
-transcript frozen as a page plus the files it produced.
-
-A Skill is **not** a wrapper to slap on every single file you happen to share. One-item Skills
-clutter Discover and defeat the model. Pick the right tool:
-
-- Share a single file or a folder/project → `stash upload <path> --json`, hand over `app_url` (no Skill).
-- Publishing a curated bundle → `stash upload <path> --skill "<title>" --json`.
-- Creating a fresh skill → `stash skills create "<name>" --public --json`.
-- Share a coding session → `stash share` (this one), or `stash share --session "<title>"` for another.
-
-Run `stash prompts agent-guidance` to reprint this rule mid-session.
+"""
+    + SKILL_MODEL
+    + """
 
 ### Browsing Stash
 
@@ -5035,7 +5013,20 @@ Common writes:
 - `stash share --title "..."` — share this session as a public Skill
 - `stash read <url>` — read a public Skill URL
 """
-    claude_md.write_text(existing.rstrip() + "\n" + block)
+)
+
+
+def _append_claude_md(repo_root: Path, use_json: bool = False) -> None:
+    """Append Stash context block to CLAUDE.md in the repo."""
+    claude_md = repo_root / "CLAUDE.md"
+    if claude_md.exists():
+        existing = claude_md.read_text()
+        if "<!-- stash-context -->" in existing:
+            return
+    else:
+        existing = ""
+
+    claude_md.write_text(existing.rstrip() + "\n" + _CLAUDE_STASH_CONTEXT)
     if use_json:
         echo_stderr("  Appended Stash context to CLAUDE.md")
     else:
@@ -6745,50 +6736,14 @@ app.add_typer(prompts_app, name="prompts")
 # Canonical explanation of what a Skill is and when to create one. Shared
 # verbatim by the SessionStart hooks, the plugin CLAUDE.md, and this command,
 # so every agent surface tells the same story.
-AGENT_GUIDANCE_PROMPT = """\
-What a Skill is
-===============
+AGENT_GUIDANCE_PROMPT = (
+    SKILL_MODEL
+    + """
 
-A Skill is a special folder — one containing a SKILL.md — holding related
-artifacts (pages, files, tables) that shares like any folder and gains a
-public URL when published. Use one when you're publishing a collection of
-related things together — a project writeup with its supporting files, a
-research thread with its sources, a session transcript frozen as a page
-with its outputs.
+Skill-adjacent commands
+-----------------------
 
-When to create a Skill
-----------------------
-
-Create a Skill when:
-- You're publishing a curated collection of related artifacts that belong
-  together as one share.
-- You want a single public URL for the whole collection (publish it), or
-  to hand a teammate everything at once (share the folder).
-
-Do NOT create a Skill when:
-- The user just wants the link to one file or page. Give them its
-  `app_url`.
-- You're emitting incidental artifacts (logs, intermediate outputs).
-  Upload them with `stash upload` and pass the `app_url` back.
-
-Commands to reach for
----------------------
-
-- `stash upload <path> --json` — a single file (Markdown/HTML become pages,
-  everything else a binary file) or a folder, into your storage. Returns
-  `app_url`. No Skill created. This is the default for "share this one
-  file."
-- `stash upload <path> --skill "<title>" --json` — same as above AND
-  publish the uploaded folder as a Skill with the given title. Use only
-  when you're producing a shareable collection.
-- `stash skills create "<name>" --public --json` — create a fresh skill
-  folder (with a SKILL.md template) and publish it. Add content with the
-  normal files/pages commands; `stash skills publish <folder_id>` shares
-  an existing skill folder.
-- `stash share` — freeze this coding session (transcript + the files it
-  touched) into a Skill folder; `--session "<title>"` picks another one
-  by the title search and the VFS show. Sessions are inherently a
-  collection, so this is the right unit.
+- `stash skills publish <folder_id>` — publish an existing skill folder.
 - `stash skills install <slug>` — install a public Skill (e.g. from
   Discover) into ~/.claude/skills so the local agent loads it next
   session. `--project` targets ./.claude/skills instead.
@@ -6797,6 +6752,10 @@ Commands to reach for
   skills push back. Runs automatically at session start, targeting each
   agent's own skills dir (Claude `~/.claude/skills`, Codex/Gemini/OpenCode
   `~/.agents/skills`, OpenClaw `~/.openclaw/skills`).
+- `stash share` — freeze this coding session (transcript + the files it
+  touched) into a Skill folder; `stash share --session "<title>"` picks
+  another session by title. Sessions are inherently a collection, so
+  this is the right unit for them.
 
 Browsing Stash
 --------------
@@ -6815,11 +6774,8 @@ virtual Stash tree:
 - `stash vfs "find / -maxdepth 3 -type f"`
 - `stash vfs "rg 'query' /"`
 - `stash vfs "cat '/files/README.md'"`
-
-Anti-pattern: minting one Stash per file you happen to share. Skills
-exist to group related things; one item per Stash defeats the model and
-clutters Discover.
 """
+)
 
 
 @prompts_app.command("agent-guidance")

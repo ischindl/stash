@@ -10,6 +10,7 @@ from adapt import adapt_session_start
 from config import DATA_DIR, get_config, get_stdin_data
 
 from stashai.plugin.doctor import shadow_install_warning
+from stashai.plugin.guidance import SKILL_MODEL
 from stashai.plugin.hooks import (
     color_upload_health_warning,
     create_session_record,
@@ -28,27 +29,10 @@ from stashai.plugin.state import load_state, reset_stats, save_state
 CONTEXT = (
     "You have the `stash` CLI on your PATH. Run `stash --help` to see commands. "
     "Your activity in this repo is streamed to your Stash account.\n\n"
-    "What a Skill is: a *special folder* (one containing a SKILL.md) of related "
-    "files, tables) that shares like any folder and gains a public URL when "
-    "published. A Skill is for a collection — a project writeup with its "
-    "supporting files, a research thread with its sources. It is NOT a "
-    "wrapper to slap on every single file you share.\n\n"
-    "When sharing artifacts, pick the right tool:\n"
-    " - Single file your teammate should look at → `stash upload "
-    "<path> --json` and hand them the returned `app_url`. NO Skill needed.\n"
-    " - Upload a folder/project into your Stash → `stash upload <path> "
-    "--json` returns the folder `app_url`. NO Skill created by default.\n"
-    " - You're publishing a curated bundle people should see together → "
-    '`stash upload <path> --skill "<title>" --json` (or `stash skills '
-    "create` to compose from existing items).\n"
-    " - Sharing a coding session → `stash share` (or `--session \"<title>\"` for another) wraps the "
-    "transcript and touched files in one Skill. Don't ALSO mint a Skill "
-    "for each file in that session.\n"
-    " - Using a public Skill locally → `stash skills install <slug>` "
-    "writes it into ~/.claude/skills so it loads next session "
+    + SKILL_MODEL
+    + "\n\nUsing a public Skill locally: `stash skills install <slug>` writes it "
+    "into ~/.claude/skills so it loads next session "
     "(`--project` for ./.claude/skills).\n\n"
-    "Run `stash prompts agent-guidance` any time you want this guidance "
-    "reprinted in full.\n\n"
     "`stash ls` shows everything Stash can reach as one filesystem — files, "
     "session transcripts, and every connected integration (GitHub, Slack, "
     "Gong, Gmail, Drive, Notion, …). When asked what you have access to, run "

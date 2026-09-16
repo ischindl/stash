@@ -664,14 +664,16 @@ def test_prompts_agent_guidance_json(monkeypatch):
     result = runner.invoke(main.app, ["prompts", "agent-guidance", "--json"])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert "A Skill is a special folder" in payload["prompt"]
+    assert "<!-- stash:skill-model -->" in payload["prompt"]
 
 
 def test_prompts_agent_guidance_default_is_plain_text(monkeypatch):
     _setup_subapp(monkeypatch)
     result = runner.invoke(main.app, ["prompts", "agent-guidance"])
     assert result.exit_code == 0
-    assert "A Skill is a special folder" in result.stdout
+    # rich word-wraps the printed prompt, so compare on whitespace-normalized
+    # stdout — the marker contract, not a rewordable sentence, is the assert.
+    assert "<!-- stash:skill-model -->" in " ".join(result.stdout.split())
     assert not result.stdout.lstrip().startswith("{")
 
 
