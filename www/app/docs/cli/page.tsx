@@ -677,7 +677,9 @@ stash vfs --cwd "/me/sources" "rg 'incident' ."`}</CodeBlock>
       <P>
         Register MCP servers once and every agent gets them: your cloud agent&apos;s{" "}
         <Code>.mcp.json</Code> is refreshed on each turn, and <Code>stash tools install</Code>{" "}
-        writes an entry into a local repo&apos;s <Code>.mcp.json</Code>. Header and env secrets
+        writes an entry into the target agent&apos;s own MCP config — this repo&apos;s{" "}
+        <Code>.mcp.json</Code> for Claude Code by default, or pi&apos;s agent-dir{" "}
+        <Code>mcp.json</Code> with <Code>--agent pi</Code>. Header and env secrets
         are stored encrypted.
       </P>
 
@@ -696,10 +698,11 @@ stash vfs --cwd "/me/sources" "rg 'incident' ."`}</CodeBlock>
 
       <CommandRef
         command="stash tools install"
-        args="<name>"
-        description="Write a registered server into this repo's .mcp.json (merged — your own entries are never touched; re-runs are idempotent)."
+        args="<name> [--agent claude|pi]"
+        description="Write a registered server into the target agent's MCP config (merged — your own entries are never touched; re-runs are idempotent). Targets pi only when the pi-mcp-adapter extension is registered (pi install npm:pi-mcp-adapter); otherwise it fails loud and writes nothing."
         params={[
           { name: "<name>", type: "string", desc: "A server from stash tools list.", required: true },
+          { name: "--agent", type: "string", desc: "Target agent: claude (default — this repo's .mcp.json) or pi (its agent-dir mcp.json). Other agents fail loud." },
         ]}
       />
 

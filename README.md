@@ -43,7 +43,7 @@
 - **There's an agent in the box too.** Chat with an agent that already has all of this — in the app, from Slack, or from Telegram. It's a real coding-agent CLI (Claude Code, Codex, opencode, or pi) running on your own cloud VM, so it can read, write, and run things. Give it a cron and it becomes a scheduled agent.
 - **Memory is a wiki an agent keeps for you.** A scheduled curator reads whatever is new since its last run — sessions, files, saves — and compiles it into linked pages: entities, concepts, and a running log. It writes only inside the reserved Memory folder, and never reads its own output.
 - **Skills are the shareable slice.** A Skill is just a folder with a `SKILL.md` in it — put the pages, files, and tables that belong together in one folder and it becomes shareable as a unit. Publish it to the world, fork a public Skill into your own Stash, or `stash skills install` one into your agent — installed skills auto-update at session start, and `stash skills follow` auto-installs skills people share with you.
-- **Bring your own MCP servers.** Register MCP servers once (Tools page or `stash tools add`); your cloud agent gets them automatically and `stash tools install` writes them into any local agent's `.mcp.json`.
+- **Bring your own MCP servers.** Register MCP servers once (Tools page or `stash tools add`); your cloud agent gets them automatically and `stash tools install --agent claude|pi` writes them into that agent's own MCP config (this repo's `.mcp.json` by default; `--agent pi` writes the agent-dir `mcp.json` that pi reads).
 
 ## Why persistent beats per-session
 
