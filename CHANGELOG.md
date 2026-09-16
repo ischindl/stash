@@ -250,6 +250,18 @@ everything before it is captured in git history (`git log`), not here.
   reads the file whole like every other agent. Every `stash` command documented
   in the shipped agent guidance is now parsed in CI against the real CLI parser,
   so instructions can no longer drift out of sync with the tool unnoticed.
+- Every agent you connect now learns the same Skill model from one canonical
+  block, delivered through the file each agent actually loads. Gemini and Hermes
+  guidance files carry it (STAS-210 shipped it to only a third of the agents and
+  CI stayed green); a fresh `stash connect` also drops a Cursor project rule and,
+  when Hermes is detected, a `HERMES.md` in the repo; `stash setup --agent openclaw`
+  writes it into the OpenClaw workspace `AGENTS.md` even when the extension was
+  already current. `stash prompts agent-guidance` and the Claude session-start
+  hook compose from the same block and no longer teach CLI forms the parser
+  rejects (a `stash skills create` without `--description`, a bare `stash upload`).
+  Two CI guards hold the line: one fails if any supported agent's channel loses
+  the block, the other parses every documented command — shipped files and
+  composed runtime strings alike — against the real CLI.
 
 ## v0
 

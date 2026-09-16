@@ -183,7 +183,10 @@ agents could not share a session at all while every parity check stayed green.
 This guard asks the real parser instead. It resolves each documented `stash ...` form to its command
 and builds a click context, asserting the parser raises nothing — and it never invokes a command
 body, so it needs no auth, no network, and no backend. The corpus is every inline-backtick span and
-fenced-block line in the plugin guidance, its shipped mirrors, and the repo's own `CLAUDE.md`. Cursor
+fenced-block line in the plugin guidance, its shipped mirrors, and the repo's own `CLAUDE.md`, plus
+the runtime strings `cli/main.py` composes (`AGENT_GUIDANCE_PROMPT`, the project `CLAUDE.md` block,
+the Claude hook's `CONTEXT`) — agents load those too, so failures name the string, not a file path.
+Cursor
 ships its guidance as `.mdc`, so the corpus takes that extension too; a `.md`-only glob leaves an
 agent's documented forms unguarded, which is the same blind spot that shipped the pi bug.
 
