@@ -4,23 +4,20 @@ IMPORTANT: You have the `stash` CLI on your PATH. When the user mentions "Stash"
 
 ## What a Skill is
 
-A **Skill** is a *special folder* — one containing a SKILL.md — holding related artifacts (pages, files, tables) that shares like any folder and gains a public URL when published. It is the unit you reach for when you want to publish a *collection* of things together — a project writeup with its supporting files, a research thread with its sources, a session transcript plus the files it produced.
+<!-- stash:skill-model -->
+A Skill is a *special folder* — one containing a SKILL.md — holding related artifacts
+(pages, files, tables) that shares like any folder and gains a public URL when
+published. Use one when you're publishing a *collection* of related things together — a
+project writeup with its supporting files, a research thread with its sources, a session
+transcript frozen as a page plus the files it produced.
 
-A Skill is **not** a wrapper around every single file you happen to share. One-item Skills clutter Discover and your Stash sidebar, and they defeat the model.
+A Skill is **not** a wrapper to slap on every single file you happen to share. One-item Skills
+clutter Discover and defeat the model. Pick the right tool:
 
-### Decision rule for sharing
-
-| What you want to do | Command | What you give the user |
-|---|---|---|
-| Share one file (publicly) | `stash upload <path> --json` | the returned `app_url` |
-| Upload a folder / project into your Stash | `stash upload <path> --json` | the returned `app_url` |
-| Publish a curated bundle as one shareable thing | `stash upload <path> --skill "<title>" --json` | the returned `url` |
-| Create a fresh skill folder | `stash skills create "<name>" --description "<what it holds>" --public --json` | the returned folder |
-| Share a coding session (transcript + files) | `stash share` (this one), or `--session "<title>"` | the returned `url` |
-| Use a public Skill in this agent | `stash skills install <slug>` | the installed `~/.claude/skills` path |
-| Sync your Stash skills with local agent skills | `stash skills sync` | runs automatically at session start; two-way |
-
-The default of `stash upload <path>` is **no Skill** — files land in a folder in your Stash and you hand back the `app_url`. Add `--skill "<title>"` only when you're deliberately publishing a bundle.
+- Share a single file or a folder/project → `stash upload <path> --json`, hand over `app_url` (no Skill).
+- Publishing a curated bundle → `stash upload <path> --skill "<title>" --json`.
+- Creating a fresh skill → `stash skills create "<name>" --description "<what it holds>" --public --json`.
+- Share a coding session → `stash share` (this one), or `stash share --session "<title>"` for another.
 
 Run `stash prompts agent-guidance` to reprint this rule mid-session.
 
@@ -91,5 +88,3 @@ stash sql "SELECT * FROM <table> LIMIT 20"  # Query rows
 ### Tips
 - Use `--json` flag on any command for JSON output
 - The CLI reads config from `~/.stash/config.json`
-</content>
-</invoke>

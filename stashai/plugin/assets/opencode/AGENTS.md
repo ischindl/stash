@@ -6,18 +6,22 @@ Your activity in this repo is streamed to your Stash, so your agents and other t
 
 ## What a Skill is
 
-A **Skill** is a *special folder* — one containing a SKILL.md — holding related artifacts (pages, files, tables) that shares like any folder and gains a public URL when published. Use one when you're publishing a *collection* of related things together — a project writeup with its supporting files, a research thread with its sources, a session transcript plus the files it produced.
+<!-- stash:skill-model -->
+A Skill is a *special folder* — one containing a SKILL.md — holding related artifacts
+(pages, files, tables) that shares like any folder and gains a public URL when
+published. Use one when you're publishing a *collection* of related things together — a
+project writeup with its supporting files, a research thread with its sources, a session
+transcript frozen as a page plus the files it produced.
 
-A Skill is **not** a wrapper to slap on every single file you happen to share. One-item Skills clutter Discover and defeat the model.
+A Skill is **not** a wrapper to slap on every single file you happen to share. One-item Skills
+clutter Discover and defeat the model. Pick the right tool:
 
-## How to share things
+- Share a single file or a folder/project → `stash upload <path> --json`, hand over `app_url` (no Skill).
+- Publishing a curated bundle → `stash upload <path> --skill "<title>" --json`.
+- Creating a fresh skill → `stash skills create "<name>" --description "<what it holds>" --public --json`.
+- Share a coding session → `stash share` (this one), or `stash share --session "<title>"` for another.
 
-- **One file to look at** → `stash upload <path> --json` and use the returned `app_url`. No Skill needed.
-- **A folder / project into your Stash** → `stash upload <path> --json`. Returns the folder `app_url`. No Skill created by default.
-- **A curated bundle as one shareable thing** → `stash upload <path> --skill "<title>" --json`, or `stash skills create "<name>" --description "<what it holds>" --public` to start a fresh one. Returns the Skill `url`.
-- **A coding session (transcript + touched files)** → `stash share`, or `stash share --session "<title>"` for another. Sessions are inherently a bundle.
-
-Run `stash prompts agent-guidance` any time you want this guidance reprinted in full.
+Run `stash prompts agent-guidance` to reprint this rule mid-session.
 
 ## Browsing
 

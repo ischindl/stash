@@ -4,7 +4,24 @@ You have the `stash` CLI on your PATH. Run `stash --help` to see commands. Use i
 
 Your activity in this repo is streamed to your Stash, so your agents and you can see what you're working on across sessions.
 
-When the user asks you to upload local files to Stash, use `stash upload <path> --json` and give the user the returned `url`. If you use `stash upload <path> --json` for a raw file upload, give the user the returned `app_url`.
+## What a Skill is
+
+<!-- stash:skill-model -->
+A Skill is a *special folder* — one containing a SKILL.md — holding related artifacts
+(pages, files, tables) that shares like any folder and gains a public URL when
+published. Use one when you're publishing a *collection* of related things together — a
+project writeup with its supporting files, a research thread with its sources, a session
+transcript frozen as a page plus the files it produced.
+
+A Skill is **not** a wrapper to slap on every single file you happen to share. One-item Skills
+clutter Discover and defeat the model. Pick the right tool:
+
+- Share a single file or a folder/project → `stash upload <path> --json`, hand over `app_url` (no Skill).
+- Publishing a curated bundle → `stash upload <path> --skill "<title>" --json`.
+- Creating a fresh skill → `stash skills create "<name>" --description "<what it holds>" --public --json`.
+- Share a coding session → `stash share` (this one), or `stash share --session "<title>"` for another.
+
+Run `stash prompts agent-guidance` to reprint this rule mid-session.
 
 Common reads (all support `--json`):
 - `stash search "<query>"` — full-text search across transcripts
