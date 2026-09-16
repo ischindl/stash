@@ -17,22 +17,26 @@ shell script is spelled; the pipeline grammar itself is covered by cli/tests/tes
 
 from __future__ import annotations
 
+import importlib.util
+import os
 import re
 import shlex
+import sys
 from pathlib import Path
 from typing import Any
 
 import pytest
 import typer.main
 
-from cli.main import app
+from cli.main import _CLAUDE_STASH_CONTEXT, AGENT_GUIDANCE_PROMPT, app
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 INLINE_CODE = re.compile(r"`([^`]+)`")
 
 # Fewer spans than this means extraction broke, not that the docs got shorter.
-MIN_INVOCATIONS = 60
+# Sized after the 2026-08 corpus: shipped files + the composed runtime strings.
+MIN_INVOCATIONS = 120
 
 # Files the guard was written for. Losing one means the sweep silently shrank.
 EXPECTED_GUIDANCE_FILES = (
@@ -41,6 +45,9 @@ EXPECTED_GUIDANCE_FILES = (
     "plugins/codex-plugin/AGENTS.md",
     "plugins/opencode-plugin/AGENTS.md",
     "plugins/cursor-plugin/stash.mdc",
+    "plugins/gemini-plugin/GEMINI.md",
+    "plugins/hermes-plugin/HERMES.md",
+    "plugins/claude-plugin/CLAUDE.md",
 )
 
 
@@ -91,12 +98,50 @@ def _invocations(spans: list[str]) -> list[tuple[str, list[str]]]:
     return found
 
 
-def _corpus_invocations() -> list[tuple[Path, str, list[str]]]:
+def _claude_hook_context() -> str:
+    """The claude session-start hook's composed CONTEXT, imported the way the
+    hook runtime loads it (scripts dir importable, new module names evicted)."""
+    scripts = REPO_ROOT / "plugins" / "claude-plugin" / "scripts"
+    os.environ.setdefault("CLAUDE_PLUGIN_DATA", str(REPO_ROOT / ".guidance-parse-hook-data"))
+    sys.path.insert(0, str(scripts))
+    before = set(sys.modules)
+    try:
+        spec = importlib.util.spec_from_file_location(
+            "_guidance_parse_on_session_start", scripts / "on_session_start.py"
+        )
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module.CONTEXT
+    finally:
+        for name in set(sys.modules) - before:
+            del sys.modules[name]
+        sys.path.remove(str(scripts))
+
+
+def _composed_sources() -> list[tuple[str, str]]:
+    """Runtime-composed guidance the CLI assembles at import time. Agents load
+    these too, so they carry the same parse contract as the shipped files;
+    each is labeled with the string's own name so a failure points at it."""
     return [
-        (path, span, tokens)
+        ("<AGENT_GUIDANCE_PROMPT>", AGENT_GUIDANCE_PROMPT),
+        ("<_CLAUDE_STASH_CONTEXT>", _CLAUDE_STASH_CONTEXT),
+        ("<claude hook CONTEXT>", _claude_hook_context()),
+    ]
+
+
+def _corpus_invocations() -> list[tuple[str, str, list[str]]]:
+    """(source label, span, tokens) for the file corpus and the composed strings."""
+    from_files = [
+        (str(path.relative_to(REPO_ROOT)), span, tokens)
         for path in _corpus()
         for span, tokens in _invocations(_documented_spans(path))
     ]
+    from_composed = [
+        (label, span, tokens)
+        for label, text in _composed_sources()
+        for span, tokens in _invocations(INLINE_CODE.findall(text))
+    ]
+    return from_files + from_composed
 
 
 ROOT_COMMAND = typer.main.get_command(app)
@@ -148,15 +193,15 @@ DOCUMENTED_FORMS = sorted(FORMS)
 
 @pytest.mark.parametrize("span", DOCUMENTED_FORMS, ids=DOCUMENTED_FORMS)
 def test_every_documented_invocation_parses(span: str) -> None:
-    files = sorted({str(p.relative_to(REPO_ROOT)) for p, s, _ in INVOCATIONS if s == span})
+    sources = sorted({src for src, s, _ in INVOCATIONS if s == span})
     error = parse_error(FORMS[span])
     assert error is None, (
-        f"Guidance documents `{span}` ({', '.join(files)}) but the CLI parser rejects it: {error}"
+        f"Guidance documents `{span}` ({', '.join(sources)}) but the CLI parser rejects it: {error}"
     )
 
 
 def test_corpus_covers_the_guidance_files_that_taught_the_bug() -> None:
-    covered = {str(path.relative_to(REPO_ROOT)) for path, _, _ in INVOCATIONS}
+    covered = {src for src, _, _ in INVOCATIONS}
     for expected in EXPECTED_GUIDANCE_FILES:
         assert expected in covered, f"corpus lost guidance file {expected}"
 
