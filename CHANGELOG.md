@@ -73,8 +73,10 @@ everything before it is captured in git history (`git log`), not here.
 - Self-hosters and containerized deployments get the features that until now only
   worked when someone built a custom image by hand. The backend image now ships the
   local embedding model, so semantic search answers immediately after a deploy
-  instead of hanging on a first-request download; it also ships the node runtime and
-  the `pi` coding agent, so local-exec mode works out of the box. And a database that
+  instead of hanging on a first-request download. The `pi` coding agent and its node
+  runtime no longer ship in the image — the shipping image is pi-free by directive;
+  a deployment that runs local-exec pi sessions builds `backend/Dockerfile.dogfood`,
+  an overlay on the pi-free base that adds node+pi and nothing else. And a database that
   was migrated by the old dogfood image's chain no longer sits in a state where the
   curator's designed "already running" skip is rejected by the database — one repair
   migration brings both migration histories to the same schema.

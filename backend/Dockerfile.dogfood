@@ -1,0 +1,32 @@
+# Dogfood-only overlay: puts the node runtime + pi coding agent back on PATH on
+# top of the pi-free backend image. The operator directive of 2026-08-28 keeps
+# the shipping image pi-free (guard: backend/tests/test_dockerfile_pi_free.py);
+# deployments that run local-exec pi sessions build this overlay against a
+# locally built base instead. The overlay carries node+pi ONLY — the /opt/hf
+# model bake and the CPU-torch pin are domain requirements that live in the
+# base image (STAS-198 ruling).
+#
+# Build from the repo root, after building the pi-free base:
+#   docker build -f backend/Dockerfile -t stash-backend:<tag> .
+#   docker build -f backend/Dockerfile.dogfood \
+#     --build-arg BASE_IMAGE=stash-backend:<tag> -t stash-backend:<tag>-pi .
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+
+# Agent CLIs on PATH. pi (@earendil-works/pi-coding-agent) is the coding-agent
+# harness the cloud agent shell-outs to for local-exec pi sessions (STAS-098).
+# Cloud sprite boxes get pi from the sprite seed instead; local exec has no
+# seed, so the dogfood image carries it. --ignore-scripts because postinstall's
+# native-keymap build needs node-gyp which isn't here; pi's TUI degrades to
+# readline without it.
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates xz-utils && \
+    curl -fsSL https://nodejs.org/dist/v22.23.2/node-v22.23.2-linux-x64.tar.xz -o /tmp/node.tar.xz && \
+    tar -xJf /tmp/node.tar.xz -C /opt && \
+    ln -sf /opt/node-v22.23.2-linux-x64/bin/node /usr/local/bin/node && \
+    ln -sf /opt/node-v22.23.2-linux-x64/bin/npm /usr/local/bin/npm && \
+    ln -sf /opt/node-v22.23.2-linux-x64/bin/npx /usr/local/bin/npx && \
+    rm /tmp/node.tar.xz && \
+    npm install -g --ignore-scripts @earendil-works/pi-coding-agent@0.84.2 && \
+    ln -sf /opt/node-v22.23.2-linux-x64/bin/pi /usr/local/bin/pi
+USER stash
