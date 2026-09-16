@@ -493,8 +493,9 @@ async def _validate_pin(
     an accidental inheritance change. And credential_id must be one of this
     user's local endpoint rows: a row whose pin cannot resolve would only fail
     at the next turn, when the cause is hardest to see. A pin is the local
-    provider's shape — an agent moved to a key provider must shed the pin in
-    the same write, or the stale id would kill every later turn in resolve.
+    provider's shape — an agent moved to a key provider must shed the pin and
+    its model pick in the same write, or the stale id would kill every later
+    turn in resolve.
     """
     if model_provider is None and (model_id is not None or credential_id is not None):
         raise HTTPException(
@@ -511,6 +512,8 @@ async def _validate_pin(
             raise HTTPException(
                 status_code=400, detail="credential_id is not one of your local endpoints"
             )
+    if model_id is not None and model_provider != "local":
+        raise HTTPException(status_code=400, detail="model_id only applies to the local provider")
 
 
 async def create_agent(user_id: UUID, fields: dict) -> dict:

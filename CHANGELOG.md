@@ -30,6 +30,15 @@ everything before it is captured in git history (`git log`), not here.
   workspace curators always keep a schedule), add a curator for a project that has none,
   and delete a project curator when you are done with it — the wiki pages it wrote stay.
 
+- What you pick for a curator is now checked when you save it, not when it next
+  runs. A model pick belongs to your local boxes, so moving a curator that carries
+  one to a cloud provider is refused with the reason named, instead of saving a
+  combination that then failed every later run. Clearing the pick in the same save
+  is accepted, and a curator already aimed at a cloud provider is untouched by the
+  rule. The endpoint list also stops waiting on each box in turn: one powered-down
+  box shows its error beside itself while the reachable ones still list their
+  models, instead of the Settings view hanging on whichever box is unreachable.
+
 - Self-hosters and containerized deployments get the features that until now only
   worked when someone built a custom image by hand. The backend image now ships the
   local embedding model, so semantic search answers immediately after a deploy

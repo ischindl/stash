@@ -404,6 +404,70 @@ async def test_endpoint_listing_probes_all_boxes_at_once(client: AsyncClient, mo
     assert [entry["probe_error"] for entry in entries] == [f"down: {BOX_ONE}-{i}" for i in range(3)]
 
 
+@pytest.mark.asyncio
+async def test_endpoint_listing_probes_a_live_and_a_dead_box_with_per_entry_error(
+    client: AsyncClient, monkeypatch
+):
+    """The mixed listing the founder actually sees: one box answering, one box
+    powered down, in the SAME call. Two shipped halves each cover one extreme —
+    every box down, or one box up then down across separate calls — so this is
+    the case that proves a silent box neither blanks the listing nor drags a
+    live box's model list into its failure. The in-flight peak is asserted here
+    too, because per-entry errors alone would also be produced by a probe loop
+    that went back to serial."""
+    _key, uid = await _register(client)
+    dead_key = "sk-local-deadbox"
+    await agent_auth.store_credential(
+        uid,
+        "local",
+        "endpoint",
+        agent_auth.local_endpoint_secret(BOX_ONE, "llama", SECRET),
+        name="box-one",
+    )
+    await agent_auth.store_credential(
+        uid,
+        "local",
+        "endpoint",
+        agent_auth.local_endpoint_secret(BOX_TWO, "qwen", dead_key),
+        name="box-two",
+    )
+
+    in_flight = 0
+    peak = 0
+    dialled: dict[str, str | None] = {}
+
+    async def mixed_probe(base_url, api_key):
+        nonlocal in_flight, peak
+        in_flight += 1
+        peak = max(peak, in_flight)
+        dialled[base_url] = api_key
+        await asyncio.sleep(0.05)
+        in_flight -= 1
+        if base_url == BOX_ONE:
+            return {"ok": True, "http_status": 200, "models": ["llama", "llama:8b"]}
+        return {"ok": False, "http_status": None, "error_detail": "connection refused"}
+
+    monkeypatch.setattr(agent_auth, "probe_local_endpoint", mixed_probe)
+    entries = await agent_auth.list_local_endpoints(uid)
+
+    assert peak == 2  # both boxes knocked on at the same instant
+    assert [entry["base_url"] for entry in entries] == [BOX_ONE, BOX_TWO]  # oldest first
+    # The live entry is the whole entry as if nothing were down: no probe_error.
+    assert entries[0] == {
+        "id": entries[0]["id"],
+        "name": "box-one",
+        "base_url": BOX_ONE,
+        "models": ["llama", "llama:8b"],
+    }
+    assert "probe_error" not in entries[0]
+    assert entries[1]["models"] == []
+    assert entries[1]["probe_error"] == "connection refused"
+    # Each box was dialled with its OWN stored key, and neither key leaves.
+    assert dialled == {BOX_ONE: SECRET, BOX_TWO: dead_key}
+    assert SECRET not in json.dumps(entries, default=str)
+    assert dead_key not in json.dumps(entries, default=str)
+
+
 # --- The HTTP surface: probe-first connect, listing, delete guard, mirror ---
 
 
@@ -687,6 +751,90 @@ async def test_switching_a_pinned_curator_off_local_is_refused_pin_intact(
     )
     assert row["model_provider"] == "local"
     assert row["credential_id"] == box
+
+
+@pytest.mark.asyncio
+async def test_switching_a_model_pinned_curator_off_local_is_refused_pin_intact(
+    client: AsyncClient, _db_pool
+):
+    """The model pick is the local provider's shape just like the endpoint pin,
+    so it must be validated at write time too. A curator running a local box's
+    model, moved to anthropic by a one-field PATCH, would otherwise save
+    anthropic + 'qwen' and die on every later turn in `_byo_auth` with 'model_id
+    only applies to the local provider' — the same failure this file's sibling
+    test closed for `credential_id`. So the switch is refused, and the row keeps
+    the provider and the pick that were working."""
+    key, uid = await _register(client)
+    agent = await agent_service.get_or_create_curator(uid)
+
+    r = await client.patch(
+        f"/api/v1/me/curators/{agent['id']}",
+        json={"model_provider": "local", "model_id": "qwen"},
+        headers=_auth(key),
+    )
+    assert r.status_code == 200, r.text
+
+    r = await client.patch(
+        f"/api/v1/me/curators/{agent['id']}",
+        json={"model_provider": "anthropic"},
+        headers=_auth(key),
+    )
+    assert r.status_code == 400
+    assert r.json()["detail"] == "model_id only applies to the local provider"
+
+    row = await _db_pool.fetchrow(
+        "SELECT model_provider, model_id FROM agents WHERE id = $1", agent["id"]
+    )
+    assert row["model_provider"] == "local"
+    assert row["model_id"] == "qwen"
+
+
+@pytest.mark.asyncio
+async def test_a_model_pick_saved_on_a_key_provider_is_refused_at_the_door(
+    client: AsyncClient, _db_pool
+):
+    """The door cannot save a row the resolver will refuse: both the one-write
+    shape (a key provider and a model pick together) and the two-write shape
+    (provider first, pick added afterwards) reach the same impossible pair, so
+    each is refused here, and the half of each write that IS legal stays exactly
+    as saved."""
+    key, uid = await _register(client)
+    agent = await agent_service.get_or_create_curator(uid)
+
+    r = await client.patch(
+        f"/api/v1/me/curators/{agent['id']}",
+        json={"model_provider": "anthropic", "model_id": "qwen"},
+        headers=_auth(key),
+    )
+    assert r.status_code == 400
+    assert r.json()["detail"] == "model_id only applies to the local provider"
+    row = await _db_pool.fetchrow(
+        "SELECT model_provider, model_id FROM agents WHERE id = $1", agent["id"]
+    )
+    assert row["model_provider"] is None
+    assert row["model_id"] is None
+
+    # A key provider on its own remains a legal save; only the pick is refused,
+    # and a refused pick must not land on top of the provider that was accepted.
+    r = await client.patch(
+        f"/api/v1/me/curators/{agent['id']}",
+        json={"model_provider": "anthropic"},
+        headers=_auth(key),
+    )
+    assert r.status_code == 200, r.text
+
+    r = await client.patch(
+        f"/api/v1/me/curators/{agent['id']}",
+        json={"model_id": "qwen"},
+        headers=_auth(key),
+    )
+    assert r.status_code == 400
+    assert r.json()["detail"] == "model_id only applies to the local provider"
+    row = await _db_pool.fetchrow(
+        "SELECT model_provider, model_id FROM agents WHERE id = $1", agent["id"]
+    )
+    assert row["model_provider"] == "anthropic"
+    assert row["model_id"] is None
 
 
 @pytest.mark.asyncio
