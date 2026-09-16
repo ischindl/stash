@@ -871,11 +871,43 @@ def _dir_content_matches(src: Path, dest: Path) -> bool:
 _OPENCLAW_MIN_VERSION = (2026, 4, 0)
 
 
+# Workspace guidance for openclaw, composed here because openclaw ships no
+# static guidance file (see the zero-bytes rule under plugins/openclaw-plugin/).
+_OPENCLAW_GUIDANCE = (
+    "# Stash\n\n"
+    "You have the `stash` CLI on your PATH. Run `stash --help` to see commands.\n\n"
+    "Your activity in this workspace is streamed to your Stash, so your other "
+    "agents and you can see what you're working on.\n\n"
+    "## What a Skill is\n\n"
+    + SKILL_MODEL
+    + """
+
+## Browsing
+
+`stash ls` shows everything Stash can reach as one filesystem — your files, session transcripts, and every connected integration (GitHub, Slack, Gong, Gmail, Drive, Notion, …). When asked what you have access to, run it and show the tree; drill in with `stash ls <source>/<path>`.
+
+Use `stash vfs` when you want to browse Stash like a filesystem without mounting anything into the OS. It accepts bash-shaped commands over the virtual Stash tree:
+- `stash vfs ls /me`
+- `stash vfs "find /me -maxdepth 3 -type f"`
+- `stash vfs "rg 'query' /me"`
+- `stash vfs "cat '/me/README.md'"`
+
+## Common reads (all support `--json`)
+
+- `stash search "<query>"` — full-text search across transcripts
+- `stash vfs "cat '/me/sessions/_index.jsonl'"` — recent events
+- `stash sessions agents` — who's been active
+- `stash vfs "find /me -name '*.md'"` — your pages
+"""
+)
+
+
 def _install_openclaw(force: bool, use_json: bool = False) -> tuple[str, str]:
     import subprocess
 
     root = _assets_dir("openclaw")
     ext_dir = _openclaw_extension_dir()
+    _upsert_agents_md(Path.home() / ".openclaw" / "workspace" / "AGENTS.md", _OPENCLAW_GUIDANCE)
     if ext_dir.is_dir() and _dir_content_matches(root, ext_dir):
         return ("skipped", f"{ext_dir}")
 
@@ -4965,6 +4997,12 @@ def _auto_connect_repo(repo_root: Path, cfg: dict, use_json: bool = False) -> No
     status(f"  Wrote [cyan]{MANIFEST_FILE}[/cyan]", f"  Wrote {MANIFEST_FILE}")
 
     _append_claude_md(repo_root, use_json=use_json)
+    _drop_cursor_project_rule(repo_root)
+    if _agent_present("hermes"):
+        _upsert_agents_md(
+            repo_root / "HERMES.md",
+            (_assets_dir("hermes") / "HERMES.md").read_text(),
+        )
 
     if _git_toplevel(repo_root):
         status(

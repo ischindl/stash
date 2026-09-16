@@ -11,7 +11,8 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from cli.main import _assets_dir, _install_openclaw
+from cli.main import _AGENTS_MD_BEGIN, _assets_dir, _install_openclaw
+from stashai.plugin.guidance import SKILL_MODEL
 
 CURRENT_VERSION_BANNER = "🦞 OpenClaw 2026.7.1 (abc1234)"
 
@@ -121,3 +122,52 @@ def test_failed_cli_surfaces_error_tail(monkeypatch, tmp_path: Path) -> None:
 
     assert status == "failed"
     assert detail == "plugin rejected by gateway"
+
+
+def _workspace_agents(tmp_path: Path) -> Path:
+    return tmp_path / ".openclaw" / "workspace" / "AGENTS.md"
+
+
+def test_skipped_extension_still_refreshes_workspace_guidance(monkeypatch, tmp_path: Path) -> None:
+    """STAS-211: the AGENTS.md guidance upsert runs BEFORE the content-match
+    skip, so users whose extension is already current still receive it."""
+    ext_dir = _patch_home(monkeypatch, tmp_path)
+    shutil.copytree(
+        _assets_dir("openclaw"),
+        ext_dir,
+        ignore=shutil.ignore_patterns("__pycache__"),
+    )
+
+    def fail_run(cmd, **kwargs):
+        raise AssertionError("openclaw CLI must not run when extension is current")
+
+    monkeypatch.setattr(subprocess, "run", fail_run)
+
+    status, _ = _install_openclaw(False)
+
+    assert status == "skipped"
+    guidance = _workspace_agents(tmp_path).read_text()
+    assert _AGENTS_MD_BEGIN in guidance
+    assert SKILL_MODEL in guidance
+
+
+def test_workspace_guidance_is_idempotent_across_runs(monkeypatch, tmp_path: Path) -> None:
+    _patch_home(monkeypatch, tmp_path)
+    monkeypatch.setattr(subprocess, "run", _fake_run([]))
+
+    _install_openclaw(False)
+    first = _workspace_agents(tmp_path).read_bytes()
+    _install_openclaw(False)
+
+    assert _workspace_agents(tmp_path).read_bytes() == first
+    assert first.decode().count(_AGENTS_MD_BEGIN) == 1
+
+
+def test_install_writes_no_stdout(monkeypatch, tmp_path: Path, capsys) -> None:
+    """The guidance upsert must stay stdout-silent: setup --json purity."""
+    _patch_home(monkeypatch, tmp_path)
+    monkeypatch.setattr(subprocess, "run", _fake_run([]))
+
+    _install_openclaw(False)
+
+    assert capsys.readouterr().out == ""
