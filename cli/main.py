@@ -6833,7 +6833,7 @@ def prompts_agent_guidance(as_json: bool = typer.Option(False, "--json")):
 # ===========================================================================
 
 tools_app = typer.Typer(
-    help="Register MCP servers in Stash and install them into Claude Code projects."
+    help="Register MCP servers in Stash and install them into coding agents (Claude Code, pi)."
 )
 app.add_typer(tools_app, name="tools")
 
@@ -6868,6 +6868,67 @@ def _mcp_json_entry(server: dict) -> dict:
     if server.get("headers"):
         entry["headers"] = server["headers"]
     return entry
+
+
+# pi has no MCP client of its own (STAS-218: its README says "No MCP.");
+# ~/.pi/agent/mcp.json is only read when this extension is registered in
+# the agent dir's settings.json. Installing into pi without it would write a
+# config the runtime silently ignores, so we fail loudly with the fix.
+_PI_MCP_EXTENSION = "pi-mcp-adapter"
+
+
+def _pi_agent_dir() -> Path:
+    """pi's agent dir, mirroring pi-mcp-adapter's own resolution: the
+    PI_CODING_AGENT_DIR override ("~" and "~/…" relative to home), else ~/.pi/agent."""
+    import os
+
+    configured = os.environ.get("PI_CODING_AGENT_DIR", "").strip()
+    if not configured:
+        return Path.home() / ".pi" / "agent"
+    if configured == "~":
+        return Path.home()
+    if configured.startswith("~/"):
+        return Path.home() / configured[2:]
+    return Path(configured).expanduser().resolve()
+
+
+def _require_pi_mcp_extension() -> None:
+    """Abort unless pi on this machine can actually read MCP config."""
+    settings_path = _pi_agent_dir() / "settings.json"
+    packages: list = []
+    if settings_path.exists():
+        try:
+            settings = json.loads(settings_path.read_text())
+        except json.JSONDecodeError:
+            _exit_user_error(
+                f"{settings_path} is not valid JSON; repair it before installing MCP servers."
+            )
+        packages = settings.get("packages", [])
+    sources = [p.get("source") if isinstance(p, dict) else p for p in packages]
+    if not any(isinstance(s, str) and _PI_MCP_EXTENSION in s for s in sources):
+        _exit_user_error(
+            f"pi only reads MCP config when the {_PI_MCP_EXTENSION} extension is registered "
+            f"in {settings_path} — install it with: pi install npm:{_PI_MCP_EXTENSION}"
+        )
+
+
+def _claude_mcp_dest() -> Path:
+    return Path.cwd() / ".mcp.json"
+
+
+def _pi_mcp_dest() -> Path:
+    _require_pi_mcp_extension()
+    return _pi_agent_dir() / "mcp.json"
+
+
+# One entry per agent whose MCP config file we can write. The merge in
+# _merge_mcp_server is destination-agnostic, so enabling another agent later
+# is just another resolver here. Agents in _SUPPORTED_AGENTS without an entry
+# get a fail-loud "no MCP install path yet", never a guessed file.
+_MCP_INSTALLERS = {
+    "claude": _claude_mcp_dest,
+    "pi": _pi_mcp_dest,
+}
 
 
 def _merge_mcp_server(dest: Path, name: str, entry: dict) -> str:
@@ -6977,14 +7038,26 @@ def tools_remove(name: str = typer.Argument(...), as_json: bool = typer.Option(F
 
 
 @tools_app.command("install")
-def tools_install(name: str = typer.Argument(...), as_json: bool = typer.Option(False, "--json")):
-    """Write a registered server into this project's .mcp.json for Claude Code."""
+def tools_install(
+    name: str = typer.Argument(...),
+    agent: str = typer.Option(
+        "claude",
+        "--agent",
+        help="Target agent (claude | pi). pi installs into its agent-dir mcp.json.",
+    ),
+    as_json: bool = typer.Option(False, "--json"),
+):
+    """Write a registered server into an agent's MCP config (default: this project's .mcp.json for Claude Code)."""
+    if agent not in _MCP_INSTALLERS:
+        _exit_user_error(
+            f"No MCP install path for agent {agent!r} yet — supported: {', '.join(sorted(_MCP_INSTALLERS))}."
+        )
+    dest = _MCP_INSTALLERS[agent]()
     with _client() as c:
         try:
             server = _find_mcp_server(c.list_mcp_servers(), name)
         except StashError as e:
             _err(e)
-    dest = Path.cwd() / ".mcp.json"
     status = _merge_mcp_server(dest, name, _mcp_json_entry(server))
     if status == "conflict":
         _exit_user_error(
