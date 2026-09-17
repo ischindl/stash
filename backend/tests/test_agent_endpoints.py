@@ -838,6 +838,121 @@ async def test_a_model_pick_saved_on_a_key_provider_is_refused_at_the_door(
 
 
 @pytest.mark.asyncio
+async def test_a_digest_pick_saved_on_a_key_provider_is_refused_at_the_door(
+    client: AsyncClient, _db_pool
+):
+    """The digest half of a curator is validated at the door exactly like its
+    writer half, because a digest run cannot survive this pairing either:
+    `run_scheduled` hands `digest_model_id` straight to `resolve` for the digest
+    turn, and the resolver treats a model pick as the local provider's shape —
+    `agent_auth.resolve` and `_byo_auth` both raise 'model_id only applies to the
+    local provider' for a key credential. So a row saving `digest_provider=
+    'anthropic'` together with a model is a curator whose every later run dies
+    mid-digest, and the 400 detail carries the run-time wording so door and run
+    agree. `digest_provider` on a key provider WITHOUT a pick stays saveable: the
+    asymmetry the curator proposal defends is the digest provider choice, which
+    never sanctioned a model pick next to it.
+    """
+    key, uid = await _register(client)
+    agent = await agent_service.get_or_create_curator(uid)
+
+    r = await client.patch(
+        f"/api/v1/me/curators/{agent['id']}",
+        json={"digest_provider": "anthropic", "digest_model_id": "haiku"},
+        headers=_auth(key),
+    )
+    assert r.status_code == 400
+    assert r.json()["detail"] == "digest_model_id only applies to the local provider"
+    row = await _db_pool.fetchrow(
+        "SELECT digest_provider, digest_model_id FROM agents WHERE id = $1", agent["id"]
+    )
+    assert row["digest_provider"] is None
+    assert row["digest_model_id"] is None
+
+    # A key digest provider on its own remains a legal save; only the pick on top
+    # of it is refused, and a refused pick must not land on the saved provider.
+    r = await client.patch(
+        f"/api/v1/me/curators/{agent['id']}",
+        json={"digest_provider": "anthropic"},
+        headers=_auth(key),
+    )
+    assert r.status_code == 200, r.text
+
+    r = await client.patch(
+        f"/api/v1/me/curators/{agent['id']}",
+        json={"digest_model_id": "haiku"},
+        headers=_auth(key),
+    )
+    assert r.status_code == 400
+    assert r.json()["detail"] == "digest_model_id only applies to the local provider"
+    row = await _db_pool.fetchrow(
+        "SELECT digest_provider, digest_model_id FROM agents WHERE id = $1", agent["id"]
+    )
+    assert row["digest_provider"] == "anthropic"
+    assert row["digest_model_id"] is None
+
+    # The stored provider is an effective value, so a curator on a LOCAL digest
+    # model moved to a key provider must shed the pick in the same write — the
+    # contract the writer pin has one test above.
+    await _pin_curator(_db_pool, uid, digest_provider="local", digest_model_id="haiku")
+
+    r = await client.patch(
+        f"/api/v1/me/curators/{agent['id']}",
+        json={"digest_provider": "anthropic"},
+        headers=_auth(key),
+    )
+    assert r.status_code == 400
+    assert r.json()["detail"] == "digest_model_id only applies to the local provider"
+    row = await _db_pool.fetchrow(
+        "SELECT digest_provider, digest_model_id FROM agents WHERE id = $1", agent["id"]
+    )
+    assert row["digest_provider"] == "local"
+    assert row["digest_model_id"] == "haiku"
+
+    # Shed together and the write is coherent again.
+    r = await client.patch(
+        f"/api/v1/me/curators/{agent['id']}",
+        json={"digest_provider": "anthropic", "digest_model_id": None},
+        headers=_auth(key),
+    )
+    assert r.status_code == 200, r.text
+    row = await _db_pool.fetchrow(
+        "SELECT digest_provider, digest_model_id FROM agents WHERE id = $1", agent["id"]
+    )
+    assert row["digest_provider"] == "anthropic"
+    assert row["digest_model_id"] is None
+
+    # A row an older deploy saved (direct SQL: the door now refuses it) keeps one
+    # legal edit — shedding the pick. Re-tuning it would re-save the same
+    # impossible pair under a different model name.
+    await _pin_curator(_db_pool, uid, digest_provider="anthropic", digest_model_id="haiku")
+
+    r = await client.patch(
+        f"/api/v1/me/curators/{agent['id']}",
+        json={"digest_model_id": "sonnet"},
+        headers=_auth(key),
+    )
+    assert r.status_code == 400
+    assert r.json()["detail"] == "digest_model_id only applies to the local provider"
+    row = await _db_pool.fetchrow(
+        "SELECT digest_provider, digest_model_id FROM agents WHERE id = $1", agent["id"]
+    )
+    assert row["digest_model_id"] == "haiku"
+
+    r = await client.patch(
+        f"/api/v1/me/curators/{agent['id']}",
+        json={"digest_model_id": None},
+        headers=_auth(key),
+    )
+    assert r.status_code == 200, r.text
+    row = await _db_pool.fetchrow(
+        "SELECT digest_provider, digest_model_id FROM agents WHERE id = $1", agent["id"]
+    )
+    assert row["digest_provider"] == "anthropic"
+    assert row["digest_model_id"] is None
+
+
+@pytest.mark.asyncio
 async def test_a_pinned_curators_run_resolves_through_the_pin(
     client: AsyncClient, monkeypatch, _db_pool
 ):
@@ -884,10 +999,22 @@ async def test_an_unpinned_curator_run_still_dials_the_oldest_box(
 async def test_the_digest_phase_carries_the_pin_only_for_a_local_box(
     client: AsyncClient, monkeypatch, _db_pool
 ):
-    """Curator pins box B, digest on a key provider: the digest turn must NOT
-    inherit the pin (it would fail loud as a provider mismatch — correctly,
-    but it's the wrong pairing, not a typo), while a local digest DOES inherit
-    the box. Only prefer_provider/model_id swap between the phases."""
+    """A digest phase asks for its own provider/model, and only inherits the
+    curator's box when its provider IS local.
+
+    Stage 1's row (`digest_provider='anthropic'` + `digest_model_id='haiku'`)
+    cannot be saved through the API any more: `update_curator` refuses that pair
+    with a 400, pinned by
+    `test_a_digest_pick_saved_on_a_key_provider_is_refused_at_the_door`. It is
+    staged by direct SQL on purpose — the shape is exactly what a deployment
+    predating that door already has in its database, and the run's contract for
+    those rows is real: the digest turn must forward the row's provider and pick
+    and must NOT inherit the writer's box, because handing a box pin to a key
+    provider is the provider mismatch that fails loud in `resolve`. Failing loud
+    is the accepted end state for rows the door never saw — no migration rewrites
+    them and nothing silently drops the pick. Stage 2 is the coherent local
+    digest, which DOES inherit the box.
+    """
     _key, uid = await _register(client)
     _one, two = await _two_boxes(uid)
 

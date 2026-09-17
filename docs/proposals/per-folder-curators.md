@@ -103,7 +103,20 @@ feed is already restricted — the agent must not ask for broader data.
   digest turn must be `local`, so it dials the oldest LOCAL endpoint, while its
   writer turn resolves exactly like the workspace curator — the oldest connected
   credential of ANY provider. The two turns may ride different providers; that
-  is not a broken pin.
+  is not a broken pin. The asymmetry is about the digest's **provider** only.
+  A model pick is the local provider's shape on **both** halves of a curator, and
+  both are therefore refused at the door rather than at the next turn:
+  `_validate_pin` refuses `model_id` on a non-local provider, and
+  `update_curator`'s digest block refuses `digest_model_id` against a non-local
+  `digest_provider` with the run's own wording (400, `digest_model_id only
+  applies to the local provider`) — while `digest_provider` alone on any
+  configured provider stays saveable. Both checks read the MERGED row, so moving
+  a curator that carries a model pick onto a key provider must shed that pick in
+  the same write, and a row an older deploy saved can be shed but never
+  re-tuned. Those legacy rows still fail loud on the digest turn —
+  `resolve`/`_byo_auth` raise the identical wording — because that is the
+  accepted end state for a row this door never saw: no migration rewrites them
+  and nothing silently drops the pick.
 - The `models_json` override rides the default endpoint row (the oldest local
   row a NULL pin resolves to). The save names that row by id — a `provider =
   'local'` predicate would stamp one box's models.json onto every box — so the
@@ -193,7 +206,9 @@ the whole capped feed to change three pages. A two-phase run splits the work.
   untouched).
 - The external curator refuses a digest model (its feed is end-user material:
   a second model would be a second processor of customer data). Workspace
-  internal curators may use any configured provider; folder curators keep the
+  internal curators may use any configured provider for the digest — provider
+  yes, model pick no: `digest_model_id` with a key provider is refused at the
+  door, see “Model selection”; folder curators keep the
   self-hosted-endpoint rule for both models.
 - Watermark semantics are unchanged: `complete_through` advances through the
   feed the digest read — the two phases are one delivery.

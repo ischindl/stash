@@ -372,7 +372,10 @@ async def update_curator(
             # on the external curator that feed is end-user material, and a
             # second model on it is a second processor of customer data. Not this
             # knob's call to make silently. Folder curators keep the create-time
-            # rule: the self-hosted endpoint only.
+            # rule: the self-hosted endpoint only. Any curator may put its digest
+            # on a key provider; no curator may pair that provider with a model
+            # pick, because a model is the local provider's shape and the digest
+            # turn would die mid-run in `resolve`.
             if row["curator_wiki"] == "external":
                 raise HTTPException(
                     status_code=400,
@@ -391,6 +394,22 @@ async def update_curator(
                 raise HTTPException(
                     status_code=400,
                     detail="folder curator digest models run on the local provider",
+                )
+            # Both halves are read MERGED, so a pick already on the row counts
+            # even when this write only touches the provider: that is what makes
+            # a move from a local digest to a key provider have to shed the pick
+            # in the same write, and what lets an older row be shed but never
+            # re-tuned. The run-time ValueError stays as the belt for rows this
+            # door never saw.
+            effective_model = fields.get("digest_model_id", row["digest_model_id"])
+            if (
+                effective_model is not None
+                and effective_provider is not None
+                and effective_provider != "local"
+            ):
+                raise HTTPException(
+                    status_code=400,
+                    detail="digest_model_id only applies to the local provider",
                 )
     if schedule_cron is not ...:
         if schedule_cron is None:

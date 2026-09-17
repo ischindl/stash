@@ -39,6 +39,15 @@ everything before it is captured in git history (`git log`), not here.
   box shows its error beside itself while the reachable ones still list their
   models, instead of the Settings view hanging on whichever box is unreachable.
 
+- The same check now covers a curator's digest model too. Pointing the digest at
+  a cloud provider remains a valid choice; naming a model for it there no longer
+  saves, because a model belongs to the local provider and that pairing is exactly
+  what killed every later digest run mid-turn, after the write had been accepted.
+  Clearing the pick in the same save is accepted, a digest already on a cloud
+  provider without a model is untouched, and Settings itself is unaffected — it
+  always runs a curator's digest locally, so the refusal only meets anything
+  saving through the API directly.
+
 - Self-hosters and containerized deployments get the features that until now only
   worked when someone built a custom image by hand. The backend image now ships the
   local embedding model, so semantic search answers immediately after a deploy
