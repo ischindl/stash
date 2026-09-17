@@ -29,6 +29,24 @@ function docsPages(dir: string = DOCS_ROOT): string[] {
 type Offence = { line: number; mention: string; why: string };
 
 /**
+ * The lib finds a mention with `stash\s+<words>`, and `\s` matches a newline, so two shell
+ * commands on consecutive lines merge into one invocation: the self-hosting page's
+ * `cd stash` followed by `cp .env.example .env` reads to the lib as `stash cp`. That page never
+ * advertises `stash cp`; the gate only stayed green because that invented name happens to be a
+ * real command, and the same shape over `git clone …` on the next line would have failed a page
+ * that tells the truth. A reader sees one invocation per line, so every line break is sealed
+ * with a character the mention pattern cannot step over — not whitespace, so scanning stops at
+ * the end of the line, and it leaves the newlines themselves in place for the lib's line
+ * numbering and for the `\n};` that closes a route's metadata block.
+ */
+const UNCROSSABLE_LINE_BREAK = "\u0000\n";
+
+/** The lib's mentions, restricted to invocations a reader can actually see: one per line. */
+function visibleMentions(page: string): Mention[] {
+  return mentionsOnPage(page.replaceAll("\n", UNCROSSABLE_LINE_BREAK), registry);
+}
+
+/**
  * The `stash …` mentions on a page that a reader cannot actually run, reusing the registry
  * lib's mention extraction — its metadata stripping, `.stash`/`~/.stash` exclusion, three-word
  * cap, and longest-prefix resolution — so this file adds no prose heuristics of its own.
@@ -43,7 +61,7 @@ type Offence = { line: number; mention: string; why: string };
  *    inside a sentence, a trailing word is data, not a subcommand.
  */
 function unrunnable(page: string): Offence[] {
-  return mentionsOnPage(page, registry).flatMap((mention) => {
+  return visibleMentions(page).flatMap((mention) => {
     const command = registry.commands.get(mention.path);
     if (!command) return [{ ...position(page, mention), mention: mention.raw, why: "no such command" }];
     const words = mention.raw.split(" ").filter((word) => !word.startsWith("-"));
@@ -68,8 +86,7 @@ function unrunnable(page: string): Offence[] {
  * it is the mention the lib meant, and any occurrence inside the metadata block sits above it.
  */
 function position(page: string, mention: Mention): { line: number } {
-  const words = mention.raw.split(" ").map((word) => word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
-  const found = [...page.matchAll(new RegExp(`stash\\s+${words.join("\\s+")}`, "g"))].map(
+  const found = [...page.matchAll(new RegExp(mentionSource(mention.raw), "g"))].map(
     (match) => page.slice(0, match.index).split("\n").length,
   );
   const candidates = found.filter((line) => line >= mention.line);
@@ -79,14 +96,36 @@ function position(page: string, mention: Mention): { line: number } {
   return { line: Math.min(...candidates) };
 }
 
+/** The mention's own words, tolerant of the whitespace a page puts between them. */
+function mentionSource(raw: string): string {
+  const words = raw.split(" ").map((word) => word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  return `stash\\s+${words.join("\\s+")}`;
+}
+
 describe("the docs pages only show commands the CLI can run", () => {
   const pages = docsPages();
 
   it("sweeps the whole docs route, not just the pinned CLI Reference", () => {
     const read = pages.map((file) => relative(REPO_ROOT, file));
     expect(read).toContain("www/app/docs/page.tsx");
-    expect(pages.reduce((seen, file) => seen + mentionsOnPage(readFileSync(file, "utf8"), registry).length, 0))
+    expect(pages.reduce((seen, file) => seen + visibleMentions(readFileSync(file, "utf8")).length, 0))
       .toBeGreaterThan(0);
+  });
+
+  it("seals a line break so it cannot become part of an invocation", () => {
+    // Whatever the lib's raw scan finds but the sealed scan refuses is, by definition, a mention
+    // no single line of the page contains. Asserting that keeps the seal honest in both
+    // directions: a seal that also discarded whole-line invocations would quietly stop reading
+    // the pages it exists to guard, and would report nothing but silence.
+    const unfounded = pages.flatMap((file) => {
+      const text = readFileSync(file, "utf8");
+      const sealed = new Set(visibleMentions(text).map((mention) => mention.raw));
+      return mentionsOnPage(text, registry)
+        .filter((mention) => !sealed.has(mention.raw))
+        .filter((mention) => text.split("\n").some((line) => new RegExp(mentionSource(mention.raw)).test(line)))
+        .map((mention) => `${relative(REPO_ROOT, file)}: stash ${mention.raw}`);
+    });
+    expect(unfounded).toEqual([]);
   });
 
   it("renders no invocation that cli/main.py does not expose", () => {
@@ -159,6 +198,32 @@ describe("the mention rule fires on made-up commands and stays silent on real on
 
   it("is silent about an empty page", () => {
     expect(reported("")).toEqual([]);
+  });
+
+  it("is silent about a route's metadata but not about its body", () => {
+    // The line sealing must not defeat the lib's metadata stripping, which closes on `\n};`: a
+    // seal that made the block unreadable would leave a marketing sentence to be honoured as a
+    // CLI claim, and a seal that swallowed the body would silence real commands with it.
+    const page = [
+      "export const metadata: Metadata = {",
+      '  description: "Run stash zzz-in-metadata to publish.",',
+      "};",
+      "export default function Page() {",
+      "  return <Code>stash zzz-in-body</Code>;",
+      "}",
+    ].join("\n");
+    expect(reported(page)).toEqual(["zzz-in-body"]);
+  });
+
+  it("is silent about the next line's command when a line ends with the product name", () => {
+    // The self-hosting page's actual shape: `cd stash` and the command beneath it are two steps
+    // of a recipe, not one `stash …` invocation. Only a mention merged across the line break
+    // would put a command on this page that the page never shows.
+    expect(reported("git clone https://example.com/stash.git\ncd stash\nzzz-not-a-command .env")).toEqual([]);
+  });
+
+  it("fires on an invented command on the line after one ending in the product name", () => {
+    expect(reported("cd stash\nstash zzz-not-a-command\n")).toEqual(["zzz-not-a-command"]);
   });
 
   it("is silent about the product name and the config file the CLI writes", () => {
