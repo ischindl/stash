@@ -987,9 +987,13 @@ async def test_changes_endpoint_exposes_project_clearance(client: AsyncClient, _
 
 @pytest.mark.asyncio
 async def test_mark_curated_cannot_walk_the_watermark_back(client: AsyncClient, _db_pool):
-    """The watermark advance is monotonic: a run that computed its position
-    from a snapshot taken before an overlapping run finished writes an older
-    value than the stored one, and the write must clamp, not clobber. A NULL
+    """The watermark advance is a compare-and-set that stays monotonic inside a
+    match: the write lands only while the stored value is the position the run
+    read, and GREATEST means a matched-but-behind proposal clamps instead of
+    clobbering — a run that computed its position from a snapshot taken before
+    an overlapping run finished cannot walk the watermark backwards. A run whose
+    read position moved under it raises instead of writing (see
+    test_a_pre_rewind_completion_cannot_swallow_a_reopened_window). A NULL
     watermark (never curated) must still accept its first advance."""
     _key, uid = await _register(client)
     curator = await agent_service.get_or_create_curator(uid)
@@ -997,13 +1001,21 @@ async def test_mark_curated_cannot_walk_the_watermark_back(client: AsyncClient, 
     never = datetime(2020, 1, 1, tzinfo=UTC)
     later = datetime(2026, 6, 1, 12, 0, tzinfo=UTC)
 
-    await _db_pool.execute("UPDATE agents SET curated_through = NULL WHERE id = $1", cid)
-    await agent_service.mark_curated(cid, never)
-    assert await _db_pool.fetchval("SELECT curated_through FROM agents WHERE id = $1", cid) == never
+    async def stored() -> datetime:
+        return await _db_pool.fetchval("SELECT curated_through FROM agents WHERE id = $1", cid)
 
-    await agent_service.mark_curated(cid, later)
-    await agent_service.mark_curated(cid, never)
-    assert await _db_pool.fetchval("SELECT curated_through FROM agents WHERE id = $1", cid) == later
+    await _db_pool.execute("UPDATE agents SET curated_through = NULL WHERE id = $1", cid)
+    await agent_service.mark_curated(cid, None, never)  # seed from NULL
+    assert await stored() == never
+
+    await agent_service.mark_curated(cid, never, later)
+    await agent_service.mark_curated(cid, later, never)  # matched read, behind proposal: clamps
+    assert await stored() == later
+
+    # Drift under the run: the position it read is no longer the stored one.
+    with pytest.raises(agent_service.CuratorWatermarkConflict):
+        await agent_service.mark_curated(cid, never, datetime(2030, 1, 1, tzinfo=UTC))
+    assert await stored() == later
 
 
 @pytest.mark.asyncio
@@ -1025,11 +1037,13 @@ async def test_a_refused_watermark_advance_is_visible_in_the_log(
     behind = datetime(2020, 1, 1, tzinfo=UTC)
 
     await _db_pool.execute("UPDATE agents SET curated_through = NULL WHERE id = $1", cid)
-    assert await agent_service.mark_curated(cid, behind) == behind
-    assert await agent_service.mark_curated(cid, ahead) == ahead
+    assert await agent_service.mark_curated(cid, None, behind) == behind  # seed from NULL
+    assert await agent_service.mark_curated(cid, behind, ahead) == ahead  # matched read, advance
     assert "not moved" not in caplog.text  # genuine advances stay quiet
 
-    assert await agent_service.mark_curated(cid, behind) == ahead  # refused
+    # A matched read whose proposal sits behind the stored value clamps (does not
+    # raise — that is the drift case) and the refusal is logged.
+    assert await agent_service.mark_curated(cid, ahead, behind) == ahead  # refused clamp
     assert "not moved" in caplog.text
     assert str(cid) in caplog.text
     assert str(behind) in caplog.text and str(ahead) in caplog.text
@@ -1077,8 +1091,12 @@ async def test_stale_completion_cannot_regress_an_overlapping_run(
 ):
     """Two overlapping curator runs: the slower one finished its turn after the
     faster one had already advanced the watermark. The slower run's bookkeeping
-    is computed from its pre-turn snapshot and must not discard the progress —
-    that silent clobber was the CEO-reported 'completed curation discarded'."""
+    is computed from its pre-turn snapshot, and the position it read has moved
+    under it — so under the compare-and-set contract it is refused loudly rather
+    than clamped into silence, while the other run's progress survives untouched.
+    Refuse-loud replaces the old clamp-and-succeed: 'must not discard the other
+    run's progress' (the CEO invariant) still holds, but the discarded-looking
+    run now records a visible failure instead of resolving as `ran`."""
     from backend.services import sprite_agent_service
     from backend.tasks.agent_schedules import _run_curator_now
     from backend.tasks.session_titles import generate_session_title
@@ -1090,73 +1108,25 @@ async def test_stale_completion_cannot_regress_an_overlapping_run(
     curator = await agent_service.get_or_create_curator(uid)
     cid = UUID(curator["id"])
     await _push_one(client, key, "conv-live", datetime.now(UTC) - timedelta(minutes=5))
-    await _db_pool.execute(
-        "UPDATE agents SET curated_through = $2 WHERE id = $1",
-        cid,
-        datetime.now(UTC) - timedelta(days=1),
-    )
+    seeded = datetime.now(UTC) - timedelta(days=1)
+    await _db_pool.execute("UPDATE agents SET curated_through = $2 WHERE id = $1", cid, seeded)
     advanced = datetime.now(UTC) + timedelta(minutes=10)
 
     async def overlapping_run_finished(agent, stamp):
-        # Stands in for the other run completing mid-turn: its watermark is
-        # newer than anything this run can compute, whose `until` predates it.
-        await agent_service.mark_curated(cid, advanced)
+        # Stands in for the other run completing mid-turn. It started from the
+        # same stored position this run read, so ITS compare-and-set matches and
+        # its (newer) watermark lands.
+        await agent_service.mark_curated(cid, seeded, advanced)
 
     monkeypatch.setattr(sprite_agent_service, "run_scheduled", overlapping_run_finished)
-    await _run_curator_now(cid, metered=False)
+    with pytest.raises(agent_service.CuratorWatermarkConflict):
+        await _run_curator_now(cid, metered=False)
 
     row = await _db_pool.fetchrow(
         "SELECT curated_through, last_run_outcome FROM agents WHERE id = $1", cid
     )
-    assert row["last_run_outcome"] == "ran"
-    assert row["curated_through"] == advanced
-
-
-@pytest.mark.asyncio
-async def test_an_advance_from_a_pre_rewind_snapshot_re_closes_a_reopened_window(
-    client: AsyncClient, _db_pool
-):
-    """Characterizes the one loss the monotonic guard cannot prevent, measured live
-    on the founder account on 2026-09-05: an ingest rewind re-opened history the
-    curator had already passed, and a run that had read its position *before* that
-    rewind then completed. Its proposal is HIGHER than the rewound watermark, so
-    `greatest()` accepts it and the window the rewind deliberately re-opened is
-    skipped with no refusal to read. That is the same loss this card exists to
-    stop, arriving from the opposite direction.
-
-    Recording it is not endorsing it: refusing an advance that would swallow a
-    rewind means compare-and-set against the position the run read, a different
-    contract than "never move backwards", and it re-charges curation for material
-    already distilled. The last two assertions are what such a card would flip."""
-    key, uid = await _register(client)
-    curator = await agent_service.get_or_create_curator(uid)
-    cid = UUID(curator["id"])
-    re_imported = datetime.now(UTC) - timedelta(days=3)
-    position = datetime.now(UTC) - timedelta(days=1)
-
-    await _push_one(client, key, "conv-imported", re_imported)
-    await _db_pool.execute("UPDATE agents SET curated_through = $2 WHERE id = $1", cid, position)
-
-    # A late import older than the watermark drags it back, which is the rewind
-    # doing its job: history the curator had walked past is pending again.
-    await _push_one(client, key, "conv-imported-late", re_imported + timedelta(days=1))
-    rewound = await _db_pool.fetchval("SELECT curated_through FROM agents WHERE id = $1", cid)
-    assert rewound < position
-    assert await curation_service.has_changes_since(
-        uid, cid, rewound, curation_service.WIKI_INTERNAL
-    )
-
-    # The run dispatched before the rewind finishes, proposing where its own
-    # pre-rewind read said the feed ended.
-    stale_proposal = datetime.now(UTC) + timedelta(hours=1)
-    assert await agent_service.mark_curated(cid, stale_proposal) == stale_proposal
-
-    assert (
-        await curation_service.has_changes_since(
-            uid, cid, stale_proposal, curation_service.WIKI_INTERNAL
-        )
-        is False
-    )  # the re-opened window is shut again, unread
+    assert row["last_run_outcome"] == "failed"
+    assert row["curated_through"] == advanced  # the other run's progress survives
 
 
 @pytest.mark.asyncio
