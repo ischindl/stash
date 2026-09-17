@@ -5,6 +5,13 @@ everything before it is captured in git history (`git log`), not here.
 
 ## Unreleased
 
+### Fixed
+
+- Self-host compose contract: dropped the orphaned `collab` override from
+  `docker-compose.local.yml` (it named a service the base file does not define, so
+  `docker compose ... up` refused the whole project), and the five GHCR pins now name the
+  version the repo actually ships. Guarded by `backend/tests/test_docker_release_contract.py`.
+
 - The website's CLI reference (`joinstash.ai/docs/cli`) now tells the truth and stays
   true. Two new www guards check the page against `cli/main.py` in both directions —
   every command and flag the page names must exist in the CLI, and every command the
