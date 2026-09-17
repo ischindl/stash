@@ -14,7 +14,9 @@ npm test       # vitest: CLI-docs guards (test/) + contact-sales action tests
 The guards in `test/` check `app/docs/cli/page.tsx` against `cli/main.py` — every
 documented command/flag exists, every exposed command is documented, and each entry's
 `args=` string is bracketed the way the command's `typer` signature really reads
-(required options unbracketed, defaulted ones bracketed, positional count matched) —
+(required options unbracketed, defaulted ones bracketed, positional count matched, and
+the params table's `required: true` markers read that same signature — a row naming a
+short and long flag together, `-n, --limit`, counting as that long flag) —
 and CI's `www-test` job runs them on every push.
 
 ## Stack

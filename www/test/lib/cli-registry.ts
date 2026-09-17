@@ -472,7 +472,7 @@ function entryContractViolations(entry: DocumentedCommand, command: Command): Ar
 
   for (const flag of command.requiredFlags) {
     if (showsFlag(flag, "required")) {
-      if (!entry.params.some((param) => param.name === flag && param.required))
+      if (!entry.params.some((param) => param.required && flagTokens(param.name).includes(flag)))
         report("required-flag-param-not-required", `${flag} is demanded by the CLI but the params table does not mark it required`);
     } else if (showsFlag(flag, "optional")) {
       report("required-flag-bracketed", `${flag} is demanded by the CLI but args shows it bracketed as optional`);
@@ -485,9 +485,14 @@ function entryContractViolations(entry: DocumentedCommand, command: Command): Ar
     if (token.kind === "flag" && token.segment === "required" && !command.requiredFlags.has(token.text))
       report("optional-flag-unbracketed", `${token.text} has a default in the CLI but args shows it unbracketed as required`);
   }
+  // A params row is identified by the long flags its name contains — the same `flagTokens`
+  // extraction the existence guard uses — so a row written `-n, --limit` counts as `--limit`.
   for (const param of entry.params) {
-    if (param.required && param.name.startsWith("--") && !command.requiredFlags.has(param.name))
-      report("optional-param-marked-required", `${param.name} has a default in the CLI but the params table marks it required`);
+    if (!param.required) continue;
+    for (const flag of flagTokens(param.name)) {
+      if (!command.requiredFlags.has(flag))
+        report("optional-param-marked-required", `${flag} has a default in the CLI but the params table marks it required`);
+    }
   }
 
   // Positional labels are the page's to choose (`<type:id>` where the CLI says refs), so only the

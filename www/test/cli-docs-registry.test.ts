@@ -175,6 +175,27 @@ describe("each entry's args string mirrors the signature the CLI declares", () =
     expect(kinds(lie)).toEqual(["optional-param-marked-required"]);
   });
 
+  it("redes a combined short+long params row that calls a defaulted option required", () => {
+    // The row shows as `-x, --long`, so `--long` is the flag it documents — the same extraction
+    // the existence guard already uses. Its silence is indistinguishable from the truth fixture's,
+    // so this red is the proof that the requiredness rule sees combined names at all.
+    const lie = entry("files edit-page", "<page_id> [--content '...]'", [
+      param("<page_id>", true),
+      param("-x, --long", true),
+    ]);
+    expect(kinds(lie)).toEqual(["optional-param-marked-required"]);
+  });
+
+  it("redes a combined row that marks a real defaulted option required", () => {
+    // Same lie with a flag `files edit-page` really declares and defaults (`--content`), so the
+    // proof does not rest on a fictional flag.
+    const lie = entry("files edit-page", "<page_id> [--content '...]'", [
+      param("<page_id>", true),
+      param("-c, --content", true),
+    ]);
+    expect(kinds(lie)).toEqual(["optional-param-marked-required"]);
+  });
+
   it("redes an argument the entry shows positionally that the CLI only takes as an option", () => {
     const lie = entry("tables import", "<table_id> <file> [--format csv|json]", [
       param("<table_id>", true),
@@ -215,6 +236,41 @@ describe("each entry's args string mirrors the signature the CLI declares", () =
   it("stays silent on a mutually-exclusive group, whose exclusivity typer cannot describe", () => {
     const truth = entry("tools add", "<name> (--url URL | --command CMD) [--header K=V]", [
       param("<name>", true),
+    ]);
+    expect(argsContractViolations(truth, registry)).toEqual([]);
+  });
+
+  it("stays silent on the truth twin of the combined short+long lie", () => {
+    const truth = entry("files edit-page", "<page_id> [--content '...']", [
+      param("<page_id>", true),
+      param("-x, --long"),
+    ]);
+    expect(argsContractViolations(truth, registry)).toEqual([]);
+  });
+
+  it("stays silent on a combined row whose real defaulted option is unmarked", () => {
+    const truth = entry("files edit-page", "<page_id> [--content '...']", [
+      param("<page_id>", true),
+      param("-c, --content"),
+    ]);
+    expect(argsContractViolations(truth, registry)).toEqual([]);
+  });
+
+  it("stays silent on a required option documented under a combined short+long name", () => {
+    // The `--name` flag is genuinely demanded here; documenting it as `-n, --name` marked required
+    // is the truth. The exact-equality companion predicate used to miss the long flag inside that
+    // combined row name and cry a false `required-flag-param-not-required`.
+    const truth = entry("files edit-folder", "<folder_id> --name NAME", [
+      param("<folder_id>", true),
+      param("-n, --name", true),
+    ]);
+    expect(argsContractViolations(truth, registry)).toEqual([]);
+  });
+
+  it("stays silent on a short-only params row, which names no long flag", () => {
+    const truth = entry("files edit-page", "<page_id> [--content '...']", [
+      param("<page_id>", true),
+      param("-y", true),
     ]);
     expect(argsContractViolations(truth, registry)).toEqual([]);
   });
