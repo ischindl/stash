@@ -5,6 +5,13 @@ everything before it is captured in git history (`git log`), not here.
 
 ## Unreleased
 
+- The MCP integration guide (`docs/stash-mcp-integration.md`) is back and rebuilt against
+  what actually ships: the local `stash-mcp` stdio server with its current tool roster,
+  the VFS path format, and the `stash tools` bring-your-own registry. The server-hosted
+  transport the old guide described is gone from the product, as are the tools it listed
+  that have since been removed — and a new guard test
+  (`cli/tests/test_mcp_integration_doc.py`) now fails the build whenever the guide and
+  the code drift apart.
 - Your local model setup in Settings is a list of endpoints now, not one box at a
   time. Add one by its base URL and test it before storing it: the test lists exactly
   the models that endpoint answers with, and those are the only ones you can then pick,
