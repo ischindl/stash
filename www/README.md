@@ -11,9 +11,11 @@ npm run dev    # http://localhost:3100
 npm test       # vitest: CLI-docs guards (test/) + contact-sales action tests
 ```
 
-The guards in `test/` check `app/docs/cli/page.tsx` against `cli/main.py` in both
-directions — every documented command/flag exists, every exposed command is
-documented — and CI's `www-test` job runs them on every push.
+The guards in `test/` check `app/docs/cli/page.tsx` against `cli/main.py` — every
+documented command/flag exists, every exposed command is documented, and each entry's
+`args=` string is bracketed the way the command's `typer` signature really reads
+(required options unbracketed, defaulted ones bracketed, positional count matched) —
+and CI's `www-test` job runs them on every push.
 
 ## Stack
 

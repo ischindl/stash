@@ -12,6 +12,14 @@ everything before it is captured in git history (`git log`), not here.
   push. The page had drifted into naming over a dozen commands that no longer exist
   and omitting dozens that do; it now has full two-way parity, so a newcomer who
   types a documented command gets what the docs promised.
+- The three worst entries on that page now show the invocation the CLI really accepts.
+  `stash sessions push` demands `--session` and `stash skills create` demands
+  `--description`; the page wrote the first as optional and never mentioned the second,
+  so copying either example ended in `Missing option`. `stash tables import` takes its
+  data through `--file` or a piped stdin, not the positional `<file>` the page insisted
+  on, which failed as `Got unexpected extra argument`. A third www guard reads
+  requiredness and positionals straight from the CLI's own signatures, so the next time
+  a required flag is documented as optional, CI reddens instead of your terminal.
 - The MCP integration guide (`docs/stash-mcp-integration.md`) is back and rebuilt against
   what actually ships: the local `stash-mcp` stdio server with its current tool roster,
   the VFS path format, and the `stash tools` bring-your-own registry. The server-hosted

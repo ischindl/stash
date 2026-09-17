@@ -229,7 +229,7 @@ stash vfs --cwd "/me/sources" "rg 'incident' ."`}</CodeBlock>
 
       <CommandRef
         command="stash files edit-page"
-        args="<page_id> --content '...'"
+        args="<page_id> [--content '...']"
         description="Update a page. Reads from stdin if --content is not given."
         params={[
           { name: "<page_id>", type: "string", desc: "ID of the page.", required: true },
@@ -274,13 +274,13 @@ stash vfs --cwd "/me/sources" "rg 'incident' ."`}</CodeBlock>
 
       <CommandRef
         command="stash sessions push"
-        args="<content> [--agent cli] [--type message] [--session ID] [--attach FILE]"
+        args="<content> --session ID [--agent cli] [--type message] [--attach FILE]"
         description="Push a new event to your session stream."
         params={[
           { name: "<content>", type: "string", desc: "Event content to push.", required: true },
+          { name: "--session", type: "string", desc: "Session ID to group events under.", required: true },
           { name: "--agent", type: "string", desc: 'Agent identifier. Defaults to "cli".' },
           { name: "--type", type: "string", desc: 'Event type. Defaults to "message".' },
-          { name: "--session", type: "string", desc: "Session ID to group events under." },
           { name: "--tool", type: "string", desc: "Tool identifier." },
           { name: "--attach", type: "path", desc: "Local file path to upload and attach. Repeatable." },
           { name: "--attach-id", type: "string", desc: "Pre-uploaded file ID to attach. Repeatable." },
@@ -475,11 +475,11 @@ stash vfs --cwd "/me/sources" "rg 'incident' ."`}</CodeBlock>
 
       <CommandRef
         command="stash tables import"
-        args="<table_id> <file> [--format csv|json]"
+        args="<table_id> [--file PATH] [--format csv|json]"
         description="Bulk import rows from a file. Auto-chunks into batches of 5000. CSV uses the first row as column headers. Supports piping: cat data.csv | stash tables import <id> --format csv."
         params={[
           { name: "<table_id>", type: "string", desc: "ID of the table.", required: true },
-          { name: "<file>", type: "path", desc: "Path to the import file.", required: true },
+          { name: "--file", type: "path", desc: "Path to the import file. Pipe the data via stdin instead if omitted." },
           { name: "--format", type: "string", desc: 'File format: "csv" or "json". Auto-detected if omitted.' },
         ]}
       />
@@ -663,10 +663,11 @@ stash vfs --cwd "/me/sources" "rg 'incident' ."`}</CodeBlock>
 
       <CommandRef
         command="stash skills create"
-        args="<name> [--public] [--discover]"
+        args="<name> --description TEXT [--public] [--discover]"
         description="Create a skill: a folder with a SKILL.md template. Pass --public to publish immediately."
         params={[
           { name: "<name>", type: "string", desc: "Skill name (becomes the folder name).", required: true },
+          { name: "--description", type: "string", desc: "What the Skill is for. Written into SKILL.md; 1-1024 characters.", required: true },
           { name: "--public", type: "flag", desc: "Publish immediately and mint a shareable link." },
           { name: "--discover", type: "flag", desc: "List the public Skill in the Discover catalog (requires --public)." },
         ]}
