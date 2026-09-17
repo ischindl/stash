@@ -20,6 +20,9 @@ short and long flag together, `-n, --limit`, counting as that long flag) —
 and CI's `www-test` job runs them on every push. The registry they check against is read
 out of every `add_typer` call in `cli/main.py`, and a group registered without a literal
 `name=` is a hard error naming that line — never a group silently dropped from the guard.
+Prose outside that pinned page is guarded too: a separate test sweeps every page under
+`app/docs/` and fails on any `stash …` invocation `cli/main.py` does not expose, so a demo
+mock cannot invent a command that the reference omits.
 
 ## Stack
 
