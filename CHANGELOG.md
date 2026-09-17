@@ -5,6 +5,13 @@ everything before it is captured in git history (`git log`), not here.
 
 ## Unreleased
 
+- The website's CLI reference (`joinstash.ai/docs/cli`) now tells the truth and stays
+  true. Two new www guards check the page against `cli/main.py` in both directions —
+  every command and flag the page names must exist in the CLI, and every command the
+  CLI exposes must appear on the page — and CI's `www-test` job runs them on every
+  push. The page had drifted into naming over a dozen commands that no longer exist
+  and omitting dozens that do; it now has full two-way parity, so a newcomer who
+  types a documented command gets what the docs promised.
 - The MCP integration guide (`docs/stash-mcp-integration.md`) is back and rebuilt against
   what actually ships: the local `stash-mcp` stdio server with its current tool roster,
   the VFS path format, and the `stash tools` bring-your-own registry. The server-hosted

@@ -8,7 +8,12 @@ Standalone Next.js app for joinstash.ai. Lives alongside `frontend/`, `backend/`
 cd www
 npm install
 npm run dev    # http://localhost:3100
+npm test       # vitest: CLI-docs guards (test/) + contact-sales action tests
 ```
+
+The guards in `test/` check `app/docs/cli/page.tsx` against `cli/main.py` in both
+directions — every documented command/flag exists, every exposed command is
+documented — and CI's `www-test` job runs them on every push.
 
 ## Stack
 
