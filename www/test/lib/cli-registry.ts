@@ -49,19 +49,27 @@ export type Registry = {
  * the CLI declares is what the docs page is held to, so a new command cannot be
  * documented or undocumented without this file saying so. Multi-line `@x.command(`
  * decorators are not read — the single-line form is the one this codebase uses.
+ * A group registration is read in full, across lines, and one carrying no literal `name=`
+ * is an error rather than an omission: skipping it would drop that group and every command
+ * under it from the registry, and from the coverage gate, without a single complaint.
  */
 export function deriveRegistry(mainPy: string = readCliMain()): Registry {
   const groupsByVar = new Map<string, { name: string; hidden: boolean }>();
-  for (const match of mainPy.matchAll(/^(\w+)\.add_typer\((\w+),\s*name="([^"]+)"([^\n]*)\)/gm)) {
-    groupsByVar.set(match[2], { name: match[3], hidden: match[4].includes("hidden=True") });
+  for (const site of groupRegistrations(mainPy)) {
+    groupsByVar.set(site.groupVar, {
+      name: groupNameOf(site),
+      hidden: site.args.includes("hidden=True"),
+    });
   }
 
   const commands = new Map<string, Command>();
   for (const match of mainPy.matchAll(/^@(\w+)\.command\(([^\n]*)\)$/gm)) {
     const [decoratorVar, decoratorArgs] = [match[1], match[2]];
     const group = decoratorVar === "app" ? null : groupsByVar.get(decoratorVar);
-    // A command on a Typer that is never registered, or on a hidden group, is not
-    // reachable by `stash <path>` and therefore not the docs page's business.
+    // A command on a Typer that is never registered sits on dead CLI code — unreachable by
+    // `stash <path>`, so not the docs page's business. A *registered* group cannot land here
+    // unread: groupRegistrations has already thrown. A hidden group is reachable on purpose
+    // but deliberately undocumented.
     if (decoratorVar !== "app" && !group) continue;
     if (group?.hidden) continue;
 
@@ -103,6 +111,65 @@ function addCommand(commands: Map<string, Command>, command: Command): void {
     throw new Error(`cli/main.py exposes \`stash ${command.path}\` twice — cannot guard it`);
   }
   commands.set(command.path, command);
+}
+
+type Registration = {
+  /** The Typer variable being registered, which is the call's first argument. */
+  groupVar: string;
+  /** Everything from just after that first argument to the call's closing paren. */
+  args: string;
+  /** 1-based line the call starts on, so an error can point at it. */
+  line: number;
+  /** The whole call flattened onto one line, for the error message. */
+  call: string;
+};
+
+/**
+ * Every `<receiver>.add_typer(...)` call site, with its arguments read across lines until
+ * the parentheses balance so a multi-line registration is read as one call. Starting the
+ * match at the line anchor is what keeps commented-out or docstring text from counting as
+ * a registration; a nested group is read under its own receiver and named like any other.
+ */
+function groupRegistrations(mainPy: string): Registration[] {
+  const sites: Registration[] = [];
+  for (const match of mainPy.matchAll(/^[ \t]*(\w+)\.add_typer\(\s*(\w+)/gm)) {
+    const argsStart = match.index + match[0].length;
+    const argsEnd = closingParen(mainPy, argsStart);
+    sites.push({
+      groupVar: match[2],
+      args: mainPy.slice(argsStart, argsEnd),
+      call: mainPy.slice(match.index, argsEnd + 1).replace(/\s+/g, " ").trim(),
+      line: mainPy.slice(0, match.index).split("\n").length,
+    });
+  }
+  return sites;
+}
+
+/** Index of the `)` closing an already-opened call. */
+function closingParen(source: string, afterOpen: number): number {
+  let depth = 1;
+  for (let index = afterOpen; index < source.length; index += 1) {
+    if (source[index] === "(") depth += 1;
+    if (source[index] === ")") {
+      depth -= 1;
+      if (depth === 0) return index;
+    }
+  }
+  throw new Error("cli/main.py has an `add_typer` call whose parentheses never close");
+}
+
+/**
+ * The group's name, which only a string literal written in the call can supply. Typer
+ * itself would derive one from the variable's name; the guard refuses to agree with that
+ * guess, because a group nobody named is a group nobody can be shown having documented.
+ */
+function groupNameOf(site: Registration): string {
+  const literal = /\bname\s*=\s*(["'])([^"']+)\1/.exec(site.args);
+  if (literal) return literal[2];
+  throw new Error(
+    `cli/main.py line ${site.line} registers a group as \`${site.call}\` with no literal name=, ` +
+      "and the docs guard refuses to guess a group name — write name=\"...\" on the add_typer call.",
+  );
 }
 
 /** A group runs on its own only when Typer allows it and a callback receives the call. */

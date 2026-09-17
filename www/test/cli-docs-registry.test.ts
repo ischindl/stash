@@ -285,3 +285,88 @@ describe("each entry's args string mirrors the signature the CLI declares", () =
     expect(violations[0]).toMatchObject({ path: "sessions push", kind: "required-flag-bracketed", line: 1 });
   });
 });
+
+describe("a group registered without a literal name stops the guard", () => {
+  // A registration the deriver cannot name used to erase its whole group from the derived
+  // registry — and from the coverage gate — without a single complaint, which is the exact
+  // rot this suite exists to catch. The deriver therefore refuses to guess a group name from
+  // the Typer variable and says which call it could not read. cli/main.py names every group
+  // today, so the rule can only fire on a future registration: each case is shown on a
+  // synthetic source, with the registration on line 3 so the message's line number is checked.
+  const source = (registration: string, groupVar: string) =>
+    [
+      "app = typer.Typer()",
+      `${groupVar} = typer.Typer()`,
+      registration,
+      "",
+      `@${groupVar}.command("ping")`,
+      "def ping():",
+      '    """Reply with pong."""',
+    ].join("\n");
+
+  it("throws on a registration that carries no name=, naming the call site", () => {
+    const nameless = () => deriveRegistry(source("app.add_typer(ghost_app)", "ghost_app"));
+    expect(nameless).toThrowError(/add_typer/);
+    expect(nameless).toThrowError(/ghost_app/);
+    expect(nameless).toThrowError(/line 3/);
+    expect(nameless).toThrowError(/cli\/main\.py/);
+  });
+
+  it("throws on a name= that is not a plain string literal", () => {
+    // Typer itself accepts a variable here; the guard cannot read a name out of one, and
+    // guessing from `name_group_app` would agree with a guess instead of failing loud.
+    const indirect = () => deriveRegistry(source("app.add_typer(named_app, name=GROUP_NAME)", "named_app"));
+    expect(indirect).toThrowError(/add_typer/);
+    expect(indirect).toThrowError(/named_app/);
+    expect(indirect).toThrowError(/line 3/);
+  });
+
+  it("derives the group from a plain double-quoted name", () => {
+    const derived = deriveRegistry(source('app.add_typer(plain_app, name="plain")', "plain_app"));
+    expect([...derived.groups]).toEqual(["plain"]);
+    expect([...derived.commands.keys()]).toEqual(["plain ping"]);
+  });
+
+  it("derives the group from a single-quoted name, which is equally valid Python", () => {
+    const derived = deriveRegistry(source("app.add_typer(quote_app, name='quoted')", "quote_app"));
+    expect([...derived.groups]).toEqual(["quoted"]);
+  });
+
+  it("derives a group whose registration is spread over several lines", () => {
+    // The old one-line matcher dropped this shape silently, exactly like the nameless one.
+    const derived = deriveRegistry(
+      source('app.add_typer(\n  wrapped_app,\n  name="wrapped",\n)', "wrapped_app"),
+    );
+    expect([...derived.groups]).toEqual(["wrapped"]);
+    expect([...derived.commands.keys()]).toEqual(["wrapped ping"]);
+  });
+
+  it("keeps a hidden group out of the registry, as it always did", () => {
+    const derived = deriveRegistry(source('app.add_typer(hush_app, name="hush", hidden=True)', "hush_app"));
+    expect(derived.groups.size).toBe(0);
+    expect(derived.commands.size).toBe(0);
+  });
+
+  it("stays silent about a registration that is only commented out", () => {
+    const derived = deriveRegistry(source("# app.add_typer(dead_app)", "dead_app"));
+    expect(derived.groups.size).toBe(0);
+    expect(derived.commands.size).toBe(0);
+  });
+
+  it("stays silent on a source that registers no group at all", () => {
+    const derived = deriveRegistry(
+      ['app = typer.Typer()', '', '@app.command("ping")', 'def ping():', '    """Reply with pong."""'].join(
+        "\n",
+      ),
+    );
+    expect([...derived.commands.keys()]).toEqual(["ping"]);
+  });
+
+  it("still reads cli/main.py into the same registry it derived before the rule existed", () => {
+    // 14 registrations, one of them hidden, is what the real CLI declares today. The counts
+    // are the no-regression proof: only error behavior moved, not one derived command.
+    const derived = deriveRegistry();
+    expect(derived.groups.size).toBe(13);
+    expect(derived.commands.size).toBe(90);
+  });
+});
