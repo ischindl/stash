@@ -319,6 +319,17 @@ function EndpointsPanel({
     setError(null);
   }
 
+  // The address of an endpoint you just removed comes back as the draft: the next
+  // move is usually reconnecting that same box, and a URL is not worth retyping.
+  // It enters through the same invalidation as typing, so a seed can never leave a
+  // test result current for a box that is no longer connected. The key is not
+  // carried — it only ever exists server-side, plus the default row's reveal.
+  function seedDraftAfterRemoval(removedBaseUrl: string) {
+    setBaseUrl(removedBaseUrl);
+    invalidateProbe();
+    onChanged();
+  }
+
   async function testEndpoint() {
     setBusy(true);
     setError(null);
@@ -394,7 +405,7 @@ function EndpointsPanel({
               key={endpoint.id}
               endpoint={endpoint}
               keyDoc={local && local.base_url === endpoint.base_url ? local : null}
-              onRemoved={onChanged}
+              onRemoved={seedDraftAfterRemoval}
             />
           ))}
         </ul>
@@ -481,7 +492,9 @@ function EndpointRow({
    *  server reveals a key for the endpoint a run resolves to by default and for
    *  no other, so every other row shows no key affordance at all. */
   keyDoc: LocalEndpointDoc | null;
-  onRemoved: () => void;
+  /** Fired only once the server confirms the removal, with the address to leave
+   *  behind as the add-form's draft. A refusal fires nothing. */
+  onRemoved: (removedBaseUrl: string) => void;
 }) {
   const confirm = useConfirm();
   const [revealed, setRevealed] = useState(false);
@@ -501,7 +514,7 @@ function EndpointRow({
     setError(null);
     try {
       await deleteLocalEndpoint(endpoint.id);
-      onRemoved();
+      onRemoved(endpoint.base_url);
     } catch (e) {
       const pinning = pinConflict(e);
       if (pinning) setConflict(pinning);

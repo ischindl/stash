@@ -250,6 +250,64 @@ describe("AgentModelSection local endpoint list", () => {
     await waitFor(() => expect(listModelEndpoints).toHaveBeenCalledTimes(2));
   });
 
+  it("seeds the add-form with the address of the endpoint you just removed", async () => {
+    renderSection();
+    fireEvent.click(await removeFirstEndpoint());
+    fireEvent.click(await screen.findByRole("button", { name: "Remove endpoint" }));
+
+    // Reconnecting the same box must never mean retyping its address.
+    await waitFor(() =>
+      expect((screen.getByLabelText("Endpoint base URL") as HTMLInputElement).value).toBe(
+        FIRST.base_url,
+      ),
+    );
+    // The key stays absent — it is never held client-side — and a seed on its own
+    // cannot store: the address still has to answer a test before a model exists.
+    expect((screen.getByLabelText("Endpoint key") as HTMLInputElement).value).toBe("");
+    expect(screen.queryByRole("button", { name: "Add endpoint" })).toBeNull();
+    expect(connectLocalEndpoint).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Test endpoint" }));
+    await screen.findByRole("button", { name: "Add endpoint" });
+    expect(connectLocalEndpoint).not.toHaveBeenCalled();
+  });
+
+  it("leaves the add-form blank when the removal is refused", async () => {
+    deleteLocalEndpoint.mockRejectedValue(
+      new ApiError(409, "API error 409", {
+        detail: { message: "agents still pin this endpoint — re-pin or unpin them first", agents: [] },
+      }),
+    );
+
+    renderSection();
+    fireEvent.click(await removeFirstEndpoint());
+    fireEvent.click(await screen.findByRole("button", { name: "Remove endpoint" }));
+    expect(await screen.findByText(/agents still pin this endpoint/)).toBeDefined();
+
+    // Nothing was removed, so nothing may be remembered: seeding on a refusal
+    // would offer to re-add an endpoint that is still connected.
+    expect((screen.getByLabelText("Endpoint base URL") as HTMLInputElement).value).toBe("");
+  });
+
+  it("retires a test result that belonged to the endpoint just removed", async () => {
+    renderSection();
+    await screen.findByText("box-one");
+
+    await typeDraft(FIRST.base_url);
+    fireEvent.click(screen.getByRole("button", { name: "Test endpoint" }));
+    await screen.findByRole("button", { name: "Add endpoint" });
+
+    fireEvent.click(await removeFirstEndpoint());
+    fireEvent.click(await screen.findByRole("button", { name: "Remove endpoint" }));
+
+    // The seed brings the same address back, but the box it was tested against is
+    // gone: the store button must not survive on the old test's strength.
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: "Add endpoint" })).toBeNull(),
+    );
+    expect(connectLocalEndpoint).not.toHaveBeenCalled();
+  });
+
   it("reveals the key only on the endpoint the server named as the default", async () => {
     renderSection();
     await screen.findByText("box-two");
