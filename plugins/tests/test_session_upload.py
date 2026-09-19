@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import sys
 
+import pytest
+
 from stashai.plugin.event import HookEvent
 from stashai.plugin.hooks import create_session_record, finalize_session_upload
 
@@ -182,13 +184,16 @@ def test_skills_sync_targets_per_agent_dir(monkeypatch):
     from stashai.plugin.session_upload import spawn_skills_sync
 
     # Codex/Gemini/OpenCode share the cross-agent ~/.agents/skills standard;
-    # Claude and OpenClaw have their own dirs.
+    # Claude and OpenClaw have their own dirs; Pi is synced into its own root
+    # even though it also scans .agents, because that copy is hand-made.
     cases = {
         "claude_code": "~/.claude/skills",
         "codex_cli": "~/.agents/skills",
         "gemini_cli": "~/.agents/skills",
         "opencode": "~/.agents/skills",
         "openclaw": "~/.openclaw/skills",
+        "hermes": "~/.hermes/skills",
+        "pi": "~/.pi/agent/skills",
     }
     for client, expected_dir in cases.items():
         calls = _capture_spawn(monkeypatch)
@@ -207,7 +212,23 @@ def test_skills_sync_noop_for_project_only_agents(monkeypatch):
     from stashai.plugin.session_upload import spawn_skills_sync
 
     # Cursor only loads project-level .cursor/skills — no global dir, no spawn.
-    for client in ("cursor", "unknown_agent", ""):
+    # An empty client means the adapter never named itself, which is also not
+    # this function's decision to make.
+    for client in ("cursor", ""):
         calls = _capture_spawn(monkeypatch)
         spawn_skills_sync({"client": client})
         assert calls == [], client
+
+
+def test_skills_sync_refuses_a_client_it_does_not_know(monkeypatch):
+    from stashai.plugin.session_upload import spawn_skills_sync
+
+    # A named client with no skills root is a missing entry, and silence here
+    # is how an agent's skills sat unsynced while its hook called this every
+    # session. The refusal has to say what to add.
+    calls = _capture_spawn(monkeypatch)
+    with pytest.raises(ValueError) as refused:
+        spawn_skills_sync({"client": "unknown_agent"})
+    assert "unknown_agent" in str(refused.value)
+    assert "_SKILLS_DIR_BY_CLIENT" in str(refused.value)
+    assert calls == []

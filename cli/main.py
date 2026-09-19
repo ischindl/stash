@@ -6789,7 +6789,9 @@ Skill-adjacent commands
   and your skills: your skills materialize locally, local edits to synced
   skills push back. Runs automatically at session start, targeting each
   agent's own skills dir (Claude `~/.claude/skills`, Codex/Gemini/OpenCode
-  `~/.agents/skills`, OpenClaw `~/.openclaw/skills`).
+  `~/.agents/skills`, OpenClaw `~/.openclaw/skills`, Hermes
+  `~/.hermes/skills`, pi `~/.pi/agent/skills`). Cursor is skipped: it loads
+  skills from the project alone.
 - `stash share` — freeze this coding session (transcript + the files it
   touched) into a Skill folder; `stash share --session "<title>"` picks
   another session by title. Sessions are inherently a collection, so
