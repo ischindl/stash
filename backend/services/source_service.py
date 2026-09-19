@@ -302,7 +302,7 @@ async def create_source(
     now(). Types without a scheduled-sync interval (search-driven) have no
     indexer and must NOT enroll in the sync queue: the reconciler skips
     them without advancing next_sync_at, so an enabled row would sit "due"
-    forever at the front of the claim order and starve real syncs."""
+    forever at the front of the due_sources window and starve real syncs."""
     validate_source_external_ref(source_type, external_ref)
     capability = SOURCE_CAPABILITY.get(source_type, "navigable")
     interval = DEFAULT_SYNC_INTERVAL_S.get(source_type, 3600)
@@ -543,45 +543,33 @@ async def get_source_for_sync(source_id: UUID) -> dict | None:
     }
 
 
-async def claim_due_sources(*, source_types: list[str], limit: int = 50) -> list[str]:
-    """Atomically claim the sources whose scheduled sync is due (for the Beat
-    reconciler); the caller enqueues exactly one sync task per returned id.
+async def due_sources(limit: int = 50) -> list[dict]:
+    """Due sources without a live claim; enqueue_sync atomically claims them."""
+    from .source_sync_service import SYNC_LEASE_MINUTES
 
-    Claiming is the point. The old path read a due list and enqueued it, so a
-    stale queue message re-ran the same sync whenever it was finally consumed,
-    and a source that fails instantly re-failed at the queue's pace instead of
-    its own. The atomic UPDATE ... FOR UPDATE SKIP LOCKED — the same shape
-    kick_stale_sources uses — applies mark_sync_started's mutation at enqueue
-    time, so a source is dispatched at most once per interval however many
-    reconciler passes or queued messages follow.
-
-    Keeps due_sources' crash-recovery clause: a sync killed mid-run (e.g. a
-    worker redeploy) never reaches mark_sync_done, so a 'syncing' row quiet for
-    over 10 minutes is claimable again.
-
-    Deliberately does NOT exclude 'needs_setup': mark_sync_started already
-    advanced next_sync_at when the source was dispatched, so a parked source
-    re-attempts on its own cadence and heals itself once the owner fixes the
-    setup. The access kick keeps excluding it — re-syncing on a page read cannot
-    fix a setup problem either.
-    """
     rows = await get_pool().fetch(
-        "UPDATE user_sources SET sync_status = 'syncing', sync_error = NULL, "
-        "next_sync_at = now() + (sync_interval_s || ' seconds')::interval, updated_at = now() "
-        "WHERE id IN ("
-        "  SELECT id FROM user_sources "
-        "  WHERE sync_enabled "
-        "  AND (next_sync_at <= now() "
-        "       OR (sync_status = 'syncing' AND updated_at < now() - interval '10 minutes')) "
-        "  AND source_type = ANY($1::text[]) "
-        "  ORDER BY next_sync_at "
-        "  LIMIT $2 "
-        "  FOR UPDATE SKIP LOCKED"
-        ") RETURNING id",
-        source_types,
+        f"""
+        SELECT id, owner_user_id, source_type, external_ref, sync_cursor, settings
+        FROM user_sources
+        WHERE sync_enabled
+          AND (sync_task_id IS NULL
+               OR sync_claimed_at < now() - interval '{SYNC_LEASE_MINUTES} minutes')
+          AND (next_sync_at <= now() OR sync_task_id IS NOT NULL)
+        ORDER BY next_sync_at LIMIT $1
+        """,
         limit,
     )
-    return [str(r["id"]) for r in rows]
+    return [
+        {
+            "id": str(r["id"]),
+            "owner_user_id": str(r["owner_user_id"]),
+            "source_type": r["source_type"],
+            "external_ref": r["external_ref"],
+            "sync_cursor": r["sync_cursor"],
+            "settings": r["settings"] or {},
+        }
+        for r in rows
+    ]
 
 
 SKILL_BINDABLE_SOURCE_TYPES = ("google_drive_folder",)
@@ -625,34 +613,13 @@ ACCESS_KICK_LIMIT = 50
 
 
 async def kick_stale_sources(owner_user_id: UUID) -> list[str]:
-    """Claim the scope's due, sync-enabled sources for an access-triggered
-    sync; the caller enqueues one sync task per returned id.
-
-    Access pulls a sync forward, it does not invent a new cadence: a source is
-    only claimed once next_sync_at has passed, the same bar the Beat reconciler
-    uses, so a source configured to sync every 6 hours still syncs every 6
-    hours no matter how often its owner opens the page. The updated_at guard is
-    the debounce on top of that — every sync start/finish/failure touches
-    updated_at, so a source is kicked at most once per window even when it
-    fails every time, and a just-created source (next_sync_at defaults to now)
-    is not re-kicked by the listing that follows its own connect.
-
-    The claim applies mark_sync_started's mutation atomically, so concurrent
-    listings enqueue each source at most once. 'needs_setup' is excluded — it
-    means the user must act, and re-syncing on read cannot fix it."""
+    """Find due sources on access; enqueue_sync arbitrates concurrent triggers."""
     rows = await get_pool().fetch(
-        "UPDATE user_sources SET sync_status = 'syncing', sync_error = NULL, "
-        "next_sync_at = now() + (sync_interval_s || ' seconds')::interval, updated_at = now() "
-        "WHERE id IN ("
-        "  SELECT id FROM user_sources "
-        "  WHERE owner_user_id = $1 AND sync_enabled "
-        "  AND sync_status NOT IN ('syncing', 'needs_setup') "
-        "  AND next_sync_at <= now() "
-        "  AND updated_at < now() - ($2 || ' seconds')::interval "
-        "  ORDER BY next_sync_at "
-        "  LIMIT $3 "
-        "  FOR UPDATE SKIP LOCKED"
-        ") RETURNING id",
+        "SELECT id FROM user_sources WHERE owner_user_id = $1 AND sync_enabled "
+        "AND sync_status != 'needs_setup' AND sync_task_id IS NULL "
+        "AND next_sync_at <= now() "
+        "AND updated_at < now() - ($2 || ' seconds')::interval "
+        "ORDER BY next_sync_at LIMIT $3",
         owner_user_id,
         str(ACCESS_KICK_STALE_S),
         ACCESS_KICK_LIMIT,
@@ -969,10 +936,11 @@ async def upsert_drive_document(
         and existing["name"] == name
         and existing["external_ref"] == external_ref
         and existing["external_updated_at"] == external_updated_at
-        and existing["extraction_status"] in SETTLED_EXTRACTION_STATUSES
     )
     if unchanged:
-        return None
+        if existing["extraction_status"] in SETTLED_EXTRACTION_STATUSES:
+            return None
+        return existing["id"]
 
     row = await pool.fetchrow(
         "INSERT INTO drive_documents "
@@ -986,7 +954,8 @@ async def upsert_drive_document(
         # at most one sync interval stale, which beats making the document
         # unreadable for the minutes an OCR pass takes.
         "extraction_status = 'pending', extraction_error = NULL, extraction_attempts = 0, "
-        "locked_at = NULL, deleted_at = NULL, updated_at = now() "
+        "locked_at = NULL, extraction_task_id = NULL, extraction_claimed_at = NULL, "
+        "extraction_retry_at = now(), deleted_at = NULL, updated_at = now() "
         "RETURNING id",
         source_id,
         owner_user_id,
