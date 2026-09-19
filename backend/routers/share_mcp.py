@@ -11,8 +11,15 @@ leave the owner believing their agent was still reading the folder.
 Requests are stateless by design: each one re-resolves its own handle, so
 revocation lands on the next call rather than at some future session expiry,
 and no session affinity is needed behind the product's proxy.
+
+The server is built per app runtime rather than at import: a FastMCP instance
+may run its session manager exactly once, and an app can be started more than
+once inside one process (tests do this per test, a reloaded process does it per
+reload). One endpoint object per runtime, resolved by the gate at request time,
+keeps the second start from inheriting a spent manager.
 """
 
+import asyncio
 import json
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
@@ -45,54 +52,96 @@ def _transport_security() -> TransportSecuritySettings:
     )
 
 
-server = FastMCP(
-    "Stash share",
-    instructions=(
-        "These tools read one Stash share — a published Skill or a shared "
-        "folder, whichever this URL was minted for. Read-only: call list to "
-        "see what is there, then read a path from that list."
-    ),
-    streamable_http_path="/",
-    stateless_http=True,
-    json_response=True,
-    transport_security=_transport_security(),
+INSTRUCTIONS = (
+    "These tools read one Stash share — a published Skill or a shared "
+    "folder, whichever this URL was minted for. Read-only: call list to "
+    "see what is there, then read a path from that list."
 )
 
 
-# The names the founder froze are the ones the client shows, so they are set
-# explicitly here rather than inherited from these functions' own names.
-@server.tool(name="list")
-async def list_shared_items() -> str:
-    """List every page, file, and table in this share, with its path."""
-    result = await share_mcp_service.list_items(_HANDLE.get())
-    return json.dumps(result, indent=2, default=str)
+def _register_tools(server: FastMCP) -> None:
+    # The names the founder froze are the ones the client shows, so they are
+    # set explicitly here rather than inherited from these functions' names.
+
+    @server.tool(name="list")
+    async def list_shared_items() -> str:
+        """List every page, file, and table in this share, with its path."""
+        result = await share_mcp_service.list_items(_HANDLE.get())
+        return json.dumps(result, indent=2, default=str)
+
+    @server.tool(name="read")
+    async def read_shared_item(path: str) -> str:
+        """Read one item's content by the path `list` reported."""
+        return await share_mcp_service.read_item(_HANDLE.get(), path)
 
 
-@server.tool(name="read")
-async def read_shared_item(path: str) -> str:
-    """Read one item's content by the path `list` reported."""
-    return await share_mcp_service.read_item(_HANDLE.get(), path)
+class ShareEndpoint:
+    """One MCP server, and the one run its session manager is allowed."""
+
+    def __init__(self) -> None:
+        self.server = FastMCP(
+            "Stash share",
+            instructions=INSTRUCTIONS,
+            streamable_http_path="/",
+            stateless_http=True,
+            json_response=True,
+            transport_security=_transport_security(),
+        )
+        _register_tools(self.server)
+        self.app: ASGIApp = self.server.streamable_http_app()
 
 
-asgi_app: ASGIApp = server.streamable_http_app()
+_active: ShareEndpoint | None = None
 
 
 @asynccontextmanager
 async def session_runtime():
-    """Owns the MCP session manager for the process lifetime."""
-    async with server.session_manager.run():
+    """Owns the MCP session manager for as long as this app runtime lives.
+
+    The manager is a one-shot anyio task group, and a task group only lets go
+    in the task that picked it up. Whoever drives our lifespan is not
+    guaranteed to do that: a caller that resumes startup and shutdown from
+    different tasks — which is how pytest-asyncio runs an async fixture — gets
+    'exit cancel scope in a different task'. So the manager is handed to a
+    task of our own, and the lifespan only ever waits on that task.
+    """
+    global _active
+    if _active is not None:
+        raise RuntimeError("a share MCP runtime is already active in this process")
+    endpoint = ShareEndpoint()
+    _active = endpoint
+    started = asyncio.Event()
+    stopping = asyncio.Event()
+
+    async def own_the_session_manager() -> None:
+        async with endpoint.server.session_manager.run():
+            started.set()
+            await stopping.wait()
+
+    owner = asyncio.create_task(own_the_session_manager())
+    try:
+        await started.wait()
         yield
+    finally:
+        stopping.set()
+        await owner
+        _active = None
 
 
 class ShareHandleGate:
     """Resolves the share handle in the URL, then hands off to the MCP server."""
 
-    def __init__(self, inner: ASGIApp):
-        self.inner = inner
-
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
-            await self.inner(scope, receive, send)
+            # Mounted here for HTTP alone; the app's own lifespan never arrives.
+            return
+
+        endpoint = _active
+        if endpoint is None:
+            await JSONResponse(
+                status_code=503,
+                content={"detail": "The Stash MCP endpoint is not running."},
+            )(scope, receive, send)
             return
 
         subject = await self._resolve(scope)
@@ -108,7 +157,7 @@ class ShareHandleGate:
         # owner's security trail says which surface their content left by.
         via_token = security_audit_service.request_via.set("mcp")
         try:
-            await self.inner(inner_scope, receive, send)
+            await endpoint.app(inner_scope, receive, send)
         finally:
             security_audit_service.request_via.reset(via_token)
             _HANDLE.reset(handle_token)
@@ -136,4 +185,4 @@ class ShareHandleGate:
         )(scope, receive, send)
 
 
-gate = ShareHandleGate(asgi_app)
+gate = ShareHandleGate()

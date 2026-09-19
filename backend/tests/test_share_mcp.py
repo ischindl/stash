@@ -15,7 +15,6 @@ grants exactly what a public link grants — an MCP client presents no identity,
 so a folder shared with named people only has no working URL.
 """
 
-import asyncio
 import json
 from contextlib import asynccontextmanager
 
@@ -75,27 +74,13 @@ def stub_storage(monkeypatch):
 async def mcp_runtime():
     """The endpoint's session-manager runtime, for the whole test session.
 
-    The MCP server owns one task group and refuses a second `run()` on the same
-    instance, so exactly one holder exists — as in the deployed app, where the
-    FastAPI lifespan is that holder. It is a task of our own rather than the
-    fixture's own frame because a cancel scope must be entered and left by the
-    same task, and pytest-asyncio finalizes a session fixture in a different
-    task than it set it up in."""
-    started = asyncio.Event()
-    stopping = asyncio.Event()
-
-    async def hold():
-        async with share_mcp.session_runtime():
-            started.set()
-            await stopping.wait()
-
-    holder = asyncio.create_task(hold())
-    await started.wait()
-    try:
+    This is the deployed app's own shape — the FastAPI lifespan entering
+    `session_runtime` — repeated here once per session. The runtime keeps the
+    MCP task group inside a task of its own, which is what lets a fixture that
+    is set up and finalized in different tasks use it without tripping the
+    cancel-scope rule."""
+    async with share_mcp.session_runtime():
         yield
-    finally:
-        stopping.set()
-        await holder
 
 
 @pytest_asyncio.fixture
