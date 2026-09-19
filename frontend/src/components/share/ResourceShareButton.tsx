@@ -13,8 +13,7 @@ import { Select } from "@/components/ui/select";
 
 import { useEscapeKey } from "../../hooks/useEscapeKey";
 import {
-  getGeneralAccess,
-  listObjectShares,
+  getShareState,
   shareObjectByEmail,
   unshareObject,
   updateGeneralAccess,
@@ -115,6 +114,7 @@ export function ResourceShareDialog({
   const [loadingShares, setLoadingShares] = useState(false);
   const [message, setMessage] = useState("");
   const [generalAccess, setGeneralAccess] = useState<GeneralPermission>("none");
+  const [mcpUrl, setMcpUrl] = useState<string | null>(null);
   const [savingAccess, setSavingAccess] = useState(false);
 
   const supportsGeneralAccess = GENERAL_ACCESS_TYPES.includes(objectType);
@@ -131,20 +131,16 @@ export function ResourceShareDialog({
     setLoadingShares(true);
     setMessage("");
     try {
-      const [shareRows, access] = await Promise.all([
-        listObjectShares(objectType, objectId),
-        supportsGeneralAccess
-          ? getGeneralAccess(objectType, objectId)
-          : Promise.resolve<GeneralPermission>("none"),
-      ]);
-      setShares(shareRows);
-      setGeneralAccess(access);
+      const state = await getShareState(objectType, objectId);
+      setShares(state.shares);
+      setGeneralAccess(state.generalAccess);
+      setMcpUrl(state.mcpUrl);
     } catch (e) {
       setMessage(e instanceof Error ? e.message : "Could not load access.");
     } finally {
       setLoadingShares(false);
     }
-  }, [objectId, objectType, supportsGeneralAccess]);
+  }, [objectId, objectType]);
 
   async function changeGeneralAccess(next: GeneralPermission) {
     const previous = generalAccess;
@@ -153,6 +149,9 @@ export function ResourceShareDialog({
     setMessage("");
     try {
       setGeneralAccess(await updateGeneralAccess(objectType, objectId, next));
+      // The link level decides whether the folder's MCP URL is live, so the
+      // URL a user should hand an agent is re-read with it.
+      await loadShares();
     } catch (e) {
       setGeneralAccess(previous);
       setMessage(e instanceof Error ? e.message : "Could not update access.");
@@ -239,6 +238,17 @@ export function ResourceShareDialog({
       setMessage("Link copied.");
     } catch {
       setMessage("Could not copy link.");
+    }
+  }
+
+  async function copyAgentUrl() {
+    if (!mcpUrl) return;
+    setMessage("");
+    try {
+      await navigator.clipboard.writeText(mcpUrl);
+      setMessage("Agent URL copied. Paste it into your MCP client.");
+    } catch {
+      setMessage("Could not copy the agent URL.");
     }
   }
 
@@ -429,6 +439,32 @@ export function ResourceShareDialog({
           )}
         </div>
       </section>
+
+      {mcpUrl && (
+        <section className="mt-4 rounded-lg border border-border bg-raised p-3">
+          <div className="flex items-center gap-3">
+            <span className="min-w-0 flex-1">
+              <span className="block text-[13px] font-medium text-foreground">
+                Agent access (MCP)
+              </span>
+              <span className="block truncate text-[12px] text-muted-foreground">
+                {mcpUrl}
+              </span>
+            </span>
+            <button
+              type="button"
+              onClick={() => void copyAgentUrl()}
+              className="shrink-0 cursor-pointer rounded-full border border-border bg-base px-3 py-1 text-[12px] font-medium text-foreground hover:bg-raised"
+            >
+              Copy agent URL
+            </button>
+          </div>
+          <p className="mt-1.5 text-[12px] text-muted-foreground">
+            An MCP client lists and reads this folder through this URL, for as long as
+            the link above stays on.
+          </p>
+        </section>
+      )}
 
       <div className="mt-5 flex items-center justify-between gap-3">
         <button

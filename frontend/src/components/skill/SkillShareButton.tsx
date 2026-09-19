@@ -12,12 +12,13 @@ import {
 } from "../../lib/api";
 import { resetSkillNavigationCache } from "../../lib/skillNavigationCache";
 
-type HandoffStatus = "idle" | "copying" | "copied" | "error";
+type AgentUrlStatus = "idle" | "copying" | "copied" | "error";
 
-function publishInfoFromRecord(record: PublishedSkill): SkillPublishInfo {
+export function publishInfoFromRecord(record: PublishedSkill): SkillPublishInfo {
   return {
     id: record.id,
     slug: record.slug,
+    mcp_url: record.mcp_url,
     discoverable: record.discoverable,
     cover_image_url: record.cover_image_url,
     icon_url: record.icon_url,
@@ -44,8 +45,8 @@ export default function SkillShareButton({
   const [copied, setCopied] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
-  const [handoffStatus, setHandoffStatus] = useState<HandoffStatus>("idle");
-  const [handoffMessage, setHandoffMessage] = useState("");
+  const [agentUrlStatus, setAgentUrlStatus] = useState<AgentUrlStatus>("idle");
+  const [agentUrlMessage, setAgentUrlMessage] = useState("");
   const popoverRef = useRef<HTMLDivElement>(null);
 
   useEscapeKey(open, () => setOpen(false));
@@ -112,21 +113,22 @@ export default function SkillShareButton({
     }
   }
 
-  async function copyAgentHandoffLink() {
-    setOpen(false);
-    setHandoffStatus("copying");
-    setHandoffMessage("");
+  async function copyMcpUrl() {
+    setAgentUrlStatus("copying");
+    setAgentUrlMessage("");
     try {
+      // A skill that was never published gets published by the copy, which is
+      // what the old handoff link did too: the URL has no meaning before it.
       const current = await ensurePublished();
-      await navigator.clipboard.writeText(agentHandoffUrl(current.slug));
-      setHandoffStatus("copied");
-      window.setTimeout(() => setHandoffStatus("idle"), 1600);
+      await navigator.clipboard.writeText(current.mcp_url);
+      setAgentUrlStatus("copied");
+      window.setTimeout(() => setAgentUrlStatus("idle"), 1600);
     } catch (e) {
-      setHandoffStatus("error");
-      setHandoffMessage(e instanceof Error ? e.message : "Could not copy agent link.");
+      setAgentUrlStatus("error");
+      setAgentUrlMessage(e instanceof Error ? e.message : "Could not copy the MCP URL.");
       window.setTimeout(() => {
-        setHandoffStatus("idle");
-        setHandoffMessage("");
+        setAgentUrlStatus("idle");
+        setAgentUrlMessage("");
       }, 3000);
     }
   }
@@ -171,17 +173,20 @@ export default function SkillShareButton({
     <div ref={popoverRef} className="relative flex items-center gap-1.5">
       <button
         type="button"
-        onClick={() => void copyAgentHandoffLink()}
-        disabled={handoffStatus === "copying"}
-        aria-label="Copy agent handoff link"
-        title="Copy an agent-readable public link"
+        onClick={() => {
+          setOpen(false);
+          void copyMcpUrl();
+        }}
+        disabled={agentUrlStatus === "copying"}
+        aria-label="Copy the MCP URL for agents"
+        title="Copy the URL an MCP client connects to, to read this skill"
         className="inline-flex min-w-[72px] cursor-pointer items-center justify-center rounded-md bg-surface px-2.5 py-1 text-[12.5px] font-medium text-dim ring-1 ring-inset ring-border hover:bg-raised hover:text-foreground disabled:opacity-50"
       >
-        {handoffStatus === "copying"
+        {agentUrlStatus === "copying"
           ? "Copying"
-          : handoffStatus === "copied"
+          : agentUrlStatus === "copied"
             ? "Copied"
-            : "Agent Handoff"}
+            : "MCP URL"}
       </button>
       <button
         type="button"
@@ -192,9 +197,9 @@ export default function SkillShareButton({
       >
         {publish ? "Published" : "Publish"}
       </button>
-      {(handoffMessage || (message && !open)) && (
+      {(agentUrlMessage || (message && !open)) && (
         <div className="absolute right-0 top-full z-40 mt-1.5 max-w-[280px] rounded-md border border-border bg-base px-2 py-1.5 text-[12px] text-muted-foreground shadow-lg">
-          {handoffMessage || message}
+          {agentUrlMessage || message}
         </div>
       )}
       {open && (
@@ -230,9 +235,29 @@ export default function SkillShareButton({
                 <button
                   type="button"
                   onClick={() => void copyLink()}
+                  aria-label="Copy public URL"
                   className="cursor-pointer rounded-md border border-border bg-base px-2 py-1.5 text-[11.5px] font-medium text-foreground hover:bg-raised"
                 >
                   {copied ? "Copied" : "Copy"}
+                </button>
+              </div>
+
+              <div className="sys-label mb-1 mt-3">MCP URL for agents</div>
+              <div className="flex gap-1.5">
+                <input
+                  readOnly
+                  value={publish.mcp_url}
+                  aria-label="Skill MCP URL"
+                  className="min-w-0 flex-1 rounded-md border border-border bg-surface px-2 py-1.5 text-[11.5px] font-mono text-foreground"
+                />
+                <button
+                  type="button"
+                  onClick={() => void copyMcpUrl()}
+                  aria-label="Copy skill MCP URL"
+                  disabled={agentUrlStatus === "copying"}
+                  className="cursor-pointer rounded-md border border-border bg-base px-2 py-1.5 text-[11.5px] font-medium text-foreground hover:bg-raised disabled:opacity-50"
+                >
+                  {agentUrlStatus === "copied" ? "Copied" : "Copy"}
                 </button>
               </div>
 
@@ -272,8 +297,4 @@ export default function SkillShareButton({
 function absoluteUrl(path: string): string {
   if (typeof window === "undefined") return path;
   return `${window.location.origin}${path}`;
-}
-
-function agentHandoffUrl(slug: string): string {
-  return absoluteUrl(`/api/v1/skills/${slug}?format=text`);
 }

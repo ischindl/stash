@@ -19,6 +19,7 @@ from uuid import UUID
 
 from ..database import get_pool
 from . import permission_service
+from .share_mcp_service import skill_mcp_url
 
 SKILL_MD_NAME = "SKILL.md"
 MAX_SKILL_NAME_LENGTH = 64
@@ -296,6 +297,7 @@ async def list_skills(owner_user_id: UUID, user_id: UUID) -> list[dict]:
             published = {
                 "id": str(r["publish_id"]),
                 "slug": r["slug"],
+                "mcp_url": skill_mcp_url(r["slug"]),
                 "discoverable": bool(r["discoverable"]),
                 "cover_image_url": r["cover_image_url"],
                 "icon_url": r["icon_url"],

@@ -15,9 +15,8 @@ import {
 } from "@/components/ShellChromeContext";
 import { ConfirmDialogProvider } from "@/components/ConfirmDialog";
 import {
-  getGeneralAccess,
   getPublicSkill,
-  listObjectShares,
+  getShareState,
   shareObjectByEmail,
   unpublishSkill,
   updateSkill,
@@ -62,8 +61,7 @@ vi.mock("../../../../lib/api", () => ({
   getPublicSkill: vi.fn(),
   githubOwner: (url: string) =>
     url.replace("https://github.com/", "").split("/")[0],
-  listObjectShares: vi.fn(),
-  getGeneralAccess: vi.fn(),
+  getShareState: vi.fn(),
   updateGeneralAccess: vi.fn(),
   publishSkillFolder: vi.fn(),
   shareObjectByEmail: vi.fn(),
@@ -118,6 +116,7 @@ function skillDetail(
       owner_user_id: "user-1",
       folder_id: "folder-1",
       slug: "shared-skill",
+      mcp_url: "http://localhost:3457/api/v1/mcp/skills/shared-skill",
       title: "Shared Skill",
       description: "",
       owner_id: "user-1",
@@ -158,8 +157,11 @@ describe("SkillPageClient", () => {
       ...skillDetail(),
       can_write: true,
     });
-    vi.mocked(listObjectShares).mockResolvedValue([]);
-    vi.mocked(getGeneralAccess).mockResolvedValue("none");
+    vi.mocked(getShareState).mockResolvedValue({
+      shares: [],
+      generalAccess: "none",
+      mcpUrl: null,
+    });
     vi.mocked(updateSkill).mockImplementation(async (_skillId, updates) => ({
       ...skillDetail().skill,
       ...updates,
@@ -175,13 +177,13 @@ describe("SkillPageClient", () => {
 
     const publishButton = await screen.findByRole("button", { name: "Published" });
     expect(
-      screen.getByRole("button", { name: "Copy agent handoff link" }),
+      screen.getByRole("button", { name: "Copy the MCP URL for agents" }),
     ).toBeInTheDocument();
     expect(publishButton.closest("header")).not.toBeNull();
 
     fireEvent.click(publishButton);
     // Popover renders a "Copy" button for the public URL; click it.
-    fireEvent.click(await screen.findByRole("button", { name: "Copy" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Copy public URL" }));
 
     await waitFor(() =>
       expect(navigator.clipboard.writeText).toHaveBeenCalledWith(
@@ -189,27 +191,42 @@ describe("SkillPageClient", () => {
       ),
     );
     await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Copied" })).toBeInTheDocument(),
+      expect(
+        screen.getByRole("button", { name: "Copy public URL" }),
+      ).toHaveTextContent("Copied"),
     );
   });
 
-  it("copies an agent-readable handoff link from the app header", async () => {
+  it("copies the MCP URL an agent connects to, from the app header", async () => {
     renderSkill(<SkillPageClient slug="shared-skill" />);
 
-    const handoffButton = await screen.findByRole("button", {
-      name: "Copy agent handoff link",
+    const mcpButton = await screen.findByRole("button", {
+      name: "Copy the MCP URL for agents",
     });
-    fireEvent.click(handoffButton);
+    fireEvent.click(mcpButton);
 
     await waitFor(() =>
       expect(navigator.clipboard.writeText).toHaveBeenCalledWith(
-        `${window.location.origin}/api/v1/skills/shared-skill?format=text`,
+        "http://localhost:3457/api/v1/mcp/skills/shared-skill",
       ),
     );
     await waitFor(() =>
       expect(
-        screen.getByRole("button", { name: "Copy agent handoff link" }),
+        screen.getByRole("button", { name: "Copy the MCP URL for agents" }),
       ).toHaveTextContent("Copied"),
+    );
+  });
+
+  it("shows the MCP URL in the popover, where it can be pasted into a client", async () => {
+    renderSkill(<SkillPageClient slug="shared-skill" />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Published" }));
+
+    const mcpField = await screen.findByRole("textbox", {
+      name: "Skill MCP URL",
+    });
+    expect(mcpField).toHaveValue(
+      "http://localhost:3457/api/v1/mcp/skills/shared-skill",
     );
   });
 
@@ -248,7 +265,7 @@ describe("SkillPageClient", () => {
     const dialog = await screen.findByRole("dialog", {
       name: "Share Shared Skill",
     });
-    expect(listObjectShares).toHaveBeenCalledWith("folder", "folder-1");
+    expect(getShareState).toHaveBeenCalledWith("folder", "folder-1");
 
     fireEvent.change(within(dialog).getByPlaceholderText("Add people by email"), {
       target: { value: "sam@example.com" },
