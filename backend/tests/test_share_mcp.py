@@ -17,6 +17,7 @@ so a folder shared with named people only has no working URL.
 
 import json
 from contextlib import asynccontextmanager
+from urllib.parse import urlparse
 
 import httpx
 import pytest
@@ -25,6 +26,7 @@ from httpx import ASGITransport, AsyncClient
 from mcp.client.session import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 
+from backend.config import settings
 from backend.main import app
 from backend.routers import share_mcp
 from backend.services import storage_service
@@ -85,11 +87,17 @@ async def mcp_runtime():
 
 @pytest_asyncio.fixture
 async def mcp_session(mcp_runtime):
-    """Open a client session at an MCP URL, against the mounted endpoint."""
+    """Open a client session at an MCP URL, against the mounted endpoint.
+
+    `headers` is what a proxy in front of us would have put on the wire — see
+    the proxy-host tests for why the Host a request arrives with is not the
+    origin printed in the URL."""
 
     @asynccontextmanager
-    async def _open(url: str):
-        async with httpx.AsyncClient(transport=ASGITransport(app=app)) as http_client:
+    async def _open(url: str, headers: dict | None = None):
+        async with httpx.AsyncClient(
+            transport=ASGITransport(app=app), headers=headers or {}
+        ) as http_client:
             async with streamable_http_client(url, http_client=http_client) as streams:
                 async with ClientSession(streams[0], streams[1]) as session:
                     await session.initialize()
@@ -213,7 +221,7 @@ async def _share_state(client: AsyncClient, api_key: str, folder_id: str) -> dic
     return (await _list_shares(client, api_key, folder_id)).json()
 
 
-async def _raw_post(client: AsyncClient, url: str) -> httpx.Response:
+async def _raw_post(client: AsyncClient, url: str, headers: dict | None = None) -> httpx.Response:
     """One initialize handshake, as an MCP client's first call looks on the wire."""
     return await client.post(
         url,
@@ -221,8 +229,87 @@ async def _raw_post(client: AsyncClient, url: str) -> httpx.Response:
         headers={
             "content-type": "application/json",
             "accept": "application/json, text/event-stream",
+            **(headers or {}),
         },
     )
+
+
+# --- The Host a proxy delivers is not the origin the URL prints -------------
+#
+# A user pastes the URL the product printed, whose origin is PUBLIC_URL. Behind
+# that origin sits the Next rewrite for /api/v1 (verified live on prod: a GET to
+# the app origin's /health is answered by this backend), and that proxy rewrites
+# Host to its own target while leaving the printed host in X-Forwarded-Host
+# (next/dist/server/lib/router-utils/proxy-request.js: `changeOrigin: true`).
+# Self-host reaches the same backend through a compose-internal name. So the
+# Host this endpoint is actually served on names the backend service, never the
+# printed origin — an allowlist built from PUBLIC_URL answers 421 to the product's
+# own URLs, and the agent never gets past the handshake to reach the authz.
+
+
+def _public_host() -> str:
+    return urlparse(settings.PUBLIC_URL.rstrip("/")).netloc
+
+
+@pytest.mark.asyncio
+async def test_the_managed_proxy_host_reads_the_published_skill(client: AsyncClient, mcp_session):
+    """Host: the API service, X-Forwarded-Host: the origin in the pasted URL."""
+    api_key = await _register(client, "mcp_managed_host")
+    folder_id = await _folder(client, api_key, "Deploy checklist")
+    await _page(client, api_key, folder_id, "Steps", "# 1. run the migration")
+    skill = await _publish(client, api_key, folder_id, "Deploy checklist")
+
+    behind_proxy = {"Host": "api.test.internal", "X-Forwarded-Host": _public_host()}
+    async with mcp_session(skill["mcp_url"], headers=behind_proxy) as session:
+        assert await _tools(session) == ["list", "read"]
+        assert "run the migration" in await _call(session, "read", path="Steps")
+
+
+@pytest.mark.asyncio
+async def test_the_self_host_proxy_host_reads_the_shared_folder(
+    client: AsyncClient, mcp_session, stub_storage
+):
+    """The compose topology serves the backend as `backend:3456`, not as PUBLIC_URL."""
+    api_key = await _register(client, "mcp_compose_host")
+    folder_id = await _folder(client, api_key, "Self-hosted share")
+    await _page(client, api_key, folder_id, "Note", "readable through the internal name")
+    mcp_url = await _share_by_link(client, api_key, folder_id, "read")
+
+    behind_proxy = {"Host": "backend:3456", "X-Forwarded-Host": _public_host()}
+    async with mcp_session(mcp_url, headers=behind_proxy) as session:
+        listing = json.loads(await _call(session, "list"))
+        assert listing["title"] == "Self-hosted share"
+        assert "readable through the internal name" in await _call(session, "read", path="Note")
+
+
+@pytest.mark.asyncio
+async def test_a_live_handle_still_demands_a_json_body(client: AsyncClient, stub_storage):
+    """What the SDK keeps checking once the Host allowlist is gone.
+
+    A browser cross-origin POST with a JSON body needs a CORS preflight, and
+    CORS_ORIGINS answers only the product's own origins; this is the second half of
+    that gate and it must survive dropping the allowlist."""
+    api_key = await _register(client, "mcp_content_type")
+    folder_id = await _folder(client, api_key, "Body check")
+    mcp_url = await _share_by_link(client, api_key, folder_id, "read")
+
+    rejected = await client.post(
+        mcp_url,
+        content=b'{"jsonrpc": "2.0"}',
+        headers={"content-type": "text/plain", "accept": "application/json, text/event-stream"},
+    )
+    assert rejected.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_a_revoked_handle_is_still_404_behind_the_proxy_host(client: AsyncClient):
+    """Answering any Host the proxy delivers must not soften the share check."""
+    behind_proxy = {"Host": "api.test.internal", "X-Forwarded-Host": _public_host()}
+
+    dead = await _raw_post(
+        client, f"http://{_public_host()}/api/v1/mcp/skills/no-such-skill", headers=behind_proxy
+    )
+    assert dead.status_code == 404
 
 
 # --- Skill leg: the slug is the handle ---------------------------------------

@@ -10,7 +10,9 @@ leave the owner believing their agent was still reading the folder.
 
 Requests are stateless by design: each one re-resolves its own handle, so
 revocation lands on the next call rather than at some future session expiry,
-and no session affinity is needed behind the product's proxy.
+and no session affinity is needed behind the product's proxy. The handle is the
+whole authorization story — the network layer adds nothing to it, which is why
+this mount runs without a Host allowlist (_transport_security says why).
 
 The server is built per app runtime rather than at import: a FastMCP instance
 may run its session manager exactly once, and an app can be started more than
@@ -23,33 +25,43 @@ import asyncio
 import json
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
-from urllib.parse import urlparse
 
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
-from backend.config import settings
 from backend.services import security_audit_service, share_mcp_service
 
 _HANDLE: ContextVar[dict] = ContextVar("stash_share_handle")
 
 
 def _transport_security() -> TransportSecuritySettings:
-    """DNS-rebinding protection scoped to the origin the product prints.
+    """No Host allowlist here: the Host this mount is served on is never the printed one.
 
-    Every MCP URL this backend hands out is built from PUBLIC_URL, so a client
-    configured from the share dialog arrives with exactly that Host. Anything
-    else is a different name resolving to us, which is the rebinding attack
-    this check exists for."""
-    origin = urlparse(settings.PUBLIC_URL.rstrip("/"))
-    host = origin.netloc
-    return TransportSecuritySettings(
-        enable_dns_rebinding_protection=True,
-        allowed_hosts=[host, f"{origin.hostname}:*"],
-        allowed_origins=[f"{origin.scheme}://{host}", f"{origin.scheme}://{origin.hostname}:*"],
-    )
+    A pasted MCP URL carries PUBLIC_URL's origin, and in every topology we ship a
+    different Host reaches us. Managed prod serves /api/v1 through the Next.js rewrite
+    to the API (live check: the app origin's /health is answered by this backend), and
+    that proxy rewrites Host to its own target while writing the printed origin into
+    X-Forwarded-Host (Next's proxy-request sets `changeOrigin: true`) — the endpoint is
+    reached as the API host while the URL names the app origin. Self-host rewrites to
+    BACKEND_INTERNAL_URL, so Host is `backend:3456`. An allowlist derived from
+    PUBLIC_URL therefore answers 421 to the product's own URLs, before any handle is
+    read (test_the_managed_proxy_host_reads_the_published_skill). Nothing in this
+    backend's config names the hosts it is served on, so any list written here is a
+    guess about someone's deployment, and a wrong guess is a dead URL. X-Forwarded-Host
+    is no more honest: the edge in front of the API host writes its own value over ours.
+
+    The Host check guards a surface that answers an attacker's browser using a
+    credential the browser supplies. This one carries none — no cookie, no session, no
+    Authorization header — so a rebound DNS name rides nothing. The grant is the handle
+    in the path (unguessable for a shared folder, public by design for a published
+    skill) and it is re-resolved through the share cascade on every request, so a
+    revoked share is a 404 before a tool runs. Browsers stay gated by CORS_ORIGINS, and
+    the MCP SDK requires application/json on POST regardless of this flag.
+    """
+
+    return TransportSecuritySettings(enable_dns_rebinding_protection=False)
 
 
 INSTRUCTIONS = (
