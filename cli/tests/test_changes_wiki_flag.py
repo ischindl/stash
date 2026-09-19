@@ -12,6 +12,8 @@ that has never heard of the flag keeps the exact request it sends today.
 
 from __future__ import annotations
 
+import re
+
 import httpx
 from typer.testing import CliRunner
 
@@ -19,6 +21,18 @@ from cli import main
 from cli.client import StashClient
 
 runner = CliRunner()
+
+ANSI = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _shown(output: str) -> str:
+    """The error as a user reads it: unstyled, and with the panel's line breaks
+    removed. typer renders usage errors through rich, which styles the option
+    name and can break it across the panel's wrap column — so `--wiki` is not
+    reliably a substring of the raw bytes. What must survive either way is the
+    words themselves."""
+    return "".join(ANSI.sub("", output).split())
+
 
 # What the server answers. These tests assert what goes ON the wire, so the body
 # only has to be one the command can honestly render: `changes` prints a backlog
@@ -96,5 +110,6 @@ def test_invalid_wiki_exits_2_naming_the_two_values():
     result = runner.invoke(main.app, ["changes", "--wiki", "exteranl"])
 
     assert result.exit_code == 2
-    assert "--wiki" in result.output
-    assert "internal" in result.output and "external" in result.output
+    assert "--wiki" in _shown(result.output)
+    assert "internal" in _shown(result.output)
+    assert "external" in _shown(result.output)
