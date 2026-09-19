@@ -13,9 +13,23 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
 from ..auth import get_current_user
-from ..services import share_service
+from ..services import share_mcp_service, share_service
 
 router = APIRouter(prefix="/api/v1/share", tags=["shares"])
+
+
+async def _folder_mcp_url(object_type: str, object_id: UUID, user_id: UUID) -> str | None:
+    """The folder's MCP URL for a share listing, None for anything else.
+
+    `GET .../share` is where a folder's MCP URL lives, and the only place: it
+    is state about the share, so the share dialog reads it from the same call
+    it reads the share list from, and no share *action* has to know the
+    endpoint exists. Other object types get nothing here - a published skill
+    carries its own URL on the skill record, and the rest have no MCP surface
+    to advertise."""
+    if object_type != "folder":
+        return None
+    return await share_mcp_service.folder_share_url(object_id, user_id)
 
 
 class ShareRequest(BaseModel):
@@ -116,4 +130,5 @@ async def list_shares(
         "general_access": await share_service.get_general_access(
             object_type, object_id, current_user["id"]
         ),
+        "mcp_url": await _folder_mcp_url(object_type, object_id, current_user["id"]),
     }

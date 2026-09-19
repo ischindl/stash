@@ -45,6 +45,7 @@ from .routers import (
     security_audit,
     session_folders,
     sessions,
+    share_mcp,
     shares,
     skills,
     sources,
@@ -60,7 +61,7 @@ from .routers import (
     webhooks,
     workspace_agent_credentials,
 )
-from .services import demo_service
+from .services import demo_service, share_mcp_service
 from .services.row_validation import RowValidationError
 
 logger = logging.getLogger("stash")
@@ -103,10 +104,13 @@ async def lifespan(app: FastAPI):
         await demo_service.seed_demo()
     except Exception:
         logger.exception("seed_demo failed at startup")
-    try:
-        yield
-    finally:
-        await close_db()
+    # The MCP session manager is process-wide: every share URL shares one
+    # server, so its task group has to outlive any single request.
+    async with share_mcp.session_runtime():
+        try:
+            yield
+        finally:
+            await close_db()
 
 
 def _rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded) -> JSONResponse:
@@ -191,6 +195,10 @@ app.include_router(billing.router)
 app.include_router(bulk_export.router)
 app.include_router(exports.router)
 app.include_router(demo.router)
+
+# An MCP client dials a share handle, not an API route: /api/v1/mcp is a
+# separate ASGI surface whose authorization is the handle itself.
+app.mount(share_mcp_service.MCP_PATH_PREFIX, share_mcp.gate)
 
 if settings.AUTH0_ENABLED:
     from backend.managed.auth0 import router as auth0_router

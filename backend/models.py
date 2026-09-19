@@ -2,7 +2,9 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
+
+from .services.share_mcp_service import skill_mcp_url
 
 # --- Users ---
 
@@ -141,6 +143,14 @@ class SkillResponse(BaseModel):
     install_count: int
     created_at: datetime
     updated_at: datetime
+
+    @computed_field
+    @property
+    def mcp_url(self) -> str:
+        """The MCP URL an agent dials to read this Skill. Carried by every
+        Skill payload: a published Skill is readable by handle, so there is
+        no skill-shaped response that should not know its own URL."""
+        return skill_mcp_url(self.slug)
 
 
 # Public renderer payload — the skill's folder contents, inlined: pages carry
