@@ -104,10 +104,14 @@ async def session_runtime():
     different tasks — which is how pytest-asyncio runs an async fixture — gets
     'exit cancel scope in a different task'. So the manager is handed to a
     task of our own, and the lifespan only ever waits on that task.
+
+    One runtime answers the endpoint at a time, and a runtime hands the
+    endpoint back to whoever held it when it exits. A test session that boots
+    the app itself and then drives the app's own lifespan must not strand the
+    endpoint on the first runtime.
     """
     global _active
-    if _active is not None:
-        raise RuntimeError("a share MCP runtime is already active in this process")
+    held = _active
     endpoint = ShareEndpoint()
     _active = endpoint
     started = asyncio.Event()
@@ -125,7 +129,7 @@ async def session_runtime():
     finally:
         stopping.set()
         await owner
-        _active = None
+        _active = held
 
 
 class ShareHandleGate:
