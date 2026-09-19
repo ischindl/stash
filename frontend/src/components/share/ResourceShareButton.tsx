@@ -460,8 +460,8 @@ export function ResourceShareDialog({
             </button>
           </div>
           <p className="mt-1.5 text-[12px] text-muted-foreground">
-            An MCP client lists and reads this folder through this URL, for as long as
-            the link above stays on.
+            An MCP client lists and reads this folder through this URL, for as long
+            as the folder is open by link or published as a skill.
           </p>
         </section>
       )}
