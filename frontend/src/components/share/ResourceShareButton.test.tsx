@@ -4,18 +4,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import ResourceShareButton from "./ResourceShareButton";
 import {
-  getGeneralAccess,
-  listObjectShares,
+  getShareState,
   shareObjectByEmail,
   unshareObject,
   updateGeneralAccess,
 } from "../../lib/api";
 
 vi.mock("../../lib/api", () => ({
-  listObjectShares: vi.fn(),
+  getShareState: vi.fn(),
   shareObjectByEmail: vi.fn(),
   unshareObject: vi.fn(),
-  getGeneralAccess: vi.fn(),
   updateGeneralAccess: vi.fn(),
 }));
 
@@ -38,19 +36,22 @@ describe("ResourceShareButton", () => {
       configurable: true,
       value: { writeText: vi.fn().mockResolvedValue(undefined) },
     });
-    vi.mocked(listObjectShares).mockResolvedValue([
-      {
-        principal_type: "user",
-        principal_id: "user-2",
-        label: "Ada Lovelace",
-        email: "ada@example.com",
-        permission: "read",
-        pending: false,
-      },
-    ]);
+    vi.mocked(getShareState).mockResolvedValue({
+      shares: [
+        {
+          principal_type: "user",
+          principal_id: "user-2",
+          label: "Ada Lovelace",
+          email: "ada@example.com",
+          permission: "read",
+          pending: false,
+        },
+      ],
+      generalAccess: "none",
+      mcpUrl: null,
+    });
     vi.mocked(shareObjectByEmail).mockResolvedValue(undefined);
     vi.mocked(unshareObject).mockResolvedValue(undefined);
-    vi.mocked(getGeneralAccess).mockResolvedValue("none");
     vi.mocked(updateGeneralAccess).mockImplementation(
       async (_type, _id, permission) => permission,
     );
@@ -89,18 +90,22 @@ describe("ResourceShareButton", () => {
   });
 
   it("invites people directly to the resource", async () => {
-    vi.mocked(listObjectShares)
-      .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([
-        {
-          principal_type: "user",
-          principal_id: null,
-          label: "ada@example.com",
-          email: "ada@example.com",
-          permission: "write",
-          pending: true,
-        },
-      ]);
+    vi.mocked(getShareState)
+      .mockResolvedValueOnce({ shares: [], generalAccess: "none", mcpUrl: null })
+      .mockResolvedValueOnce({
+        shares: [
+          {
+            principal_type: "user",
+            principal_id: null,
+            label: "ada@example.com",
+            email: "ada@example.com",
+            permission: "write",
+            pending: true,
+          },
+        ],
+        generalAccess: "none",
+        mcpUrl: null,
+      });
 
     render(
       <ResourceShareButton
@@ -160,6 +165,56 @@ describe("ResourceShareButton", () => {
       ),
     );
     expect(await screen.findByText("Access updated.")).toBeInTheDocument();
+  });
+
+  it("offers the folder's MCP URL to agents once the link is on", async () => {
+    vi.mocked(getShareState).mockResolvedValue({
+      shares: [],
+      generalAccess: "read",
+      mcpUrl: "http://localhost:3457/api/v1/mcp/folders/abc123",
+    });
+
+    render(
+      <ResourceShareButton
+        objectType="folder"
+        objectId="folder-1"
+        resourceName="Research"
+        resourceUrlPath="/folders/folder-1"
+        currentUser={currentUser}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Share" }));
+    await screen.findByRole("dialog", { name: "Share Research" });
+
+    expect(
+      await screen.findByText("http://localhost:3457/api/v1/mcp/folders/abc123"),
+    ).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Copy agent URL" }));
+
+    await waitFor(() =>
+      expect(navigator.clipboard.writeText).toHaveBeenCalledWith(
+        "http://localhost:3457/api/v1/mcp/folders/abc123",
+      ),
+    );
+  });
+
+  it("shows no agent URL while the folder is restricted", async () => {
+    render(
+      <ResourceShareButton
+        objectType="folder"
+        objectId="folder-1"
+        resourceName="Research"
+        resourceUrlPath="/folders/folder-1"
+        currentUser={currentUser}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Share" }));
+    await screen.findByRole("dialog", { name: "Share Research" });
+
+    expect(screen.queryByText("Agent access (MCP)")).not.toBeInTheDocument();
   });
 
 });

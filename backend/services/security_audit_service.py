@@ -123,12 +123,13 @@ async def record_content_read(
 async def record_entries_listed(
     *,
     target_type: str,
-    actor_user_id: UUID,
+    actor_user_id: UUID | None,
     owner_user_id: UUID,
     metadata: dict | None = None,
 ) -> None:
     """Listing trail for native content (tree, overview, tables, ...) —
-    parallel to source.entries_listed for connected sources."""
+    parallel to source.entries_listed for connected sources.
+    actor_user_id is None for anonymous public-link and MCP listings."""
     await record_event(
         action="content.entries_listed",
         actor_user_id=actor_user_id,

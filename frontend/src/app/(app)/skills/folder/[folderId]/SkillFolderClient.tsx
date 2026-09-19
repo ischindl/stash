@@ -1,6 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useBreadcrumbs } from "@/components/BreadcrumbContext";
 import { useConfirm } from "@/components/ConfirmDialog";
@@ -146,6 +147,17 @@ export default function SkillFolderClient({ folderId }: { folderId: string }) {
           resourceUrlPath={`/skills/folder/${folderId}`}
           currentUser={user}
         />
+        {/* Once published, the panel's job is to point at the live page — the
+            publish call-to-action is not shown again here in either state. */}
+        {publish && (
+          <Link
+            href={`/skills/${publish.slug}`}
+            title="Open the published skill page"
+            className="rounded-md bg-surface px-2.5 py-1 text-[12.5px] font-medium text-dim ring-1 ring-inset ring-border hover:bg-raised hover:text-foreground"
+          >
+            Public page
+          </Link>
+        )}
         <SkillShareButton
           folderId={folderId}
           publish={publish}

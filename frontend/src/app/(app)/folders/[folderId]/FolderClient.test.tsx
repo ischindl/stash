@@ -1,7 +1,8 @@
-import { cleanup, render, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import FolderClient from "./FolderClient";
 import { getFolderContents } from "@/lib/api";
+import { useShareAction } from "@/components/ShellChromeContext";
 
 const router = vi.hoisted(() => ({
   push: vi.fn(),
@@ -104,5 +105,23 @@ describe("FolderClient skill redirect", () => {
 
     await waitFor(() => expect(getFolderContents).toHaveBeenCalled());
     expect(router.replace).not.toHaveBeenCalled();
+  });
+
+  // One verb turns a folder into a skill. The old panel carried a second
+  // "Publish as skill" button beside it, which made people hunt for where
+  // publishing actually happens.
+  it("offers a single Convert to Skill verb that opens the composer", async () => {
+    vi.mocked(getFolderContents).mockResolvedValue(contents(false));
+
+    render(<FolderClient folderId="folder-root" />);
+    await screen.findByTestId("file-browser");
+
+    const action = vi.mocked(useShareAction).mock.calls.at(-1)?.[0];
+    render(<>{action}</>);
+
+    fireEvent.click(screen.getByRole("button", { name: "Convert to Skill" }));
+
+    expect(await screen.findByText("Convert “Brake Shoes” to a skill")).toBeInTheDocument();
+    expect(screen.queryByText("Publish as skill")).toBeNull();
   });
 });

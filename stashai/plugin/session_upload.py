@@ -15,10 +15,10 @@ from stashai.plugin.upload_status import record_upload_failure
 # start. Codex, Gemini, and OpenCode all read the cross-agent ~/.agents/skills
 # standard, so they converge on one synced copy. Claude Code reads its own
 # ~/.claude/skills (it does not scan .agents); OpenClaw uses ~/.openclaw/skills.
-# Cursor is omitted: it only loads project-level .cursor/skills with no global
-# location, so there's nothing to sync at session start.
 # Hermes loads ~/.hermes/skills natively; ~/.agents/skills only counts if the
 # user opts into skills.external_dirs, so we sync to the always-loaded dir.
+# Pi scans both ~/.agents/skills and ~/.pi/agent/skills, so the cross-agent
+# copy is whatever the user left there by hand — pi gets its own root.
 _SKILLS_DIR_BY_CLIENT = {
     "claude_code": "~/.claude/skills",
     "codex_cli": "~/.agents/skills",
@@ -26,17 +26,35 @@ _SKILLS_DIR_BY_CLIENT = {
     "opencode": "~/.agents/skills",
     "openclaw": "~/.openclaw/skills",
     "hermes": "~/.hermes/skills",
+    "pi": "~/.pi/agent/skills",
 }
+
+# Agents that load skills from the project alone, with no global directory to
+# sync into. Cursor reads project-level .cursor/skills and nothing else.
+_PROJECT_ONLY_CLIENTS = {"cursor"}
 
 
 def spawn_skills_sync(cfg: dict) -> None:
     """Sync the user's skills into the agent's skills directory in the
     background, so they're loaded next session. Detached and silent — a failed
-    sync must never break a session. No-op for agents without a global skills
-    directory (e.g. Cursor, which is project-only)."""
-    skills_dir = _SKILLS_DIR_BY_CLIENT.get(cfg.get("client", ""))
-    if not skills_dir:
+    sync must never break a session.
+
+    An agent that names itself and has no entry in either set is a bug, not a
+    no-op: silently skipping it is how pi's skills stayed unsynced for as long
+    as its hook already called this. Name its root in `_SKILLS_DIR_BY_CLIENT`,
+    or list it in `_PROJECT_ONLY_CLIENTS` if it truly loads skills from the
+    project alone. An adapter that never named its client at all is a different
+    situation and stays out of this decision."""
+    client = cfg.get("client", "")
+    if not client or client in _PROJECT_ONLY_CLIENTS:
         return
+    skills_dir = _SKILLS_DIR_BY_CLIENT.get(client)
+    if not skills_dir:
+        raise ValueError(
+            f"No skills directory configured for client {client!r}. Add it to "
+            "_SKILLS_DIR_BY_CLIENT, or to _PROJECT_ONLY_CLIENTS if that agent "
+            "loads skills from the project alone."
+        )
     cmd = ["stash", "skills", "sync", "--dir", skills_dir]
     env = dict(os.environ)
     if cfg.get("api_endpoint"):
@@ -90,9 +108,17 @@ def spawn_session_watcher(
     try:
         subprocess.Popen(
             [
-                sys.executable, str(script),
-                str(agent_pid), session_id, agent_name,
-                base_url, api_key, cwd, str(data_dir), session_row_id, transcript_path,
+                sys.executable,
+                str(script),
+                str(agent_pid),
+                session_id,
+                agent_name,
+                base_url,
+                api_key,
+                cwd,
+                str(data_dir),
+                session_row_id,
+                transcript_path,
             ],
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
@@ -124,9 +150,16 @@ def spawn_session_upload(
     try:
         subprocess.Popen(
             [
-                sys.executable, str(script),
-                session_row_id, transcript_path, cwd, session_id,
-                agent_name, base_url, api_key, upload_status_dir,
+                sys.executable,
+                str(script),
+                session_row_id,
+                transcript_path,
+                cwd,
+                session_id,
+                agent_name,
+                base_url,
+                api_key,
+                upload_status_dir,
             ],
             env=env,
             stdin=subprocess.DEVNULL,

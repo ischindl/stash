@@ -1,14 +1,31 @@
 import { cleanup, render as renderBase, screen, waitFor } from "@testing-library/react";
-import type { ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import SkillFolderClient from "./SkillFolderClient";
-import { getFolderContents, listSkills } from "@/lib/api";
+import { getFolderContents, listSkills, type FolderBackedSkill, type SkillPublishInfo } from "@/lib/api";
 import { useBreadcrumbs } from "@/components/BreadcrumbContext";
 import { useShareAction } from "@/components/ShellChromeContext";
 import { ConfirmDialogProvider } from "@/components/ConfirmDialog";
 
 function render(ui: ReactNode) {
   return renderBase(ui, { wrapper: ConfirmDialogProvider });
+}
+
+/**
+ * Stands in for the shell chrome: the panel publishes its share action to
+ * `useShareAction`, and only the chrome renders it. Re-reads the latest action
+ * until the test's assertion holds, so a publish that lands a moment after the
+ * folder contents is waited for rather than guessed at with a fixed delay.
+ */
+function ShareActionHost() {
+  const [action, setAction] = useState<ReactNode>(null);
+  useEffect(() => {
+    const id = setInterval(() => {
+      setAction(vi.mocked(useShareAction).mock.calls.at(-1)?.[0] ?? null);
+    }, 10);
+    return () => clearInterval(id);
+  }, []);
+  return <>{action}</>;
 }
 
 const router = vi.hoisted(() => ({
@@ -68,6 +85,52 @@ vi.mock("@/hooks/useAuth", () => ({
     loading: false,
   }),
 }));
+
+const PUBLISH: SkillPublishInfo = {
+  id: "skill-1",
+  slug: "launch-plan",
+  mcp_url: "http://localhost:3456/api/v1/mcp/skills/launch-plan",
+  discoverable: true,
+  cover_image_url: null,
+  icon_url: null,
+  view_count: 3,
+};
+
+function folderSkill(published: SkillPublishInfo | null): FolderBackedSkill {
+  return {
+    backing: "folder",
+    folder_id: "folder-root",
+    source_ref: null,
+    source_id: null,
+    source_name: null,
+    name: "Launch Plan",
+    description: "",
+    when_to_use: "",
+    version: "1.0",
+    mcp_exposed: true,
+    file_count: 2,
+    updated_at: "2026-08-25T00:00:00Z",
+    has_instructions: true,
+    published,
+  };
+}
+
+// The skill's own root folder — the only place the publish affordances live.
+function mockSkillRoot() {
+  vi.mocked(getFolderContents).mockResolvedValue({
+    folder: {
+      id: "folder-root",
+      name: "Launch Plan",
+      parent_folder_id: null,
+      is_skill: true,
+    },
+    breadcrumbs: [{ id: "folder-root", name: "Launch Plan", is_skill: true }],
+    subfolders: [],
+    pages: [],
+    files: [],
+    tables: [],
+  });
+}
 
 describe("SkillFolderClient", () => {
   beforeEach(() => {
@@ -148,19 +211,7 @@ describe("SkillFolderClient", () => {
   // The Share dialog turns this path into the link the user copies. Pointing
   // it at /skills/<folderId> hands the recipient a "Skill not found" page.
   it("shares the skill with a link the recipient can open", async () => {
-    vi.mocked(getFolderContents).mockResolvedValue({
-      folder: {
-        id: "folder-root",
-        name: "Launch Plan",
-        parent_folder_id: null,
-        is_skill: true,
-      },
-      breadcrumbs: [{ id: "folder-root", name: "Launch Plan", is_skill: true }],
-      subfolders: [],
-      pages: [],
-      files: [],
-      tables: [],
-    });
+    mockSkillRoot();
 
     render(<SkillFolderClient folderId="folder-root" />);
     await screen.findByTestId("file-browser");
@@ -172,5 +223,39 @@ describe("SkillFolderClient", () => {
       "data-share-url",
       "/skills/folder/folder-root",
     );
+  });
+
+  // Once a skill is published the panel's remaining job is to point at the
+  // live page: the title is the page heading, the link is the published URL.
+  it("links the panel to the published page once the skill is live", async () => {
+    mockSkillRoot();
+    vi.mocked(listSkills).mockResolvedValue([folderSkill(PUBLISH)]);
+
+    render(<SkillFolderClient folderId="folder-root" />);
+    render(<ShareActionHost />);
+    await screen.findByTestId("file-browser");
+
+    await waitFor(() =>
+      expect(screen.getByRole("link", { name: "Public page" })).toHaveAttribute(
+        "href",
+        `/skills/${PUBLISH.slug}`,
+      ),
+    );
+    // The panel is never a second place to be told to publish.
+    expect(screen.queryByText("Convert to Skill")).toBeNull();
+  });
+
+  // Unpublishing deletes the URL, so the link has to leave with it.
+  it("keeps the page link off a skill that is not published", async () => {
+    mockSkillRoot();
+    vi.mocked(listSkills).mockResolvedValue([folderSkill(null)]);
+
+    render(<SkillFolderClient folderId="folder-root" />);
+    render(<ShareActionHost />);
+    await screen.findByTestId("file-browser");
+
+    // Past the point where a published skill would have had its link, there is none.
+    await waitFor(() => expect(screen.getByText("Share resource")).toBeTruthy());
+    expect(screen.queryByRole("link", { name: "Public page" })).toBeNull();
   });
 });

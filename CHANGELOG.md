@@ -5,6 +5,15 @@ everything before it is captured in git history (`git log`), not here.
 
 ## Unreleased
 
+### Changed
+
+- Sharing with an agent now hands it a server. The folder share dialog shows the folder's
+  MCP URL with a "Copy agent URL" button, the skill publish popover shows the MCP URL next
+  to the public URL, the skill panel's toolbar copies it, and a published skill's panel
+  links to its public page. The old "Agent Handoff" copy button is gone. An agent reads a
+  folder through that URL for exactly as long as the folder is open by link or published
+  as a skill — the same gate the MCP endpoint itself enforces.
+
 ### Fixed
 
 - Self-host compose contract: dropped the orphaned `collab` override from

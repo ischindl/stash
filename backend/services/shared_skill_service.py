@@ -59,7 +59,7 @@ def _html_to_text(content_html: str) -> str:
     return "\n".join(line for line in lines if line).strip()
 
 
-def _page_text(page: dict) -> str:
+def page_text(page: dict) -> str:
     content_markdown = page.get("content_markdown") or ""
     if content_markdown.strip():
         return content_markdown.strip()
@@ -1000,7 +1000,7 @@ def skill_to_text(skill: dict, owner_name: str, contents: dict, base_url: str) -
             continue
         label = "/".join([*page["folder_path"], page["name"]])
         md_url = _agent_item_url(base_url, skill, "page", page["id"], "md")
-        preview = _preview(_page_text(page)) or "Page"
+        preview = _preview(page_text(page)) or "Page"
         lines.append(f"{index}. [{label}]({md_url})\n   Type: page\n   Preview: {preview}")
         index += 1
     for file in files:
@@ -1037,9 +1037,9 @@ def item_to_text(skill: dict, object_type: str, item: dict, base_url: str) -> st
     ]
 
     if object_type == "page":
-        page_text = _page_text(item)
-        if page_text:
-            parts.append(page_text)
+        body = page_text(item)
+        if body:
+            parts.append(body)
     elif object_type == "table":
         cols = item.get("columns", [])
         rows = item.get("rows", [])
@@ -1070,9 +1070,9 @@ def contents_to_text(title: str, contents: dict) -> str:
     """Flatten a skill folder's contents into readable markdown text."""
     parts = [f"# {title}\n"]
     for page in contents["pages"]:
-        page_text = _page_text(page)
-        if page_text:
-            parts.append(page_text)
+        body = page_text(page)
+        if body:
+            parts.append(body)
     for file in contents["files"]:
         parts.append(
             f"*Attached file: {file.get('name', '')} ({file.get('content_type', 'unknown')})*\n"

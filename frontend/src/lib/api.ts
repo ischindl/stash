@@ -1700,6 +1700,9 @@ export async function recordRecent(
 export interface SkillPublishInfo {
   id: string;
   slug: string;
+  /** The share's MCP URL: what an agent connects to in order to list and read
+   *  this skill. Live exactly while the skill is published. */
+  mcp_url: string;
   discoverable: boolean;
   cover_image_url: string | null;
   icon_url: string | null;
@@ -1815,6 +1818,8 @@ export interface PublishedSkill {
   owner_user_id: string;
   folder_id: string;
   slug: string;
+  /** The MCP URL an agent connects to in order to list and read this skill. */
+  mcp_url: string;
   title: string;
   description: string;
   owner_id: string;
@@ -2326,26 +2331,31 @@ export interface ObjectShare {
   pending: boolean;
 }
 
-export async function listObjectShares(
-  objectType: SharedObjectType,
-  objectId: string,
-): Promise<ObjectShare[]> {
-  const res = await apiFetch<{ shares: ObjectShare[] }>(
-    `/api/v1/share?object_type=${objectType}&object_id=${objectId}`,
-  );
-  return res.shares;
+// Everything the share dialog shows about one object, from the single
+// endpoint that reports its access state.
+export interface ShareState {
+  shares: ObjectShare[];
+  // The object's "anyone with the link" level ('none' when only the owner and
+  // named shares can reach it).
+  generalAccess: GeneralPermission;
+  // A shared folder's MCP URL for agents, or null while it isn't public.
+  mcpUrl: string | null;
 }
 
-// The object's current "anyone with the link" level ('none' when it's only
-// reachable by the owner and named shares).
-export async function getGeneralAccess(
+export async function getShareState(
   objectType: SharedObjectType,
   objectId: string,
-): Promise<GeneralPermission> {
-  const res = await apiFetch<{ general_access: GeneralPermission }>(
-    `/api/v1/share?object_type=${objectType}&object_id=${objectId}`,
-  );
-  return res.general_access;
+): Promise<ShareState> {
+  const res = await apiFetch<{
+    shares: ObjectShare[];
+    general_access: GeneralPermission;
+    mcp_url: string | null;
+  }>(`/api/v1/share?object_type=${objectType}&object_id=${objectId}`);
+  return {
+    shares: res.shares,
+    generalAccess: res.general_access,
+    mcpUrl: res.mcp_url,
+  };
 }
 
 export async function updateGeneralAccess(

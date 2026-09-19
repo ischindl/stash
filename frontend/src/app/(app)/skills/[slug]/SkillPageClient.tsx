@@ -20,7 +20,9 @@ import { useShareAction } from "@/components/ShellChromeContext";
 import { PublicSkillSkeleton } from "@/components/SkeletonStates";
 import { GitHubIcon } from "@/components/integrations/BrandIcons";
 import ResourceShareButton from "@/components/share/ResourceShareButton";
-import SkillShareButton from "@/components/skill/SkillShareButton";
+import SkillShareButton, {
+  publishInfoFromRecord,
+} from "@/components/skill/SkillShareButton";
 import { SettingsIcon, SkillIcon } from "@/components/SkillIcons";
 import { useAuth } from "@/hooks/useAuth";
 import {
@@ -31,7 +33,6 @@ import {
   uploadFile,
   type PublicSkillContents,
   type PublicSkillDetail,
-  type SkillPublishInfo,
 } from "@/lib/api";
 import { SKILL_MD, stripFrontmatter } from "@/lib/localSkill";
 import AddToStashButton from "./AddToStashButton";
@@ -78,14 +79,7 @@ export default function SkillPageClient({ slug }: { slug: string }) {
   const canWrite = data?.can_write ?? false;
   const shareAction = useMemo(() => {
     if (!skill || !canWrite) return null;
-    const publish: SkillPublishInfo = {
-      id: skill.id,
-      slug: skill.slug,
-      discoverable: skill.discoverable,
-      cover_image_url: skill.cover_image_url,
-      icon_url: skill.icon_url,
-      view_count: skill.view_count,
-    };
+    const publish = publishInfoFromRecord(skill);
     return (
       <div className="flex items-center gap-1.5">
         {/* Person-to-person sharing of a skill = sharing its folder. */}
