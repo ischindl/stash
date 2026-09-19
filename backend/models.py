@@ -4,7 +4,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, computed_field
 
-from .services.share_mcp_service import skill_mcp_url
+from .services.share_mcp_urls import skill_mcp_url
 
 # --- Users ---
 

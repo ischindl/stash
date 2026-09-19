@@ -61,7 +61,7 @@ from .routers import (
     webhooks,
     workspace_agent_credentials,
 )
-from .services import demo_service, share_mcp_service
+from .services import demo_service, share_mcp_urls
 from .services.row_validation import RowValidationError
 
 logger = logging.getLogger("stash")
@@ -198,7 +198,7 @@ app.include_router(demo.router)
 
 # An MCP client dials a share handle, not an API route: /api/v1/mcp is a
 # separate ASGI surface whose authorization is the handle itself.
-app.mount(share_mcp_service.MCP_PATH_PREFIX, share_mcp.gate)
+app.mount(share_mcp_urls.MCP_PATH_PREFIX, share_mcp.gate)
 
 if settings.AUTH0_ENABLED:
     from backend.managed.auth0 import router as auth0_router

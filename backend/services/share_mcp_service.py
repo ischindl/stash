@@ -25,7 +25,6 @@ from uuid import UUID
 
 import asyncpg
 
-from backend.config import settings
 from backend.database import get_pool
 from backend.services import (
     permission_service,
@@ -33,20 +32,11 @@ from backend.services import (
     shared_skill_service,
     storage_service,
 )
-
-MCP_PATH_PREFIX = "/api/v1/mcp"
+from backend.services.share_mcp_urls import (
+    folder_mcp_url_for_token,
+)
 
 MAX_LISTED_PATHS_IN_ERROR = 12
-
-
-def _origin() -> str:
-    """The origin the share dialog shows in its URLs — the product's public
-    face, which proxies /api/v1 through to this backend."""
-    return settings.PUBLIC_URL.rstrip("/")
-
-
-def skill_mcp_url(slug: str) -> str:
-    return f"{_origin()}{MCP_PATH_PREFIX}/skills/{slug}"
 
 
 async def folder_mcp_url(folder_id: UUID, created_by: UUID) -> str:
@@ -74,7 +64,7 @@ async def folder_mcp_url(folder_id: UUID, created_by: UUID) -> str:
             token = await pool.fetchval(
                 "SELECT token FROM folder_mcp_tokens WHERE folder_id = $1", folder_id
             )
-    return f"{_origin()}{MCP_PATH_PREFIX}/folders/{token}"
+    return folder_mcp_url_for_token(token)
 
 
 async def folder_share_url(folder_id: UUID, requested_by: UUID) -> str | None:

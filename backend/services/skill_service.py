@@ -19,7 +19,7 @@ from uuid import UUID
 
 from ..database import get_pool
 from . import permission_service
-from .share_mcp_service import skill_mcp_url
+from .share_mcp_urls import skill_mcp_url
 
 SKILL_MD_NAME = "SKILL.md"
 MAX_SKILL_NAME_LENGTH = 64
