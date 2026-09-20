@@ -151,15 +151,28 @@ npm test
 
 ### Adding a schema change
 
-1. Create a new Alembic migration:
+1. Ask the guard which revision id you may book:
+   ```bash
+   python backend/migrations/check_heads.py
+   ```
+   It prints the graph head and, when something is wrong, the next free id. Two rules
+   it enforces cannot be inferred from the tree: `backend/migrations/shipped_revisions.json`
+   freezes every `(id, slug)` pair a deployed build has stamped — a database stamped `0206`
+   cannot say *which* `0206` it ran, so a migration that re-books a shipped id is treated as
+   already applied and silently skips its schema on every stamped DB — and ids above the
+   highest booked one have to form one unbroken run that ends at the head.
+2. Create a new Alembic migration:
    ```bash
    python -m alembic revision -m "add_my_column"
    ```
-2. Edit the generated file in `backend/migrations/versions/` — write both
+3. Edit the generated file in `backend/migrations/versions/` — write both
    `upgrade()` and `downgrade()` using raw SQL via `op.execute()`.
-3. Run `python -m alembic upgrade head` to verify.
-4. Add a corresponding test in `backend/tests/test_migrations.py` if the
+4. Run `python -m alembic upgrade head` to verify.
+5. Add a corresponding test in `backend/tests/test_migrations.py` if the
    migration has non-trivial data logic.
+6. When the migration reaches a deployed build, add its `(id, slug)` to
+   `shipped_revisions.json` in the same change. Forgetting it does not break anything
+   today; it only surfaces as a red guard on the next PR that needs to know.
 
 ---
 

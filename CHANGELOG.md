@@ -16,6 +16,15 @@ everything before it is captured in git history (`git log`), not here.
 
 ### Fixed
 
+- A database stamped by an intermediate build boots again. The dogfood build booked its own
+  revisions `0203`–`0209` on top of `0202`, so those numbers name different content than the
+  project's own `0203`–`0209`: `alembic upgrade head` stopped at the unknown stamp
+  (`ResolutionError: No such revision or branch '0209'`) and the backend never came up. The
+  stamped revisions now resolve, and one convergence revision carries what they never ran —
+  the schema those numbers skipped, plus the curator-log archiving and shared-wiki
+  revocation, which are a no-op on a database that took the normal path. `backend/tests/test_migration_chain.py`
+  now refuses any revision file booking a number a deployed build already stamped.
+
 - Self-host compose contract: dropped the orphaned `collab` override from
   `docker-compose.local.yml` (it named a service the base file does not define, so
   `docker compose ... up` refused the whole project), and the five GHCR pins now name the
