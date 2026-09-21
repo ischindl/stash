@@ -1,0 +1,48 @@
+# Dogfood-stack override: the third `-f` file, for the company's own deployment.
+#
+# Self-hosters never use this file. The published images stay pi-free (operator
+# directive of 2026-08-28, guard: backend/tests/test_dockerfile_pi_free.py) and the
+# two-file command published in the README needs no third overlay. This file exists
+# because local exec mode shell-outs to the `pi` coding-agent harness, and that
+# harness now lives ONLY in backend/Dockerfile.dogfood — a deployment running local
+# exec has to build that overlay instead of pulling.
+#
+# The base is not published, so build it locally first, then let compose select the
+# overlay. All three commands below take the same three files, from the repo root:
+#
+#   docker build -f backend/Dockerfile -t stash-backend:dogfood-base .
+#   BASE_IMAGE=stash-backend:dogfood-base docker compose \
+#     -f docker-compose.prod.yml -f docker-compose.local.yml \
+#     -f docker-compose.dogfood.yml build backend
+#   BASE_IMAGE=stash-backend:dogfood-base docker compose \
+#     -f docker-compose.prod.yml -f docker-compose.local.yml \
+#     -f docker-compose.dogfood.yml up -d
+#
+# Do not run plain `pull` against this three-file config: compose skips the
+# build-defined backend but still tries to fetch the shared tag below for the four
+# celery lanes, and no registry has it. Build once and the lanes reuse the tag.
+#
+# BASE_IMAGE carries no default on purpose, mirroring the deliberate
+# `InvalidDefaultArgInFrom` warning in backend/Dockerfile.dogfood: an empty or
+# defaulted base would let the overlay assemble against the wrong image silently.
+
+services:
+  backend:
+    image: stash-backend:dogfood
+    build:
+      context: .
+      dockerfile: backend/Dockerfile.dogfood
+      args:
+        BASE_IMAGE: "${BASE_IMAGE:?Build the pi-free base first: docker build -f backend/Dockerfile -t stash-backend:dogfood-base .}"
+
+  worker:
+    image: stash-backend:dogfood
+
+  heavy-worker:
+    image: stash-backend:dogfood
+
+  sync-worker:
+    image: stash-backend:dogfood
+
+  beat:
+    image: stash-backend:dogfood
