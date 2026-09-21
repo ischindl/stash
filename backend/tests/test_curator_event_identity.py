@@ -30,10 +30,17 @@ from .test_curator_feed_scoping import (
 from .test_developer_platform import _developer, _mint_workspace_key, _push
 
 
-def _turn(session_id: str, content: str, at: datetime) -> dict:
+def _turn(
+    session_id: str,
+    content: str,
+    at: datetime,
+    *,
+    event_type: str = "user_message",
+    agent_name: str = "heavi-chat",
+) -> dict:
     return {
-        "agent_name": "heavi-chat",
-        "event_type": "user_message",
+        "agent_name": agent_name,
+        "event_type": event_type,
         "content": content,
         "session_id": session_id,
         "created_at": at.isoformat(),
@@ -120,6 +127,110 @@ async def test_the_same_content_at_two_times_is_two_events(client: AsyncClient, 
         "raw_rows": 2,
         "distinct_sessions": 1,
     }
+
+
+@pytest.mark.asyncio
+async def test_a_tool_use_and_its_result_sharing_one_instant_stay_distinct(
+    client: AsyncClient, pool
+):
+    """`event_type` is load-bearing. Remove it and a `tool_use` collapses into
+    its own `tool_result` — they legitimately share one timestamp and here one
+    payload too — so half the transcript disappears from curation while the
+    backlog calmly reports the halved number. Nothing else in this file varies
+    `event_type`, so nothing else would notice."""
+    key, uid = await _register(client)
+    call = [
+        _turn("conv-tool", "same payload", BASE, event_type="tool_use"),
+        _turn("conv-tool", "same payload", BASE, event_type="tool_result"),
+    ]
+    await _push_events(client, key, call)
+
+    assert await curation_service.curator_event_backlog(uid, INTERNAL, OLD) == {
+        "distinct_events": 2,
+        "raw_rows": 2,
+        "distinct_sessions": 1,
+    }
+
+    events, has_more = await curation_service._feed_events(uid, OLD, None, 1, wiki=INTERNAL)
+    assert (len(events), has_more) == (1, True)
+
+    shown, _ = await curation_service._feed_events(uid, OLD, None, 100, wiki=INTERNAL)
+    assert {e["event_type"] for e in shown} == {"tool_use", "tool_result"}
+
+    await _push_events(client, key, call)
+
+    assert await curation_service.curator_event_backlog(uid, INTERNAL, OLD) == {
+        "distinct_events": 2,
+        "raw_rows": 4,
+        "distinct_sessions": 1,
+    }
+
+
+@pytest.mark.asyncio
+async def test_two_sessions_saying_the_same_words_at_one_instant_are_two_events(
+    client: AsyncClient, pool
+):
+    """`session_id` is load-bearing in the identity. Remove it and two
+    transcripts that happen to say the same words at the same instant read as
+    one event, so one session's history is silently never curated — the feed
+    hands the run one of them and the watermark steps past both. This is the
+    only fixture that holds content, `created_at` and `event_type` equal while
+    the session differs, so it is the only one that can catch that."""
+    key, uid = await _register(client)
+    pair = [_turn("conv-left", "same words", BASE), _turn("conv-right", "same words", BASE)]
+    await _push_events(client, key, pair)
+
+    assert await curation_service.curator_event_backlog(uid, INTERNAL, OLD) == {
+        "distinct_events": 2,
+        "raw_rows": 2,
+        "distinct_sessions": 2,
+    }
+    assert await curation_service.has_changes_since(uid, uid, OLD, wiki=INTERNAL)
+    feed = await curation_service.changes_since(uid, uid, OLD, wiki=INTERNAL)
+    assert feed["counts"]["history"] == 2
+
+    # Consumption, not just counting: with a per-run budget of one event, two
+    # distinct events must leave the run asking for more.
+    events, has_more = await curation_service._feed_events(uid, OLD, None, 1, wiki=INTERNAL)
+    assert (len(events), has_more) == (1, True)
+
+    # Re-importing both still collapses the copies across sessions rather than
+    # weakening the re-import fix this file exists for.
+    await _push_events(client, key, pair)
+
+    assert await curation_service.curator_event_backlog(uid, INTERNAL, OLD) == {
+        "distinct_events": 2,
+        "raw_rows": 4,
+        "distinct_sessions": 2,
+    }
+
+
+@pytest.mark.asyncio
+async def test_a_reimport_labelled_by_a_different_client_is_still_one_event(
+    client: AsyncClient, pool
+):
+    """The counterpart of the tests above: `agent_name` is deliberately OUT of
+    the identity, and this pins that too. Re-uploading a transcript from another
+    tool relabels every row's client while changing nothing the curator reads,
+    so it must stay one event. Put `agent_name` into the identity and a whole
+    transcript is re-curated — backlog inflated, budget spent, watermark moved —
+    purely because it arrived from somewhere else."""
+    key, uid = await _register(client)
+    await _push_events(client, key, [_turn("conv-relabel", "same words", BASE)])
+    await _push_events(
+        client, key, [_turn("conv-relabel", "same words", BASE, agent_name="claude-code")]
+    )
+
+    assert await _row_count(pool, uid) == 2
+    assert await curation_service.curator_event_backlog(uid, INTERNAL, OLD) == {
+        "distinct_events": 1,
+        "raw_rows": 2,
+        "distinct_sessions": 1,
+    }
+
+    # The relabelled copy must not buy a second slot in a saturated run.
+    events, has_more = await curation_service._feed_events(uid, OLD, None, 1, wiki=INTERNAL)
+    assert (len(events), has_more) == (1, False)
 
 
 @pytest.mark.asyncio
