@@ -16,6 +16,15 @@ everything before it is captured in git history (`git log`), not here.
 
 ### Fixed
 
+- The dogfood stack gets its coding agent back. `backend/Dockerfile.dogfood` had no compose
+  consumer at all, so a deployment that sets `AGENT_EXEC_MODE=local` built the pi-free image
+  and every local agent turn shell-ed out to a `pi` binary that was not there. A third,
+  opt-in overlay — `docker-compose.dogfood.yml` — now builds that Dockerfile against a
+  locally built pi-free base (`BASE_IMAGE`, required, no default) and points all five
+  backend-image services, the queue workers included, at the one image it produces.
+  Self-hosters see no change: the two-file command in the README still pulls the published
+  pi-free images, and the published images stay pi-free.
+
 - A database stamped by an intermediate build boots again. The dogfood build booked its own
   revisions `0203`–`0209` on top of `0202`, so those numbers name different content than the
   project's own `0203`–`0209`: `alembic upgrade head` stopped at the unknown stamp

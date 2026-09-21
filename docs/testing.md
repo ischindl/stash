@@ -46,6 +46,7 @@ TEST_DATABASE_URL=postgresql://stash:stash@localhost:5432/stash_test \
 | `test_migration_data_convergence.py` | The founder-lineage convergence node runs through its own `converge()`: a database that never converged gets trunk `0203`'s curator-log archive and `0204`'s shared-wiki revocation, a second run changes nothing, and a database that ran trunk `0203`–`0207` the normal way does no data work at all |
 | `test_startup_logging.py` | App startup owns root logging: one INFO handler on stderr, and the migration runner must not disable app loggers |
 | `test_dockerfile_pi_free.py` | The shipping backend image stays pi-free: the named pattern matches nothing in `backend/Dockerfile`, matches reported by line number; the node+pi bake lives only in the dogfood overlay |
+| `test_docker_dogfood_compose.py` | The dogfood stack actually selects the pi-carrying image: `docker-compose.dogfood.yml` builds `backend/Dockerfile.dogfood` through a required `BASE_IMAGE` (no default, so an unbuilt base fails loud), one local tag covers every service the prod file pins to the backend image — derived, so a newly added queue cannot be stranded — the overlay declares no service the base file lacks, and both self-host files stay pull-only with no dev-only service or port |
 | `test_collab.py` | Sharing, copy, and collaboration on user-scoped objects |
 | `test_session_folder_share_wiki.py` | Per-project shared-wiki opt-in: starts off, only the switch flips it |
 | `test_websocket.py` | ConnectionManager delivery, dead-socket cleanup, pg_notify, oversized fallback |
