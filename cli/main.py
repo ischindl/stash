@@ -12,6 +12,7 @@ import sys
 import tempfile
 import textwrap
 import time
+import uuid
 from enum import StrEnum
 from pathlib import Path
 
@@ -3745,6 +3746,12 @@ class WikiScope(StrEnum):
 @app.command("changes")
 def changes(
     since: str = typer.Option(None, "--since", help="ISO timestamp; omit for everything."),
+    since_event: uuid.UUID | None = typer.Option(
+        None,
+        "--since-event",
+        help="Event uuid to resume from inside --since: the event the last read stopped on, "
+        "when an instant held more events than one pass carried. Requires --since.",
+    ),
     wiki: WikiScope | None = typer.Option(
         None,
         "--wiki",
@@ -3763,7 +3770,12 @@ def changes(
     """What changed since a timestamp — history, pages, files, saves, sources.
     Feeds the Memory curator's incremental pass."""
     with _client() as c:
-        data = c.get_changes(since or None, wiki.value if wiki else None, folder or None)
+        data = c.get_changes(
+            since or None,
+            wiki.value if wiki else None,
+            folder or None,
+            str(since_event) if since_event else None,
+        )
     if _use_json(as_json):
         output_json(data)
         return

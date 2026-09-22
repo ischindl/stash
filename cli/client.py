@@ -381,11 +381,26 @@ class StashClient:
         return self._post("/api/v1/me/vfs", json={"script": script, "cwd": cwd})
 
     def get_changes(
-        self, since: str | None = None, wiki: str | None = None, folder: str | None = None
+        self,
+        since: str | None = None,
+        wiki: str | None = None,
+        folder: str | None = None,
+        since_event: str | None = None,
     ) -> dict:
-        """The curator's incremental feed. `wiki` and `folder` are sent only when
-        named, so a caller that does not scope keeps the server's own default."""
-        params = {k: v for k, v in {"since": since, "wiki": wiki, "folder": folder}.items() if v}
+        """The curator's incremental feed. `wiki`, `folder`, and `since_event` are
+        sent only when named, so a caller that does not use them keeps the exact
+        request it sends today. `since_event` is the event half of the read
+        position — useless without `since`, which the server refuses."""
+        params = {
+            k: v
+            for k, v in {
+                "since": since,
+                "since_event": since_event,
+                "wiki": wiki,
+                "folder": folder,
+            }.items()
+            if v
+        }
         return self._get("/api/v1/me/changes", **params)
 
     def recompute_memory(self) -> dict:

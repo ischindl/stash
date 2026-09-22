@@ -42,7 +42,7 @@ class _StubClient:
     def __exit__(self, *exc) -> None:
         return None
 
-    def get_changes(self, since=None, wiki=None, folder=None):
+    def get_changes(self, since=None, wiki=None, folder=None, since_event=None):
         return self._payload
 
 

@@ -217,19 +217,34 @@ Begin now.
 """
 
 
-def curator_changes_cmd(since: str | None, project_folder_id: str | None = None) -> str:
+def curator_changes_cmd(
+    since: str | None, project_folder_id: str | None = None, since_event: str | None = None
+) -> str:
     """The feed command a curator run reads. One definition: the prompt and the
-    digest prompt must order the exact same work set."""
+    digest prompt must order the exact same work set.
+
+    `since_event` is the second half of the read position — the event the last run
+    stopped on, when it stopped inside an instant rather than at its edge. It is
+    emitted beside `--since` because it means nothing without it: a position is
+    named by both halves or by neither, so an event with no instant is refused
+    here rather than rendered as a command that would read everything."""
+    if since_event and not since:
+        raise ValueError("since_event names a position inside an instant; it needs `since`")
     args = []
     if project_folder_id:
         args.append(f"--folder {project_folder_id}")
     if since:
         args.append(f"--since {since}")
+    if since_event:
+        args.append(f"--since-event {since_event}")
     return "stash changes " + " ".join(args + ["--json"])
 
 
 def render_curator_prompt(
-    memory_folder_id: str, since: str | None, extracts: str | None = None
+    memory_folder_id: str,
+    since: str | None,
+    extracts: str | None = None,
+    since_event: str | None = None,
 ) -> str:
     """The curation instruction the scheduled Memory-curator agent runs headless.
 
@@ -242,7 +257,7 @@ def render_curator_prompt(
     raw-feed command was already read by the digest model, and this pass
     curates from the report instead of the delta."""
     window = curator_window(since)
-    changes_cmd = curator_changes_cmd(since)
+    changes_cmd = curator_changes_cmd(since, None, since_event)
     if extracts is None:
         delta_bullet = f"""`{changes_cmd}` — the delta to curate: recent
   history/chats, changed pages, new files, changed source documents (docs
@@ -392,6 +407,7 @@ def render_folder_curator_prompt(
     folder_name: str,
     since: str | None,
     extracts: str | None = None,
+    since_event: str | None = None,
 ) -> str:
     """The curation instruction a folder-bound curator runs headless.
 
@@ -403,7 +419,7 @@ def render_folder_curator_prompt(
     With `extracts` (a two-phase run) the raw feed was already read by the
     digest model and this pass curates from its report."""
     window = curator_window(since)
-    changes_cmd = curator_changes_cmd(since, project_folder_id)
+    changes_cmd = curator_changes_cmd(since, project_folder_id, since_event)
     if extracts is None:
         delta_bullet = f"""`{changes_cmd}` — the delta to curate. This IS your
   entire work set: the feed carries only the project's sessions. There is

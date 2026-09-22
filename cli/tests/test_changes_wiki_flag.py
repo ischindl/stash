@@ -113,3 +113,59 @@ def test_invalid_wiki_exits_2_naming_the_two_values():
     assert "--wiki" in _shown(result.output)
     assert "internal" in _shown(result.output)
     assert "external" in _shown(result.output)
+
+
+def test_since_event_reaches_the_request_as_a_pair():
+    """`--since-event` is the event half of a read position, so it travels with
+    `--since` and means nothing alone: a run resuming inside a saturated instant
+    has to put both halves on the wire or the server reads a different window
+    than the one it stopped in."""
+    requests: list[httpx.Request] = []
+    client = _capturing_client(requests)
+
+    client.get_changes("2026-01-01T00:00:00", None, None, "00000000-0000-4000-8000-000000000007")
+
+    assert requests[0].url.params["since"] == "2026-01-01T00:00:00"
+    assert requests[0].url.params["since_event"] == "00000000-0000-4000-8000-000000000007"
+
+
+def test_unnamed_event_half_sends_no_since_event_param():
+    """A caller that never names the event half must send the request it sent
+    before it existed — no empty param for the server to interpret."""
+    requests: list[httpx.Request] = []
+    client = _capturing_client(requests)
+
+    client.get_changes("2026-01-01T00:00:00")
+
+    assert "since_event" not in requests[0].url.params
+
+
+def test_since_event_flag_reaches_the_request_end_to_end(monkeypatch):
+    requests: list[httpx.Request] = []
+    monkeypatch.setattr(main, "_client", lambda: _capturing_client(requests))
+
+    result = runner.invoke(
+        main.app,
+        [
+            "changes",
+            "--since",
+            "2026-01-01T00:00:00",
+            "--since-event",
+            "00000000-0000-4000-8000-000000000007",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert requests[0].url.params["since_event"] == "00000000-0000-4000-8000-000000000007"
+
+
+def test_invalid_since_event_exits_2_naming_the_option():
+    """The half is a uuid or the command is wrong; typer's usage error is the
+    loud failure, and a value that is not one must never be dropped on the floor
+    to read a wider feed instead."""
+    result = runner.invoke(
+        main.app, ["changes", "--since", "2026-01-01T00:00:00", "--since-event", "not-a-uuid"]
+    )
+
+    assert result.exit_code == 2
+    assert "--since-event" in _shown(result.output)

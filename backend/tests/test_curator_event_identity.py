@@ -14,6 +14,7 @@ import pytest
 from httpx import AsyncClient
 
 from backend.services import curation_service
+from backend.services.curation_service import Position
 
 from .test_curator import _auth, _file_session_into_folder, _push_events, _register
 from .test_curator_feed_scoping import (
@@ -523,3 +524,151 @@ async def test_the_curator_status_endpoint_publishes_the_shared_backlog(client: 
     assert backlog["distinct_events"] == 1
     assert backlog["raw_rows"] == 2
     assert backlog["distinct_sessions"] == 1
+
+
+# ── the pair has to cross the prompt → CLI → HTTP boundary too ─────────────────
+# A mid-tie position the consuming run cannot name is not a fixed plateau: it is
+# a plateau that reads as a drained feed. These pins fail if any leg of that
+# transport drops the event half, because each leg is where the model's whole
+# work set is decided.
+
+
+@pytest.mark.asyncio
+async def test_the_changes_endpoint_reads_from_the_event_half_of_a_position(
+    client: AsyncClient, pool, monkeypatch
+):
+    """`(T, c)` on the wire is `(T, c)`, or the tie tail is never shown again.
+
+    The service now parks a saturated lane inside the instant it could not
+    finish. The run that resumes it is a model executing a `stash changes`
+    command, so if the transport carries only the instant, the resumed run asks
+    for `created_at > T`, is handed nothing, and writes the wiki as though the
+    tail had been read — while the backlog and `complete_through`, both reading
+    the pair, count and consume it. The in-process tests above certify the
+    cursor; this one certifies the door."""
+    monkeypatch.setattr(curation_service, "_MAX_EVENTS", 3)
+    key, uid = await _register(client)
+    await _push_events(client, key, [_turn("conv-wire", f"w{i}", BASE) for i in range(5)])
+
+    stopped = await curation_service.complete_through(
+        uid, Position(OLD), BASE + timedelta(hours=1), INTERNAL
+    )
+    ordered = await pool.fetch(
+        "SELECT id, content FROM history_events WHERE owner_user_id = $1 ORDER BY created_at, id",
+        uid,
+    )
+    assert stopped.event_id == ordered[2]["id"], "the run stopped inside the tie"
+
+    r = await client.get(
+        "/api/v1/me/changes",
+        params={"since": BASE.isoformat(), "since_event": str(stopped.event_id)},
+        headers=_auth(key),
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert [h["content"] for h in body["history"]] == [row["content"] for row in ordered[3:]]
+    assert body["event_backlog"] == {
+        "distinct_events": 2,
+        "raw_rows": 2,
+        "distinct_sessions": 1,
+    }
+    # The instant it was asked for is what it echoes: no half-position reading.
+    assert body["since"] == BASE.isoformat()
+
+
+@pytest.mark.asyncio
+async def test_a_position_named_by_instant_alone_reads_the_whole_instant(client: AsyncClient, pool):
+    """A caller that has never heard of the event half must read exactly what it
+    reads today. `since=T` with no event is a position through the WHOLE of T, so
+    the entire tie at T sits behind it: introducing the pair must not quietly
+    re-serve an instant a lane already consumed, which is what a mid-tie reading
+    of a lone instant would have done."""
+    key, uid = await _register(client)
+    await _push_events(client, key, [_turn("conv-wire2", f"x{i}", BASE) for i in range(3)])
+
+    r = await client.get(
+        "/api/v1/me/changes", params={"since": BASE.isoformat()}, headers=_auth(key)
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["counts"]["history"] == 0
+    assert r.json()["event_backlog"]["distinct_events"] == 0
+
+
+@pytest.mark.asyncio
+async def test_the_changes_endpoint_refuses_an_event_without_an_instant(client: AsyncClient):
+    """Half a position is not a legal cursor anywhere, including in a query
+    string: an event id alone names no window, and guessing one (the beginning)
+    would read the corpus under a caller's half-stated cursor."""
+    key, _ = await _register(client)
+    r = await client.get(
+        "/api/v1/me/changes",
+        params={"since_event": "00000000-0000-4000-8000-000000000001"},
+        headers=_auth(key),
+    )
+    assert r.status_code == 400
+    assert "since" in r.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_the_changes_endpoint_refuses_an_event_that_is_not_an_id(client: AsyncClient):
+    """The id is a uuid or the request is wrong; a string that cannot be one must
+    not be read as "no event half" and silently widen the feed."""
+    key, uid = await _register(client)
+    r = await client.get(
+        "/api/v1/me/changes",
+        params={"since": OLD.isoformat(), "since_event": "not-a-uuid"},
+        headers=_auth(key),
+    )
+    assert r.status_code == 400
+    assert "since_event" in r.json()["detail"]
+
+
+def test_the_feed_command_the_prompt_hands_the_curator_carries_both_halves():
+    """The prompt is the transport's first leg: it is where the stored position
+    becomes the words a model runs. `--since-event` belongs right beside
+    `--since`, and an event with no instant is refused rather than rendered as a
+    bare `--since-event`, which would read as an unbounded feed."""
+    from backend.services import prompts
+
+    ev = "00000000-0000-4000-8000-000000000007"
+    cmd = prompts.curator_changes_cmd(BASE.isoformat(), None, ev)
+    assert cmd == f"stash changes --since {BASE.isoformat()} --since-event {ev} --json"
+
+    # No event half, nothing emitted — a boot run's command keeps its exact shape.
+    assert prompts.curator_changes_cmd(BASE.isoformat()) == (
+        f"stash changes --since {BASE.isoformat()} --json"
+    )
+    assert prompts.curator_changes_cmd(None) == "stash changes --json"
+
+    with pytest.raises(ValueError, match="since"):
+        prompts.curator_changes_cmd(None, None, ev)
+
+
+@pytest.mark.asyncio
+async def test_a_mid_tie_lane_schedules_its_run_with_the_pair(
+    client: AsyncClient, pool, monkeypatch
+):
+    """The scheduled run is the transport's last leg, and it is the one no model
+    reviews: a mid-tie curator woken by the schedule must be handed the pair in
+    its prompt, or every nightly run after a saturated instant re-reads the wrong
+    window and nobody sees the command."""
+    from backend.services import agent_service, sprite_agent_service
+
+    monkeypatch.setattr(curation_service, "_MAX_EVENTS", 3)
+    key, uid = await _register(client)
+    curator = await agent_service.get_or_create_curator(uid)
+    await _push_events(client, key, [_turn("conv-night", f"n{i}", BASE) for i in range(5)])
+    stopped = await curation_service.complete_through(
+        uid, Position(OLD), BASE + timedelta(hours=1), INTERNAL
+    )
+    await pool.execute(
+        "UPDATE agents SET curated_through=$2, curated_through_event_id=$3 WHERE id=$1",
+        curator["id"],
+        stopped.at,
+        stopped.event_id,
+    )
+    agent = await agent_service.get_curator_by_id(UUID(curator["id"]))
+
+    _, prompt = await sprite_agent_service.build_scheduled_turn(agent, "2026-01-02T03-04")
+    assert f"--since {stopped.at.isoformat()}" in prompt
+    assert f"--since-event {stopped.event_id}" in prompt

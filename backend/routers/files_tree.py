@@ -222,6 +222,12 @@ async def get_local_curator_prompt(
 @router.get("/changes")
 async def get_changes(
     since: str | None = None,
+    since_event: str | None = Query(
+        None,
+        description="The event half of the read position: resume from just after this event "
+        "at `since`, which is how a lane parked inside a saturated instant names where the "
+        "last run stopped. Requires `since`; without it there is no window to sit inside.",
+    ),
     wiki: str = Query(
         curation_service.WIKI_INTERNAL,
         description="Which curator wiki the feed is scoped for: 'internal' (the owner's own "
@@ -249,6 +255,11 @@ async def get_changes(
     halves drop out entirely. The scoping is in SQL, so a folder curator is
     never even shown material from outside its folder.
 
+    `since` and `since_event` together are the read position, and both the feed
+    and `event_backlog` are read from that one position — a feed that moved the
+    cursor and a backlog that did not would report two different truths about the
+    same lane.
+
     `event_backlog` is how much of this wiki's feed is still unread from `since`,
     counted as distinct events over exactly the rows this feed may read — so it
     reaches 0 exactly when the feed comes back empty. It counts history events
@@ -271,11 +282,22 @@ async def get_changes(
             raise HTTPException(status_code=404, detail="folder not found")
 
     since_dt = datetime.fromisoformat(since) if since else None
+    if since_event and since_dt is None:
+        raise HTTPException(
+            status_code=400,
+            detail="since_event names a position inside an instant: it needs `since` with it",
+        )
+    try:
+        event_id = UUID(since_event) if since_event else None
+    except ValueError:
+        raise HTTPException(status_code=400, detail="since_event must be an event uuid")
+
+    position = curation_service.Position(since_dt, event_id)
     feed = await curation_service.changes_since(
-        scope_user_id, current_user["id"], since_dt, wiki, folder
+        scope_user_id, current_user["id"], position, wiki, folder
     )
     feed["event_backlog"] = await curation_service.curator_event_backlog(
-        scope_user_id, wiki, since_dt, folder
+        scope_user_id, wiki, position, folder
     )
     return feed
 

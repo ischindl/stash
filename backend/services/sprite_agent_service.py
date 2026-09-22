@@ -465,6 +465,23 @@ def scheduled_session_prefix(agent: dict) -> str:
     return f"{base}{agent['id']}-"
 
 
+def _feed_window(agent: dict) -> tuple[str | None, str | None]:
+    """The lane's read position, as the two strings a feed command carries.
+
+    A prompt that rendered the instant alone would hand a mid-tie lane the
+    window `created_at > T`, which shows none of the tie tail it never read and
+    lets the run report a drained wiki while the backlog still counts it. Both
+    halves therefore leave here together, read through the one accessor that
+    understands the pair."""
+    from . import curation_service
+
+    position = curation_service.position_of(agent)
+    return (
+        position.at.isoformat() if position.at else None,
+        str(position.event_id) if position.event_id else None,
+    )
+
+
 async def build_scheduled_turn(
     agent: dict, run_stamp: str, extracts: str | None = None
 ) -> tuple[str, str]:
@@ -483,7 +500,7 @@ async def build_scheduled_turn(
     user_id = UUID(str(agent["user_id"]))
     session_id = f"{scheduled_session_prefix(agent)}{run_stamp}"
     if agent.get("is_curator"):
-        since = agent["curated_through"].isoformat() if agent.get("curated_through") else None
+        since, since_event = _feed_window(agent)
         # A developer-platform workspace curates through the backend's scoped
         # path and never reaches a sprite here: a sprite runs with the
         # workspace's own credentials and a shell, so it can read every end
@@ -515,9 +532,10 @@ async def build_scheduled_turn(
                 folder["name"],
                 since,
                 extracts,
+                since_event,
             )
         memory = await files_tree_service.get_or_create_memory_folder(user_id, user_id)
-        return session_id, prompts.render_curator_prompt(memory["id"], since, extracts)
+        return session_id, prompts.render_curator_prompt(memory["id"], since, extracts, since_event)
     return session_id, agent["schedule_prompt"]
 
 
@@ -538,9 +556,9 @@ async def build_digest_turn(agent: dict, run_stamp: str) -> tuple[str, str]:
         # owner's own material.
         raise ValueError("digest runs cover the internal curators only")
     session_id = f"{scheduled_session_prefix(agent)}{run_stamp}-digest"
-    since = agent["curated_through"].isoformat() if agent.get("curated_through") else None
+    since, since_event = _feed_window(agent)
     folder_id = str(agent["curator_folder_id"]) if agent.get("curator_folder_id") else None
-    changes_cmd = prompts.curator_changes_cmd(since, folder_id)
+    changes_cmd = prompts.curator_changes_cmd(since, folder_id, since_event)
     return session_id, prompts.render_digest_prompt(changes_cmd, prompts.curator_window(since))
 
 
