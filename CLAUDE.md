@@ -36,6 +36,31 @@ or commenting on existing PRs is likewise only on operator order.
 PR screenshots are optional (requirement waived 2026-08-10). Include them when they genuinely help review; skip the live-stack dance when they don't.
 Never commit screenshots, recordings, or other assets that exist only to support a PR description or review thread. Keep those files outside the repo or delete them before staging, then attach/upload them directly to the PR instead.
 
+### Landing hygiene
+
+The trunk checkout — the one checkout where the trunk branch is checked out — is shared:
+other sessions move its ref while it sleeps, so its on-disk state is never yours to assume.
+
+- Never advance the trunk ref from a linked worktree: no `update-ref`, no `git branch -f`, no
+  fetch refspec into the trunk branch, no `--ignore-other-worktrees` — card work never happens in the trunk checkout, so the
+  trunk ref moves only by merging inside it: `git merge --ff-only <sha>` run inside the trunk checkout,
+  the one primitive that moves the ref *and* refreshes the index and files in the same step.
+  A ref write with no message leaves that checkout behind its own ref, and the difference
+  reads as a huge staged revert of work that already landed; the next commit from there lands
+  the revert.
+- Verify that checkout on both sides of the landing. `status --porcelain` must print nothing on BOTH sides of the
+  merge, and clean is two facts, not one: the listing is
+  empty AND its `write-tree` equals `HEAD^{tree}`. Read the output — a successful exit code
+  proves neither. A merge that reports success while either side is dirty is a failure.
+- A landing is that one merge plus the files it brings — never a hand-picked file copy from
+  another worktree, never a bare `commit -a`.
+- A trunk checkout dirty with edits you did not make is a STOP-and-report condition: do not `commit -a`,
+  `stash`, `reset --hard`, or `clean` them away. First prove per path that the content is
+  byte-identical to a previous trunk tip recorded in the trunk's own reflog — zero unique
+  content — and only then restore those paths to the current commit with an explicit `--source=HEAD`.
+  The flag-less `restore --staged --worktree` reads the index and the work tree against each
+  other, so on exactly that state it exits 0 having changed nothing.
+
 <!-- stash-context -->
 ## Stash
 
