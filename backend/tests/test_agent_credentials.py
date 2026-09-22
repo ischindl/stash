@@ -744,3 +744,128 @@ async def test_local_test_is_a_pure_probe(
     # The candidate key knocked on the tested box; the stored box only ever
     # heard from the connect that saved it, never from the test route.
     assert endpoint.requests == [("/v1/models", "Bearer candidate")]
+
+
+# ── Re-probing ONE stored box by id ──────────────────────────────────────────
+#
+# A stored row is only as fresh as the last full list load, and the key that
+# dials it never travels to the browser, so only the backend can re-knock on
+# one box on demand. These tests pin the three things that make that honest:
+# the dial carries the STORED key (observed on the loopback server), the answer
+# is `/local/test`'s exact body contract (HTTP 200 even on a failed probe, so
+# one client-side classifier serves both surfaces), and nothing is written.
+
+
+def _by_id_url(credential_id) -> str:
+    return f"/api/v1/me/agent-credentials/endpoints/{credential_id}/test"
+
+
+async def _local_endpoint_ids(client: AsyncClient, key: str) -> list[str]:
+    """The ids the Settings list shows for this user's boxes, oldest first."""
+    r = await client.get("/api/v1/me/agent-credentials", headers=_auth(key))
+    assert r.status_code == 200, r.text
+    return [entry["id"] for entry in r.json()["endpoints"]]
+
+
+@pytest.mark.asyncio
+async def test_probe_by_id_dials_the_stored_box_with_the_stored_key(
+    client: AsyncClient, probe_endpoints: Callable[[str], _ProbeEndpoint]
+):
+    """The whole reason the route exists: the browser holds no key, so a
+    client-side re-probe would dial a keyed box keyless and call a healthy
+    endpoint an auth failure. Here the SERVER dials with the stored key."""
+    box = probe_endpoints("ok")
+    key = await _register(client)
+    await _connect_local(client, key, box.base_url, "stored-model", "stored-key")
+    [credential_id] = await _local_endpoint_ids(client, key)
+    box.requests.clear()
+
+    r = await client.post(_by_id_url(credential_id), headers=_auth(key))
+
+    assert r.status_code == 200, r.text
+    assert r.json() == {
+        "ok": True,
+        "http_status": 200,
+        "models": ["mock-model-1", "mock-model-2"],
+    }
+    assert box.requests == [("/v1/models", "Bearer stored-key")]
+
+
+@pytest.mark.asyncio
+async def test_probe_by_id_reports_a_refused_key_as_the_box_said_it(
+    client: AsyncClient, probe_endpoints: Callable[[str], _ProbeEndpoint]
+):
+    """A stored key can start being refused after it was saved (rotated on the
+    box). The route answers 200 with the box's own words, because the verdict is
+    read off the body — the same contract `/local/test` answers on."""
+    box = probe_endpoints("ok")
+    key = await _register(client)
+    await _connect_local(client, key, box.base_url, "stored-model", "stored-key")
+    [credential_id] = await _local_endpoint_ids(client, key)
+    box.mode = "unauthorized"
+    box.requests.clear()
+
+    r = await client.post(_by_id_url(credential_id), headers=_auth(key))
+
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["ok"] is False
+    assert body["http_status"] == 401
+    assert "token_not_found_in_db" in body["error_detail"]
+    assert box.requests == [("/v1/models", "Bearer stored-key")]
+
+
+@pytest.mark.asyncio
+async def test_probe_by_id_writes_nothing_and_returns_no_key(
+    client: AsyncClient, probe_endpoints: Callable[[str], _ProbeEndpoint]
+):
+    """A re-check is a question, not an edit: the stored doc comes back byte-for
+    byte the same, and no part of the key rides along in the answer."""
+    box = probe_endpoints("ok")
+    key = await _register(client)
+    await _connect_local(client, key, box.base_url, "stored-model", "stored-key")
+    [credential_id] = await _local_endpoint_ids(client, key)
+    before = json.loads(await _stored_secret(client, key, "local"))
+
+    r = await client.post(_by_id_url(credential_id), headers=_auth(key))
+
+    assert r.status_code == 200, r.text
+    assert json.loads(await _stored_secret(client, key, "local")) == before
+    assert "stored-key" not in r.text
+
+
+@pytest.mark.asyncio
+async def test_probe_by_id_refuses_ids_that_are_not_the_caller_s_box(
+    client: AsyncClient, _stub_probe
+):
+    """Three ids a dial-by-id route must never dial: one that was never issued,
+    another user's box, and a key provider's row. All read as 404 — never as a
+    credential to knock on."""
+    mine = await _register(client)
+    theirs = await _register(client)
+    await _connect_local(client, mine, "http://box-one.example/v1", "m", "sk-mine")
+    [my_id] = await _local_endpoint_ids(client, mine)
+    await _connect_local(client, theirs, "http://box-two.example/v1", "m", "sk-theirs")
+    [their_id] = await _local_endpoint_ids(client, theirs)
+    await client.post(
+        "/api/v1/me/agent-credentials",
+        json={"provider": "anthropic", "api_key": "sk-ant"},
+        headers=_auth(mine),
+    )
+    user_id = UUID((await client.get("/api/v1/users/me", headers=_auth(mine))).json()["id"])
+    key_provider_id = (await agent_auth._get_credential(user_id, "anthropic"))["id"]
+
+    for credential_id in [str(UUID(int=0)), their_id, key_provider_id]:
+        assert credential_id != my_id
+        r = await client.post(_by_id_url(credential_id), headers=_auth(mine))
+        assert r.status_code == 404, credential_id
+
+    # The caller's own box answers the same request: the 404s above are the scope
+    # guard doing its job, not a route that was never wired up.
+    assert (await client.post(_by_id_url(my_id), headers=_auth(mine))).status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_probe_by_id_requires_auth(client: AsyncClient):
+    r = await client.post(_by_id_url(UUID(int=0)))
+    assert r.status_code == 401

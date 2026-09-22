@@ -5,6 +5,20 @@ everything before it is captured in git history (`git log`), not here.
 
 ## Unreleased
 
+### Added
+
+- A saved model box can be re-checked without dialling all of them. Every local model
+  endpoint row in Settings now has its own "Test connection" button, and it answers with
+  the same verdict the add-form's test gives: "Reachable and authenticated — serving 2
+  model(s)", "Auth failed (HTTP 401): token_not_found_in_db", or "Unreachable: no route
+  to host", with the box's own words unedited. Until now a row was only as fresh as the
+  last time Settings loaded, and that load probes every box and returns when the slowest
+  one answers. The re-test happens on the server with the key stored for that box — the
+  key is never sent to the browser, so a browser-side test would call a healthy keyed box
+  an auth failure — and it writes nothing: your key and your saved model list are
+  untouched. It answers "is this box alive right now", not "what does it serve today";
+  reload Settings for the row's model list to refresh.
+
 ### Changed
 
 - Testing a local model box now names its outcome instead of handing you a colour to

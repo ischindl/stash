@@ -431,6 +431,34 @@ def _endpoint_summary(credential_id: UUID, name: str, secret_enc) -> dict:
     }
 
 
+async def probe_stored_endpoint(user_id: UUID, credential_id: UUID) -> dict | None:
+    """Re-dial one STORED box with the key stored for it, and report exactly what
+    :func:`probe_local_endpoint` saw — or None when the id is not this user's
+    local endpoint at all.
+
+    This is the by-id sibling of :func:`list_local_endpoints`: the list knocks on
+    every box at once so a page load is as fresh as the slowest box, while this
+    re-checks one box on demand. The dial belongs here because the stored key
+    never travels to the browser — a client that probed a keyed box itself would
+    dial it keyless and report a healthy endpoint as an auth failure.
+
+    Scoped to 'local' exactly as :func:`delete_endpoint` scopes it: an id is also
+    how a key provider's row is addressable, and a route that dials boxes must
+    not be able to reach an Anthropic key. Nothing is written, and no part of the
+    secret rides back out in the answer.
+    """
+    row = await get_pool().fetchrow(
+        "SELECT secret_enc FROM user_agent_credentials "
+        "WHERE id = $1 AND user_id = $2 AND provider = 'local'",
+        credential_id,
+        user_id,
+    )
+    if row is None:
+        return None
+    doc = json.loads(_decrypt(row["secret_enc"]))
+    return await probe_local_endpoint(doc["base_url"], doc["api_key"])
+
+
 async def resolve(
     user_id: UUID,
     prefer_provider: str | None = None,

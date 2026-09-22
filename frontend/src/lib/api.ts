@@ -2556,6 +2556,20 @@ export async function probeLocalEndpoint(
   });
 }
 
+/** Re-dial ONE stored endpoint by id, server-side, with the key the server keeps for
+ *  it. This is the only honest way to re-check a saved row: the stored key never
+ *  travels to the browser (see `ModelEndpoint`), so probing `base_url` from here would
+ *  dial a keyed box keyless and report a healthy endpoint as an auth failure.
+ *
+ *  Answers `probeLocalEndpoint`'s exact body — including HTTP 200 with `ok: false`
+ *  when the box refuses — so one verdict classifier serves both probe surfaces. A
+ *  404 means the id is not one of this user's local endpoints. */
+export async function probeSavedEndpoint(credentialId: string): Promise<LocalProbeResult> {
+  return apiFetch<LocalProbeResult>(`/api/v1/me/agent-credentials/endpoints/${credentialId}/test`, {
+    method: "POST",
+  });
+}
+
 /** Store one more local endpoint. The server probes before it saves and answers
  *  400 `endpoint probe failed: <detail>` when the box does not answer, so a stored
  *  row is always a live one. `model` is the model the user picked, and it is what

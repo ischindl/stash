@@ -12,6 +12,7 @@ import {
   finishAgentOAuth,
   listModelEndpoints,
   probeLocalEndpoint,
+  probeSavedEndpoint,
   PROBE_ONLY_MODEL,
   startAgentOAuth,
   type LocalEndpointDoc,
@@ -294,36 +295,71 @@ function pinConflict(error: unknown): PinConflict | null {
 // connection, a redirect, a proxy's HTML landing page — is the box not answering as
 // a model endpoint. Each failure carries the endpoint's own words unedited, because
 // they are the only part that says which of these it was.
-type ProbeResult =
-  | { baseUrl: string; apiKey: string; verdict: "reachable"; models: string[] }
-  | {
-      baseUrl: string;
-      apiKey: string;
-      verdict: "auth-failed";
-      httpStatus: number;
-      reason: string;
-    }
-  | { baseUrl: string; apiKey: string; verdict: "unreachable"; reason: string };
+//
+// ONE classifier serves both places a box is dialled: the pre-save test in the
+// add-form, and the re-test of a box that is already stored. A verdict therefore has
+// exactly one wording and one styling, and cannot drift between the two surfaces.
+type ProbeVerdict =
+  | { verdict: "reachable"; label: string; models: string[] }
+  | { verdict: "answered-no-models"; label: string }
+  | { verdict: "auth-failed"; label: string; reason: string }
+  | { verdict: "unreachable"; label: string; reason: string };
 
-/** Name a failed probe. A probe that never reached the box, or reached something
- *  that is not a model endpoint, is unreachable — never dressed up as a key
- *  problem. When the box refuses to say why, that is said out loud instead of
- *  leaving the line blank. */
-function probeFailure(typed: { baseUrl: string; apiKey: string }, result: LocalProbeResult) {
+/** Name what a probe body proved. A probe that never reached the box, or reached
+ *  something that is not a model endpoint, is unreachable — never dressed up as a key
+ *  problem. When the box refuses to say why, that is said out loud instead of leaving
+ *  the line blank. */
+function probeVerdict(result: LocalProbeResult): ProbeVerdict {
+  if (result.ok && result.models?.length) {
+    return {
+      verdict: "reachable",
+      label: `Reachable and authenticated — serving ${result.models.length} model(s)`,
+      models: result.models,
+    };
+  }
+  if (result.ok) {
+    // The box answered for that key but serves nothing, so there is no model to run
+    // on it: said plainly, rather than as a reachability claim or a key problem.
+    return {
+      verdict: "answered-no-models",
+      label: "The endpoint answered but listed no models, so there is nothing to run.",
+    };
+  }
   const reason = result.error_detail ?? "the endpoint gave no reason";
   return result.http_status === 401 || result.http_status === 403
-    ? { ...typed, verdict: "auth-failed" as const, httpStatus: result.http_status, reason }
-    : { ...typed, verdict: "unreachable" as const, reason };
+    ? { verdict: "auth-failed", label: `Auth failed (HTTP ${result.http_status}):`, reason }
+    : { verdict: "unreachable", label: "Unreachable:", reason };
 }
 
-/** The one sentence a test result is answered with, so the outcome has a name and
- *  does not have to be inferred from a colour. */
-function verdictLabel(result: ProbeResult): string {
-  if (result.verdict === "reachable") {
-    return `Reachable and authenticated — serving ${result.models.length} model(s)`;
-  }
-  if (result.verdict === "auth-failed") return `Auth failed (HTTP ${result.httpStatus}):`;
-  return "Unreachable:";
+/** The one line a verdict is answered with, so the outcome has a NAME and never has
+ *  to be inferred from a colour. `className` carries only the caller's spacing. */
+function ProbeVerdictLine({
+  verdict,
+  className = "",
+}: {
+  verdict: ProbeVerdict;
+  className?: string;
+}) {
+  const classes = [
+    "text-[12px]",
+    verdict.verdict === "reachable" ? "text-[var(--color-success)]" : "text-error",
+    className,
+  ]
+    .filter(Boolean)
+    .join(" ");
+  return (
+    <p className={classes}>
+      <span className="font-medium">{verdict.label}</span>
+      {"reason" in verdict && (
+        <>
+          {" "}
+          {/* The endpoint's own words, unedited: LiteLLM says
+              token_not_found_in_db where the HTTP layer says only 401. */}
+          <span>{verdict.reason}</span>
+        </>
+      )}
+    </p>
+  );
 }
 
 function EndpointsPanel({
@@ -342,8 +378,12 @@ function EndpointsPanel({
   // fields, so it is kept beside them and dropped whenever they change: the
   // endpoint cannot be stored on the strength of a test it was not served with, and
   // a verdict belongs to the box that answered it. One state holds whichever verdict
-  // came back, so there is no second path a stale answer can survive on.
-  const [probed, setProbed] = useState<ProbeResult | null>(null);
+  // came back, so there is no second path a stale answer can survive on. The box's
+  // verdict is kept beside the fields it was served with, which is what makes
+  // staleness checkable at all.
+  const [probed, setProbed] = useState<(ProbeVerdict & { baseUrl: string; apiKey: string }) | null>(
+    null,
+  );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -377,14 +417,16 @@ function EndpointsPanel({
     setProbed(null);
     setModel("");
     try {
-      const result = await probeLocalEndpoint(url, key || null, PROBE_ONLY_MODEL);
-      if (result.ok && result.models?.length) {
-        setProbed({ baseUrl: url, apiKey: key, verdict: "reachable", models: result.models });
-        setModel(result.models[0]);
-      } else if (result.ok) {
-        setError("The endpoint answered but listed no models, so there is nothing to run.");
+      const verdict = probeVerdict(
+        await probeLocalEndpoint(url, key || null, PROBE_ONLY_MODEL),
+      );
+      if (verdict.verdict === "answered-no-models") {
+        // Nothing here can act on a box that serves no models — there is no model to
+        // pick and nothing to store — so it is not filed as a test result.
+        setError(verdict.label);
       } else {
-        setProbed(probeFailure({ baseUrl: url, apiKey: key }, result));
+        setProbed({ ...verdict, baseUrl: url, apiKey: key });
+        if (verdict.verdict === "reachable") setModel(verdict.models[0]);
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not reach the endpoint");
@@ -490,21 +532,7 @@ function EndpointsPanel({
 
         {probeIsCurrent && probed && (
           <>
-            <p
-              className={`text-[12px] ${
-                probed.verdict === "reachable" ? "text-[var(--color-success)]" : "text-error"
-              }`}
-            >
-              <span className="font-medium">{verdictLabel(probed)}</span>
-              {probed.verdict !== "reachable" && (
-                <>
-                  {" "}
-                  {/* The endpoint's own words, unedited: LiteLLM says
-                      token_not_found_in_db where the HTTP layer says only 401. */}
-                  <span>{probed.reason}</span>
-                </>
-              )}
-            </p>
+            <ProbeVerdictLine verdict={probed} />
 
             {probed.verdict === "reachable" && (
               <div className="flex gap-2">
@@ -560,6 +588,34 @@ function EndpointRow({
   const [busy, setBusy] = useState(false);
   const [conflict, setConflict] = useState<PinConflict | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // A re-test of THIS box, answered with the same named verdicts the add-form's test
+  // answers with. It is kept per row on purpose: a verdict belongs to the box that
+  // answered for it, so one row's answer can never be read as another's.
+  const [probed, setProbed] = useState<ProbeVerdict | null>(null);
+  const [testing, setTesting] = useState(false);
+
+  // The list load live-probes every box, so a reload is by definition the fresher
+  // answer for this row: a verdict clicked against an earlier load retires the moment
+  // the row's data is replaced.
+  useEffect(() => {
+    setProbed(null);
+  }, [endpoint]);
+
+  // The dial happens server-side with the stored key — the only key this box has ever
+  // been seen with — and nothing about the row is written. No reload either: the
+  // other boxes keep the answers the last load already paid for.
+  async function testConnection() {
+    setTesting(true);
+    setProbed(null);
+    setError(null);
+    try {
+      setProbed(probeVerdict(await probeSavedEndpoint(endpoint.id)));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not re-test the endpoint");
+    } finally {
+      setTesting(false);
+    }
+  }
 
   async function remove() {
     const sure = await confirm({
@@ -611,7 +667,7 @@ function EndpointRow({
             </div>
           )}
         </div>
-        <div className="flex shrink-0 gap-2">
+        <div className="flex shrink-0 flex-wrap justify-end gap-2">
           {keyDoc && (
             <button
               type="button"
@@ -623,6 +679,15 @@ function EndpointRow({
           )}
           <button
             type="button"
+            onClick={testConnection}
+            disabled={testing}
+            aria-label={`Test connection for ${endpoint.name}`}
+            className="rounded-md border border-border px-3 py-1.5 text-[12.5px] text-dim hover:text-foreground disabled:opacity-60"
+          >
+            Test connection
+          </button>
+          <button
+            type="button"
             onClick={remove}
             disabled={busy}
             className="rounded-md border border-border px-3 py-1.5 text-[12.5px] text-dim hover:text-error disabled:opacity-60"
@@ -631,6 +696,7 @@ function EndpointRow({
           </button>
         </div>
       </div>
+      {probed && <ProbeVerdictLine verdict={probed} className="mt-2" />}
       {conflict && (
         <p className="mt-2 text-[12px] text-error">
           {conflict.message}

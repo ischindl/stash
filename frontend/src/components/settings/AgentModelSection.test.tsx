@@ -7,6 +7,7 @@ import AgentModelSection from "./AgentModelSection";
 
 const listModelEndpoints = vi.fn();
 const probeLocalEndpoint = vi.fn();
+const probeSavedEndpoint = vi.fn();
 const connectLocalEndpoint = vi.fn();
 const deleteLocalEndpoint = vi.fn();
 const disconnectAgentCredential = vi.fn();
@@ -21,6 +22,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
     ...actual,
     listModelEndpoints: () => listModelEndpoints(),
     probeLocalEndpoint: (...args: unknown[]) => probeLocalEndpoint(...args),
+    probeSavedEndpoint: (...args: unknown[]) => probeSavedEndpoint(...args),
     connectLocalEndpoint: (...args: unknown[]) => connectLocalEndpoint(...args),
     deleteLocalEndpoint: (...args: unknown[]) => deleteLocalEndpoint(...args),
     disconnectAgentCredential: (...args: unknown[]) => disconnectAgentCredential(...args),
@@ -86,6 +88,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   listModelEndpoints.mockResolvedValue(status());
   probeLocalEndpoint.mockResolvedValue({ ok: true, http_status: 200, models: ["new-model:1"] });
+  probeSavedEndpoint.mockResolvedValue({ ok: true, http_status: 200, models: ["served:1"] });
   connectLocalEndpoint.mockResolvedValue({ id: "cred-3", connected: ["local"] });
   deleteLocalEndpoint.mockResolvedValue({ ok: true, connected: ["local"] });
   disconnectAgentCredential.mockResolvedValue([]);
@@ -518,5 +521,169 @@ describe("AgentModelSection key and OAuth providers", () => {
     // spelling of it can come back, and the operator's word is what renders.
     expect(screen.queryByRole("button", { name: /test\s*endpoint/i })).toBeNull();
     expect(screen.getByRole("button", { name: "Test connection" })).toBeDefined();
+  });
+});
+
+// A saved row is only as fresh as the last list load, and the list dials EVERY box,
+// so refreshing one row meant reloading all of them. These tests pin the per-row
+// re-test: it dials the by-id route (the stored key never reaches the browser, so a
+// browser-side probe would dial keyed boxes keyless and call healthy endpoints
+// refused), it answers with the same named verdicts the add-form test answers with,
+// and it changes nothing else on the page.
+describe("AgentModelSection per-endpoint re-test", () => {
+  // With several rows on screen the only globally-unique verdict line is the
+  // add-form's, so a row's own verdict is always read inside its own <li>.
+  function rowOf(name: string): HTMLElement {
+    return screen.getByText(name).closest("li")!;
+  }
+
+  function rowVerdict(row: HTMLElement): HTMLElement {
+    const label = within(row).getByText(
+      /^(Unreachable:|Auth failed \(HTTP \d+\):|Reachable and authenticated|The endpoint answered)/,
+    );
+    return label.closest("p")!;
+  }
+
+  // Awaiting the row here is what makes the click land on a rendered list rather
+  // than on the loading state, so no test has to remember to do it first.
+  async function retest(name: string): Promise<HTMLElement> {
+    const row = (await screen.findByText(name)).closest("li")!;
+    fireEvent.click(within(row).getByRole("button", { name: `Test connection for ${name}` }));
+    return row;
+  }
+
+  it("dials the by-id route for exactly the row that was tested, and nothing else", async () => {
+    renderSection();
+    await screen.findByText("box-two");
+
+    const row = await retest("box-two");
+    await waitFor(() => expect(probeSavedEndpoint).toHaveBeenCalledTimes(1));
+
+    // The id is the only thing that may leave: the pre-save probe route needs a
+    // base_url plus the PROBE_ONLY_MODEL placeholder, and a stored row has to be
+    // re-dialled server-side with a key this page never holds.
+    expect(probeSavedEndpoint.mock.calls[0]).toEqual(["cred-2"]);
+    expect(probeLocalEndpoint).not.toHaveBeenCalled();
+    // And a re-check is a question, not an edit: no reload (which would re-dial
+    // every other box) and no row mutation.
+    expect(listModelEndpoints).toHaveBeenCalledTimes(1);
+    await within(row).findByText(/Reachable and authenticated/);
+  });
+
+  it("names a stored key that has stopped working, in the box's own words", async () => {
+    probeSavedEndpoint.mockResolvedValue({
+      ok: false,
+      http_status: 401,
+      error_detail: "token_not_found_in_db: no token with that hash",
+    });
+    renderSection();
+
+    const row = await retest("box-two");
+    await waitFor(() =>
+      expect(rowVerdict(row).textContent).toBe(
+        "Auth failed (HTTP 401): token_not_found_in_db: no token with that hash",
+      ),
+    );
+    expect(rowVerdict(row).className).toContain("text-error");
+    expect(rowVerdict(row).className).not.toContain("text-[var(--color-success)]");
+  });
+
+  it("calls a box that cannot be reached unreachable, never an auth failure", async () => {
+    probeSavedEndpoint.mockResolvedValue({ ok: false, http_status: 0, error_detail: "no route to host" });
+    renderSection();
+
+    const row = await retest("box-one");
+    await waitFor(() => expect(rowVerdict(row).textContent).toBe("Unreachable: no route to host"));
+    expect(rowVerdict(row).className).toContain("text-error");
+  });
+
+  it("says so out loud when the box refuses to give a reason", async () => {
+    probeSavedEndpoint.mockResolvedValue({ ok: false, http_status: 502 });
+    renderSection();
+
+    const row = await retest("box-one");
+    await waitFor(() =>
+      expect(rowVerdict(row).textContent).toBe("Unreachable: the endpoint gave no reason"),
+    );
+  });
+
+  it("renders the honest no-models answer for a box that serves nothing", async () => {
+    probeSavedEndpoint.mockResolvedValue({ ok: true, http_status: 200, models: [] });
+    renderSection();
+
+    const row = await retest("box-one");
+    await within(row).findByText(
+      "The endpoint answered but listed no models, so there is nothing to run.",
+    );
+    expect(within(row).queryByText(/Reachable and authenticated/)).toBeNull();
+  });
+
+  it("styles a reachable box as a success, the same way the add-form test does", async () => {
+    probeSavedEndpoint.mockResolvedValue({ ok: true, http_status: 200, models: ["a:1", "b:2"] });
+    renderSection();
+
+    const row = await retest("box-two");
+    await waitFor(() =>
+      expect(rowVerdict(row).textContent).toBe("Reachable and authenticated — serving 2 model(s)"),
+    );
+    expect(rowVerdict(row).className).toContain("text-[var(--color-success)]");
+  });
+
+  it("reports a refused id through the error path, on that row only", async () => {
+    probeSavedEndpoint.mockRejectedValue(new ApiError(404, "no such local endpoint"));
+    renderSection();
+    await screen.findByText("box-two");
+
+    const row = await retest("box-two");
+
+    // An ApiError is the route refusing the request, not the box refusing a dial:
+    // the message renders and no verdict is claimed for a probe that never ran.
+    await within(row).findByText("no such local endpoint");
+    expect(within(row).queryByText(/^(Unreachable:|Auth failed|Reachable)/)).toBeNull();
+    expect(within(rowOf("box-one")).queryByText("no such local endpoint")).toBeNull();
+  });
+
+  it("allows one dial per row and locks only that row's own button", async () => {
+    let answerProbe!: (result: unknown) => void;
+    probeSavedEndpoint.mockReturnValue(new Promise((resolve) => (answerProbe = resolve)));
+    renderSection();
+    await screen.findByText("box-two");
+
+    const row = await retest("box-two");
+    fireEvent.click(within(row).getByRole("button", { name: "Test connection for box-two" }));
+    await waitFor(() => expect(probeSavedEndpoint).toHaveBeenCalledTimes(1));
+
+    expect(within(row).getByRole("button", { name: "Test connection for box-two" })).toBeDisabled();
+    // A slow box must not hold the other rows or the row's own Remove hostage.
+    expect(
+      within(rowOf("box-one")).getByRole("button", { name: "Test connection for box-one" }),
+    ).not.toBeDisabled();
+    expect(within(row).getByRole("button", { name: "Remove" })).not.toBeDisabled();
+
+    answerProbe({ ok: true, http_status: 200, models: ["a:1"] });
+    await within(row).findByText(/Reachable and authenticated/);
+  });
+
+  it("retires a row's verdict when a list reload brings fresher probe data", async () => {
+    listModelEndpoints
+      .mockResolvedValueOnce(status())
+      .mockResolvedValueOnce(
+        status({ endpoints: [{ ...FIRST, models: ["freshly-probed:1"] }, SECOND] }),
+      );
+    renderSection();
+    await screen.findByText("box-one");
+
+    const row = await retest("box-one");
+    await within(row).findByText(/Reachable and authenticated/);
+
+    // Storing another endpoint reloads the list, and that load live-probes every
+    // box — by definition fresher than a verdict clicked against an earlier load.
+    await typeDraft("http://box-three:11434/v1", "sk-test");
+    fireEvent.click(screen.getByRole("button", { name: "Test connection" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Add endpoint" }));
+    await waitFor(() => expect(listModelEndpoints).toHaveBeenCalledTimes(2));
+
+    expect(within(row).queryByText(/Reachable and authenticated/)).toBeNull();
+    expect(within(row).getByText("freshly-probed:1")).toBeDefined();
   });
 });

@@ -176,6 +176,34 @@ async def delete_local_models_json(current_user: dict = Depends(get_current_user
     return {"ok": True, "stored": False}
 
 
+@router.post("/endpoints/{credential_id}/test")
+async def test_stored_endpoint(credential_id: UUID, current_user: dict = Depends(get_current_user)):
+    """Re-dial exactly one stored endpoint, with the key stored for it, so a saved
+    box can be re-checked on demand instead of waiting for the next full list load
+    (which dials every box and costs the slowest one).
+
+    The answer is `POST /local/test`'s body contract unchanged — HTTP 200 even
+    when `ok` is false, the box's own words in `error_detail` — because one
+    client-side verdict classifier must serve both surfaces. The stored key is
+    used server-side, which is the whole point: it never travels to the browser,
+    so a browser-side re-probe would dial a keyed box keyless and call a healthy
+    endpoint an auth failure. Nothing is written and no part of the secret is
+    returned.
+
+    An id addresses this user's local endpoints only: a foreign id or a key
+    provider's row reads as 404, never as a credential to dial. Dialing is the
+    same deliberate, bounded SSRF trade-off `POST /local/test` documents, and
+    bounded the same way — absolute http(s) only (it is what connect stored), no
+    redirect following, one request under the probe's timeout, a capped error
+    body, and an authenticated caller dialling the box their own agent would dial
+    at turn time anyway.
+    """
+    probe = await agent_auth.probe_stored_endpoint(current_user["id"], credential_id)
+    if probe is None:
+        raise HTTPException(status_code=404, detail="no such local endpoint")
+    return probe
+
+
 @router.delete("/endpoints/{credential_id}")
 async def disconnect_endpoint(credential_id: UUID, current_user: dict = Depends(get_current_user)):
     """Disconnect exactly one local endpoint. Refused (409, listing the agents)
