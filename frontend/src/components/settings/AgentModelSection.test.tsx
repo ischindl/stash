@@ -67,6 +67,21 @@ async function typeDraft(url: string, key?: string) {
   }
 }
 
+// A test result renders as one line: its leading span names the outcome, and on a
+// failure the endpoint's own words follow it verbatim. Reading the whole line is
+// how these tests pin that the verdict is NAMED, not merely coloured.
+function verdictLine(): HTMLElement {
+  const label = screen.getByText(
+    /^(Unreachable:|Auth failed \(HTTP \d+\):|Reachable and authenticated)/,
+  );
+  return label.closest("p")!;
+}
+
+async function typeAndTest() {
+  await typeDraft("http://box-three:11434/v1", "sk-test");
+  fireEvent.click(screen.getByRole("button", { name: "Test connection" }));
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   listModelEndpoints.mockResolvedValue(status());
@@ -113,7 +128,7 @@ describe("AgentModelSection local endpoint list", () => {
     // until the box has answered for the address currently typed.
     expect(screen.queryByRole("button", { name: "Add endpoint" })).toBeNull();
 
-    fireEvent.click(screen.getByRole("button", { name: "Test endpoint" }));
+    fireEvent.click(screen.getByRole("button", { name: "Test connection" }));
 
     await screen.findByRole("button", { name: "Add endpoint" });
     const picker = screen.getByLabelText("Model");
@@ -137,7 +152,7 @@ describe("AgentModelSection local endpoint list", () => {
     await screen.findByText("box-one");
 
     await typeDraft("http://box-three:11434/v1");
-    fireEvent.click(screen.getByRole("button", { name: "Test endpoint" }));
+    fireEvent.click(screen.getByRole("button", { name: "Test connection" }));
     await screen.findByRole("button", { name: "Add endpoint" });
 
     await typeDraft("http://box-four:11434/v1");
@@ -157,9 +172,12 @@ describe("AgentModelSection local endpoint list", () => {
     await screen.findByText("box-one");
 
     await typeDraft("http://box-three:11434/v1", "sk-test");
-    fireEvent.click(screen.getByRole("button", { name: "Test endpoint" }));
+    fireEvent.click(screen.getByRole("button", { name: "Test connection" }));
 
     expect(await screen.findByText("upstream refused the connection")).toBeDefined();
+    // A 502 is the box refusing to serve, not a key being refused: it is named
+    // unreachable, and the endpoint's own words are kept exactly as they arrived.
+    expect(verdictLine().textContent).toBe("Unreachable: upstream refused the connection");
     expect((screen.getByLabelText("Endpoint base URL") as HTMLInputElement).value).toBe(
       "http://box-three:11434/v1",
     );
@@ -173,7 +191,7 @@ describe("AgentModelSection local endpoint list", () => {
     await screen.findByText("box-one");
 
     await typeDraft("http://box-three:11434/v1", "sk-test");
-    fireEvent.click(screen.getByRole("button", { name: "Test endpoint" }));
+    fireEvent.click(screen.getByRole("button", { name: "Test connection" }));
     await screen.findByRole("button", { name: "Add endpoint" });
     fireEvent.click(screen.getByRole("button", { name: "Add endpoint" }));
 
@@ -188,7 +206,7 @@ describe("AgentModelSection local endpoint list", () => {
     await screen.findByText("box-one");
 
     await typeDraft("http://box-three:11434/v1", "sk-test");
-    fireEvent.click(screen.getByRole("button", { name: "Test endpoint" }));
+    fireEvent.click(screen.getByRole("button", { name: "Test connection" }));
     await screen.findByRole("button", { name: "Add endpoint" });
     fireEvent.click(screen.getByRole("button", { name: "Add endpoint" }));
     await waitFor(() => expect(connectLocalEndpoint).toHaveBeenCalled());
@@ -205,7 +223,7 @@ describe("AgentModelSection local endpoint list", () => {
     await screen.findByText("box-one");
 
     await typeDraft("http://box-three:11434/v1");
-    fireEvent.click(screen.getByRole("button", { name: "Test endpoint" }));
+    fireEvent.click(screen.getByRole("button", { name: "Test connection" }));
     await screen.findByRole("button", { name: "Add endpoint" });
     fireEvent.click(screen.getByRole("button", { name: "Add endpoint" }));
     await waitFor(() => expect(connectLocalEndpoint).toHaveBeenCalled());
@@ -267,7 +285,7 @@ describe("AgentModelSection local endpoint list", () => {
     expect(screen.queryByRole("button", { name: "Add endpoint" })).toBeNull();
     expect(connectLocalEndpoint).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole("button", { name: "Test endpoint" }));
+    fireEvent.click(screen.getByRole("button", { name: "Test connection" }));
     await screen.findByRole("button", { name: "Add endpoint" });
     expect(connectLocalEndpoint).not.toHaveBeenCalled();
   });
@@ -294,7 +312,7 @@ describe("AgentModelSection local endpoint list", () => {
     await screen.findByText("box-one");
 
     await typeDraft(FIRST.base_url);
-    fireEvent.click(screen.getByRole("button", { name: "Test endpoint" }));
+    fireEvent.click(screen.getByRole("button", { name: "Test connection" }));
     await screen.findByRole("button", { name: "Add endpoint" });
 
     fireEvent.click(await removeFirstEndpoint());
@@ -334,11 +352,130 @@ describe("AgentModelSection local endpoint list", () => {
     await screen.findByText("box-one");
 
     await typeDraft("http://box-three:11434/v1");
-    fireEvent.click(screen.getByRole("button", { name: "Test endpoint" }));
+    fireEvent.click(screen.getByRole("button", { name: "Test connection" }));
     await screen.findByRole("button", { name: "Add endpoint" });
     fireEvent.click(screen.getByRole("button", { name: "Add endpoint" }));
 
     await waitFor(() => expect(listModelEndpoints).toHaveBeenCalledTimes(2));
+  });
+});
+
+describe("AgentModelSection Test connection verdicts", () => {
+  it("names a healthy box reachable and authenticated, and counts what it serves", async () => {
+    probeLocalEndpoint.mockResolvedValue({ ok: true, http_status: 200, models: ["a:1", "b:2"] });
+
+    renderSection();
+    await screen.findByText("box-one");
+    await typeAndTest();
+
+    expect(
+      await screen.findByText("Reachable and authenticated — serving 2 model(s)"),
+    ).toBeDefined();
+    // Success reads as success the way the connected pills do, so a green line
+    // does not have to be parsed to be understood.
+    expect(verdictLine().className).toContain("text-[var(--color-success)]");
+    // The verdict is a pre-save answer only: the picker appears, nothing is stored.
+    await screen.findByRole("button", { name: "Add endpoint" });
+    expect(connectLocalEndpoint).not.toHaveBeenCalled();
+  });
+
+  it("names a refused key an auth failure and shows the box's own words", async () => {
+    probeLocalEndpoint.mockResolvedValue({
+      ok: false,
+      http_status: 401,
+      error_detail: "token_not_found_in_db",
+    });
+
+    renderSection();
+    await screen.findByText("box-one");
+    await typeAndTest();
+
+    await screen.findByText("token_not_found_in_db");
+    expect(verdictLine().textContent).toBe("Auth failed (HTTP 401): token_not_found_in_db");
+    expect(screen.queryByRole("button", { name: "Add endpoint" })).toBeNull();
+    expect((screen.getByLabelText("Endpoint base URL") as HTMLInputElement).value).toBe(
+      "http://box-three:11434/v1",
+    );
+    expect(connectLocalEndpoint).not.toHaveBeenCalled();
+  });
+
+  it("names a 403 refusal the same auth failure a 401 is", async () => {
+    probeLocalEndpoint.mockResolvedValue({
+      ok: false,
+      http_status: 403,
+      error_detail: "key rejected by proxy",
+    });
+
+    renderSection();
+    await screen.findByText("box-one");
+    await typeAndTest();
+
+    await screen.findByText("key rejected by proxy");
+    expect(verdictLine().textContent).toBe("Auth failed (HTTP 403): key rejected by proxy");
+    expect(connectLocalEndpoint).not.toHaveBeenCalled();
+  });
+
+  it("names a box that never answers unreachable, never an auth failure", async () => {
+    probeLocalEndpoint.mockResolvedValue({
+      ok: false,
+      http_status: null,
+      error_detail: "connection failed: connection refused",
+    });
+
+    renderSection();
+    await screen.findByText("box-one");
+    await typeAndTest();
+
+    await screen.findByText("connection failed: connection refused");
+    expect(verdictLine().textContent).toBe("Unreachable: connection failed: connection refused");
+    // A dead box must never be dressed up as a key problem — that is the sentence
+    // that sends a user hunting for a typo in a key that is fine.
+    expect(screen.queryByText(/auth failed/i)).toBeNull();
+    expect(verdictLine().className).not.toContain("text-[var(--color-success)]");
+    expect(screen.queryByRole("button", { name: "Add endpoint" })).toBeNull();
+  });
+
+  it("says the endpoint gave no reason when the probe sends none, instead of going blank", async () => {
+    probeLocalEndpoint.mockResolvedValue({ ok: false, http_status: null });
+
+    renderSection();
+    await screen.findByText("box-one");
+    await typeAndTest();
+
+    await screen.findByText("Unreachable:");
+    expect(verdictLine().textContent).toBe("Unreachable: the endpoint gave no reason");
+  });
+
+  it("keeps the plain sentence when a reachable box serves no models", async () => {
+    probeLocalEndpoint.mockResolvedValue({ ok: true, http_status: 200, models: [] });
+
+    renderSection();
+    await screen.findByText("box-one");
+    await typeAndTest();
+
+    expect(
+      await screen.findByText(
+        "The endpoint answered but listed no models, so there is nothing to run.",
+      ),
+    ).toBeDefined();
+    expect(screen.queryByText(/Reachable and authenticated/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Add endpoint" })).toBeNull();
+  });
+
+  it("retires the reachable verdict the moment the address changes", async () => {
+    renderSection();
+    await screen.findByText("box-one");
+
+    await typeDraft("http://box-three:11434/v1");
+    fireEvent.click(screen.getByRole("button", { name: "Test connection" }));
+    await screen.findByText(/Reachable and authenticated/);
+
+    await typeDraft("http://box-four:11434/v1");
+
+    // One source of truth: the verdict retires with the picker it unlocked, so no
+    // stale "reachable" can survive for a box that was never dialled.
+    expect(screen.queryByText(/Reachable and authenticated/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Add endpoint" })).toBeNull();
   });
 });
 
@@ -376,5 +513,10 @@ describe("AgentModelSection key and OAuth providers", () => {
 
     expect(screen.queryByRole("button", { name: "Connect endpoint" })).toBeNull();
     expect(screen.queryByText("Local model")).toBeNull();
+    // One action, one name. The retired label is matched by pattern rather than
+    // spelled out, so this file holds no copy of it while still pinning that no
+    // spelling of it can come back, and the operator's word is what renders.
+    expect(screen.queryByRole("button", { name: /test\s*endpoint/i })).toBeNull();
+    expect(screen.getByRole("button", { name: "Test connection" })).toBeDefined();
   });
 });

@@ -7,6 +7,16 @@ everything before it is captured in git history (`git log`), not here.
 
 ### Changed
 
+- Testing a local model box now names its outcome instead of handing you a colour to
+  interpret. The button under the draft fields reads "Test connection" — the word you
+  already use for it — and it answers with one of three verdicts: "Reachable and
+  authenticated — serving 2 model(s)", "Auth failed (HTTP 401): token_not_found_in_db", or
+  "Unreachable: connection refused". A box that is down is no longer described as a key
+  problem, and a refused key is no longer described as a dead box. Whatever the endpoint
+  itself reported is shown unedited, because LiteLLM and Ollama are more specific than a
+  bare HTTP status; when an endpoint reports nothing, the line says so instead of going
+  blank.
+
 - Sharing with an agent now hands it a server. The folder share dialog shows the folder's
   MCP URL with a "Copy agent URL" button, the skill publish popover shows the MCP URL next
   to the public URL, the skill panel's toolbar copies it, and a published skill's panel

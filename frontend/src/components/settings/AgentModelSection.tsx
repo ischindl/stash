@@ -15,6 +15,7 @@ import {
   PROBE_ONLY_MODEL,
   startAgentOAuth,
   type LocalEndpointDoc,
+  type LocalProbeResult,
   type ModelEndpoint,
 } from "@/lib/api";
 
@@ -287,6 +288,44 @@ function pinConflict(error: unknown): PinConflict | null {
   return { message: String(detail.message), agents: (detail.agents ?? []).map((a) => a.name) };
 }
 
+// What a Test connection proved — and only what it proved. The route answers HTTP
+// 200 even when the probe failed, so the verdict is read off the response BODY: a
+// 401 or 403 is the key being refused, while everything else — a timeout, a refused
+// connection, a redirect, a proxy's HTML landing page — is the box not answering as
+// a model endpoint. Each failure carries the endpoint's own words unedited, because
+// they are the only part that says which of these it was.
+type ProbeResult =
+  | { baseUrl: string; apiKey: string; verdict: "reachable"; models: string[] }
+  | {
+      baseUrl: string;
+      apiKey: string;
+      verdict: "auth-failed";
+      httpStatus: number;
+      reason: string;
+    }
+  | { baseUrl: string; apiKey: string; verdict: "unreachable"; reason: string };
+
+/** Name a failed probe. A probe that never reached the box, or reached something
+ *  that is not a model endpoint, is unreachable — never dressed up as a key
+ *  problem. When the box refuses to say why, that is said out loud instead of
+ *  leaving the line blank. */
+function probeFailure(typed: { baseUrl: string; apiKey: string }, result: LocalProbeResult) {
+  const reason = result.error_detail ?? "the endpoint gave no reason";
+  return result.http_status === 401 || result.http_status === 403
+    ? { ...typed, verdict: "auth-failed" as const, httpStatus: result.http_status, reason }
+    : { ...typed, verdict: "unreachable" as const, reason };
+}
+
+/** The one sentence a test result is answered with, so the outcome has a name and
+ *  does not have to be inferred from a colour. */
+function verdictLabel(result: ProbeResult): string {
+  if (result.verdict === "reachable") {
+    return `Reachable and authenticated — serving ${result.models.length} model(s)`;
+  }
+  if (result.verdict === "auth-failed") return `Auth failed (HTTP ${result.httpStatus}):`;
+  return "Unreachable:";
+}
+
 function EndpointsPanel({
   endpoints,
   local,
@@ -299,12 +338,12 @@ function EndpointsPanel({
   const [baseUrl, setBaseUrl] = useState("");
   const [apiKey, setApiKey] = useState("");
   const [model, setModel] = useState("");
-  // A probe is only trustworthy while it describes exactly what is in the two
+  // A test result is only trustworthy while it describes exactly what is in the two
   // fields, so it is kept beside them and dropped whenever they change: the
-  // endpoint cannot be stored on the strength of a test it was not served with.
-  const [probed, setProbed] = useState<{ baseUrl: string; apiKey: string; models: string[] } | null>(
-    null,
-  );
+  // endpoint cannot be stored on the strength of a test it was not served with, and
+  // a verdict belongs to the box that answered it. One state holds whichever verdict
+  // came back, so there is no second path a stale answer can survive on.
+  const [probed, setProbed] = useState<ProbeResult | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -330,24 +369,22 @@ function EndpointsPanel({
     onChanged();
   }
 
-  async function testEndpoint() {
+  async function testConnection() {
+    const url = baseUrl.trim();
+    const key = apiKey.trim();
     setBusy(true);
     setError(null);
     setProbed(null);
     setModel("");
     try {
-      const result = await probeLocalEndpoint(
-        baseUrl.trim(),
-        apiKey.trim() || null,
-        PROBE_ONLY_MODEL,
-      );
+      const result = await probeLocalEndpoint(url, key || null, PROBE_ONLY_MODEL);
       if (result.ok && result.models?.length) {
-        setProbed({ baseUrl: baseUrl.trim(), apiKey: apiKey.trim(), models: result.models });
+        setProbed({ baseUrl: url, apiKey: key, verdict: "reachable", models: result.models });
         setModel(result.models[0]);
       } else if (result.ok) {
         setError("The endpoint answered but listed no models, so there is nothing to run.");
       } else {
-        setError(result.error_detail ?? "The endpoint did not answer.");
+        setProbed(probeFailure({ baseUrl: url, apiKey: key }, result));
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not reach the endpoint");
@@ -356,8 +393,10 @@ function EndpointsPanel({
     }
   }
 
+  // Only a reachable-and-authenticated verdict licenses a store, and only while it
+  // still describes what is typed.
   async function addEndpoint() {
-    if (!probeIsCurrent || !probed || !model) return;
+    if (!probeIsCurrent || probed?.verdict !== "reachable" || !model) return;
     setBusy(true);
     setError(null);
     try {
@@ -441,39 +480,59 @@ function EndpointsPanel({
           />
           <button
             type="button"
-            onClick={testEndpoint}
+            onClick={testConnection}
             disabled={busy || !baseUrl.trim()}
             className="rounded-md border border-border px-3 py-1.5 text-[12.5px] text-foreground hover:bg-raised disabled:opacity-60"
           >
-            Test endpoint
+            Test connection
           </button>
         </div>
 
         {probeIsCurrent && probed && (
-          <div className="flex gap-2">
-            <label className="flex flex-1 items-center gap-2 text-[12.5px] text-muted-foreground">
-              Model
-              <select
-                value={model}
-                onChange={(e) => setModel(e.target.value)}
-                className="min-w-0 flex-1 rounded-md border border-border bg-surface px-2.5 py-1.5 font-mono text-[12.5px] text-foreground"
-              >
-                {probed.models.map((served) => (
-                  <option key={served} value={served}>
-                    {served}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <button
-              type="button"
-              onClick={addEndpoint}
-              disabled={busy || !model}
-              className="rounded-md bg-brand px-3 py-1.5 text-[12.5px] font-medium text-white disabled:opacity-60"
+          <>
+            <p
+              className={`text-[12px] ${
+                probed.verdict === "reachable" ? "text-[var(--color-success)]" : "text-error"
+              }`}
             >
-              Add endpoint
-            </button>
-          </div>
+              <span className="font-medium">{verdictLabel(probed)}</span>
+              {probed.verdict !== "reachable" && (
+                <>
+                  {" "}
+                  {/* The endpoint's own words, unedited: LiteLLM says
+                      token_not_found_in_db where the HTTP layer says only 401. */}
+                  <span>{probed.reason}</span>
+                </>
+              )}
+            </p>
+
+            {probed.verdict === "reachable" && (
+              <div className="flex gap-2">
+                <label className="flex flex-1 items-center gap-2 text-[12.5px] text-muted-foreground">
+                  Model
+                  <select
+                    value={model}
+                    onChange={(e) => setModel(e.target.value)}
+                    className="min-w-0 flex-1 rounded-md border border-border bg-surface px-2.5 py-1.5 font-mono text-[12.5px] text-foreground"
+                  >
+                    {probed.models.map((served) => (
+                      <option key={served} value={served}>
+                        {served}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <button
+                  type="button"
+                  onClick={addEndpoint}
+                  disabled={busy || !model}
+                  className="rounded-md bg-brand px-3 py-1.5 text-[12.5px] font-medium text-white disabled:opacity-60"
+                >
+                  Add endpoint
+                </button>
+              </div>
+            )}
+          </>
         )}
 
         {error && <p className="text-[12px] text-error">{error}</p>}
