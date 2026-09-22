@@ -2,8 +2,9 @@
 
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock
-from uuid import UUID
+from uuid import UUID, uuid4
 
+import asyncpg
 import pytest
 from httpx import AsyncClient
 
@@ -43,6 +44,42 @@ async def test_curator_provisioned_reserved_and_due(client: AsyncClient, _db_poo
     # Idempotent — same row on second call.
     again = await agent_service.get_or_create_curator(uid)
     assert again["id"] == curator["id"]
+
+
+@pytest.mark.asyncio
+async def test_watermark_pair_accepts_a_whole_instant(client: AsyncClient, _db_pool):
+    """Migration 0219: the event half is a nullable uuid column, and NULL there is
+    a complete position — the instant alone, every event at it behind — which is
+    what every watermark stored before the column existed. That reading is why the
+    migration backfills nothing and why this legal write needs no event id."""
+    key, uid = await _register(client)
+    curator = await agent_service.get_or_create_curator(uid)
+    await _db_pool.execute(
+        "UPDATE agents SET curated_through = $2, curated_through_event_id = NULL WHERE id = $1",
+        UUID(curator["id"]),
+        datetime(2026, 1, 1, tzinfo=UTC),
+    )
+    stored = await _db_pool.fetchrow(
+        "SELECT curated_through, curated_through_event_id FROM agents WHERE id = $1",
+        UUID(curator["id"]),
+    )
+    assert stored["curated_through"] == datetime(2026, 1, 1, tzinfo=UTC)
+    assert stored["curated_through_event_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_watermark_pair_rejects_an_event_with_no_instant(client: AsyncClient, _db_pool):
+    """The pair's CHECK: an event id at no instant is a half-written position, not
+    a position that bounds nothing. Every reader may treat the two columns as one
+    value only because no row can hold half of it."""
+    key, uid = await _register(client)
+    curator = await agent_service.get_or_create_curator(uid)
+    with pytest.raises(asyncpg.CheckViolationError):
+        await _db_pool.execute(
+            "UPDATE agents SET curated_through = NULL, curated_through_event_id = $2 WHERE id = $1",
+            UUID(curator["id"]),
+            uuid4(),
+        )
 
 
 @pytest.mark.asyncio
