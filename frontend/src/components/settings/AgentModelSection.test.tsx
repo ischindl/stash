@@ -664,6 +664,35 @@ describe("AgentModelSection per-endpoint re-test", () => {
     await within(row).findByText(/Reachable and authenticated/);
   });
 
+  // The other half of the row's freshness rule. A list load live-probes every box, so
+  // the load is the fresher answer while nothing has been clicked, and the click is the
+  // fresher answer afterwards — which is why the load's own refusal must retire under a
+  // verdict rather than sit above it as a second, older truth about the same box.
+  it("retires the load-time error once a manual re-test answers", async () => {
+    listModelEndpoints.mockResolvedValue(
+      status({
+        endpoints: [
+          { ...FIRST, models: [], probe_error: "connect: connection refused" },
+          { ...SECOND, models: [], probe_error: "connect: connection refused" },
+        ],
+      }),
+    );
+    probeSavedEndpoint.mockResolvedValue({ ok: true, http_status: 200, models: ["a:1", "b:2"] });
+    renderSection();
+
+    // Both boxes were down at list time, so both rows loaded carrying that refusal.
+    const row = await retest("box-one");
+    await within(row).findByText(/Reachable and authenticated/);
+
+    expect(rowVerdict(row).textContent).toBe("Reachable and authenticated — serving 2 model(s)");
+    expect(within(row).queryByText("connect: connection refused")).toBeNull();
+    // A re-test is a question, not an edit: the served list belongs to the last full
+    // load, so a verdict must not quietly rewrite the row's chips.
+    expect(within(row).queryByText("a:1")).toBeNull();
+    // Row-local on purpose: box-two was never asked, so its own load-time answer stands.
+    expect(within(rowOf("box-two")).getByText("connect: connection refused")).toBeDefined();
+  });
+
   it("retires a row's verdict when a list reload brings fresher probe data", async () => {
     listModelEndpoints
       .mockResolvedValueOnce(status())
@@ -683,7 +712,11 @@ describe("AgentModelSection per-endpoint re-test", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Add endpoint" }));
     await waitFor(() => expect(listModelEndpoints).toHaveBeenCalledTimes(2));
 
-    expect(within(row).queryByText(/Reachable and authenticated/)).toBeNull();
-    expect(within(row).getByText("freshly-probed:1")).toBeDefined();
+    // The call count only says the reload started; its data reaches the row one
+    // render later, so both facts are pinned against the rendered row.
+    await waitFor(() => {
+      expect(within(row).queryByText(/Reachable and authenticated/)).toBeNull();
+      expect(within(row).getByText("freshly-probed:1")).toBeDefined();
+    });
   });
 });

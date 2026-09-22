@@ -639,6 +639,11 @@ function EndpointRow({
     }
   }
 
+  // One row carries one truth about itself. The list load is the fresher answer while
+  // nothing has been clicked since it ran; once this box has answered a click, that
+  // verdict is the fresher answer and the load's own complaint about this row retires.
+  const staleLoadError = probed === null ? endpoint.probe_error : null;
+
   return (
     <li className="rounded-lg border border-border bg-surface px-3 py-2">
       <div className="flex items-start justify-between gap-3">
@@ -647,8 +652,8 @@ function EndpointRow({
           <div className="truncate font-mono text-[11.5px] text-muted-foreground">
             {endpoint.base_url}
           </div>
-          {endpoint.probe_error ? (
-            <div className="mt-1 text-[11.5px] text-error">{endpoint.probe_error}</div>
+          {staleLoadError ? (
+            <div className="mt-1 text-[11.5px] text-error">{staleLoadError}</div>
           ) : (
             <div className="mt-1 flex flex-wrap gap-1">
               {endpoint.models.map((model) => (
