@@ -95,6 +95,18 @@ class Position:
         if self.at is None and self.event_id is not None:
             raise ValueError("curator position with an event id must carry its instant")
 
+    def __str__(self) -> str:
+        """The form an operator reads: a refused advance, a stale-watermark alert,
+        and a conflict all name the position they are refusing, and the instant is
+        the part a log is searched for. The event half appears only when the lane
+        stands inside an instant, because "where did that run stop?" is exactly the
+        question a mid-tie answer settles. The dataclass repr is kept for tests and
+        debugging, where which value is which matters more than grep-ability."""
+        if self.at is None:
+            return "never"
+        instant = str(self.at)
+        return instant if self.event_id is None else f"{instant}#{self.event_id}"
+
     def ahead(self, other: Position) -> bool:
         """Strictly ahead of `other`, on the pair's encoded order.
 

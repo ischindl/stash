@@ -23,6 +23,7 @@ from httpx import AsyncClient
 
 from backend.config import settings
 from backend.services import agent_auth, agent_service, curation_service, sprite_agent_service
+from backend.services.curation_service import NEVER, Position
 
 from .test_curator import _auth, _push_events, _register
 
@@ -100,14 +101,16 @@ async def test_scoped_feed_reads_only_its_project(client: AsyncClient, _db_pool,
         ],
     )
 
-    feed = await curation_service.changes_since(uid, uid, OLD, INTERNAL, UUID(rozvrh))
+    feed = await curation_service.changes_since(uid, uid, Position(OLD), INTERNAL, UUID(rozvrh))
     assert feed["counts"]["history"] == 1
     assert feed["history"][0]["content"] == "seminars on tuesday"
     assert feed["pages"] == []
     assert all(
         s == [] for s in (feed["files"], feed["source_docs"], feed["saves"], feed["sources"])
     )
-    backlog = await curation_service.curator_event_backlog(uid, INTERNAL, OLD, UUID(rozvrh))
+    backlog = await curation_service.curator_event_backlog(
+        uid, INTERNAL, Position(OLD), UUID(rozvrh)
+    )
     assert backlog["distinct_events"] == 1
 
 
@@ -131,8 +134,8 @@ async def test_scoped_watermark_advances_within_its_scope(client: AsyncClient, _
         at=BASE + timedelta(hours=1),
     )
 
-    position = await curation_service.complete_through(uid, None, BASE, INTERNAL, UUID(rozvrh))
-    assert position == BASE
+    position = await curation_service.complete_through(uid, NEVER, BASE, INTERNAL, UUID(rozvrh))
+    assert position == Position(BASE)  # the folder's own event sits at that instant
     scoped = await curation_service.curator_event_backlog(uid, INTERNAL, position, UUID(rozvrh))
     assert scoped["distinct_events"] == 0
     unscoped = await curation_service.curator_event_backlog(uid, INTERNAL, position)
@@ -417,7 +420,9 @@ async def test_filing_old_sessions_reopens_the_folder_position(client: AsyncClie
 
     wm = await _db_pool.fetchval("SELECT curated_through FROM agents WHERE id = $1", cid)
     assert wm == older - timedelta(microseconds=1)
-    backlog = await curation_service.curator_event_backlog(uid, INTERNAL, wm, UUID(rozvrh))
+    backlog = await curation_service.curator_event_backlog(
+        uid, INTERNAL, Position(wm), UUID(rozvrh)
+    )
     assert backlog["distinct_events"] == 2  # both the filed history and the fresh event
 
 

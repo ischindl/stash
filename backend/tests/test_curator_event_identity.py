@@ -64,12 +64,12 @@ async def test_a_reimported_transcript_is_one_set_of_events(client: AsyncClient,
     await _push_events(client, key, turns)
     await _push_events(client, key, turns)
 
-    feed = await curation_service.changes_since(uid, uid, OLD, wiki=INTERNAL)
+    feed = await curation_service.changes_since(uid, uid, Position(OLD), wiki=INTERNAL)
     assert feed["counts"]["history"] == 3
     assert [h["content"] for h in feed["history"]] == ["turn 0", "turn 1", "turn 2"]
-    assert await curation_service.has_changes_since(uid, uid, OLD, wiki=INTERNAL)
+    assert await curation_service.has_changes_since(uid, uid, Position(OLD), wiki=INTERNAL)
 
-    assert await curation_service.curator_event_backlog(uid, INTERNAL, OLD) == {
+    assert await curation_service.curator_event_backlog(uid, INTERNAL, Position(OLD)) == {
         "distinct_events": 3,
         "raw_rows": 6,
         "distinct_sessions": 1,
@@ -77,8 +77,8 @@ async def test_a_reimported_transcript_is_one_set_of_events(client: AsyncClient,
 
     # The watermark advances through the distinct events it was handed, and
     # then nothing is ahead — with the six rows still sitting there.
-    position = await curation_service.complete_through(uid, OLD, LATER, INTERNAL)
-    assert position == LATER
+    position = await curation_service.complete_through(uid, Position(OLD), LATER, INTERNAL)
+    assert position == Position(LATER)
     assert await _row_count(pool, uid) == 6
     assert await curation_service.curator_event_backlog(uid, INTERNAL, position) == {
         "distinct_events": 0,
@@ -108,7 +108,7 @@ async def test_events_sharing_one_batch_timestamp_stay_distinct(client: AsyncCli
         ],
     )
 
-    assert await curation_service.curator_event_backlog(uid, INTERNAL, OLD) == {
+    assert await curation_service.curator_event_backlog(uid, INTERNAL, Position(OLD)) == {
         "distinct_events": 3,
         "raw_rows": 3,
         "distinct_sessions": 1,
@@ -123,7 +123,7 @@ async def test_the_same_content_at_two_times_is_two_events(client: AsyncClient, 
     await _push_events(client, key, [_turn("conv-repeat", "same words", BASE)])
     await _push_events(client, key, [_turn("conv-repeat", "same words", BASE + timedelta(hours=2))])
 
-    assert await curation_service.curator_event_backlog(uid, INTERNAL, OLD) == {
+    assert await curation_service.curator_event_backlog(uid, INTERNAL, Position(OLD)) == {
         "distinct_events": 2,
         "raw_rows": 2,
         "distinct_sessions": 1,
@@ -146,21 +146,23 @@ async def test_a_tool_use_and_its_result_sharing_one_instant_stay_distinct(
     ]
     await _push_events(client, key, call)
 
-    assert await curation_service.curator_event_backlog(uid, INTERNAL, OLD) == {
+    assert await curation_service.curator_event_backlog(uid, INTERNAL, Position(OLD)) == {
         "distinct_events": 2,
         "raw_rows": 2,
         "distinct_sessions": 1,
     }
 
-    events, has_more = await curation_service._feed_events(uid, OLD, None, 1, wiki=INTERNAL)
+    events, has_more = await curation_service._feed_events(
+        uid, Position(OLD), None, 1, wiki=INTERNAL
+    )
     assert (len(events), has_more) == (1, True)
 
-    shown, _ = await curation_service._feed_events(uid, OLD, None, 100, wiki=INTERNAL)
+    shown, _ = await curation_service._feed_events(uid, Position(OLD), None, 100, wiki=INTERNAL)
     assert {e["event_type"] for e in shown} == {"tool_use", "tool_result"}
 
     await _push_events(client, key, call)
 
-    assert await curation_service.curator_event_backlog(uid, INTERNAL, OLD) == {
+    assert await curation_service.curator_event_backlog(uid, INTERNAL, Position(OLD)) == {
         "distinct_events": 2,
         "raw_rows": 4,
         "distinct_sessions": 1,
@@ -181,25 +183,27 @@ async def test_two_sessions_saying_the_same_words_at_one_instant_are_two_events(
     pair = [_turn("conv-left", "same words", BASE), _turn("conv-right", "same words", BASE)]
     await _push_events(client, key, pair)
 
-    assert await curation_service.curator_event_backlog(uid, INTERNAL, OLD) == {
+    assert await curation_service.curator_event_backlog(uid, INTERNAL, Position(OLD)) == {
         "distinct_events": 2,
         "raw_rows": 2,
         "distinct_sessions": 2,
     }
-    assert await curation_service.has_changes_since(uid, uid, OLD, wiki=INTERNAL)
-    feed = await curation_service.changes_since(uid, uid, OLD, wiki=INTERNAL)
+    assert await curation_service.has_changes_since(uid, uid, Position(OLD), wiki=INTERNAL)
+    feed = await curation_service.changes_since(uid, uid, Position(OLD), wiki=INTERNAL)
     assert feed["counts"]["history"] == 2
 
     # Consumption, not just counting: with a per-run budget of one event, two
     # distinct events must leave the run asking for more.
-    events, has_more = await curation_service._feed_events(uid, OLD, None, 1, wiki=INTERNAL)
+    events, has_more = await curation_service._feed_events(
+        uid, Position(OLD), None, 1, wiki=INTERNAL
+    )
     assert (len(events), has_more) == (1, True)
 
     # Re-importing both still collapses the copies across sessions rather than
     # weakening the re-import fix this file exists for.
     await _push_events(client, key, pair)
 
-    assert await curation_service.curator_event_backlog(uid, INTERNAL, OLD) == {
+    assert await curation_service.curator_event_backlog(uid, INTERNAL, Position(OLD)) == {
         "distinct_events": 2,
         "raw_rows": 4,
         "distinct_sessions": 2,
@@ -223,14 +227,16 @@ async def test_a_reimport_labelled_by_a_different_client_is_still_one_event(
     )
 
     assert await _row_count(pool, uid) == 2
-    assert await curation_service.curator_event_backlog(uid, INTERNAL, OLD) == {
+    assert await curation_service.curator_event_backlog(uid, INTERNAL, Position(OLD)) == {
         "distinct_events": 1,
         "raw_rows": 2,
         "distinct_sessions": 1,
     }
 
     # The relabelled copy must not buy a second slot in a saturated run.
-    events, has_more = await curation_service._feed_events(uid, OLD, None, 1, wiki=INTERNAL)
+    events, has_more = await curation_service._feed_events(
+        uid, Position(OLD), None, 1, wiki=INTERNAL
+    )
     assert (len(events), has_more) == (1, False)
 
 
@@ -245,8 +251,10 @@ async def test_the_gate_and_the_feed_agree_when_only_copies_remain(client: Async
     await _push_events(client, key, turns)
     await _push_events(client, key, turns)
 
-    assert not await curation_service.has_changes_since(uid, uid, WATERMARK, wiki=INTERNAL)
-    assert await curation_service.curator_event_backlog(uid, INTERNAL, WATERMARK) == {
+    assert not await curation_service.has_changes_since(
+        uid, uid, Position(WATERMARK), wiki=INTERNAL
+    )
+    assert await curation_service.curator_event_backlog(uid, INTERNAL, Position(WATERMARK)) == {
         "distinct_events": 0,
         "raw_rows": 0,
         "distinct_sessions": 0,
@@ -254,13 +262,13 @@ async def test_the_gate_and_the_feed_agree_when_only_copies_remain(client: Async
 
     await _push_events(client, key, [_turn("conv-bound", "turn 1", LATER)])
 
-    assert await curation_service.has_changes_since(uid, uid, WATERMARK, wiki=INTERNAL)
-    assert await curation_service.curator_event_backlog(uid, INTERNAL, WATERMARK) == {
+    assert await curation_service.has_changes_since(uid, uid, Position(WATERMARK), wiki=INTERNAL)
+    assert await curation_service.curator_event_backlog(uid, INTERNAL, Position(WATERMARK)) == {
         "distinct_events": 1,
         "raw_rows": 1,
         "distinct_sessions": 1,
     }
-    feed = await curation_service.changes_since(uid, uid, WATERMARK, wiki=INTERNAL)
+    feed = await curation_service.changes_since(uid, uid, Position(WATERMARK), wiki=INTERNAL)
     assert [h["content"] for h in feed["history"]] == ["turn 1"]
 
 
@@ -278,24 +286,37 @@ async def test_the_overflow_budget_buys_distinct_events(client: AsyncClient, poo
             [_turn("conv-cap", f"c{i}", BASE + timedelta(minutes=i)) for i in range(5)],
         )
 
-    assert await curation_service.curator_event_backlog(uid, INTERNAL, OLD) == {
+    assert await curation_service.curator_event_backlog(uid, INTERNAL, Position(OLD)) == {
         "distinct_events": 5,
         "raw_rows": 15,
         "distinct_sessions": 1,
     }
 
-    events, has_more = await curation_service._feed_events(uid, OLD, None, 3, wiki=INTERNAL)
+    events, has_more = await curation_service._feed_events(
+        uid, Position(OLD), None, 3, wiki=INTERNAL
+    )
     assert has_more is True
     assert [e["content"] for e in events] == ["c0", "c1", "c2"]
 
     boundary = await curation_service.complete_through(
-        uid, OLD, BASE + timedelta(hours=1), INTERNAL
+        uid, Position(OLD), BASE + timedelta(hours=1), INTERNAL
     )
-    assert boundary == BASE + timedelta(minutes=2) - timedelta(microseconds=1)
+    # The boundary is exactly the last event the feed showed, named by id: the
+    # instant half is that event's instant and the event half says which event at
+    # it the run consumed. The old cursor had to stand a microsecond BEFORE it,
+    # which left an already-curated event in the next run's backlog.
+    assert boundary == Position(events[-1]["created_at"], events[-1]["event_id"])
 
+    # Backlog honesty: the boundary leaves exactly the two events the run never
+    # saw, not the three an instant-only boundary left (the re-owed one being the
+    # event this run had already been shown).
     assert await curation_service.curator_event_backlog(uid, INTERNAL, boundary) == {
-        "distinct_events": 3,
-        "raw_rows": 9,
+        "distinct_events": 2,
+        # The six rows of the two unread events plus the two re-import copies of
+        # the boundary event itself: those copies ride ahead of the cursor without
+        # being pending work, which is exactly why `raw_rows` is reported beside
+        # `distinct_events` rather than collapsed into it.
+        "raw_rows": 8,
         "distinct_sessions": 1,
     }
 
@@ -320,7 +341,7 @@ async def test_an_instant_holding_more_events_than_the_cap_still_drains(
     # The boundary a saturated run hands the next one must leave exactly the
     # events that did not fit — two of them, not the whole five-event instant.
     boundary = await curation_service.complete_through(
-        uid, OLD, BASE + timedelta(hours=1), INTERNAL
+        uid, Position(OLD), BASE + timedelta(hours=1), INTERNAL
     )
     # Backlog honesty through the half-read instant: however far the boundary
     # reached, the backlog must count what the feed could still show from it —
@@ -335,7 +356,7 @@ async def test_an_instant_holding_more_events_than_the_cap_still_drains(
 
     # And the drain terminates: five events in two runs of (at most) three,
     # each identity fed exactly once, and the gate closing behind it.
-    fed, position = [], OLD
+    fed, position = [], Position(OLD)
     for _ in range(4):
         events, _ = await curation_service._feed_events(
             uid, position, None, curation_service._MAX_EVENTS, wiki=INTERNAL
@@ -365,7 +386,7 @@ async def test_duplicates_collapse_and_the_shared_wiki_stays_scoped(client: Asyn
     await _push(client, key, [shared, private])
     await _push(client, key, [shared, private])
 
-    assert await curation_service.curator_event_backlog(scope, INTERNAL, OLD) == {
+    assert await curation_service.curator_event_backlog(scope, INTERNAL, Position(OLD)) == {
         "distinct_events": 2,
         "raw_rows": 4,
         "distinct_sessions": 2,
@@ -373,12 +394,12 @@ async def test_duplicates_collapse_and_the_shared_wiki_stays_scoped(client: Asyn
 
     await _opt_out(pool, scope, "org_choate")
 
-    assert await curation_service.curator_event_backlog(scope, EXTERNAL, OLD) == {
+    assert await curation_service.curator_event_backlog(scope, EXTERNAL, Position(OLD)) == {
         "distinct_events": 1,
         "raw_rows": 2,
         "distinct_sessions": 1,
     }
-    feed = await curation_service.changes_since(scope, scope, OLD, wiki=EXTERNAL)
+    feed = await curation_service.changes_since(scope, scope, Position(OLD), wiki=EXTERNAL)
     assert [h["content"] for h in feed["history"]] == ["shared turn"]
 
 
@@ -395,7 +416,7 @@ async def test_the_curator_transcript_is_never_backlog(client: AsyncClient, pool
     )
 
     assert await _row_count(pool, uid) == 5
-    assert await curation_service.curator_event_backlog(uid, INTERNAL, OLD) == {
+    assert await curation_service.curator_event_backlog(uid, INTERNAL, Position(OLD)) == {
         "distinct_events": 1,
         "raw_rows": 1,
         "distinct_sessions": 1,
@@ -414,13 +435,17 @@ async def test_a_backlog_of_only_curator_transcripts_reports_zero(client: AsyncC
     )
 
     assert await _row_count(pool, uid) == 2
-    assert await curation_service.curator_event_backlog(uid, INTERNAL, WATERMARK) == {
+    assert await curation_service.curator_event_backlog(uid, INTERNAL, Position(WATERMARK)) == {
         "distinct_events": 0,
         "raw_rows": 0,
         "distinct_sessions": 0,
     }
-    assert not await curation_service.has_changes_since(uid, uid, WATERMARK, wiki=INTERNAL)
-    events, has_more = await curation_service._feed_events(uid, WATERMARK, None, 100, wiki=INTERNAL)
+    assert not await curation_service.has_changes_since(
+        uid, uid, Position(WATERMARK), wiki=INTERNAL
+    )
+    events, has_more = await curation_service._feed_events(
+        uid, Position(WATERMARK), None, 100, wiki=INTERNAL
+    )
     assert (events, has_more) == ([], False)
 
 
@@ -430,7 +455,12 @@ async def test_draining_the_feed_consumes_exactly_the_backlog(
 ):
     """The backlog is a drain estimate only if consuming the feed lands it at
     zero. Fourteen rows for seven events, drained three at a time, must read
-    nine rows and consume each of the seven identities — no more, no less."""
+    seven rows and consume each of the seven identities — no more, no less.
+
+    Seven, not the nine an instant-only cursor cost: the boundary event used to be
+    handed to the next run a second time on every overflow. Feeding each identity
+    exactly once is what makes `rows_fed == distinct_events` the proof that the
+    watermark advances as fast as the feed is consumed."""
     monkeypatch.setattr(curation_service, "_MAX_EVENTS", 3)
     key, uid = await _register(client)
     for _ in range(2):
@@ -440,11 +470,11 @@ async def test_draining_the_feed_consumes_exactly_the_backlog(
             [_turn("conv-drain", f"c{i}", BASE + timedelta(minutes=i)) for i in range(7)],
         )
 
-    start = await curation_service.curator_event_backlog(uid, INTERNAL, OLD)
+    start = await curation_service.curator_event_backlog(uid, INTERNAL, Position(OLD))
     assert start["distinct_events"] == 7 and start["raw_rows"] == 14
 
     until = BASE + timedelta(hours=2)
-    position, seen, rows_fed, runs = OLD, set(), 0, 0
+    position, seen, rows_fed, runs = Position(OLD), set(), 0, 0
     while True:
         events, _ = await curation_service._feed_events(
             uid, position, None, curation_service._MAX_EVENTS, wiki=INTERNAL
@@ -457,8 +487,8 @@ async def test_draining_the_feed_consumes_exactly_the_backlog(
         runs += 1
 
     assert seen == {("conv-drain", f"c{i}") for i in range(7)}
-    assert rows_fed == 9 and runs == 3
-    assert position == until
+    assert rows_fed == 7 and runs == 3  # three runs, and not one duplicate row
+    assert position == Position(until)
     assert await curation_service.curator_event_backlog(uid, INTERNAL, position) == {
         "distinct_events": 0,
         "raw_rows": 0,
@@ -474,7 +504,9 @@ async def test_a_filed_session_yields_one_row_per_identity(client: AsyncClient, 
     folder_id = await _file_session_into_folder(client, key, uid, pool, "conv-folder")
     await _push_events(client, key, [_turn("conv-folder", "filing the session", BASE)])
 
-    events, has_more = await curation_service._feed_events(uid, OLD, None, 100, wiki=INTERNAL)
+    events, has_more = await curation_service._feed_events(
+        uid, Position(OLD), None, 100, wiki=INTERNAL
+    )
     assert (has_more, len(events)) == (False, 1)
     assert events[0]["session_folder"] == "Acme Corp"
     assert events[0]["session_folder_id"] == UUID(folder_id)

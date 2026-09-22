@@ -29,6 +29,7 @@ from backend.services import (
     curation_service,
     memory_service,
 )
+from backend.services.curation_service import Position
 from backend.tasks import agent_schedules
 from backend.tasks.agent_schedules import AGENT_RUN_LOCK_TTL, CURATOR_DRAIN_LANES_PER_TICK
 
@@ -367,9 +368,11 @@ async def test_drain_gate_for_a_folder_lane_is_that_folder_and_nothing_else(
     )
     assert watermark == BASE  # seeding read the folder's own first event
     # The trap, stated as data: the same lane's gate answers differently by scope.
-    assert await curation_service.has_changes_since(user_id, user_id, watermark, "internal")
+    assert await curation_service.has_changes_since(
+        user_id, user_id, Position(watermark), "internal"
+    )
     assert not await curation_service.has_changes_since(
-        user_id, user_id, watermark, "internal", UUID(rozvrh)
+        user_id, user_id, Position(watermark), "internal", UUID(rozvrh)
     )
     before = await _metering(folder_curator["id"])
     captured = _capture_dispatches(monkeypatch)

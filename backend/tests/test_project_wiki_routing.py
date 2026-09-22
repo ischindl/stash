@@ -25,6 +25,7 @@ import pytest
 from httpx import AsyncClient
 
 from backend.services import curation_service, session_folder_service
+from backend.services.curation_service import NEVER
 
 from .conftest import unique_name
 from .test_developer_platform import _developer, _event, _push
@@ -123,7 +124,7 @@ async def test_feed_events_carry_the_project_flag(client: AsyncClient, pool):
     )
 
     events, _ = await curation_service._feed_events(
-        UUID(workspace["scope_user_id"]), None, None, 50, "internal"
+        UUID(workspace["scope_user_id"]), NEVER, None, 50, "internal"
     )
     row = next(e for e in events if e["session_id"] == "s-routing")
     assert row["session_folder"] == folder["name"]
@@ -133,7 +134,7 @@ async def test_feed_events_carry_the_project_flag(client: AsyncClient, pool):
         "UPDATE session_folders SET share_wiki = TRUE WHERE id = $1", UUID(folder["id"])
     )
     events, _ = await curation_service._feed_events(
-        UUID(workspace["scope_user_id"]), None, None, 50, "internal"
+        UUID(workspace["scope_user_id"]), NEVER, None, 50, "internal"
     )
     row = next(e for e in events if e["session_id"] == "s-routing")
     assert row["session_folder_share_wiki"] is True

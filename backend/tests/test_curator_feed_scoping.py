@@ -27,6 +27,7 @@ import pytest
 from httpx import AsyncClient
 
 from backend.services import curation_service
+from backend.services.curation_service import Position
 
 from .test_curator import _auth, _register
 from .test_developer_platform import _developer, _mint_workspace_key, _push
@@ -121,11 +122,11 @@ async def test_external_feed_excludes_opted_out_sessions_internal_keeps_them(
     )
     await _opt_out(pool, scope, "secret-corp")
 
-    external = await curation_service.changes_since(scope, scope, OLD, wiki=EXTERNAL)
+    external = await curation_service.changes_since(scope, scope, Position(OLD), wiki=EXTERNAL)
     assert [h["content"] for h in external["history"]] == ["part numbers for the Cascadia"]
     assert external["counts"]["history"] == 1
 
-    internal = await curation_service.changes_since(scope, scope, OLD, wiki=INTERNAL)
+    internal = await curation_service.changes_since(scope, scope, Position(OLD), wiki=INTERNAL)
     assert {h["content"] for h in internal["history"]} == {
         "part numbers for the Cascadia",
         "the owner's private supplier list",
@@ -187,12 +188,18 @@ async def test_gate_is_false_for_opted_out_activity_the_feed_cannot_see(client: 
         ],
     )
 
-    assert await curation_service.has_changes_since(scope, scope, WATERMARK, wiki=EXTERNAL) is False
-    empty = await curation_service.changes_since(scope, scope, WATERMARK, wiki=EXTERNAL)
+    assert (
+        await curation_service.has_changes_since(scope, scope, Position(WATERMARK), wiki=EXTERNAL)
+        is False
+    )
+    empty = await curation_service.changes_since(scope, scope, Position(WATERMARK), wiki=EXTERNAL)
     assert empty["counts"]["history"] == 0
 
     # Same instant, same data, different wiki: the owner's curator must run.
-    assert await curation_service.has_changes_since(scope, scope, WATERMARK, wiki=INTERNAL) is True
+    assert (
+        await curation_service.has_changes_since(scope, scope, Position(WATERMARK), wiki=INTERNAL)
+        is True
+    )
 
 
 @pytest.mark.asyncio
@@ -209,8 +216,11 @@ async def test_gate_turns_true_when_an_opted_in_session_changes(client: AsyncCli
         [_event("sess-sharing", "new fault code on the Cascadia", user_id="acme", at=LATER)],
     )
 
-    assert await curation_service.has_changes_since(scope, scope, WATERMARK, wiki=EXTERNAL) is True
-    feed = await curation_service.changes_since(scope, scope, WATERMARK, wiki=EXTERNAL)
+    assert (
+        await curation_service.has_changes_since(scope, scope, Position(WATERMARK), wiki=EXTERNAL)
+        is True
+    )
+    feed = await curation_service.changes_since(scope, scope, Position(WATERMARK), wiki=EXTERNAL)
     assert [h["content"] for h in feed["history"]] == ["new fault code on the Cascadia"]
 
 
@@ -248,18 +258,21 @@ async def test_noise_from_an_opted_out_user_cannot_starve_the_shared_wiki(
     await _opt_out(pool, scope, "secret-corp")
     until = BASE + timedelta(hours=1)
 
-    external = await curation_service.changes_since(scope, scope, OLD, wiki=EXTERNAL)
+    external = await curation_service.changes_since(scope, scope, Position(OLD), wiki=EXTERNAL)
     assert [h["content"] for h in external["history"]] == ["the shared lesson"]
     assert external["history_has_more"] is False
     # The window is complete for the external wiki, so the watermark reaches it.
-    assert await curation_service.complete_through(scope, OLD, until, wiki=EXTERNAL) == until
+    assert await curation_service.complete_through(
+        scope, Position(OLD), until, wiki=EXTERNAL
+    ) == Position(until)
 
     # The internal curator still sees the flood and still overflows — proof the
     # cap was live and that internal behaviour did not change.
-    internal = await curation_service.changes_since(scope, scope, OLD, wiki=INTERNAL)
+    internal = await curation_service.changes_since(scope, scope, Position(OLD), wiki=INTERNAL)
     assert internal["history_has_more"] is True
     assert len(internal["history"]) == 5
-    assert await curation_service.complete_through(scope, OLD, until, wiki=INTERNAL) < until
+    overflowed = await curation_service.complete_through(scope, Position(OLD), until, wiki=INTERNAL)
+    assert overflowed.at < until  # not caught up: the instant half is short of the end
 
 
 # --- 4. the predicate is one definition, not a widening default -------------
@@ -278,15 +291,15 @@ async def test_personal_scope_external_feed_is_empty_and_gate_is_false(client: A
     await _push_events_personal(client, key)
     assert await pool.fetchval("SELECT count(*) FROM end_users") == 0
 
-    external = await curation_service.changes_since(uid, uid, OLD, wiki=EXTERNAL)
+    external = await curation_service.changes_since(uid, uid, Position(OLD), wiki=EXTERNAL)
     assert external["counts"]["history"] == 0
     assert external["history"] == []
-    assert await curation_service.has_changes_since(uid, uid, OLD, wiki=EXTERNAL) is False
+    assert await curation_service.has_changes_since(uid, uid, Position(OLD), wiki=EXTERNAL) is False
 
     # Internal keeps every one of them.
-    internal = await curation_service.changes_since(uid, uid, OLD, wiki=INTERNAL)
+    internal = await curation_service.changes_since(uid, uid, Position(OLD), wiki=INTERNAL)
     assert internal["counts"]["history"] == 2
-    assert await curation_service.has_changes_since(uid, uid, OLD, wiki=INTERNAL) is True
+    assert await curation_service.has_changes_since(uid, uid, Position(OLD), wiki=INTERNAL) is True
 
 
 async def _push_events_personal(client: AsyncClient, key: str) -> None:
@@ -308,9 +321,9 @@ async def test_unknown_wiki_raises_naming_the_value(client: AsyncClient, pool):
     the wrong wiki or default to internal — it must fail where it is typed."""
     scope, _ = await _workspace(client)
     for call in (
-        lambda: curation_service.changes_since(scope, scope, OLD, wiki="exteranl"),
-        lambda: curation_service.has_changes_since(scope, scope, OLD, wiki="exteranl"),
-        lambda: curation_service.complete_through(scope, OLD, BASE, wiki="exteranl"),
+        lambda: curation_service.changes_since(scope, scope, Position(OLD), wiki="exteranl"),
+        lambda: curation_service.has_changes_since(scope, scope, Position(OLD), wiki="exteranl"),
+        lambda: curation_service.complete_through(scope, Position(OLD), BASE, wiki="exteranl"),
     ):
         with pytest.raises(ValueError, match="exteranl"):
             await call()

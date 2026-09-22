@@ -15,6 +15,7 @@ from backend.services import (
     prompts,
     session_folder_service,
 )
+from backend.services.curation_service import NEVER, Position
 
 from .conftest import unique_name
 
@@ -156,9 +157,11 @@ async def test_has_changes_and_feed_exclude_memory(client: AsyncClient, _db_pool
         json={"name": "Notes", "content": "a real note"},
         headers=_auth(key),
     )
-    assert await curation_service.has_changes_since(uid, uid, old, wiki="internal") is True
+    assert (
+        await curation_service.has_changes_since(uid, uid, Position(old), wiki="internal") is True
+    )
 
-    feed = await curation_service.changes_since(uid, uid, old, wiki="internal")
+    feed = await curation_service.changes_since(uid, uid, Position(old), wiki="internal")
     assert any(p["name"] == "Notes" for p in feed["pages"])
 
     # A page written INTO the Memory folder must NOT appear (no self-curation).
@@ -168,7 +171,7 @@ async def test_has_changes_and_feed_exclude_memory(client: AsyncClient, _db_pool
         json={"name": "Wiki Page", "content": "curated", "folder_id": mem["id"]},
         headers=_auth(key),
     )
-    feed2 = await curation_service.changes_since(uid, uid, old, wiki="internal")
+    feed2 = await curation_service.changes_since(uid, uid, Position(old), wiki="internal")
     assert all(p["name"] != "Wiki Page" for p in feed2["pages"])
 
 
@@ -196,8 +199,10 @@ async def test_hydrated_saves_flow_through_the_feed(client: AsyncClient, _db_poo
         UUID(source["id"]),
     )
 
-    assert await curation_service.has_changes_since(uid, uid, old, wiki="internal") is True
-    feed = await curation_service.changes_since(uid, uid, old, wiki="internal")
+    assert (
+        await curation_service.has_changes_since(uid, uid, Position(old), wiki="internal") is True
+    )
+    feed = await curation_service.changes_since(uid, uid, Position(old), wiki="internal")
     assert feed["counts"]["saves"] == 1
     save = feed["saves"][0]
     assert save["name"] == "@bob - 77"
@@ -231,8 +236,10 @@ async def test_changed_drive_docs_flow_through_the_feed(client: AsyncClient, _db
         UUID(source["id"]),
     )
 
-    assert await curation_service.has_changes_since(uid, uid, old, wiki="internal") is True
-    feed = await curation_service.changes_since(uid, uid, old, wiki="internal")
+    assert (
+        await curation_service.has_changes_since(uid, uid, Position(old), wiki="internal") is True
+    )
+    feed = await curation_service.changes_since(uid, uid, Position(old), wiki="internal")
     assert feed["counts"]["source_docs"] == 1
     doc = feed["source_docs"][0]
     assert doc["path"] == "Sheets/Brakes"
@@ -272,23 +279,30 @@ async def test_feed_overflow_never_drops_events(client: AsyncClient, _db_pool, m
         ],
     )
 
-    feed = await curation_service.changes_since(uid, uid, old, wiki="internal")
+    feed = await curation_service.changes_since(uid, uid, Position(old), wiki="internal")
     assert feed["history_has_more"] is True
     assert [h["content"] for h in feed["history"]] == ["turn 0", "turn 1", "turn 2"]
 
     until = base + timedelta(hours=1)
-    through = await curation_service.complete_through(uid, old, until, wiki="internal")
-    # Complete only through the last event that fit, not through `until`.
-    assert through < base + timedelta(minutes=3)
+    through = await curation_service.complete_through(uid, Position(old), until, wiki="internal")
+    # Complete only through the last event that fit — the third one, mid-instant —
+    # not through `until`. The instant is not the boundary any more either: these
+    # three events have distinct timestamps, so its event half names `turn 2`.
+    boundary_event = await _db_pool.fetchval(
+        "SELECT id FROM history_events WHERE owner_user_id = $1 AND content = $2", uid, "turn 2"
+    )
+    assert through == Position(base + timedelta(minutes=2), boundary_event)
 
-    # The next run's feed starts where this one stopped: nothing was lost.
-    # The boundary event re-appears by design — the watermark backs off a
-    # microsecond so events sharing its timestamp can never be skipped; a
-    # duplicated boundary event is the cheap side of that trade.
+    # The next run's feed starts where this one stopped: nothing was lost. And
+    # unlike the instant-only cursor, the boundary event does NOT re-appear — the
+    # position says which event at that instant was read, so a resuming run sees
+    # each event exactly once instead of paying for a duplicate on every overflow.
     next_feed = await curation_service.changes_since(uid, uid, through, wiki="internal")
-    assert [h["content"] for h in next_feed["history"]] == ["turn 2", "turn 3", "turn 4"]
+    assert [h["content"] for h in next_feed["history"]] == ["turn 3", "turn 4"]
     assert next_feed["history_has_more"] is False
-    assert await curation_service.complete_through(uid, through, until, wiki="internal") == until
+    assert await curation_service.complete_through(
+        uid, through, until, wiki="internal"
+    ) == Position(until)
 
 
 @pytest.mark.asyncio
@@ -325,12 +339,12 @@ async def test_curate_sessions_do_not_consume_feed_slots(
     ]
     await _push_events(client, key, curate_noise + real)
 
-    feed = await curation_service.changes_since(uid, uid, old, wiki="internal")
+    feed = await curation_service.changes_since(uid, uid, Position(old), wiki="internal")
     assert [h["content"] for h in feed["history"]] == ["real 0", "real 1"]
     assert feed["history_has_more"] is False
     assert await curation_service.complete_through(
-        uid, old, base + timedelta(hours=1), wiki="internal"
-    ) == base + timedelta(hours=1)
+        uid, Position(old), base + timedelta(hours=1), wiki="internal"
+    ) == Position(base + timedelta(hours=1))
 
 
 async def test_has_changes_false_after_watermark(client: AsyncClient, _db_pool):
@@ -340,7 +354,10 @@ async def test_has_changes_false_after_watermark(client: AsyncClient, _db_pool):
     )
     future = datetime.now(UTC) + timedelta(hours=1)
     # Nothing changed after a future watermark → no changes → curator skipped.
-    assert await curation_service.has_changes_since(uid, uid, future, wiki="internal") is False
+    assert (
+        await curation_service.has_changes_since(uid, uid, Position(future), wiki="internal")
+        is False
+    )
 
 
 @pytest.mark.asyncio
@@ -438,16 +455,19 @@ async def test_curator_run_does_not_echo_loop(
     await _run_scheduled_agent(UUID(dispatched[0][0]), dispatched[0][1])
 
     row = await _db_pool.fetchrow(
-        "SELECT curated_through, last_run_outcome FROM agents WHERE id = $1", UUID(curator["id"])
+        "SELECT curated_through, curated_through_event_id, last_run_outcome FROM agents "
+        "WHERE id = $1",
+        UUID(curator["id"]),
     )
     # Watermark advanced past the page change, and the run's own transcript
     # doesn't re-trigger the gate or appear in the feed.
     assert row["last_run_outcome"] == "ran"
+    advanced_position = curation_service.position_of(row)
     assert (
-        await curation_service.has_changes_since(uid, uid, row["curated_through"], wiki="internal")
+        await curation_service.has_changes_since(uid, uid, advanced_position, wiki="internal")
         is False
     )
-    feed = await curation_service.changes_since(uid, uid, row["curated_through"], wiki="internal")
+    feed = await curation_service.changes_since(uid, uid, advanced_position, wiki="internal")
     assert all(not str(e["session_id"] or "").startswith("agent-curate-") for e in feed["history"])
 
 
@@ -867,7 +887,7 @@ async def test_feed_carries_session_folder(client: AsyncClient, _db_pool):
         ],
     )
 
-    feed = await curation_service.changes_since(uid, uid, old, wiki="internal")
+    feed = await curation_service.changes_since(uid, uid, Position(old), wiki="internal")
     by_session = {h["session_id"]: h for h in feed["history"]}
     filed, bare = by_session["conv-folder"], by_session["conv-bare"]
     assert filed["session_folder"] == "Acme Corp"
@@ -882,7 +902,9 @@ async def test_feed_carries_session_folder(client: AsyncClient, _db_pool):
         assert h["user_share_wiki"] is None
 
     # Row level carries the id too — 1:1, so no fan-out and no missing row.
-    rows, has_more = await curation_service._feed_events(uid, old, None, 100, wiki="internal")
+    rows, has_more = await curation_service._feed_events(
+        uid, Position(old), None, 100, wiki="internal"
+    )
     assert has_more is False
     rows_by_session = {r["session_id"]: r for r in rows}
     assert rows_by_session["conv-folder"]["session_folder"] == "Acme Corp"
@@ -991,7 +1013,7 @@ async def test_feed_marks_which_projects_are_cleared(client: AsyncClient, _db_po
     await _push_one(client, key, "conv-on", at)
     await _file_session(client, key, uid, _db_pool, "conv-on", on_folder.json()["id"])
 
-    feed = await curation_service.changes_since(uid, uid, old, wiki="internal")
+    feed = await curation_service.changes_since(uid, uid, Position(old), wiki="internal")
     by_session = {h["session_id"]: h for h in feed["history"]}
 
     assert by_session["conv-unfiled"]["session_folder_share_wiki"] is None
@@ -1042,13 +1064,15 @@ async def test_changes_endpoint_exposes_project_clearance(client: AsyncClient, _
 @pytest.mark.asyncio
 async def test_mark_curated_cannot_walk_the_watermark_back(client: AsyncClient, _db_pool):
     """The watermark advance is a compare-and-set that stays monotonic inside a
-    match: the write lands only while the stored value is the position the run
-    read, and GREATEST means a matched-but-behind proposal clamps instead of
-    clobbering — a run that computed its position from a snapshot taken before
-    an overlapping run finished cannot walk the watermark backwards. A run whose
-    read position moved under it raises instead of writing (see
-    test_a_pre_rewind_completion_cannot_swallow_a_reopened_window). A NULL
-    watermark (never curated) must still accept its first advance."""
+    match: the write lands only while the stored PAIR is the position the run
+    read, and the clamp in the SET means a matched-but-behind proposal keeps the
+    stored position rather than clobbering it — a run that computed its position
+    from a snapshot taken before an overlapping run finished cannot walk the
+    watermark backwards. A run whose read position moved under it raises instead
+    of writing (see test_a_pre_rewind_completion_cannot_swallow_a_reopened_window).
+    A never-curated lane must still accept its first advance, and a proposal is
+    only legal as a pair: the clamp compares the whole (instant, event), which an
+    instant-only comparison could not do."""
     _key, uid = await _register(client)
     curator = await agent_service.get_or_create_curator(uid)
     cid = UUID(curator["id"])
@@ -1059,16 +1083,20 @@ async def test_mark_curated_cannot_walk_the_watermark_back(client: AsyncClient, 
         return await _db_pool.fetchval("SELECT curated_through FROM agents WHERE id = $1", cid)
 
     await _db_pool.execute("UPDATE agents SET curated_through = NULL WHERE id = $1", cid)
-    await agent_service.mark_curated(cid, None, never)  # seed from NULL
+    await agent_service.mark_curated(cid, NEVER, Position(never))  # seed from NULL
     assert await stored() == never
 
-    await agent_service.mark_curated(cid, never, later)
-    await agent_service.mark_curated(cid, later, never)  # matched read, behind proposal: clamps
+    await agent_service.mark_curated(cid, Position(never), Position(later))
+    await agent_service.mark_curated(
+        cid, Position(later), Position(never)
+    )  # matched read, behind proposal: clamps
     assert await stored() == later
 
     # Drift under the run: the position it read is no longer the stored one.
     with pytest.raises(agent_service.CuratorWatermarkConflict):
-        await agent_service.mark_curated(cid, never, datetime(2030, 1, 1, tzinfo=UTC))
+        await agent_service.mark_curated(
+            cid, Position(never), Position(datetime(2030, 1, 1, tzinfo=UTC))
+        )
     assert await stored() == later
 
 
@@ -1091,13 +1119,19 @@ async def test_a_refused_watermark_advance_is_visible_in_the_log(
     behind = datetime(2020, 1, 1, tzinfo=UTC)
 
     await _db_pool.execute("UPDATE agents SET curated_through = NULL WHERE id = $1", cid)
-    assert await agent_service.mark_curated(cid, None, behind) == behind  # seed from NULL
-    assert await agent_service.mark_curated(cid, behind, ahead) == ahead  # matched read, advance
+    assert await agent_service.mark_curated(cid, NEVER, Position(behind)) == Position(
+        behind
+    )  # seed from NULL
+    assert await agent_service.mark_curated(cid, Position(behind), Position(ahead)) == Position(
+        ahead
+    )  # matched read, advance
     assert "not moved" not in caplog.text  # genuine advances stay quiet
 
     # A matched read whose proposal sits behind the stored value clamps (does not
     # raise — that is the drift case) and the refusal is logged.
-    assert await agent_service.mark_curated(cid, ahead, behind) == ahead  # refused clamp
+    assert await agent_service.mark_curated(cid, Position(ahead), Position(behind)) == Position(
+        ahead
+    )  # refused clamp
     assert "not moved" in caplog.text
     assert str(cid) in caplog.text
     assert str(behind) in caplog.text and str(ahead) in caplog.text
@@ -1127,7 +1161,7 @@ async def test_full_history_backfill_cannot_regress_an_advanced_watermark(
     await _db_pool.execute("UPDATE agents SET curated_through = $2 WHERE id = $1", cid, stored)
 
     # Two events under a cap of one: the full-history feed overflows, so
-    # complete_through lands on the first event minus a microsecond — below
+    # complete_through lands mid-instant on the single event it read — below
     # the stored watermark.
     monkeypatch.setattr(curation_service, "_MAX_EVENTS", 1)
     await _run_curator_now(cid, full_history=True, metered=False)
@@ -1170,7 +1204,7 @@ async def test_stale_completion_cannot_regress_an_overlapping_run(
         # Stands in for the other run completing mid-turn. It started from the
         # same stored position this run read, so ITS compare-and-set matches and
         # its (newer) watermark lands.
-        await agent_service.mark_curated(cid, seeded, advanced)
+        await agent_service.mark_curated(cid, Position(seeded), Position(advanced))
 
     monkeypatch.setattr(sprite_agent_service, "run_scheduled", overlapping_run_finished)
     with pytest.raises(agent_service.CuratorWatermarkConflict):
@@ -1211,7 +1245,7 @@ async def test_a_pre_rewind_completion_cannot_swallow_a_reopened_window(
     rewound = await _db_pool.fetchval("SELECT curated_through FROM agents WHERE id = $1", cid)
     assert rewound < position
     assert await curation_service.has_changes_since(
-        uid, uid, rewound, curation_service.WIKI_INTERNAL
+        uid, uid, Position(rewound), curation_service.WIKI_INTERNAL
     )
 
     # A run dispatched before the rewind, completing from its own pre-rewind read
@@ -1219,13 +1253,13 @@ async def test_a_pre_rewind_completion_cannot_swallow_a_reopened_window(
     # `rewound`, so this completion may not write.
     stale_proposal = datetime.now(UTC) + timedelta(hours=1)
     with pytest.raises(agent_service.CuratorWatermarkConflict):
-        await agent_service.mark_curated(cid, position, stale_proposal)
+        await agent_service.mark_curated(cid, Position(position), Position(stale_proposal))
 
     assert (
         await _db_pool.fetchval("SELECT curated_through FROM agents WHERE id = $1", cid) == rewound
     )  # the rewind is honored exactly — nothing swallowed it
     assert await curation_service.has_changes_since(
-        uid, uid, rewound, curation_service.WIKI_INTERNAL
+        uid, uid, Position(rewound), curation_service.WIKI_INTERNAL
     )  # the re-opened window stays open, not shut unread
 
 
@@ -1271,7 +1305,7 @@ async def test_a_mid_run_ingest_rewind_fails_the_curator_run_loud(
     assert row["last_run_outcome"] == "failed"
     assert row["month_run_count"] == meter_before  # the metered run was refunded
     assert await curation_service.has_changes_since(
-        uid, uid, rewound, curation_service.WIKI_INTERNAL
+        uid, uid, Position(rewound), curation_service.WIKI_INTERNAL
     )  # the re-opened window stays open
 
 
@@ -1306,7 +1340,7 @@ async def test_the_scheduled_curator_run_fails_loud_when_the_watermark_moves(
     async def overlapping_writer(agent, stamp):
         # The other run advanced the watermark mid-turn; its own CAS matches
         # (it started from the same stored position), so its write lands.
-        await agent_service.mark_curated(cid, seeded, advanced)
+        await agent_service.mark_curated(cid, Position(seeded), Position(advanced))
 
     monkeypatch.setattr(sprite_agent_service, "run_scheduled", overlapping_writer)
 

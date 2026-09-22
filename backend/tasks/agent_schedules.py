@@ -135,7 +135,7 @@ async def _run_curator_now(
             return
         # The compare-and-set anchor for mark_curated is the stored position this
         # run actually loaded — captured BEFORE the full_history override below,
-        # which zeroes the feed's `since` but must not change what the run may
+        # which zeroes the feed's position but must not change what the run may
         # write against. A rewind or an overlapping run that moves the stored
         # position during the turn makes this run's completion refuse loudly.
         read = curation_service.position_of(agent)
@@ -152,9 +152,16 @@ async def _run_curator_now(
             # permission lock as its writes, so a concurrent opt-out's reset
             # cannot be overwritten by this stamp.
             if await scoped_curation_service.workspace_for_agent(agent) is None:
+                # The boundary is computed from the position the run ACTUALLY read
+                # from, which the full_history override moved to `never`: a backfill
+                # counts the whole corpus as its backlog, so its overflow boundary
+                # sits under the stored cursor and the clamp keeps the cursor where
+                # an earlier run left it. Deriving it from `read` instead would read
+                # an already-consumed window as "nothing left" and advance the cursor
+                # over everything the backfill was dispatched to catch up on.
                 through = await curation_service.complete_through(
                     UUID(str(agent["user_id"])),
-                    read,
+                    curation_service.position_of(agent),
                     now,
                     agent["curator_wiki"],
                     agent.get("curator_folder_id"),

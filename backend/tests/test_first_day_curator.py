@@ -13,6 +13,7 @@ import pytest
 from httpx import AsyncClient
 
 from backend.services import agent_auth
+from backend.services.curation_service import Position
 from backend.tasks.agent_schedules import _first_day_curator_tick, run_curator_now
 
 from .conftest import unique_name
@@ -281,5 +282,5 @@ async def test_late_import_reopens_curation(client: AsyncClient, pool, dispatche
     from backend.services import curation_service
 
     assert await curation_service.has_changes_since(
-        user_id, user_id, curated_through, wiki="internal"
+        user_id, user_id, Position(curated_through), wiki="internal"
     )

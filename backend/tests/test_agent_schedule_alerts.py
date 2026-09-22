@@ -200,7 +200,7 @@ async def test_run_bookkeeping_failure_sends_alert(client: AsyncClient, sprite_e
     async def fake_run_scheduled(agent, stamp):
         return ""
 
-    async def boom(user_id, curated_through, now, wiki, folder_id=None):
+    async def boom(user_id, position, now, wiki, folder_id=None):
         raise RuntimeError("watermark write failed")
 
     monkeypatch.setattr(sprite_agent_service, "run_scheduled", fake_run_scheduled)
@@ -234,7 +234,7 @@ async def test_run_due_records_no_changes_skip(client: AsyncClient, monkeypatch)
 
     gated_by: list[str] = []
 
-    async def no_changes(owner_user_id, user_id, since, wiki, folder_id=None):
+    async def no_changes(owner_user_id, user_id, position, wiki, folder_id=None):
         gated_by.append(wiki)
         return False
 
