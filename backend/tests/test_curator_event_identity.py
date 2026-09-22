@@ -300,6 +300,61 @@ async def test_the_overflow_budget_buys_distinct_events(client: AsyncClient, poo
 
 
 @pytest.mark.asyncio
+async def test_an_instant_holding_more_events_than_the_cap_still_drains(
+    client: AsyncClient, pool, monkeypatch
+):
+    """The tie plateau: five distinct events share one `created_at`, cap is 3.
+
+    A watermark that names only an instant must stay strictly behind every row
+    it has read, so consuming part of a saturated instant has to put the
+    position *inside* BASE. An instant-only watermark cannot: stepping back one
+    microsecond lands before the whole tie, so every later run re-reads the
+    same three events, pays the budget for them again, and the backlog never
+    reaches zero. The position that steps past the tie is the pair
+    (BASE, id of the last event that fit) — which is what this test demands."""
+    monkeypatch.setattr(curation_service, "_MAX_EVENTS", 3)
+    key, uid = await _register(client)
+    await _push_events(client, key, [_turn("conv-plateau", f"c{i}", BASE) for i in range(5)])
+
+    # The boundary a saturated run hands the next one must leave exactly the
+    # events that did not fit — two of them, not the whole five-event instant.
+    boundary = await curation_service.complete_through(
+        uid, OLD, BASE + timedelta(hours=1), INTERNAL
+    )
+    # Backlog honesty through the half-read instant: however far the boundary
+    # reached, the backlog must count what the feed could still show from it —
+    # never a false zero while material is unread.
+    assert await curation_service.curator_event_backlog(uid, INTERNAL, boundary) == {
+        "distinct_events": 2,
+        "raw_rows": 2,
+        "distinct_sessions": 1,
+    }
+    events, _ = await curation_service._feed_events(uid, boundary, None, 100, wiki=INTERNAL)
+    assert len(events) == 2
+
+    # And the drain terminates: five events in two runs of (at most) three,
+    # each identity fed exactly once, and the gate closing behind it.
+    fed, position = [], OLD
+    for _ in range(4):
+        events, _ = await curation_service._feed_events(
+            uid, position, None, curation_service._MAX_EVENTS, wiki=INTERNAL
+        )
+        if not events:
+            break
+        fed.extend(e["content"] for e in events)
+        position = await curation_service.complete_through(
+            uid, position, BASE + timedelta(hours=1), INTERNAL
+        )
+    assert sorted(fed) == ["c0", "c1", "c2", "c3", "c4"]
+    assert await curation_service.curator_event_backlog(uid, INTERNAL, position) == {
+        "distinct_events": 0,
+        "raw_rows": 0,
+        "distinct_sessions": 0,
+    }
+    assert not await curation_service.has_changes_since(uid, uid, position, wiki=INTERNAL)
+
+
+@pytest.mark.asyncio
 async def test_duplicates_collapse_and_the_shared_wiki_stays_scoped(client: AsyncClient, pool):
     """Collapsing and scoping are orthogonal: the shared wiki still excludes
     an opted-out user's session even though its copies collapsed away too."""
