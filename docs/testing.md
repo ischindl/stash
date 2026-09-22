@@ -33,9 +33,10 @@ TEST_DATABASE_URL=postgresql://stash:stash@localhost:5432/stash_test \
 | `test_internal_email_domains.py` | The internal-account domain list as one env setting: defaults equal the fixed company domains, the env string replaces them (normalized, empty grants nobody), the kill switch still wins, and admin analytics follows the same list |
 | `test_tools_and_chat_domains.py` | The Tools-and-Chat `/users/me` flag driven by its own env domain list — false for unlisted domains, true for the defaults and env-listed ones |
 | `test_webhooks.py` | SSRF URL validation, secret hashing, delivery logic |
-| `test_curator.py` | Curator provisioning, schedule, gate, feed, page writes, and the watermark: an advance is compare-and-set on the position the run read, so a moved-under run fails loud instead of swallowing an ingest rewind; monotonic within a match, a refused clamp is logged, `full_history` never clears the stored position, one run per agent at a time |
+| `test_curator.py` | Curator provisioning, schedule, gate, feed, page writes, and the watermark: an advance is compare-and-set on the pair the run read, so a moved-under run fails loud instead of swallowing an ingest rewind; monotonic within a match on the encoded pair, a refused clamp is logged, `full_history` never clears the stored position, one run per agent at a time; the stored pair is CHECK-constrained — an event half with no instant is rejected at the database |
+| `test_curator_watermark_position.py` | The pair itself: the `ahead` truth table in both directions (a whole instant is ahead of any position inside it), and the CAS on the pair — a mid-tie advance is refused under a whole-instant watermark, an advance to the next event at the same instant lands, an advance must read the position it started from, a tie larger than the feed cap drains to zero, and an ingest rewind clears the event half |
 | `test_curator_feed_scoping.py` | Which events each wiki may read — the internal wiki everything, the external wiki only sessions of end users who share — and the gate agreeing with that feed |
-| `test_curator_event_identity.py` | One event, however often its session was re-pushed: the identity the feed, the gate, the watermark boundary, and the backlog share — with a discriminating test per identity part, so removing any one reddens a named test (`session_id`: two sessions saying the same words at one instant; `event_type`: a `tool_use` and its `tool_result` sharing one instant and payload; `created_at`: a re-asked turn; `md5(content)`: three contents under one batch timestamp), and `agent_name` pinned OUT of it so a re-import relabelled by another client stays one event; distinct-vs-raw backlog; the honest zero (a leftover of only the curator's own transcripts is not work); drain equality; and both endpoints publishing the honest number |
+| `test_curator_event_identity.py` | One event, however often its session was re-pushed: the identity the feed, the gate, the watermark boundary, and the backlog share — with a discriminating test per identity part, so removing any one reddens a named test (`session_id`: two sessions saying the same words at one instant; `event_type`: a `tool_use` and its `tool_result` sharing one instant and payload; `created_at`: a re-asked turn; `md5(content)`: three contents under one batch timestamp), and `agent_name` pinned OUT of it so a re-import relabelled by another client stays one event; distinct-vs-raw backlog; the honest zero (a leftover of only the curator's own transcripts is not work); drain equality; an instant holding more events than the feed cap draining over consecutive runs instead of plateauing; and both endpoints publishing the honest number, `since`+`since_event` honoured by feed and backlog alike (a malformed or orphan event half is a 400), plus the render pins for the feed command the prompt hands the curator — it carries `--since-event` exactly when the lane stands inside an instant and is byte-identical otherwise |
 | `test_curator_backlog_drain.py` | The beat that drains a behind curator instead of waiting a calendar day: most-behind lanes re-woken first, at most two per tick, a lane busy or with a failed last run stepped past to the nightly tick, free-plan lanes out of monthly runs skipped, no runnable credential box skipped, no pending material skipped; the drain and the nightly tick share one meter per lane, only curator lanes are woken, and a folder lane is gated by its own folder and nothing else |
 | `test_first_day_curator.py` | First-day curator tick, and the ingest rewind re-opening the cursor that imported history predates |
 | `test_agent_schedule_alerts.py` | Beat dispatch, designed skips, and the stale-watermark / failing-curator alerts |
@@ -51,13 +52,32 @@ TEST_DATABASE_URL=postgresql://stash:stash@localhost:5432/stash_test \
 | `test_session_folder_share_wiki.py` | Per-project shared-wiki opt-in: starts off, only the switch flips it |
 | `test_websocket.py` | ConnectionManager delivery, dead-socket cleanup, pg_notify, oversized fallback |
 
-**The curator watermark (`agents.curated_through`) has several writers and one CAS-protected
-advance.** `mark_curated` — the completion write for both the personal-memory curator and the
-project-folder curators — lands its write only while the stored value is still the position
-the run *read* when it started (`WHERE curated_through IS NOT DISTINCT FROM <read position>`);
-inside that match, `greatest(...)` keeps the write monotonic, so a matched read whose proposal
-sits behind the stored value clamps rather than regresses and the refused position is logged
-rather than dropped. If anything moved the marker under the run — a rewind or an overlapping
+**The curator watermark is a position, not a timestamp: `agents.curated_through` plus
+`agents.curated_through_event_id`, and it can stop *inside* an instant.** The feed already
+orders events by `(created_at, id)`, so a watermark that names only the instant cannot express
+where a run that hit the feed budget actually stopped — it was pushed back 1µs, re-admitting the
+whole tied instant forever, and an instant holding more distinct events than the budget could
+never be consumed at all. `curation_service.Position(at, event_id)` is the one encoding of that
+order (`ahead()`, and `_position_sql`/`position_bound` for SQL), and the same clause bounds the
+feed, the gate, the backlog, and the watermark boundary — one clause, four readers, no mid-tie
+branch in Python and no second encoding (`greatest(...)` and the ±1µs step are gone). Because the
+position's event half is COALESCE'd to the max uuid, a whole-instant position collapses to
+exactly the old `created_at > at` scan; the event half exists only to split an instant, so the
+cursor is applied to an event's *canonical* row (the group's lowest id) everywhere at once — feed,
+backlog and gate — or a consumed group with a copy above the cursor would count as work and fire
+the gate while the feed showed nothing. The backlog therefore scans from the cursor's *instant*
+and asks the sharp question per row inside its `GROUP BY`, which is what keeps `raw_rows`
+counting re-imported copies while `distinct_events` collapses them.
+
+Every writer sets both columns in one statement, and the writers that move the position
+backwards clear the event half in the same write, so a stored pair is never half-moved (the
+database CHECK refuses an event with no instant). `mark_curated` — the completion write for both
+the personal-memory curator and the project-folder curators — lands its write only while the
+stored pair is still the position the run *read* when it started
+(`WHERE (curated_through, curated_through_event_id) IS NOT DISTINCT FROM (<read pair>)`);
+inside that match, the clamp compares the encoded pair — a whole instant ahead of any position
+inside it — so a matched read whose proposal sits behind the stored value clamps rather than
+regresses and the refused position is logged rather than dropped. If anything moved the marker under the run — a rewind or an overlapping
 run — the completion is refused loud as `CuratorWatermarkConflict` (raised through
 `_run_curator_now`, recorded via `mark_run_failed` on the beat path) and the moved value,
 including any deliberately re-opened window, survives untouched for the next run. Pinned by
@@ -81,9 +101,23 @@ external curator's position so re-sharing re-curates from the start (migration `
 backfilled the same reset for already-revoked wikis — `test_curation_optout_migration.py`).
 The compare-and-set is what makes each of those moves un-clobberable by a run that read
 before it. One forward writer still bypasses the CAS: the scoped-workspace commit in
-`scoped_curation_service.run_workspace` stamps its own watermark unguarded under the
-permission lock (not even the monotonic `greatest` applies there); it is left as found and
-needs its own card.
+`scoped_curation_service.run_workspace` stamps its own pair unguarded under the permission lock
+(not even the monotonic clamp applies there); it is left as found and needs its own card.
+
+**The stored pair has to survive the trip through the run's own feed command.** A sprite curator
+reads its changes through a command the server renders into its prompt —
+`stash changes --since <iso> [--since-event <uuid>] --json` — so `prompts.curator_changes_cmd`,
+the CLI option, and `GET /api/v1/me/changes` all carry both halves to the same `Position`, for
+the feed and the backlog alike. A position the prompt could not name would turn a mid-tie
+watermark into a silent permanent skip: the run would ask for `created_at > T`, never see the
+tail of the tie, and `complete_through` would count it as read anyway. Pinned by
+`test_curator_event_identity.py`'s `test_the_changes_endpoint_reads_from_the_event_half_of_a_position`,
+`test_a_position_named_by_instant_alone_reads_the_whole_instant`,
+`test_the_feed_command_the_prompt_hands_the_curator_carries_both_halves` and
+`test_a_mid_tie_lane_schedules_its_run_with_the_pair`, and on the CLI side by
+`cli/tests/test_changes_wiki_flag.py`. Deployment skew is loud rather than silent either way: an
+old CLI meets an unknown option and the run fails visibly, while an old server ignores the extra
+query parameter and re-presents the tie tail (redundant, never lossy).
 
 ### Conventions
 
