@@ -421,20 +421,21 @@ async def run(agent: dict, workspace: dict, run_stamp: str) -> str:
             f"{agent['curator_folder_id']}; scoped curation has no folder scope"
         )
     owner = workspace["scope_user_id"]
-    since = agent["curated_through"]
+    position = curation_service.position_of(agent)
+    since = position.at
     # This curator's own wiki is the widest feed the run reads — an internal
     # curator reads the unfiltered feed, an external one reads the shared feed at
     # the same width as its shared scope, and every private scope is a subset of
     # it — so clamping here cannot let the watermark outrun a narrower scope.
     until = await curation_service.complete_through(
-        owner, since, datetime.now(UTC), agent["curator_wiki"]
+        owner, position, datetime.now(UTC), agent["curator_wiki"]
     )
     session = f"agent-curate-{agent['id']}-{run_stamp}"
     scopes = []
     if agent["curator_wiki"] == "internal":
         memory = await files_tree_service.get_or_create_memory_folder(owner, owner)
         scopes.append(
-            await load_scope(workspace, "internal", memory["id"], [], session, since, until)
+            await load_scope(workspace, "internal", memory["id"], [], session, since, until.at)
         )
     else:
         users = await get_pool().fetch(
@@ -443,7 +444,13 @@ async def run(agent: dict, workspace: dict, run_stamp: str) -> str:
         )
         for user in users:
             private = await load_scope(
-                workspace, "private", user["wiki_folder_id"], [user["id"]], session, since, until
+                workspace,
+                "private",
+                user["wiki_folder_id"],
+                [user["id"]],
+                session,
+                since,
+                until.at,
             )
             if any(key.startswith(("session:", "file:", "source:")) for key in private.documents):
                 scopes.append(private)
@@ -455,7 +462,7 @@ async def run(agent: dict, workspace: dict, run_stamp: str) -> str:
                 [u["id"] for u in users if u["share_wiki"]],
                 session,
                 since,
-                until,
+                until.at,
             )
         )
     concurrency = asyncio.Semaphore(_MAX_CONCURRENT_SCOPES)
@@ -484,7 +491,10 @@ async def run(agent: dict, workspace: dict, run_stamp: str) -> str:
     async with get_pool().acquire() as conn, conn.transaction():
         await scopes[-1].check(conn)
         await conn.execute(
-            "UPDATE agents SET curated_through=$2 WHERE id=$1", UUID(str(agent["id"])), until
+            "UPDATE agents SET curated_through=$2, curated_through_event_id=$3 WHERE id=$1",
+            UUID(str(agent["id"])),
+            until.at,
+            until.event_id,
         )
     await memory_service.push_event(
         owner,

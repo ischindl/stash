@@ -301,7 +301,8 @@ async def get_curator(
     # Every user, for the overview columns; the prompt names only those with
     # material since the watermark, which is all a run can write for.
     end_users = await end_user_service.list_end_users(workspace["id"])
-    since = curator["curated_through"]
+    position = curation_service.position_of(curator)
+    since = position.at
     prompt = await end_user_service.external_curator_prompt(workspace, since)
 
     return {
@@ -317,7 +318,7 @@ async def get_curator(
         # event, so this is the figure a drain estimate can be built from. The
         # raw row count travels with it so the gap explains itself.
         "event_backlog": await curation_service.curator_event_backlog(
-            scope_user_id, curator["curator_wiki"], since
+            scope_user_id, curator["curator_wiki"], position
         ),
         "feeding": [
             {"id": str(u["id"]), "name": u["name"], "external_id": u["external_id"]}

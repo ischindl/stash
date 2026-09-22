@@ -138,9 +138,9 @@ async def _run_curator_now(
         # which zeroes the feed's `since` but must not change what the run may
         # write against. A rewind or an overlapping run that moves the stored
         # position during the turn makes this run's completion refuse loudly.
-        read_position = agent["curated_through"]
+        read = curation_service.position_of(agent)
         if full_history:
-            agent = {**agent, "curated_through": None}
+            agent = {**agent, "curated_through": None, "curated_through_event_id": None}
         now = datetime.now(UTC)
         await agent_service.mark_run(agent_id, metered=metered)
         try:
@@ -154,12 +154,12 @@ async def _run_curator_now(
             if await scoped_curation_service.workspace_for_agent(agent) is None:
                 through = await curation_service.complete_through(
                     UUID(str(agent["user_id"])),
-                    agent["curated_through"],
+                    read,
                     now,
                     agent["curator_wiki"],
                     agent.get("curator_folder_id"),
                 )
-                await agent_service.mark_curated(agent_id, read_position, through)
+                await agent_service.mark_curated(agent_id, read, through)
             await agent_service.mark_run_succeeded(agent_id)
         except Exception as e:
             await agent_service.mark_run_failed(agent_id, str(e), metered=metered)
@@ -256,7 +256,7 @@ async def _maybe_dispatch_first_day_run(scope_user_id: UUID, agent: dict, now: d
     if not await curation_service.has_changes_since(
         scope_user_id,
         scope_user_id,
-        agent["curated_through"],
+        curation_service.position_of(agent),
         agent["curator_wiki"],
         agent.get("curator_folder_id"),
     ):
@@ -311,7 +311,7 @@ async def _run_due() -> int:
         if agent["is_curator"] and not await curation_service.has_changes_since(
             user_id,
             user_id,
-            agent["curated_through"],
+            curation_service.position_of(agent),
             agent["curator_wiki"],
             agent.get("curator_folder_id"),
         ):
@@ -365,8 +365,13 @@ def _run_in_flight(agent: dict, now: datetime) -> bool:
 
 def _drain_order(agent: dict) -> datetime:
     """Most-behind lane first. A curator that has never run has no watermark at
-    all, which is further behind than any timestamp can be."""
-    return agent["curated_through"] or datetime.min.replace(tzinfo=UTC)
+    all, which is further behind than any timestamp can be. The position is read
+    whole so a row with a stray event half fails here rather than sorting as
+    never-run; the instant alone orders the lanes, because two lanes parked at the
+    two halves of one instant are a microsecond apart and either may run first."""
+    from ..services import curation_service
+
+    return curation_service.position_of(agent).at or datetime.min.replace(tzinfo=UTC)
 
 
 async def _drain_curator_backlog() -> int:
@@ -438,7 +443,7 @@ async def _drain_curator_backlog() -> int:
         if not await curation_service.has_changes_since(
             user_id,
             user_id,
-            agent["curated_through"],
+            curation_service.position_of(agent),
             agent["curator_wiki"],
             agent.get("curator_folder_id"),
         ):
@@ -494,18 +499,18 @@ async def _run_scheduled_agent(agent_id: UUID, stamp: str) -> None:
             # that fit — the overflow drains on subsequent runs. Bookkeeping
             # failures share the run's try so they also record last_run_error
             # and alert, instead of dying as a bare task error. The CAS anchor is
-            # the very `agent["curated_through"]` handed to `complete_through` as
-            # `since` — one value, so the position written against and the
-            # position read cannot drift; a move under the run fails loudly here.
-            read_position = agent["curated_through"]
+            # the very position handed to `complete_through` as its cursor — one
+            # value, so the position written against and the position read cannot
+            # drift; a move under the run fails loudly here.
+            read = curation_service.position_of(agent)
             through = await curation_service.complete_through(
                 user_id,
-                read_position,
+                read,
                 now,
                 agent["curator_wiki"],
                 agent.get("curator_folder_id"),
             )
-            await agent_service.mark_curated(agent_id, read_position, through)
+            await agent_service.mark_curated(agent_id, read, through)
         await agent_service.mark_run_succeeded(agent_id)
     except Exception as e:
         logger.exception("agent schedule: run failed for agent %s", agent_id)
@@ -541,7 +546,8 @@ async def _alert_stale_curators() -> int:
     cutoff = datetime.now(UTC) - timedelta(hours=STALE_CURATOR_HOURS)
     rows = await get_pool().fetch(
         """
-        SELECT a.user_id, a.curated_through, a.last_run_error, a.last_run_outcome,
+        SELECT a.user_id, a.curated_through, a.curated_through_event_id,
+               a.last_run_error, a.last_run_outcome,
                a.curator_wiki, a.curator_folder_id, u.email
         FROM agents a JOIN users u ON u.id = a.user_id
         WHERE a.is_curator AND a.run_mode = 'scheduled'
@@ -556,7 +562,7 @@ async def _alert_stale_curators() -> int:
         if await curation_service.has_changes_since(
             r["user_id"],
             r["user_id"],
-            r["curated_through"],
+            curation_service.position_of(r),
             r["curator_wiki"],
             r["curator_folder_id"],
         )

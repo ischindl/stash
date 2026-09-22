@@ -16,6 +16,7 @@ from fastapi import HTTPException
 
 from ..database import get_pool
 from . import agent_auth
+from .curation_service import Position, position_ahead, position_of
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +24,7 @@ _COLUMNS = (
     "id, user_id, name, model_provider, system_prompt, run_mode, "
     "schedule_cron, schedule_prompt, is_default, is_curator, slack_bound, "
     "telegram_bound, last_run_at, last_run_error, last_run_outcome, curated_through, "
+    "curated_through_event_id, "
     "curator_wiki, curator_folder_id, model_id, credential_id, digest_provider, digest_model_id, "
     "month_run_count, month_run_anchor, created_at"
 )
@@ -132,7 +134,9 @@ async def get_or_create_curator(user_id: UUID, wiki: str = "internal") -> dict:
 
     Scheduled nightly (staggered). Both the cron baseline (last_run_at) and the
     delta watermark (curated_through) seed to a bounded backfill point, so the
-    first run is due immediately and bootstraps from real history."""
+    first run is due immediately and bootstraps from real history. The seed is an
+    instant with no event half, which is a whole position — everything at that
+    instant is still ahead — so the id column needs no backfill."""
     pool = get_pool()
     row = await pool.fetchrow(
         f"SELECT {_COLUMNS} FROM agents "
@@ -425,7 +429,12 @@ async def update_curator(
             raise HTTPException(status_code=400, detail="invalid schedule_cron")
         fields["schedule_cron"] = schedule_cron
     if curated_through is not ...:
+        # A watermark set from outside is a whole instant, so the event half goes
+        # with it: a stale id would claim the new instant had only been half read,
+        # and an instant cleared under a surviving id is the half position the
+        # column's CHECK forbids.
         fields["curated_through"] = curated_through
+        fields["curated_through_event_id"] = None
     if not fields:
         return await get_curator_by_id(agent_id) or _raise_missing(agent_id)
     sets = ", ".join(f"{k} = ${i + 2}" for i, k in enumerate(fields))
@@ -471,13 +480,15 @@ async def rewind_folder_curator_for_sessions(
     if oldest is None:
         return
     target = oldest - timedelta(microseconds=1)
+    args: list = [folder_id]
+    rewind = position_ahead(args, Position(target), "curated_through", "curated_through_event_id")
     moved = await pool.fetch(
-        "UPDATE agents a SET curated_through = $2 "
+        "UPDATE agents a SET curated_through = $2, curated_through_event_id = NULL "
         "FROM (SELECT id, curated_through AS was FROM agents "
-        "      WHERE curator_folder_id = $1 AND is_curator AND curated_through > $2) o "
+        "      WHERE curator_folder_id = $1 AND is_curator "
+        f"      AND {rewind}) o "
         "WHERE a.id = o.id RETURNING a.id, o.was",
-        folder_id,
-        target,
+        *args,
     )
     for row in moved:
         logger.info(
@@ -737,53 +748,65 @@ class CuratorWatermarkConflict(Exception):
     advance that swallows an ingest rewind (the founder's 2026-09-05 ~4,300-row
     skip) or, from the other direction, clobber an overlapping run — so the
     advance is a compare-and-set on the position the run actually read. The run
-    that loses is recorded as a failure, never a silent success."""
+    that loses is recorded as a failure, never a silent success. Both attributes are positions: a conflict reporting the instant alone would describe a mid-tie position as its instant, which is not the position anybody read."""
 
-    def __init__(self, agent_id: UUID, read_position: datetime | None, stored: datetime | None):
+    def __init__(self, agent_id: UUID, read: Position, stored: Position | None):
         self.agent_id = agent_id
-        self.read_position = read_position
+        self.read = read
         self.stored = stored
         super().__init__(
             f"curator watermark conflict for agent {agent_id}: the run read "
-            f"position {read_position} but the stored position is now {stored}; "
+            f"position {read} but the stored position is now {stored}; "
             f"the watermark moved under the run, so its advance was refused"
         )
 
 
-async def mark_curated(
-    agent_id: UUID, read_position: datetime | None, through: datetime
-) -> datetime:
+async def mark_curated(agent_id: UUID, read: Position, through: Position) -> Position:
     """Advance the curator's delta watermark — only after a successful run, so a
     failed run's window is re-covered next time. Returns the stored position.
 
     The advance is a compare-and-set: it lands only while the stored value is
-    still the position the run read (`read_position`). If anything moved it in
-    the interim — an ingest rewind re-opening deliberately-re-read history, or
-    an overlapping run pushing ahead — the write is refused and raised as
+    still the position the run read (`read`). If anything moved it in the interim
+    — an ingest rewind re-opening deliberately-re-read history, or an overlapping
+    run pushing ahead — the write is refused and raised as
     CuratorWatermarkConflict, so a stale completion can neither swallow a rewind
-    nor discard the other run's progress. Inside a match, GREATEST keeps the
-    write monotonic: a matched read whose proposal sits behind the stored value
-    clamps rather than regressing, and that clamp is logged naming the curator
-    and the retained position (a run's number vanishing in silence is what read
-    as "completed curation discarded"). The one writer allowed to move the
-    watermark backwards is the ingest rewind in memory_service — a deliberate
-    re-read, not a run's bookkeeping — and this compare-and-set is precisely
-    what makes that rewind un-clobberable by a run that read before it."""
-    stored = await get_pool().fetchval(
-        "UPDATE agents SET curated_through = greatest(curated_through, $2) WHERE id = $1 "
-        "AND curated_through IS NOT DISTINCT FROM $3::timestamptz RETURNING curated_through",
-        agent_id,
-        through,
-        read_position,
+    nor discard the other run's progress. Inside a match the write stays monotonic:
+    a matched read whose proposal sits behind the stored position clamps rather than
+    regressing, and that clamp is logged naming the curator and the retained position
+    (a run's number vanishing in silence is what read as "completed curation
+    discarded"). The one writer allowed to move the watermark backwards is the ingest
+    rewind in memory_service — a deliberate re-read, not a run's bookkeeping — and
+    this compare-and-set is precisely what makes that rewind un-clobberable by a run
+    that read before it.
+
+    Both halves are written by the same statement, and the clamp compares them as one
+    position: `position_ahead` is the SQL form of `Position.ahead`, so Python and the
+    database cannot disagree about which of two positions is further along.
+    `greatest` on the instant alone could not express the case this exists for — a
+    mid-tie proposal inside an instant the column already consumed whole must clamp,
+    while the same proposal next to a mid-tie stored position must advance."""
+    args: list = [agent_id, read.at, read.event_id]
+    clamp = position_ahead(args, through, "curated_through", "curated_through_event_id")
+    row = await get_pool().fetchrow(
+        "UPDATE agents SET "
+        "curated_through = CASE WHEN " + clamp + " THEN curated_through ELSE $4::timestamptz END, "
+        "curated_through_event_id = CASE WHEN " + clamp + " THEN curated_through_event_id "
+        "ELSE $5::uuid END "
+        "WHERE id = $1 AND (curated_through, curated_through_event_id) "
+        "IS NOT DISTINCT FROM ($2::timestamptz, $3::uuid) "
+        "RETURNING curated_through, curated_through_event_id",
+        *args,
     )
-    if stored is None:
+    if row is None:
         # No row matched: the position moved under the run (or the agent row is
         # gone). Re-read to report where it actually stands, then fail loud.
-        current = await get_pool().fetchval(
-            "SELECT curated_through FROM agents WHERE id = $1", agent_id
+        current = await get_pool().fetchrow(
+            "SELECT curated_through, curated_through_event_id FROM agents WHERE id = $1",
+            agent_id,
         )
-        raise CuratorWatermarkConflict(agent_id, read_position, current)
-    if stored > through:
+        raise CuratorWatermarkConflict(agent_id, read, position_of(current) if current else None)
+    stored = position_of(row)
+    if stored.ahead(through):
         logger.info(
             "curator %s watermark not moved: run proposed %s, stored position kept at %s "
             "(advance is monotonic; see mark_curated)",

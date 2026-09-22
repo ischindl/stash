@@ -303,7 +303,7 @@ async def recompute_memory(
     user_id = current_user["id"]
     curator = await agent_service.get_or_create_curator(user_id)
     if not await curation_service.has_changes_since(
-        user_id, user_id, curator["curated_through"], curator["curator_wiki"]
+        user_id, user_id, curation_service.position_of(curator), curator["curator_wiki"]
     ):
         raise HTTPException(status_code=409, detail="Nothing new to curate since the last run.")
     if agent_service.month_runs_used(curator) >= settings.FREE_CURATOR_RUNS_PER_MONTH:
@@ -370,7 +370,10 @@ async def list_scope_curators(
             entry["folder_name"] = name
             entry["wiki_folder_id"] = wiki_folder_id
             entry["event_backlog"] = await curation_service.curator_event_backlog(
-                scope_user_id, c["curator_wiki"], c["curated_through"], UUID(folder_id)
+                scope_user_id,
+                c["curator_wiki"],
+                curation_service.position_of(c),
+                UUID(folder_id),
             )
         out.append(entry)
     return {"curators": out}

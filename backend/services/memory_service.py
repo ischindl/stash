@@ -143,7 +143,9 @@ async def _rewind_curated_through(owner_user_id: UUID, event_ids: list[UUID]) ->
         _SHARE_WIKI_EVENT_SCOPE,
         WIKI_EXTERNAL,
         WIKI_INTERNAL,
+        Position,
         _event_identity,
+        position_ahead,
     )
 
     pool = get_pool()
@@ -167,15 +169,23 @@ async def _rewind_curated_through(owner_user_id: UUID, event_ids: list[UUID]) ->
         if oldest is None:
             continue
         target = oldest - timedelta(microseconds=1)
+        # The rewind lands on the instant before the oldest touched event, which is
+        # a whole position: clearing the event half is what makes every event at the
+        # target instant — including one the watermark had half consumed — readable
+        # again. A target that left an id behind would re-skip the very rows this
+        # rewind exists to re-open.
+        args: list = [owner_user_id, wiki]
+        rewind = position_ahead(
+            args, Position(target), "curated_through", "curated_through_event_id"
+        )
         moved = await pool.fetch(
-            "UPDATE agents a SET curated_through = $3 "
+            "UPDATE agents a SET curated_through = $3, curated_through_event_id = NULL "
             "FROM (SELECT id, curated_through AS was FROM agents "
             "      WHERE user_id = $1 AND is_curator AND curator_wiki = $2 "
-            "      AND curator_folder_id IS NULL AND curated_through > $3) o "
+            "      AND curator_folder_id IS NULL "
+            f"      AND {rewind}) o "
             "WHERE a.id = o.id RETURNING o.was",
-            owner_user_id,
-            wiki,
-            target,
+            *args,
         )
         for row in moved:
             logger.info(
