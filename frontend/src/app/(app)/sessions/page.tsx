@@ -290,7 +290,7 @@ export default function SkillSessionsPage() {
 
   return (
     <div className="scroll-thin flex-1 overflow-y-auto">
-      <div className="mx-auto max-w-5xl px-12 py-8">
+      <div className="mx-auto max-w-[1440px] px-12 py-8">
         {error && (
           <div className="mt-4 rounded-lg border border-red-300/40 bg-red-500/10 px-4 py-2 text-[13px] text-red-500">
             {error}
@@ -806,10 +806,11 @@ function SessionsTable({
 }
 
 // The folder layout at its narrowest: 896px of column minimums + 96px of gap-3
-// gutters + 24px of row padding. Below this the grid would overflow the table
-// box, which is exactly what used to clip the Updated and pin columns off the
-// right edge — now the table scrolls sideways instead. Only applies at md+, where
-// the grid layout takes over from the two-column mobile row.
+// gutters + 24px of row padding. The widened 1440px page cap leaves a 1344px
+// content column (1440 − 96px of px-12), so at 1440px this grid fits without
+// sideways scroll; the overflow-x-auto wrapper now only guards windows narrower
+// than that. Only applies at md+, where the grid layout takes over from the
+// two-column mobile row.
 const TABLE_MIN_WIDTH = "md:min-w-[1016px]";
 
 const GRID_COLS =

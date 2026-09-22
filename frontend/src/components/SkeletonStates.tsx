@@ -313,7 +313,7 @@ export function VisualizationSkeleton({ className }: SkeletonProps) {
 export function SessionsListSkeleton() {
   return (
     <div className="scroll-thin flex-1 overflow-y-auto">
-      <div className="mx-auto max-w-5xl px-12 py-8">
+      <div className="mx-auto max-w-[1440px] px-12 py-8">
         <div className="flex items-baseline justify-between">
           <SkeletonLine className="h-8 w-32" />
           <SkeletonLine className="h-3 w-20" />
@@ -456,7 +456,7 @@ function ViewerHeaderSkeleton() {
 export function SessionDetailSkeleton() {
   return (
     <div className="scroll-thin flex-1 overflow-y-auto">
-      <div className="mx-auto grid max-w-[1100px] gap-7 px-12 pb-20 pt-7 lg:grid-cols-[minmax(0,1fr)_260px]">
+      <div className="mx-auto grid max-w-[1440px] gap-7 px-12 pb-20 pt-7 lg:grid-cols-[minmax(0,1fr)_260px]">
         <main className="min-w-0">
           <div className="mb-2 border-b border-border pb-3.5">
             <SkeletonBlock className="h-5 w-36" />
