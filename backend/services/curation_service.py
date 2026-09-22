@@ -17,13 +17,16 @@ never woken for a delta its own feed cannot show. `has_changes_since`,
 splice the single clause in `_SHARE_WIKI_EVENT_SCOPE`, share the one eligibility
 clause in `_CURATOR_FEED_ELIGIBILITY`, bound on the one cursor clause in
 `position_bound`, and collapse copies with the one identity in `_event_identity`
-— the gate and the backlog splicing `_canonical_rows()` as well, because a
-cursor standing inside a tie is exactly when a row count and the feed's answer
-would otherwise disagree. A second near-identical query would let gate and feed
-disagree, which is the failure this file exists to make impossible: the gate says
-there is work, the feed and the watermark boundary read exactly that work, and
-the backlog reports exactly what is left of it — so the backlog reads zero
-precisely when the feed comes back empty.
+— the gate splicing `_canonical_rows()` as well, because a cursor standing inside
+a tie is exactly when a row count and the feed's answer would otherwise disagree.
+The backlog reaches the same truth through the group instead: an identity's copies
+all share one instant, so it asks `row_ahead` per row and calls a group pending only
+when every copy is ahead, which is the same statement as "its canonical row is
+ahead" without a per-row anti-join. A second near-identical query would let gate
+and feed disagree, which is the failure this file exists to make impossible: the
+gate says there is work, the feed and the watermark boundary read exactly that
+work, and the backlog reports exactly what is left of it — so the backlog reads
+zero precisely when the feed comes back empty.
 """
 
 from __future__ import annotations
@@ -193,6 +196,22 @@ def position_bound(args: list, position: Position) -> str:
     )
 
 
+def instant_bound(args: list, position: Position) -> str:
+    """The `AND` clause admitting the position's own instant and everything after it.
+
+    The coarser sibling of `position_bound`, for the one reader that cannot use the
+    sharp form: the backlog groups by event identity, and every copy of an identity
+    shares one `created_at`, so a scan that starts at the cursor's INSTANT still
+    sees all of a group's copies — which is what lets it decide pending-ness by
+    looking at them instead of probing per row. `row_ahead` then asks the sharp
+    question row by row, so nothing the cursor has passed disappears from the
+    figures. Never-curated bounds nothing, as in `position_bound`."""
+    if position.at is None:
+        return ""
+    args.append(position.at)
+    return f" AND he.created_at >= ${len(args)}"
+
+
 def position_ahead(args: list, position: Position, instant_ref: str, id_ref: str) -> str:
     """A boolean SQL expression: the pair at `instant_ref`/`id_ref` is strictly
     ahead of `position`, in the order `ahead` implements.
@@ -203,6 +222,10 @@ def position_ahead(args: list, position: Position, instant_ref: str, id_ref: str
     proposed one, so both use `_position_sql` rather than the instant alone. A
     stored position with no instant is ahead of nothing, which is why the
     `IS NOT NULL` guard leads — an uncurated lane must never clamp a proposal.
+
+    The two callers differ only in what their left-hand pair is: the CAS and the
+    rewind query name two columns of an agent row, `row_ahead` names the two
+    columns of a history event.
 
     `position` is what the caller holds and must be a real position: a
     never-curated one has no SQL bound to render, and naming that here beats
@@ -215,6 +238,25 @@ def position_ahead(args: list, position: Position, instant_ref: str, id_ref: str
         f"({instant_ref} IS NOT NULL"
         f" AND {_position_sql(instant_ref, id_ref)} > {_position_sql(f'${instant}', f'${event}')})"
     )
+
+
+def row_ahead(args: list, position: Position, instant_ref: str, id_ref: str) -> str:
+    """A boolean SQL expression: the ROW at `instant_ref`/`id_ref` is ahead of
+    `position`.
+
+    `position_bound` is this same predicate as a WHERE term, which drops the rows
+    behind the cursor; this is the form an aggregate needs, so a reader can ask the
+    question per row and still count the rows it answers False for. Its one caller
+    is the backlog's `GROUP BY`, and that difference is the whole point: a
+    re-imported session's copies stay in `raw_rows` after the cursor has passed
+    them, which is the amplification the figure exists to show.
+
+    Unlike `position_ahead`, a never-curated position qualifies every row — a
+    curator that has read nothing has everything ahead of it, the same reading
+    `position_bound` gives by bounding nothing."""
+    if position.at is None:
+        return "true"
+    return position_ahead(args, position, instant_ref, id_ref)
 
 
 # An event reaches the shared, anonymized wiki only through the end user its
@@ -372,6 +414,7 @@ def _feed_conditions(
     until: datetime | None,
     args: list,
     folder_id: UUID | None = None,
+    cursor_bound=position_bound,
 ) -> str:
     """Build the one WHERE clause that says what one wiki's curator may read.
 
@@ -388,11 +431,16 @@ def _feed_conditions(
     The canonical-row test is deliberately NOT here: only the feed may drop
     non-canonical copies from what it SHOWS, while the backlog still has to count
     them as raw rows. That term is `_canonical_rows`, spliced by the readers that
-    mean it."""
+    mean it.
+
+    `cursor_bound` is the clause the cursor takes. The feed wants the sharp form,
+    `position_bound`, because it must not READ past the cursor; the backlog groups
+    by identity and so scans from the cursor's instant (`instant_bound`) to keep
+    each group's copies together, asking the sharp question per row instead."""
     where = f"he.owner_user_id = $1 {_CURATOR_FEED_ELIGIBILITY}{_wiki_event_scope(wiki)}"
     if folder_id is not None:
         where += _folder_event_scope(folder_id, args)
-    where += position_bound(args, position)
+    where += cursor_bound(args, position)
     if until is not None:
         args.append(until)
         where += f" AND he.created_at <= ${len(args)}"
@@ -786,10 +834,11 @@ async def curator_event_backlog(
     connected-source documents, and saves, so it must not be read as "all pending
     work"; it is the part of the backlog that moves the watermark.
 
-    Its WHERE clause is `_feed_conditions` — the feed's own clause, not a hand-
-    copied approximation of it — which is what makes both halves of the invariant
-    true: `distinct_events` is zero exactly when the feed returns nothing, and it
-    never counts a row the feed could not have shown. The curator's own
+    Its WHERE clause is `_feed_conditions` — the feed's own scope clauses, not a
+    hand-copied approximation of them — with the cursor taken as `instant_bound` and
+    applied row by row by `row_ahead`, which is what makes both halves of the
+    invariant true: `distinct_events` is zero exactly when the feed returns nothing,
+    and no group it counts has a copy the feed would not have offered. The curator's
     `agent-curate-%` transcripts are in neither, because every successful run
     appends its transcript behind the position it just wrote: a backlog that
     counted those rows would grow with the work it is supposed to measure and
@@ -801,19 +850,32 @@ async def curator_event_backlog(
     the two wikis disagree: the shared wiki only ever counts sessions of end users
     who still share it.
 
-    One `GROUP BY` over the identity does the collapsing, carrying each group's size
-    and whether the group holds a canonical row, so a single scan yields all three
-    figures. It is not written as `count(DISTINCT (identity))` because that form
-    sorts the whole window on a content-width key: 1053ms and a 54MB disk spill
+    One `GROUP BY` over the identity does the collapsing, carrying each group's
+    pending flag and its ahead-of-the-cursor row count, so a single scan yields all
+    three figures. It is not written as `count(DISTINCT (identity))` because that
+    form sorts the whole window on a content-width key: 1053ms and a 54MB disk spill
     against 741ms and 24MB over a founder-scale window, and a tie (~12ms) once the
     curator is caught up.
 
-    The canonical flag is why the two figures are not simply equal: a group with no
-    canonical row ahead of the position had its offering behind the cursor, so it
-    is not pending work and `distinct_events` excludes it — while `raw_rows` still
-    counts those rows, because collapsing them would erase the re-import
-    amplification this pair exists to expose. Filtering the window by the canonical
-    test instead would make `raw_rows` read exactly like `distinct_events`.
+    A group is pending when EVERY row of it is ahead of the position — the same claim
+    as 'its canonical row is ahead', because the canonical row is the group's lowest
+    id, every copy shares the group's instant, and one copy left behind the cursor
+    drags the whole group behind with it. The two figures still differ: `raw_rows`
+    counts rows that are individually ahead, so the copies an already-shown event
+    carries are reported there and nowhere else — not work, but exactly the
+    amplification this pair exists to expose.
+
+    The scan therefore bounds on the cursor's INSTANT (`instant_bound`) and leaves
+    the sharp cursor to `row_ahead`, asked per row inside the aggregates: the wider
+    scan is what keeps each group's copies in one read, and the per-row question is
+    what keeps `raw_rows` honest about rows it reports as no work. Splicing the
+    feed's per-row anti-join `_canonical_rows()` here instead — this query's first
+    shape — measured 3.3–6.5s over a 50k-row window holding 10k identities of which
+    2k shared one instant, because every probe re-walks its own tie (16.8M buffer
+    hits), against 114–163ms for this one scan; with the cursor standing mid-tie, 2.2s
+    against 18ms. The pair clause itself costs nothing: 48–55ms with it over that
+    window, against 83–97ms over the same window with the instant cursor this task
+    replaced.
 
     `sum` answers NULL over a window holding no groups while `count` answers 0, so
     the sum is coalesced: a drained backlog reads as the same shape as a full one.
@@ -822,15 +884,16 @@ async def curator_event_backlog(
     the whole corpus is still ahead (same reading as `has_changes_since`)."""
     pool = get_pool()
     args: list = [owner_user_id]
-    where = _feed_conditions(wiki, position, None, args, folder_id)
+    where = _feed_conditions(wiki, position, None, args, folder_id, cursor_bound=instant_bound)
+    ahead = row_ahead(args, position, "he.created_at", "he.id")
     row = await pool.fetchrow(
-        f"SELECT count(*) FILTER (WHERE has_canonical) AS distinct_events, "
-        f"coalesce(sum(group_rows), 0)::bigint AS raw_rows, "
-        f"count(DISTINCT session_id) FILTER (WHERE has_canonical) AS distinct_sessions "
+        f"SELECT count(*) FILTER (WHERE all_ahead) AS distinct_events, "
+        f"coalesce(sum(rows_ahead), 0)::bigint AS raw_rows, "
+        f"count(DISTINCT session_id) FILTER (WHERE all_ahead) AS distinct_sessions "
         f"FROM ( "
         f"  SELECT he.session_id, "
-        f"  bool_or({_canonical_rows()}) AS has_canonical, "
-        f"  count(*) AS group_rows "
+        f"  bool_and({ahead}) AS all_ahead, "
+        f"  count(*) FILTER (WHERE {ahead}) AS rows_ahead "
         f"  FROM history_events he "
         f"  WHERE {where} "
         f"  GROUP BY {_event_identity('he')} "
