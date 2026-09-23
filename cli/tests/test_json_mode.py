@@ -14,6 +14,7 @@ the root-callback ``--json`` option must set a module flag that ORs into
 """
 
 import json
+from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
@@ -265,7 +266,33 @@ def test_verify_email_json_emits_sent_to(monkeypatch):
 
 
 class _FakeUpgradeResult:
-    returncode = 0
+    def __init__(self, stdout: str = ""):
+        self.returncode = 0
+        self.stdout = stdout
+        self.stderr = ""
+
+
+def _patch_home(monkeypatch, tmp_path: Path) -> Path:
+    """Point every product-owned guidance destination at `tmp_path`."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    return tmp_path
+
+
+GUIDANCE_DOCUMENT = (
+    '{"guidance_version": "9.9.9", "refreshed": ["pi"], "unchanged": [], "absent": []}'
+)
+
+
+def _fake_upgrade_run(calls: list):
+    import sys
+
+    def run(cmd, **kwargs):
+        calls.append(cmd)
+        is_guidance_child = cmd[:5] == [sys.executable, "-m", "cli.main", "guidance", "refresh"]
+        return _FakeUpgradeResult(GUIDANCE_DOCUMENT if is_guidance_child else "")
+
+    return run
 
 
 def test_upgrade_json_emits_result_object(monkeypatch):
@@ -275,18 +302,120 @@ def test_upgrade_json_emits_result_object(monkeypatch):
     monkeypatch.setattr(
         "stashai.release.upgrade_command", lambda: ["uv", "tool", "install", "stashai"]
     )
-    monkeypatch.setattr(subprocess, "run", lambda cmd: _FakeUpgradeResult())
+    calls: list = []
+    monkeypatch.setattr(subprocess, "run", _fake_upgrade_run(calls))
     result = runner.invoke(main.app, ["upgrade", "--json"])
     assert result.exit_code == 0
     # stdout is exactly one parseable JSON document; progress text stays on
-    # stderr, never on stdout.
-    assert json.loads(result.stdout) == {"ok": True, "exit_code": 0}
+    # stderr, never on stdout. The guidance refresh that follows a successful
+    # upgrade rides inside that same document rather than printing a second one.
+    assert json.loads(result.stdout) == {
+        "ok": True,
+        "exit_code": 0,
+        "guidance": json.loads(GUIDANCE_DOCUMENT),
+    }
     assert "Upgrading stashai" in result.stderr
     assert "Upgrading stashai" not in result.stdout
+    # The refresh runs against the freshly installed build — a child process, not
+    # this one, which still holds the pre-upgrade guidance text.
+    import sys
+
+    assert calls[1] == [sys.executable, "-m", "cli.main", "guidance", "refresh", "--json"]
     # Parity: the global flag behaves identically.
+    calls.clear()
     result = runner.invoke(main.app, ["--json", "upgrade"])
     assert result.exit_code == 0
-    assert json.loads(result.stdout) == {"ok": True, "exit_code": 0}
+    assert json.loads(result.stdout) == {
+        "ok": True,
+        "exit_code": 0,
+        "guidance": json.loads(GUIDANCE_DOCUMENT),
+    }
+    assert calls[1][-1] == "--json"
+
+
+def test_upgrade_default_runs_the_guidance_refresh_without_json(monkeypatch):
+    import subprocess
+    import sys
+
+    monkeypatch.setattr("stashai.release.is_editable", lambda: False)
+    monkeypatch.setattr(
+        "stashai.release.upgrade_command", lambda: ["uv", "tool", "install", "stashai"]
+    )
+    calls: list = []
+    monkeypatch.setattr(subprocess, "run", _fake_upgrade_run(calls))
+    result = runner.invoke(main.app, ["upgrade"])
+    assert result.exit_code == 0
+    # Human mode hands the terminal to the child so its per-agent lines are the
+    # report; capturing them here would render the same fact twice.
+    assert calls[1] == [sys.executable, "-m", "cli.main", "guidance", "refresh"]
+
+
+# --- guidance_app (STAS-248) ---
+
+
+def test_guidance_refresh_json_emits_the_contract_document(monkeypatch, tmp_path):
+    _patch_home(monkeypatch, tmp_path)
+    (tmp_path / ".pi").mkdir()
+    (tmp_path / ".pi" / "AGENTS.md").write_text("# stash\n")
+
+    result = runner.invoke(main.app, ["guidance", "refresh", "--json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert set(payload) == {"guidance_version", "refreshed", "unchanged", "absent"}
+    assert payload["guidance_version"] == main.__version__
+    assert payload["refreshed"] == ["pi"]
+    assert payload["absent"] == ["codex", "opencode", "gemini", "openclaw"]
+    assert result.stdout.strip().startswith("{")
+
+
+def test_guidance_refresh_global_json_flag_matches_per_command_flag(monkeypatch, tmp_path):
+    _patch_home(monkeypatch, tmp_path)
+
+    per_command = runner.invoke(main.app, ["guidance", "refresh", "--json"])
+    main._JSON_MODE = False
+    global_flag = runner.invoke(main.app, ["--json", "guidance", "refresh"])
+
+    assert per_command.exit_code == global_flag.exit_code == 0
+    assert json.loads(per_command.stdout) == json.loads(global_flag.stdout)
+
+
+def test_guidance_refresh_reports_a_malformed_block_on_stderr_and_exits_one(monkeypatch, tmp_path):
+    _patch_home(monkeypatch, tmp_path)
+    broken = tmp_path / ".codex"
+    broken.mkdir()
+    (broken / "AGENTS.md").write_text(f"{main._AGENTS_MD_BEGIN}\nno end\n")
+
+    result = runner.invoke(main.app, ["--json", "guidance", "refresh"])
+
+    assert result.exit_code == 1
+    assert not result.stdout
+    envelope = json.loads(result.stderr)
+    assert envelope["error"]["class"] == "user_error"
+    assert str(broken / "AGENTS.md") in envelope["error"]["detail"]
+
+
+def test_guidance_refresh_default_prints_one_line_per_agent_plus_the_version(monkeypatch, tmp_path):
+    _patch_home(monkeypatch, tmp_path)
+    (tmp_path / ".gemini").mkdir()
+    (tmp_path / ".gemini" / "GEMINI.md").write_text("# stash\n")
+
+    result = runner.invoke(main.app, ["guidance", "refresh"])
+
+    assert result.exit_code == 0
+    assert not result.stdout.lstrip().startswith("{")
+    assert f"guidance_version {main.__version__}" in result.stdout
+    assert "gemini: refreshed" in result.stdout
+    assert "openclaw: absent" in result.stdout
+
+
+def test_guidance_command_is_hidden_from_help(monkeypatch):
+    result = runner.invoke(main.app, ["--help"])
+
+    assert result.exit_code == 0
+    # The seam is plumbing; advertising it invites users to run it manually
+    # instead of filing the bug where a refresh did not converge.
+    assert "guidance" not in result.stdout
 
 
 def test_delete_json_stdout_has_no_human_text(monkeypatch):

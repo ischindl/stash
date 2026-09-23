@@ -18,7 +18,13 @@ from pathlib import Path
 
 import pytest
 
-from cli.main import _INSTALLERS, _install_all_hooks, _install_pi, _plugin_installed
+from cli.main import (
+    _INSTALLERS,
+    __version__,
+    _install_all_hooks,
+    _install_pi,
+    _plugin_installed,
+)
 
 # event name in the hook wrapper -> handler script it execs via _run.sh
 HOOK_EVENTS = {
@@ -301,3 +307,41 @@ def test_setup_path_installs_pi(pi_home: Path, monkeypatch, capsys) -> None:
     assert (pi / "on_prompt.py").is_file()
     assert (pi / "AGENTS.md").is_file()
     assert _plugin_installed("pi") is True
+
+
+def test_a_dead_deployed_generation_upgrades_without_force(pi_home: Path, monkeypatch) -> None:
+    """The bug this installer was judged on: a ~/.pi whose handler imports a name the
+    installed package no longer exports (`on_session_start.py:16 ImportError: cannot
+    import name 'echo_stdout'`) sat dead on this box for a month, invisible because pi
+    ignores failing hooks. The install path is the only thing allowed to replace a
+    deployed generation — a hand-copy would destroy the repro — so 'connect pi' must
+    overwrite a dead handler, a stale wrapper, and a stale guidance block in one pass,
+    with no --force and no fallback that keeps the old copy running.
+    """
+    assets = _make_assets(pi_home)
+    monkeypatch.setattr("cli.main._assets_dir", lambda agent: assets)
+
+    pi = pi_home / ".pi"
+    (pi / "hooks").mkdir(parents=True)
+    dead_handler = pi / "on_session_start.py"
+    dead_handler.write_text("from cli.formatting import echo_stdout\n")
+    stale_wrapper = pi / "hooks" / "session_start"
+    stale_wrapper.write_text("#!/usr/bin/env bash\necho I am the old generation\n")
+    (pi / "AGENTS.md").write_text(
+        "# my own rules\n\n"
+        "<!-- stash-plugin:begin -->\nOld frozen skill model.\n<!-- stash-plugin:end -->\n"
+        "\nkeep me\n"
+    )
+
+    status, _ = _install_pi(False)
+
+    assert status == "installed"
+    assert dead_handler.read_text() == "# on_session_start.py\n"
+    assert _hook_wrapper("session_start") in stale_wrapper.read_text()
+    assert os.stat(stale_wrapper).st_mode & stat.S_IXUSR, "wrapper lost its exec bit"
+
+    guidance = (pi / "AGENTS.md").read_text()
+    assert "Old frozen skill model." not in guidance
+    assert f"guidance_version={__version__}" in guidance
+    assert "# my own rules" in guidance and "keep me" in guidance
+    assert guidance.count("stash-plugin:begin") == 1

@@ -5,6 +5,7 @@ from __future__ import annotations
 import difflib
 import hashlib
 import json
+import os
 import posixpath
 import re
 import shutil
@@ -29,6 +30,10 @@ from typer import rich_utils
 
 from stashai.plugin.doctor import shadow_install_warning
 from stashai.plugin.guidance import SKILL_MODEL
+from stashai.plugin.session_upload import (
+    guidance_refresh_command,
+    spawn_guidance_refresh_if_stale,
+)
 from stashai.plugin.upload_status import read_upload_status
 
 from . import __version__, telemetry
@@ -142,8 +147,17 @@ def upgrade(
         )
     echo_stderr(f"Upgrading stashai from {__version__}…")
     result = subprocess.run(command)
+    guidance = None
+    if result.returncode == 0:
+        guidance = _guidance_refresh_after_upgrade(_use_json(as_json))
     if _use_json(as_json):
-        output_json({"ok": result.returncode == 0, "exit_code": result.returncode})
+        output_json(
+            {
+                "ok": result.returncode == 0,
+                "exit_code": result.returncode,
+                "guidance": guidance,
+            }
+        )
     raise typer.Exit(result.returncode)
 
 
@@ -589,25 +603,259 @@ def _drop_cursor_project_rule(repo_root: Path) -> Path | None:
 
 
 _CODEX_MARKER = "# stash-plugin"
-_AGENTS_MD_BEGIN = "<!-- stash-plugin:begin -->"
-_AGENTS_MD_END = "<!-- stash-plugin:end -->"
+# Detection uses the attribute-independent substrings, not the full marker line:
+# the begin line carries a `guidance_version` stamp, so the shipped marker and a
+# block written by an older package are found by the same codepath. An unversioned
+# begin line is just stale content that the refresh rewrites — there is no legacy
+# branch to keep it alive.
+_AGENTS_MD_BEGIN_MARK = "stash-plugin:begin"
+_AGENTS_MD_END_MARK = "stash-plugin:end"
+_AGENTS_MD_BEGIN = f"<!-- {_AGENTS_MD_BEGIN_MARK} guidance_version={__version__} -->"
+_AGENTS_MD_END = f"<!-- {_AGENTS_MD_END_MARK} -->"
 
 
-def _upsert_agents_md(path: Path, body: str) -> None:
-    """Idempotently write a stash-owned block into an AGENTS.md-style file."""
+def _marker_positions(text: str, needle: str) -> list[int]:
+    positions: list[int] = []
+    start = 0
+    while True:
+        found = text.find(needle, start)
+        if found == -1:
+            return positions
+        positions.append(found)
+        start = found + len(needle)
+
+
+def _write_agents_md(path: Path, text: str) -> None:
+    """Publish a guidance file by temp-file replace, never in place.
+
+    The refresh now also runs detached at session start, so one agent can be
+    reading its guidance while another process is rewriting it: `write_text`
+    truncates first, and a reader landing in that window sees a file with no
+    markers at all — which the upsert reads as "block missing, append it" and
+    turns into two contradictory blocks in one file. Replace is atomic, so a
+    reader always sees either the old generation or the new one, whole.
+    """
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    tmp.write_text(text)
+    os.replace(tmp, path)
+
+
+def _upsert_agents_md(path: Path, body: str) -> str:
+    """Replace the stash-owned block in an AGENTS.md-style file; return its status.
+
+    Returns "refreshed" or "unchanged", and that return value is the status
+    source of truth for every caller — one codepath, no re-derivation. A file
+    whose managed block cannot be identified uniquely raises ValueError instead
+    of being written: guessing here is how an agent ends up reading two
+    contradictory copies of the same guidance.
+    """
     block = f"{_AGENTS_MD_BEGIN}\n{body.rstrip()}\n{_AGENTS_MD_END}"
-    existing = path.read_text() if path.exists() else ""
-
-    if _AGENTS_MD_BEGIN in existing and _AGENTS_MD_END in existing:
-        pre, rest = existing.split(_AGENTS_MD_BEGIN, 1)
-        _, post = rest.split(_AGENTS_MD_END, 1)
-        new = f"{pre}{block}{post}"
-    else:
-        sep = "" if not existing or existing.endswith("\n") else "\n"
-        new = f"{existing}{sep}{block}\n"
 
     path.parent.mkdir(parents=True, exist_ok=True)
+    if not path.exists():
+        _write_agents_md(path, f"{block}\n")
+        return "refreshed"
+
+    existing = path.read_text()
+    begins = _marker_positions(existing, _AGENTS_MD_BEGIN_MARK)
+    ends = _marker_positions(existing, _AGENTS_MD_END_MARK)
+
+    if not begins and not ends:
+        sep = "" if existing.endswith("\n") else "\n"
+        _write_agents_md(path, f"{existing}{sep}{block}\n")
+        return "refreshed"
+    if len(begins) != 1:
+        raise ValueError(
+            f"{path} has {len(begins)} '{_AGENTS_MD_BEGIN_MARK}' markers; exactly one "
+            "is expected. Edit the file down to a single stash-owned block, then re-run."
+        )
+    if len(ends) != 1:
+        raise ValueError(
+            f"{path} has {len(ends)} '{_AGENTS_MD_END_MARK}' markers; exactly one "
+            "is expected. Edit the file down to a single stash-owned block, then re-run."
+        )
+    if ends[0] < begins[0]:
+        raise ValueError(
+            f"{path} has '{_AGENTS_MD_END_MARK}' before '{_AGENTS_MD_BEGIN_MARK}'. "
+            "Repair the block order, then re-run."
+        )
+
+    close = existing.find("-->", ends[0])
+    if close == -1:
+        raise ValueError(
+            f"{path}'s '{_AGENTS_MD_END_MARK}' marker is never closed by '-->'. "
+            "Repair the comment, then re-run."
+        )
+
+    # Splice whole marker lines: the marker substrings sit *inside* their comment
+    # delimiters, so cutting at the substring would leave the opening `<!--`
+    # behind and corrupt the file.
+    line_start = existing.rfind("\n", 0, begins[0]) + 1
+    tail_start = close + len("-->")
+    newline = existing.find("\n", tail_start)
+    tail = existing[tail_start:] if newline != -1 else ""
+
+    new = f"{existing[:line_start]}{block}{tail}"
+    if new == existing:
+        return "unchanged"
     path.write_text(new)
+    return "refreshed"
+
+
+def _guidance_targets() -> list[tuple[str, Path]]:
+    """Every global guidance file the product owns, as (agent, destination).
+
+    This table is the single source of truth shared by both write paths — the
+    per-agent `connect` installer and the convergence refresh — so the set of
+    files can never drift between them. Hermes is absent on purpose: its guidance
+    is the `# stash-plugin` block inside `~/.hermes/config.yaml`, which Hermes
+    itself owns and rewrites, not a product-owned file.
+    """
+    return [
+        ("pi", Path.home() / ".pi" / "AGENTS.md"),
+        ("codex", Path.home() / ".codex" / "AGENTS.md"),
+        ("opencode", Path.home() / ".config" / "opencode" / "AGENTS.md"),
+        ("gemini", Path.home() / ".gemini" / "GEMINI.md"),
+        ("openclaw", Path.home() / ".openclaw" / "workspace" / "AGENTS.md"),
+    ]
+
+
+def _guidance_dest(agent: str) -> Path:
+    for name, dest in _guidance_targets():
+        if name == agent:
+            return dest
+    raise ValueError(f"{agent} has no product-owned guidance file")
+
+
+def _guidance_body(agent: str) -> str:
+    """The canonical guidance text for `agent`.
+
+    One resolver so the two write paths can never put different bytes into the
+    same file. OpenClaw's body is an inline constant (its assets dir ships an
+    extension, no guidance file); every other agent ships a guidance file whose
+    name is the one its agent loads. A shipped guidance file that is missing from
+    the wheel is a broken install, so this names it rather than writing nothing —
+    silently skipping the write is how every agent on this box ended up reading
+    years-old guidance while its installer reported green.
+    """
+    if agent == "openclaw":
+        return _OPENCLAW_GUIDANCE
+    filename = "GEMINI.md" if agent == "gemini" else "AGENTS.md"
+    source = _assets_dir(agent) / filename
+    if not source.is_file():
+        raise ValueError(
+            f"{agent}'s shipped guidance file {source} is missing; the stashai "
+            "install is incomplete. Reinstall stash, then re-run."
+        )
+    return source.read_text()
+
+
+def _install_guidance(agent: str) -> None:
+    """Write `agent`'s guidance file from the shared table.
+
+    Every installer's guidance write goes through here, so the file an installer
+    produces and the file a refresh repairs are the same path with the same bytes.
+    """
+    _upsert_agents_md(_guidance_dest(agent), _guidance_body(agent))
+
+
+def _refresh_installed_guidance() -> dict[str, str]:
+    """Rewrite every installed guidance file from the shipped text; per-agent status.
+
+    A destination that does not exist is reported `absent` and left that way:
+    the product creates an agent's guidance file when it installs that agent, and
+    a refresh that manufactured files would claim convergence for an agent nobody
+    connected. A block the writer cannot identify uniquely propagates its
+    ValueError — repairing it is a human decision, not a guess.
+    """
+    statuses: dict[str, str] = {}
+    for agent, dest in _guidance_targets():
+        if not dest.exists():
+            statuses[agent] = "absent"
+            continue
+        statuses[agent] = _upsert_agents_md(dest, _guidance_body(agent))
+    return statuses
+
+
+guidance_app = typer.Typer(
+    help="Managed agent-guidance maintenance. Invoked by the CLI itself; not for interactive use."
+)
+app.add_typer(guidance_app, name="guidance", hidden=True)
+
+
+@guidance_app.command("refresh")
+def guidance_refresh(
+    as_json: bool = typer.Option(False, "--json"),
+) -> None:
+    """Rewrite every installed agent guidance file from the text this build ships.
+
+    Runs detached at each recorded agent's session start and in the foreground after
+    `stash upgrade`, so a new release converges the guidance an agent actually reads
+    instead of waiting for someone to re-run `connect`. Exit 0 means every installed
+    guidance file carries this build's text; a block that cannot be identified
+    uniquely exits non-zero naming its file, because repairing it is a human call.
+    """
+    use_json = _use_json(as_json)
+    try:
+        statuses = _refresh_installed_guidance()
+    except ValueError as e:
+        _exit_user_error(str(e))
+
+    if use_json:
+        output_json(
+            {
+                "guidance_version": __version__,
+                "refreshed": [a for a, s in statuses.items() if s == "refreshed"],
+                "unchanged": [a for a, s in statuses.items() if s == "unchanged"],
+                "absent": [a for a, s in statuses.items() if s == "absent"],
+            }
+        )
+        return
+
+    console.print(f"[dim]guidance_version[/dim] {__version__}")
+    for agent, status in statuses.items():
+        mark = {"refreshed": "[green]✓[/green]", "unchanged": "[green]✓[/green]"}.get(
+            status, "[dim]—[/dim]"
+        )
+        console.print(f"  {mark} {agent}: {status}")
+
+
+def _guidance_refresh_after_upgrade(use_json: bool) -> dict | None:
+    """Refresh installed guidance using the wheel that was just installed.
+
+    It has to be a subprocess: this process still runs the pre-upgrade code, so
+    refreshing in-process would rewrite every file with the OLD guidance text under
+    the OLD version stamp — a no-op dressed as a fix. Human mode lets the child
+    report its own per-agent lines; JSON mode captures its document and folds it
+    into `upgrade`'s single stdout document, since two documents would break the
+    reader. A non-zero child is reported rather than fatal: `upgrade`'s exit code
+    describes the upgrade, and the session-start seam tries again on its own.
+    """
+    import subprocess
+
+    command = guidance_refresh_command()
+    if not use_json:
+        try:
+            subprocess.run(command)
+        except OSError as e:
+            echo_stderr(
+                f"Guidance refresh could not start ({e}). Run 'stash guidance refresh' yourself."
+            )
+        return None
+    try:
+        result = subprocess.run(command + ["--json"], capture_output=True, text=True)
+    except OSError as e:
+        return {
+            "exit_code": 1,
+            "detail": f"{e}. Run 'stash guidance refresh' yourself.",
+        }
+    detail = result.stderr.strip()
+    if detail:
+        echo_stderr(detail)
+    try:
+        return json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return {"exit_code": result.returncode, "detail": detail or "no JSON document on stdout"}
 
 
 def _merge_snippet_into_toml(existing: str, snippet: str) -> tuple[str, str]:
@@ -749,10 +997,8 @@ def _install_codex(force: bool, use_json: bool = False) -> tuple[str, str]:
             f"instead.[/dim]"
         )
 
-    agents_src = root / "AGENTS.md"
-    agents_dest = Path.home() / ".codex" / "AGENTS.md"
-    if agents_src.exists():
-        _upsert_agents_md(agents_dest, agents_src.read_text())
+    agents_dest = _guidance_dest("codex")
+    _install_guidance("codex")
 
     return (status_, f"{hooks_dest} + merged {cfg_path} + {agents_dest}")
 
@@ -777,10 +1023,8 @@ def _install_opencode(force: bool, use_json: bool = False) -> tuple[str, str]:
     cfg["plugin"] = plugins
     cfg_path.write_text(json.dumps(cfg, indent=2) + "\n")
 
-    agents_src = root / "AGENTS.md"
-    agents_dest = cfg_path.parent / "AGENTS.md"
-    if agents_src.exists():
-        _upsert_agents_md(agents_dest, agents_src.read_text())
+    agents_dest = _guidance_dest("opencode")
+    _install_guidance("opencode")
 
     if already and not force:
         return ("skipped", f"{cfg_path} already references plugin.ts + {agents_dest}")
@@ -800,8 +1044,8 @@ def _install_gemini(force: bool, use_json: bool = False) -> tuple[str, str]:
         ("stash hook run gemini", "stashai/plugin/assets/gemini"),
     )
 
-    agents_dest = Path.home() / ".gemini" / "GEMINI.md"
-    _upsert_agents_md(agents_dest, (root / "GEMINI.md").read_text())
+    agents_dest = _guidance_dest("gemini")
+    _install_guidance("gemini")
     return (status_, f"{dest} + {agents_dest}")
 
 
@@ -908,7 +1152,7 @@ def _install_openclaw(force: bool, use_json: bool = False) -> tuple[str, str]:
 
     root = _assets_dir("openclaw")
     ext_dir = _openclaw_extension_dir()
-    _upsert_agents_md(Path.home() / ".openclaw" / "workspace" / "AGENTS.md", _OPENCLAW_GUIDANCE)
+    _install_guidance("openclaw")
     if ext_dir.is_dir() and _dir_content_matches(root, ext_dir):
         return ("skipped", f"{ext_dir}")
 
@@ -990,14 +1234,10 @@ def _copy_pi_runtime(scripts_src: Path, dest: Path, force: bool) -> bool:
 def _install_pi(force: bool, use_json: bool = False) -> tuple[str, str]:
     root = _assets_dir("pi")
     dest = Path.home() / ".pi"
-    agents_dest = dest / "AGENTS.md"
+    agents_dest = _guidance_dest("pi")
 
     changed = _copy_pi_runtime(root / "scripts", dest, force)
-
-    # Install AGENTS.md via the existing idempotent helper
-    agents_src = root / "AGENTS.md"
-    if agents_src.exists():
-        _upsert_agents_md(agents_dest, agents_src.read_text())
+    _install_guidance("pi")
 
     if not changed and not force:
         return ("skipped", f"{dest} already up to date + {agents_dest}")
@@ -1051,6 +1291,16 @@ def hook_run(agent: str = typer.Argument(...), event: str = typer.Argument(...))
     what keeps Codex (which trusts hooks by command hash) from silently
     distrusting the hooks after a stash/python upgrade.
     """
+    # The byte-stable command string is what makes this the one place a product
+    # change can reliably reach an installed machine: this process is the freshly
+    # resolved package, and it is running here before any configuration or plugin
+    # state is read, so no dropped setting gates it. Pi is absent from
+    # `_HOOK_EVENTS` (its runtime is byte-copied under ~/.pi) and converges
+    # through `connect`/`upgrade` — but the refresh is global, so the first
+    # session of any agent here repairs pi's guidance file too.
+    if event == "on_session_start":
+        spawn_guidance_refresh_if_stale([dest for _, dest in _guidance_targets()], __version__)
+
     events = _HOOK_EVENTS.get(agent)
     if events is None:
         _exit_user_error(f"Unknown hook agent: {agent}")

@@ -92,6 +92,71 @@ def spawn_self_upgrade() -> None:
     )
 
 
+def guidance_refresh_command() -> list[str]:
+    """The argv that refreshes installed agent guidance.
+
+    Addressed at this interpreter's own package rather than a `stash` found off
+    PATH: hooks run under the package interpreter with a PATH that may not carry
+    the console script, and the point of the refresh is to run the *installed*
+    generation's code, which is the code this interpreter imports.
+    """
+    return [sys.executable, "-m", "cli.main", "guidance", "refresh"]
+
+
+def _guidance_needs_refresh(dests: list[Path], version: str) -> bool:
+    """Whether any installed guidance file lags `version`.
+
+    This decides only whether to *ask* for a refresh, so it uses the cheapest
+    possible probe — the version stamp every managed block carries — and leaves
+    the actual comparing and writing to the command. A file that exists but
+    cannot be read counts as lagging: unreadable is not proof of currentness, and
+    routing it forward hands it to the one codepath that reads these files with a
+    parser that fails loud and names the file.
+    """
+    stamp = f"guidance_version={version}".encode()
+    for dest in dests:
+        if not dest.is_file():
+            continue
+        try:
+            body = dest.read_bytes()
+        except OSError:
+            return True
+        if stamp not in body:
+            return True
+    return False
+
+
+def spawn_guidance_refresh_if_stale(dests: list[Path], version: str) -> None:
+    """Rewrite installed agent guidance in the background when it lags this build.
+
+    `dests` is passed in because the target table belongs to the CLI and this
+    module must not import it back. Detached and silent like the other
+    session-start spawns: a convenience repair must never block or break the
+    session it rides along with, and a repair that does not happen leaves the old
+    stamp in place, so the next session start asks again. Convergence therefore
+    needs no setting anybody has to keep switched on, and the version stamp that
+    triggered the spawn is still on disk for `stash guidance refresh` to report.
+
+    Deliberately *not* a seam inside an adapter script or a shipped hook script:
+    a generation already deployed to `~/.pi` predates this call and can never
+    reach it, which is why pi's copy ran dead for a month while its source was
+    fixed. This runs in the CLI itself, which is fresh on every invocation.
+    """
+    if not _guidance_needs_refresh(dests, version):
+        return
+    try:
+        subprocess.Popen(
+            guidance_refresh_command(),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+            close_fds=True,
+        )
+    except Exception:
+        pass
+
+
 def spawn_session_watcher(
     agent_pid: int,
     session_id: str,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
 
 import pytest
@@ -232,3 +233,145 @@ def test_skills_sync_refuses_a_client_it_does_not_know(monkeypatch):
     assert "unknown_agent" in str(refused.value)
     assert "_SKILLS_DIR_BY_CLIENT" in str(refused.value)
     assert calls == []
+
+
+# --- guidance convergence seam (STAS-248) ------------------------------------
+#
+# Installed guidance used to be written once, at connect time, and then frozen:
+# a release that changed the skill model reached nobody until someone re-ran an
+# installer. The seam that fixes it rides the session-start hook, so these tests
+# pin both halves of that promise — it spawns when an installed file lags this
+# build, and it stays silent when nothing does.
+
+
+def _stamp(version: str) -> str:
+    return f"guidance_version={version}"
+
+
+def _seed_guidance(tmp_path, named: dict) -> list:
+    """Guidance files under a fake home, keyed by agent name."""
+    dests = []
+    for agent, content in named.items():
+        dest = tmp_path / agent / "AGENTS.md"
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(content)
+        dests.append(dest)
+    return dests
+
+
+def test_a_target_that_lags_this_build_triggers_one_refresh(monkeypatch, tmp_path):
+    from stashai.plugin.session_upload import (
+        guidance_refresh_command,
+        spawn_guidance_refresh_if_stale,
+    )
+
+    calls = _capture_spawn(monkeypatch)
+    dests = _seed_guidance(
+        tmp_path,
+        {
+            "pi": f"<!-- stash-plugin:begin {_stamp('0.1.0')} -->\nold\n<!-- stash-plugin:end -->\n",
+            "codex": f"<!-- stash-plugin:begin {_stamp('0.1.368')} -->\nnew\n<!-- stash-plugin:end -->\n",
+        },
+    )
+
+    spawn_guidance_refresh_if_stale(dests, "0.1.368")
+
+    assert len(calls) == 1
+    assert calls[0]["cmd"] == guidance_refresh_command()
+
+
+def test_guidance_current_across_every_target_spawns_nothing(monkeypatch, tmp_path):
+    from stashai.plugin.session_upload import spawn_guidance_refresh_if_stale
+
+    calls = _capture_spawn(monkeypatch)
+    dests = _seed_guidance(
+        tmp_path,
+        {
+            agent: f"<!-- stash-plugin:begin {_stamp('0.1.368')} -->\ntext\n<!-- stash-plugin:end -->\n"
+            for agent in ("pi", "codex", "opencode")
+        },
+    )
+
+    spawn_guidance_refresh_if_stale(dests, "0.1.368")
+
+    # A spawn per session start would be the churn this card exists to remove:
+    # the probe has to be able to prove "nothing to do", not just "something to do".
+    assert calls == []
+
+
+def test_a_guidance_file_that_was_never_installed_is_not_staleness(monkeypatch, tmp_path):
+    from stashai.plugin.session_upload import spawn_guidance_refresh_if_stale
+
+    calls = _capture_spawn(monkeypatch)
+    installed = _seed_guidance(
+        tmp_path, {"codex": f"<!-- stash-plugin:begin {_stamp('0.1.368')} -->\nx\n<!-- ... -->\n"}
+    )
+    never_installed = tmp_path / "gemini" / "GEMINI.md"
+
+    spawn_guidance_refresh_if_stale([*installed, never_installed], "0.1.368")
+
+    # Absent means the user never connected that agent. Refreshing does not
+    # install, and a session start certainly does not.
+    assert calls == []
+    assert not never_installed.exists()
+
+
+def test_a_target_that_cannot_be_read_is_sent_to_the_command_that_reports_it(monkeypatch, tmp_path):
+    from stashai.plugin import session_upload
+
+    calls = _capture_spawn(monkeypatch)
+    dests = _seed_guidance(
+        tmp_path, {"codex": f"<!-- stash-plugin:begin {_stamp('0.1.368')} -->\nx\n<!-- ... -->\n"}
+    )
+
+    def unreadable(self):
+        raise OSError(13, "Permission denied")
+
+    monkeypatch.setattr(type(dests[0]), "read_bytes", unreadable)
+
+    session_upload.spawn_guidance_refresh_if_stale(dests, "0.1.368")
+
+    # "Couldn't look" is not "already current": skipping here would keep a stale
+    # copy running silently. The refresh reads the same file with a parser that
+    # fails loud and names it.
+    assert len(calls) == 1
+
+
+def test_the_refresh_is_detached_silent_and_addressed_at_this_package(monkeypatch, tmp_path):
+    from stashai.plugin.session_upload import spawn_guidance_refresh_if_stale
+
+    calls = []
+
+    def fake_popen(cmd, **kwargs):
+        calls.append(kwargs)
+
+        class _P:
+            pass
+
+        return _P()
+
+    monkeypatch.setattr("stashai.plugin.session_upload.subprocess.Popen", fake_popen)
+    dests = _seed_guidance(tmp_path, {"pi": "no markers at all"})
+
+    spawn_guidance_refresh_if_stale(dests, "0.1.368")
+
+    kwargs = calls[0]
+    assert kwargs["start_new_session"] is True
+    assert kwargs["stdin"] is subprocess.DEVNULL
+    assert kwargs["stdout"] is subprocess.DEVNULL
+    assert kwargs["stderr"] is subprocess.DEVNULL
+
+
+def test_a_refresh_that_cannot_even_start_does_not_break_the_session(monkeypatch, tmp_path):
+    from stashai.plugin.session_upload import spawn_guidance_refresh_if_stale
+
+    def explode(*args, **kwargs):
+        raise OSError("no such file or directory")
+
+    monkeypatch.setattr("stashai.plugin.session_upload.subprocess.Popen", explode)
+    dests = _seed_guidance(tmp_path, {"pi": "stale"})
+
+    spawn_guidance_refresh_if_stale(dests, "0.1.368")
+
+    # The stamp stays stale, so the next session start asks again. Nothing here
+    # may propagate into a hook whose stdout is an agent's session payload.

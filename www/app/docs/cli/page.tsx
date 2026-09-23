@@ -648,10 +648,17 @@ stash vfs --cwd "/me/sources" "rg 'incident' ."`}</CodeBlock>
 
       <H2>Skills</H2>
       <P>
-        A <strong>Skill</strong> is a special folder — one containing a <Code>SKILL.md</Code> —
-        of pages, files, and tables. Publishing a skill makes it publicly readable at its link (optionally listed
-        in Discover); to share privately with a specific person, share its folder
-        like any other folder. (The <Code>stash</Code> CLI name is unchanged.)
+        A <strong>Skill</strong> is a <em>special folder</em> — one containing a <Code>SKILL.md</Code> — holding
+        related artifacts (pages, files, tables) that shares like any folder and gains a public URL when
+        published. Use one when you are publishing a <em>collection</em> of related things together: a project
+        writeup with its supporting files, a research thread with its sources. A Skill is not a wrapper to slap
+        on every single file you happen to share — one-item Skills clutter Discover and defeat the model. Pick the
+        right tool: share a single file or a folder with <Code>stash upload &lt;path&gt; --json</Code> and hand over
+        the <Code>app_url</Code>; publish a curated bundle with <Code>stash upload &lt;path&gt; --skill &quot;&lt;title&gt;&quot; --json</Code>; create
+        a fresh one with <Code>stash skills create</Code>; share a coding session with <Code>stash share</Code>.
+        Publishing makes a Skill publicly readable at its link (optionally listed in Discover); to share privately
+        with a specific person, share its folder like any other folder. (The <Code>stash</Code> CLI name is
+        unchanged.)
       </P>
 
       <CommandRef

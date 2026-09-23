@@ -56,6 +56,25 @@ everything before it is captured in git history (`git log`), not here.
 
 ### Fixed
 
+- Guidance your agents read now converges to the version of Stash you have installed,
+  instead of the version you first connected with. Every guided-behaviour file —
+  `~/.codex/AGENTS.md`, `~/.pi/AGENTS.md`, and the OpenCode, Gemini and OpenClaw
+  equivalents — was written once by `stash connect` and never touched again, so a release
+  that rewrote the Skill model reached nobody: on the machine where this was found, five
+  agents were still being taught a model the product had already abandoned, and Pi's
+  installed session-start and stop hooks were failing outright against an older release.
+  The managed block now carries the release that wrote it (`guidance_version=…`), and the
+  first session-start hook to find a file lagging the installed build repairs it in the
+  background — quietly, with nobody having to re-run `stash connect`; `stash upgrade` runs
+  the same repair once the new version is on disk. Only what sits between the
+  `stash-plugin` markers is rewritten, so your own prose above and below the block stays
+  put. A file whose managed block can't be trusted — an end marker with no begin, or the
+  same marker twice — is named and left exactly as it is rather than guessed at, because
+  these are hand-editable files and a repair that swallowed someone's own instructions
+  would be worse than the staleness it fixes. `stash guidance refresh` runs the repair on
+  demand, and reports per agent what it changed, what was already current, and what was
+  never installed.
+
 - Project curators run on your own model box again, even if you also have a developer
   workspace. A curator that belongs to one project folder was being sent down the
   developer-platform curation path, which only speaks to Anthropic and demands a backend
