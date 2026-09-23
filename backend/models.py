@@ -567,7 +567,9 @@ class HistoryEventCreateRequest(BaseModel):
     agent_name: str = Field(..., min_length=1, max_length=64)
     event_type: str = Field(..., min_length=1, max_length=64)
     content: str = Field(..., min_length=1)
-    session_id: str = Field(..., min_length=1, max_length=64)
+    # Equals the history_events.session_id column width (migration 0220);
+    # test_curator_session_id_width enforces the parity against the real column.
+    session_id: str = Field(..., min_length=1, max_length=128)
     user_id: str | None = Field(
         None,
         max_length=128,
