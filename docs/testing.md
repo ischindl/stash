@@ -256,3 +256,65 @@ Two ways this file goes green while checking nothing, both asserted rather than 
 The fix goes in the document, never the parser: when a command gains a required option, every
 guidance file that predates it is wrong. Restoring a rejected form and watching this file name both
 the document and the parser's own reason is the check that the guard still bites.
+
+### Every supported agent must be taught the Skill model — `test_guidance_coverage.py`
+
+Parsing is not teaching. The guard above proves a documented command is one the CLI accepts; it says
+nothing about whether any agent was ever told the concept exists. That is the failure mode this file
+exists for: STAS-210 shipped the Skill/folder-sharing prose to a third of the supported agents
+(`grep -ric skill` answered 0 for both `gemini-plugin/GEMINI.md` and `hermes-plugin/HERMES.md` while
+the commit claimed 13/13) and every other check — byte parity, parse, hook execution — stayed green.
+The symptom only surfaces later, when a founder shares a published skill and the agent on the other
+end has never heard of one.
+
+One canonical block lives in `stashai/plugin/guidance.py` (`SKILL_MODEL`, anchored by its
+`<!-- stash:skill-model -->` marker so a copy can be traced to the module rather than to a
+paraphrase that drifted). `CHANNELS` is the registry of which channels exist, and every one of them
+must contain the block **verbatim and exactly once**:
+
+- **Static files** (`STATIC_CHANNELS`) — the guidance a plugin ships: the `AGENTS.md` files for codex,
+  opencode and pi, `GEMINI.md`, `HERMES.md`, Cursor's `stash.mdc`, and Claude's plugin `CLAUDE.md`.
+- **Composed runtime strings** (`COMPOSED_CHANNELS`) — text the CLI or a hook builds at import time,
+  so no file on disk contains it: the project `CLAUDE.md` block `_CLAUDE_STASH_CONTEXT`, the
+  session-start hook's `CONTEXT`, and `_OPENCLAW_GUIDANCE` (openclaw ships no guidance file by design).
+  A map that read only files would call those agents untaught, and would happily accept a file-based
+  paraphrase instead — agents load the string, so the guard reads the string.
+
+`AGENT_GUIDANCE_PROMPT` (printed by `stash prompts agent-guidance`, loaded by every agent at runtime)
+and the repo's own `CLAUDE.md` get their own assertions for the same reason: they are channels, not
+copy.
+
+Two invariants keep the guard from quietly rotting into a green no-op:
+
+- **The map is keyed to `cli.main._SUPPORTED_AGENTS`.** Adding a supported agent without registering
+  the channel it actually loads fails `test_channels_are_wired_to_the_supported_agent_table`.
+  Registration is mandatory, not a courtesy.
+- **Nothing stale survives beside the block.** A channel embedding it twice, or keeping a superseded
+  paraphrase under a second `## What a Skill is` heading, fails the count and heading assertions.
+
+The shipped mirrors in `stashai/plugin/assets/<agent>/` (what `stash connect` hands out) need no
+entry here: `test_assets_in_sync.py` pins them byte-for-byte to the sources above. Parity alone
+cannot see a symmetric edit — delete the section from *both* copies and parity still holds — which is
+why coverage asserts on the source, where such a strip does fail. Claude is the case that teaches
+both rules: its mirror carries only `scripts/*.py` because its `CLAUDE.md` arrives through the
+marketplace, so nothing read that file until STAS-255 registered it, and stripping its Skill section
+had passed 343 tests.
+
+Prove it still bites the same way every other guard here is proven — strip one channel, watch it
+name the agent, restore:
+
+```bash
+python - <<'PY'
+from stashai.plugin.guidance import SKILL_MODEL
+import pathlib
+
+p = pathlib.Path("plugins/gemini-plugin/GEMINI.md")
+p.write_text(p.read_text().replace("## What a Skill is\n\n" + SKILL_MODEL + "\n\n", "", 1))
+PY
+python -m pytest plugins/tests/test_guidance_coverage.py --no-cov   # gemini: ... does not ship ...
+git checkout -- plugins/gemini-plugin/GEMINI.md                     # back to green
+```
+
+What this guard cannot claim: it proves an agent was *told*. Whether that text ever landed on a
+developer's machine is a different failure — installed plugin artifacts do not always converge with
+what the repo ships, and closing that is STAS-248's convergence work, not this guard's.
