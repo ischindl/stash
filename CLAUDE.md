@@ -58,8 +58,11 @@ other sessions move its ref while it sleeps, so its on-disk state is never yours
   `stash`, `reset --hard`, or `clean` them away. First prove per path that the content is
   byte-identical to a previous trunk tip recorded in the trunk's own reflog — zero unique
   content — and only then restore those paths to the current commit with an explicit `--source=HEAD`.
-  The flag-less `restore --staged --worktree` reads the index and the work tree against each
-  other, so on exactly that state it exits 0 having changed nothing.
+  The flag-less `restore --staged --worktree` names no source, so the command line never says which
+  content it restores; `--source=HEAD` does. On git 2.55.0 the flag-less form was measured to exit 0
+  and leave index and work tree at HEAD's content — empty `status --porcelain`, on the phantom and
+  on a HEAD/index/work-tree three-way split alike — and no other git was measured here, so the
+  source is named, not assumed.
 
 <!-- stash-context -->
 ## Stash

@@ -24,8 +24,8 @@ RULE_HEADING = "### Landing hygiene"
 MANAGED_BLOCK_MARKER = "<!-- stash-context -->"
 
 # Each literal pins one behaviour a landing agent must be told: no ref write from elsewhere,
-# merge inside the trunk, verify both sides, one merge not a copy, STOP, and the only
-# restore form that is not a silent no-op.
+# merge inside the trunk, verify both sides, one merge not a copy, STOP, and the restore form
+# that names the content source (the flag-less form names none).
 REQUIRED_LITERALS = (
     "card work never happens in the trunk checkout",
     "Never advance the trunk ref from a linked worktree",
