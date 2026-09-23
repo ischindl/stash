@@ -21,6 +21,22 @@ everything before it is captured in git history (`git log`), not here.
 
 ### Changed
 
+- The backend can run its completions on the model endpoint you connected, not only on a
+  cloud key. Before this, one question decided every curator run — is `ANTHROPIC_API_KEY`
+  set? — and a self-hosted server, which by design has no cloud key, answered "no" to its
+  own curators: the External wiki curator and the workspace's Memory curator refused with
+  *"Scoped curation requires the backend ANTHROPIC_API_KEY"* while a working local box sat
+  in Settings. Completions are now provider-aware. A backend key means the product behaves
+  exactly as it always did, on Anthropic. No key means the run takes the local model
+  endpoint you stored in Settings — the box your agent pins, or your default one — and
+  answers on it. Nothing ever tries the other provider: a key that is set is not
+  second-guessed by a box that happens to be reachable, and a stack with neither says so in
+  one message naming both, because a run that quietly switched providers would quietly
+  switch whose servers hold your end users' transcripts. A box that is switched off is
+  refused before the run starts, quoting the endpoint's own error, rather than spending the
+  one metered run your lane gets this month on a failure. A pinned agent may also name the
+  model id to use on that box; the base URL and its key always come from the credential.
+
 - Testing a local model box now names its outcome instead of handing you a colour to
   interpret. The button under the draft fields reads "Test connection" — the word you
   already use for it — and it answers with one of three verdicts: "Reachable and
@@ -49,11 +65,10 @@ everything before it is captured in git history (`git log`), not here.
   ANTHROPIC_API_KEY"* on a lane that had nothing to do with Anthropic. Which path a curator
   takes is now decided by what that curator curates: a project's folder is read and written by
   its owner alone, so it runs on the credential and endpoint its own row names, and a box with
-  no cloud key anywhere on it curates its projects normally. What stays behind the backend key
-  is exactly what needs it — the External wiki curator, whose feed mixes your end users'
-  transcripts, and your workspace's own Memory curator — because those two must not be handed
-  to a model endpoint you connect, and a curator pointed at a shared workspace is scoped by
-  design.
+  no cloud key anywhere on it curates its projects normally. The External wiki curator —
+  whose feed mixes your end users' transcripts — and your workspace's own Memory curator
+  stayed on the stricter scoped path, which at that point still demanded the backend key;
+  what those two lanes do today is the entry above.
 
 - The dogfood stack gets its coding agent back. `backend/Dockerfile.dogfood` had no compose
   consumer at all, so a deployment that sets `AGENT_EXEC_MODE=local` built the pi-free image

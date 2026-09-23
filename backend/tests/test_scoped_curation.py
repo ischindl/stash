@@ -301,7 +301,8 @@ async def test_separate_model_contexts_and_no_sprite_execution(
     calls = []
     all_started = asyncio.Event()
 
-    async def fake_run(scope, instructions, route=None):  # `route`: run() hands every scope its resolved one
+    # `route` arrives because run() hands every scope of a run the one provider it resolved
+    async def fake_run(scope, instructions, route=None):
         calls.append((scope.purpose, json.dumps(scope.documents)))
         if len(calls) == 3:
             all_started.set()
