@@ -6,7 +6,12 @@ answered 0 for both while the commit claimed 13/13, and the `prompts
 agent-guidance` string carried a `stash skills create "<name>" --public --json`
 span the CLI itself rejects (no `--description`). This guard makes either
 regression fail CI: one canonical block in `stashai/plugin/guidance.py`, and
-every channel an agent actually loads must contain it verbatim.
+every channel an agent actually loads must contain it verbatim and exactly
+once. STAS-257 tightened the two channels asserted outside the channel map —
+`AGENT_GUIDANCE_PROMPT` and the repo's own `CLAUDE.md` — from presence-only to
+that same rule: a second copy pasted beside the block used to ship duplicated
+guidance with the guard green, and root `CLAUDE.md` is not a `STATIC_CHANNELS`
+entry, so nothing else in the suite reaches it at all.
 
 The map is keyed to `cli.main._SUPPORTED_AGENTS`: an agent added to the product
 table without registering its guidance channel here fails
@@ -153,11 +158,20 @@ def test_runtime_agent_guidance_prompt_carries_the_block() -> None:
         "`stash prompts agent-guidance` still ships the pre-STAS-211 prose "
         "(rejected skills-create span / bare `stash upload`)"
     )
+    assert AGENT_GUIDANCE_PROMPT.count(SKILL_MODEL) == 1, (
+        "AGENT_GUIDANCE_PROMPT embeds SKILL_MODEL more than once: the duplicate ships "
+        "to every agent via `stash prompts agent-guidance` and no other assertion sees it"
+    )
 
 
 def test_root_claude_md_dogfoods_the_block() -> None:
-    assert SKILL_MODEL in _read("CLAUDE.md"), (
+    text = _read("CLAUDE.md")
+    assert SKILL_MODEL in text, (
         "root CLAUDE.md must carry the canonical block verbatim, not a paraphrase"
+    )
+    assert text.count(SKILL_MODEL) == 1, (
+        "root CLAUDE.md embeds SKILL_MODEL more than once: it is outside STATIC_CHANNELS, "
+        "so the heading test never reaches it and no other assertion sees the duplicate"
     )
 
 
