@@ -40,6 +40,21 @@ everything before it is captured in git history (`git log`), not here.
 
 ### Fixed
 
+- Project curators run on your own model box again, even if you also have a developer
+  workspace. A curator that belongs to one project folder was being sent down the
+  developer-platform curation path, which only speaks to Anthropic and demands a backend
+  `ANTHROPIC_API_KEY` the self-hosted server has never had — so the run died before it ever
+  looked at the model you pinned to that curator, and the project's wiki stopped updating
+  while its activity kept coming in. The error said *"Scoped curation requires the backend
+  ANTHROPIC_API_KEY"* on a lane that had nothing to do with Anthropic. Which path a curator
+  takes is now decided by what that curator curates: a project's folder is read and written by
+  its owner alone, so it runs on the credential and endpoint its own row names, and a box with
+  no cloud key anywhere on it curates its projects normally. What stays behind the backend key
+  is exactly what needs it — the External wiki curator, whose feed mixes your end users'
+  transcripts, and your workspace's own Memory curator — because those two must not be handed
+  to a model endpoint you connect, and a curator pointed at a shared workspace is scoped by
+  design.
+
 - The dogfood stack gets its coding agent back. `backend/Dockerfile.dogfood` had no compose
   consumer at all, so a deployment that sets `AGENT_EXEC_MODE=local` built the pi-free image
   and every local agent turn shell-ed out to a `pi` binary that was not there. A third,

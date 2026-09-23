@@ -22,20 +22,60 @@ from cryptography.fernet import Fernet
 from httpx import AsyncClient
 
 from backend.config import settings
-from backend.services import agent_auth, agent_service, curation_service, sprite_agent_service
+from backend.services import (
+    agent_auth,
+    agent_service,
+    curation_service,
+    scoped_curation_service,
+    sprite_agent_service,
+)
 from backend.services.curation_service import NEVER, Position
+from backend.tasks import agent_schedules
 
 from .test_curator import _auth, _push_events, _register
+from .test_developer_platform import _developer
 
 OLD = datetime(2020, 1, 1, tzinfo=UTC)
 BASE = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
 INTERNAL = "internal"
+# The self-hosted box the founder curates against: a qwen endpoint his own
+# machine dials, with no backend API key anywhere on it.
+BOX = "http://rozvrh-box:11434/v1"
 
 
-async def _folder(client: AsyncClient, key: str, name: str) -> str:
-    r = await client.post("/api/v1/me/session-folders", json={"name": name}, headers=_auth(key))
+def _console(api_key: str, workspace: dict) -> dict:
+    """The Developer Platform console's headers: the founder's own request,
+    aimed at the workspace's login-less scope account — the account that owns
+    the workspace's curators, its folders, and its connected boxes."""
+    return {**_auth(api_key), "X-Stash-Scope": workspace["scope_user_id"]}
+
+
+async def _folder(client: AsyncClient, key: str, name: str, headers: dict | None = None) -> str:
+    r = await client.post(
+        "/api/v1/me/session-folders", json={"name": name}, headers=headers or _auth(key)
+    )
     assert r.status_code == 200
     return str(r.json()["id"])
+
+
+async def _connected_box(client: AsyncClient, api_key: str, workspace: dict, monkeypatch) -> UUID:
+    """Connect the box the console offers for the workspace's agents. It lands on
+    the scope account, where `agent_auth`'s auto-resolution already points every
+    curator of that workspace. The probe is stubbed — the subject of these tests
+    is which lane a run takes, not the dial, and no box answers on a runner."""
+    monkeypatch.setattr(settings, "INTEGRATIONS_ENCRYPTION_KEY", Fernet.generate_key().decode())
+
+    async def answering_probe(base_url: str, api_key: str | None) -> dict:
+        return {"ok": True, "http_status": 200, "models": ["qwen"]}
+
+    monkeypatch.setattr(agent_auth, "probe_local_endpoint", answering_probe)
+    r = await client.post(
+        "/api/v1/me/developer/agent-credentials",
+        json={"base_url": BOX, "model": "qwen"},
+        headers=_console(api_key, workspace),
+    )
+    assert r.status_code == 200, r.text
+    return UUID(r.json()["id"])
 
 
 async def _file_session(
@@ -47,9 +87,11 @@ async def _file_session(
     folder_id: str,
     content: str,
     at: datetime = BASE,
+    headers: dict | None = None,
 ) -> None:
     """Push one event for `session_id`, then file the session into `folder_id`
     through the production assign route."""
+    headers = headers or _auth(key)
     await _push_events(
         client,
         key,
@@ -62,6 +104,7 @@ async def _file_session(
                 "created_at": at.isoformat(),
             }
         ],
+        headers=headers,
     )
     row_id = await pool.fetchval(
         "SELECT id FROM sessions WHERE owner_user_id = $1 AND session_id = $2",
@@ -71,7 +114,7 @@ async def _file_session(
     r = await client.post(
         "/api/v1/me/session-folders/assign",
         json={"session_row_ids": [str(row_id)], "folder_id": folder_id},
-        headers=_auth(key),
+        headers=headers,
     )
     assert r.status_code == 200
 
@@ -899,3 +942,111 @@ async def test_patching_every_selection_away_returns_a_curator_to_inheritance(
         headers=_auth(key),
     )
     assert r.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_a_project_curator_in_an_activated_workspace_keeps_its_own_lane(
+    client: AsyncClient, _db_pool, pool, monkeypatch
+):
+    """Which lane a curator runs on is the curator's shape, not its owner's CV.
+
+    `activate` hands the workspace's scope account an External wiki, so a
+    predicate that asks the owner sweeps in every curator that account owns: the
+    two lanes scoped curation exists to isolate, and also the project curators
+    the console pins to a self-hosted box. The founder's dogfood is that last
+    case — rozvrh and saneca on local qwen, every run dying on "Scoped curation
+    requires the backend ANTHROPIC_API_KEY" on a machine whose entire point is
+    that it needs no backend key. A folder-bound curator reads one project's feed
+    and writes one wiki folder, so the credential lane is the only lane it can
+    run on, whichever account happens to own it.
+    """
+    monkeypatch.setattr(settings, "AGENT_EXEC_MODE", "sprites")
+    api_key, _, workspace = await _developer(client)
+    scope = UUID(workspace["scope_user_id"])
+    box = await _connected_box(client, api_key, workspace, monkeypatch)
+    console = _console(api_key, workspace)
+    rozvrh = await _folder(client, api_key, "Rozvrh", headers=console)
+    await _file_session(
+        client, api_key, scope, pool, "conv-rozvrh", rozvrh, "seminars on tuesday", headers=console
+    )
+    curator = await agent_service.create_folder_curator(
+        scope, UUID(rozvrh), "local", "qwen", credential_id=box
+    )
+    agent = await agent_service.get_curator_by_id(UUID(curator["id"]))
+    assert UUID(str(agent["user_id"])) == scope  # the account activate gave a wiki
+    monkeypatch.setattr(settings, "ANTHROPIC_API_KEY", "")
+
+    assert await scoped_curation_service.workspace_for_agent(agent) is None
+
+    # Its gate is the pinned box, not the backend's key. The resolver is spyred
+    # so no turn executes and the selection the run actually passed is recorded;
+    # replaying it through the REAL resolver puts the assertion on RunAuth bytes
+    # rather than on kwargs.
+    calls: list[dict] = []
+    real = agent_auth.resolve
+
+    async def spy(user_id, prefer_provider=None, model_id=None, credential_id=None):
+        calls.append(
+            {
+                "prefer_provider": prefer_provider,
+                "model_id": model_id,
+                "credential_id": credential_id,
+            }
+        )
+
+    monkeypatch.setattr(agent_auth, "resolve", spy)
+    await agent_schedules._require_run_auth(scope, agent)
+    assert calls == [{"prefer_provider": "local", "model_id": "qwen", "credential_id": box}]
+
+    monkeypatch.setattr(agent_auth, "resolve", real)
+    auth = await agent_auth.resolve(scope, **calls[0])
+    assert auth.endpoint == BOX  # the founder's own box, not api.anthropic.com
+    assert auth.model == "qwen"
+
+    # And the turn it builds is the project prompt, not the scoped one.
+    _, prompt = await sprite_agent_service.build_scheduled_turn(agent, "2026-01-02T03-04")
+    assert "stash changes" in prompt
+    assert f"--folder {rozvrh}" in prompt
+
+
+@pytest.mark.asyncio
+async def test_the_two_scoped_lanes_keep_their_backend_key_gate(
+    client: AsyncClient, _db_pool, sprite_exec, monkeypatch
+):
+    """The isolation a folder-lane fix must not leak.
+
+    Two lanes are scoped, and both stay scoped with a local box connected to the
+    same account — the box that makes them look runnable to any credential-first
+    reading: the External-wiki curator, whose feed mixes every end user's
+    transcripts, and the workspace's own internal curator, which a sprite could
+    read across. Both keep the backend-key gate, and the internal one still
+    dispatches through the scoped path when the key is present."""
+    api_key, _, workspace = await _developer(client)
+    scope = UUID(workspace["scope_user_id"])
+    await _connected_box(client, api_key, workspace, monkeypatch)
+    external = await agent_service.get_curator_by_id(
+        UUID((await agent_service.get_or_create_curator(scope, wiki="external"))["id"])
+    )
+    internal = await agent_service.get_curator_by_id(
+        UUID((await agent_service.get_or_create_curator(scope))["id"])
+    )
+    assert (internal["curator_folder_id"], external["curator_wiki"]) == (None, "external")
+    monkeypatch.setattr(settings, "ANTHROPIC_API_KEY", "")
+
+    for lane, why in ((external, "cross-user material"), (internal, "the workspace's own memory")):
+        scoped = await scoped_curation_service.workspace_for_agent(lane)
+        assert str(scoped["id"]) == workspace["id"], why
+        with pytest.raises(
+            agent_auth.ProviderNotConfigured, match="Scoped curation requires the backend"
+        ):
+            await agent_schedules._require_run_auth(scope, lane)
+
+    runs: list[tuple[str, str, str]] = []
+
+    async def scoped_run(agent, scoped_workspace, run_stamp):
+        runs.append((str(agent["id"]), str(scoped_workspace["id"]), run_stamp))
+        return "CURATED"
+
+    monkeypatch.setattr(scoped_curation_service, "run", scoped_run)
+    assert await sprite_agent_service.run_scheduled(internal, "20260102030405") == "CURATED"
+    assert runs == [(str(internal["id"]), workspace["id"], "20260102030405")]

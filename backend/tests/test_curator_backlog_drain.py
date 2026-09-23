@@ -384,3 +384,68 @@ async def test_drain_gate_for_a_folder_lane_is_that_folder_and_nothing_else(
     )
     assert _dispatched(captured) == [str(workspace["id"])]
     assert await _metering(folder_curator["id"]) == before
+
+
+@pytest.mark.asyncio
+async def test_the_drain_gate_is_the_lane_and_not_the_owner_developer_workspace(
+    client: AsyncClient, pool, monkeypatch
+):
+    """The mirror of the hijack, on the dispatcher that runs unattended.
+
+    The drain asks the credential because that is the question the run asks. A
+    developer workspace turns that around for its scoped lanes: the External and
+    Memory lanes resolve on the box the console connected, so they earn a metered
+    dispatch here, and only die later inside the run on the missing backend key.
+    The tick's two heavy slots are then spent on runs that cannot start, and the
+    one lane that could have run — the project curator pinned to that same box —
+    waits for a tick that already has two lanes in it. Both lanes are checked
+    against the lane, so the drain, the nightly tick, and the run cannot disagree."""
+    from .test_developer_platform import _developer
+    from .test_folder_curators import _connected_box, _console, _file_session, _folder
+
+    api_key, _, workspace = await _developer(client)
+    scope = UUID(workspace["scope_user_id"])
+    box = await _connected_box(client, api_key, workspace, monkeypatch)
+    console = _console(api_key, workspace)
+    rozvrh = await _folder(client, api_key, "Rozvrh", headers=console)
+    owed = datetime.now(UTC) - timedelta(hours=2)
+    await _file_session(
+        client,
+        api_key,
+        scope,
+        pool,
+        "conv-rozvrh",
+        rozvrh,
+        "seminars on tuesday",
+        at=owed,
+        headers=console,
+    )
+    project_lane = await agent_service.create_folder_curator(
+        scope, UUID(rozvrh), "local", "qwen", credential_id=box
+    )
+    memory_lane = await agent_service.get_or_create_curator(scope)
+
+    # Both lanes owe that one event, and the Memory lane is the further behind of
+    # the two: a drain allowed to take both takes it first.
+    for lane, hours_ago in ((memory_lane, 4), (project_lane, 3)):
+        await get_pool().execute(
+            "UPDATE agents SET curated_through = $2 WHERE id = $1",
+            lane["id"],
+            datetime.now(UTC) - timedelta(hours=hours_ago),
+        )
+    monkeypatch.setattr(settings, "ANTHROPIC_API_KEY", "")
+    before = await _metering(memory_lane["id"])
+    captured = _capture_dispatches(monkeypatch)
+
+    await agent_schedules._drain_curator_backlog()
+
+    dispatched = _dispatched(captured)
+    assert str(project_lane["id"]) in dispatched, (
+        f"the project lane can run on its own box: {dispatched}"
+    )
+    assert str(memory_lane["id"]) not in dispatched, (
+        f"the scoped lane has no backend key to run on: {dispatched}"
+    )
+    assert await _metering(memory_lane["id"]) == before, (
+        "a lane that cannot run must not spend its allowance on the attempt"
+    )

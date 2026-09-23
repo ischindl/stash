@@ -399,8 +399,11 @@ async def _drain_curator_backlog() -> int:
         `alert_stale_curators` pages on the failed outcome if it persists;
       - 'started' older than the lock TTL → un-sticks here (see `_run_in_flight`),
         which is what stops a killed run from looking busy forever;
-      - no credential / allowance spent / nothing pending → skipped here with no
-        row write, because a drain tick consumes nothing to resolve.
+      - lane not runnable / allowance spent / nothing pending → skipped here with
+        no row write, because a drain tick consumes nothing to ask. "Runnable" is
+        `_require_run_auth`'s answer and no other: a personal or project lane
+        needs the credential its row names, a scoped lane needs the backend key,
+        and a lane that cannot start its run must not be dispatched to fail at.
 
     Skips are logged at debug rather than written into the lane: a drain tick that
     dispatches nothing has consumed nothing, and its return value is what shows in
@@ -439,9 +442,12 @@ async def _drain_curator_backlog() -> int:
                 logger.debug("curator drain: lane %s has spent its allowance", agent["id"])
                 continue
         try:
-            await agent_auth.resolve(
-                user_id, agent["model_provider"], model_id=agent.get("model_id")
-            )
+            # One question, one answer: the same gate the run itself applies.
+            # Resolving a credential here instead would ask the owner's account,
+            # so a workspace's scoped lanes would pass on the box its console
+            # connected, spend a metered dispatch and one of the tick's two heavy
+            # slots, and only die later inside the run on the missing backend key.
+            await _require_run_auth(user_id, agent)
         except (agent_auth.NeedsAuth, agent_auth.ProviderNotConfigured):
             logger.debug("curator drain: lane %s has no runnable credential", agent["id"])
             continue

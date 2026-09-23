@@ -80,7 +80,21 @@ def require_configured() -> None:
 
 
 async def workspace_for_agent(agent: dict) -> dict | None:
+    """The developer workspace whose scoped curation this curator must run under.
+
+    The answer is the curator's lane, not its owner's résumé: the External-wiki
+    curator and a workspace's own Memory curator are scoped because their inputs
+    cross people, and no credential the account connects can isolate them. A
+    project curator is scoped by neither — it reads one folder's feed and writes
+    one wiki folder, so it runs on the credential its row names even when the
+    workspace's scope account owns it. Activation gives that account an External
+    wiki, so deciding by owner would sweep the project lanes into the path their
+    rows can never run on: scoped curation needs the backend's key, and a
+    self-hosted box is the one thing that needs no key at all.
+    """
     if not agent["is_curator"]:
+        return None
+    if agent.get("curator_folder_id") is not None:
         return None
     row = await get_pool().fetchrow(
         "SELECT * FROM workspaces WHERE scope_user_id=$1 AND external_wiki_folder_id IS NOT NULL",

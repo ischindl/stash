@@ -246,9 +246,13 @@ async def test_changed_drive_docs_flow_through_the_feed(client: AsyncClient, _db
     assert doc["snippet"] == "the final recipe"
 
 
-async def _push_events(client: AsyncClient, key: str, events: list[dict]) -> None:
+async def _push_events(
+    client: AsyncClient, key: str, events: list[dict], headers: dict | None = None
+) -> None:
     r = await client.post(
-        "/api/v1/me/sessions/events/batch", json={"events": events}, headers=_auth(key)
+        "/api/v1/me/sessions/events/batch",
+        json={"events": events},
+        headers=headers or _auth(key),
     )
     assert r.status_code == 201
 

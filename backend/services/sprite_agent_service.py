@@ -506,7 +506,9 @@ async def build_scheduled_turn(
         # workspace's own credentials and a shell, so it can read every end
         # user's material in the workspace — the customers who opted out
         # included. The gate is that isolation, which is why it also covers a
-        # workspace's own internal curator, not only the cross-user one.
+        # workspace's own internal curator, not only the cross-user one — and
+        # why it stops there: a project curator of the same workspace reads one
+        # folder and writes one wiki, so it belongs on the sprite lane below.
         if (
             agent["curator_wiki"] == "external"
             or await scoped_curation_service.workspace_for_agent(agent) is not None
