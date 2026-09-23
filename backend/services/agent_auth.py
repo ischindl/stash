@@ -346,6 +346,24 @@ async def local_credential(user_id: UUID) -> dict | None:
     return _local_credential_doc(cred)
 
 
+async def local_endpoint_for_id(user_id: UUID, credential_id: UUID) -> dict:
+    """The stored endpoint doc of exactly one pinned endpoint.
+
+    The read behind a scoped run whose agent row names a box: the caller gets
+    the same doc :func:`local_credential` returns, without the storage-order
+    guess. The failures are RuntimeError, as in :func:`_pinned_auth` — the row
+    was saved with this id, so a pin that no longer resolves is a broken
+    reference to repair, not a connect prompt to answer."""
+    cred = await _get_credential_by_id(user_id, credential_id)
+    if cred is None:
+        raise RuntimeError(f"agent credential_id {credential_id} is not a credential of this user")
+    if cred["kind"] != "endpoint":
+        raise RuntimeError(
+            f"agent credential_id {credential_id} is a {cred['provider']} key, not a local endpoint"
+        )
+    return _local_credential_doc(cred)
+
+
 async def delete_credential(user_id: UUID, provider: str) -> None:
     """Disconnect a key provider. 'local' is refused rather than guessed: with
     several endpoints connected, a provider name no longer names one row to

@@ -301,7 +301,7 @@ async def test_separate_model_contexts_and_no_sprite_execution(
     calls = []
     all_started = asyncio.Event()
 
-    async def fake_run(scope, instructions):
+    async def fake_run(scope, instructions, route=None):  # `route`: run() hands every scope its resolved one
         calls.append((scope.purpose, json.dumps(scope.documents)))
         if len(calls) == 3:
             all_started.set()
@@ -331,7 +331,7 @@ async def test_internal_developer_curator_cannot_read_customer_inputs(
 
     calls = []
 
-    async def fake_run(scope, instructions):
+    async def fake_run(scope, instructions, route=None):
         calls.append(scope)
         assert "SECRET_TRANSCRIPT" not in json.dumps(scope.documents)
         assert "ALLOWED_TRANSCRIPT" not in json.dumps(scope.documents)
@@ -534,7 +534,7 @@ async def test_failed_shared_run_does_not_report_success_or_advance_watermark(
     private_cancelled = set()
     all_private_started = asyncio.Event()
 
-    async def fail_shared(scope, instructions):
+    async def fail_shared(scope, instructions, route=None):
         if scope.purpose == "shared":
             await asyncio.wait_for(all_private_started.wait(), timeout=1)
             raise PermissionError("Publication denied")

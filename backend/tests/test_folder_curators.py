@@ -1010,7 +1010,7 @@ async def test_a_project_curator_in_an_activated_workspace_keeps_its_own_lane(
 
 
 @pytest.mark.asyncio
-async def test_the_two_scoped_lanes_keep_their_backend_key_gate(
+async def test_the_two_scoped_lanes_stay_scoped_and_gated_on_a_provider(
     client: AsyncClient, _db_pool, sprite_exec, monkeypatch
 ):
     """The isolation a folder-lane fix must not leak.
@@ -1019,7 +1019,11 @@ async def test_the_two_scoped_lanes_keep_their_backend_key_gate(
     same account — the box that makes them look runnable to any credential-first
     reading: the External-wiki curator, whose feed mixes every end user's
     transcripts, and the workspace's own internal curator, which a sprite could
-    read across. Both keep the backend-key gate, and the internal one still
+    read across. Being scoped is the lane's, never the credential's; which
+    provider a scoped run then answers to is the backend's configuration, so
+    this stays a refusal only while the account has neither provider — the
+    `sprite_exec` seam answers for a stack with no key and no reachable box, and
+    test_llm_provider covers the box-connected branch. The internal lane still
     dispatches through the scoped path when the key is present."""
     api_key, _, workspace = await _developer(client)
     scope = UUID(workspace["scope_user_id"])

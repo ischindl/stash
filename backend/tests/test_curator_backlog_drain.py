@@ -392,14 +392,13 @@ async def test_the_drain_gate_is_the_lane_and_not_the_owner_developer_workspace(
 ):
     """The mirror of the hijack, on the dispatcher that runs unattended.
 
-    The drain asks the credential because that is the question the run asks. A
-    developer workspace turns that around for its scoped lanes: the External and
-    Memory lanes resolve on the box the console connected, so they earn a metered
-    dispatch here, and only die later inside the run on the missing backend key.
-    The tick's two heavy slots are then spent on runs that cannot start, and the
-    one lane that could have run — the project curator pinned to that same box —
-    waits for a tick that already has two lanes in it. Both lanes are checked
-    against the lane, so the drain, the nightly tick, and the run cannot disagree."""
+    The drain asks the credential because that is the question the run asks, and
+    it asks it per lane. A developer workspace's scoped lanes ask it of the
+    backend's own configuration: with no key and a box the console connected they
+    run on that box (STAS-241), so they earn the dispatch here rather than dying
+    inside the run; the project lane asks it of the endpoint its own row pins.
+    The owner merely having a developer workspace gates neither, so the drain,
+    the nightly tick, and the run cannot disagree."""
     from .test_developer_platform import _developer
     from .test_folder_curators import _connected_box, _console, _file_session, _folder
 
@@ -443,9 +442,9 @@ async def test_the_drain_gate_is_the_lane_and_not_the_owner_developer_workspace(
     assert str(project_lane["id"]) in dispatched, (
         f"the project lane can run on its own box: {dispatched}"
     )
-    assert str(memory_lane["id"]) not in dispatched, (
-        f"the scoped lane has no backend key to run on: {dispatched}"
+    assert str(memory_lane["id"]) in dispatched, (
+        f"the scoped lane runs on the box the console connected: {dispatched}"
     )
     assert await _metering(memory_lane["id"]) == before, (
-        "a lane that cannot run must not spend its allowance on the attempt"
+        "the drain dispatches a lane that can run; only the run itself spends the allowance"
     )

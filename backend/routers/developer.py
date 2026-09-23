@@ -358,11 +358,15 @@ async def _runnable_curator(scope_user_id: UUID, user_id: UUID) -> dict:
     await _require_active_workspace(scope_user_id)
     if not await permission_service.is_workspace_member(scope_user_id, user_id):
         raise HTTPException(status_code=403, detail="Not a workspace member")
+    # The row comes first because its pins are part of the answer: a keyless
+    # stack curates on the endpoint its row names, and a request that gated
+    # before reading the row could only ever ask the backend's key.
+    curator = await agent_service.get_or_create_curator(scope_user_id, wiki="external")
     try:
-        scoped_curation_service.require_configured()
+        await scoped_curation_service.require_route(scope_user_id, curator)
     except agent_auth.ProviderNotConfigured as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
-    return await agent_service.get_or_create_curator(scope_user_id, wiki="external")
+    return curator
 
 
 @router.post("/curator/run", status_code=202)

@@ -219,12 +219,14 @@ async def _first_day_curator_tick(scope_user_id: UUID) -> None:
 async def _require_run_auth(scope_user_id: UUID, agent: dict) -> None:
     """Preflight the credential a run needs, raising NeedsAuth/ProviderNotConfigured.
 
-    A developer-platform workspace curates through the backend's own key with no
-    user credential in play, so its gate is that key. Everything else — personal
-    Memory, project-folder curators, scheduled non-curator agents — runs on the
-    scope's credential, and that credential is a *pinned local endpoint* as much
-    as a key provider: resolving without `model_id`/`credential_id` would send
-    the run to a provider the row never chose (or fail it as a mismatch).
+    A developer-platform workspace curates with no user credential in play, so
+    its gate is the provider the backend is configured for — its own key, or the
+    local endpoint its scope account connected when there is no key. Everything
+    else — personal Memory, project-folder curators, scheduled non-curator
+    agents — runs on the scope's credential, and that credential is a *pinned
+    local endpoint* as much as a key provider: resolving without
+    `model_id`/`credential_id` would send the run to a provider the row never
+    chose (or fail it as a mismatch).
 
     `scope_user_id` is the owner of the feed, which for a folder curator is not
     necessarily `agent["user_id"]`.
@@ -232,7 +234,7 @@ async def _require_run_auth(scope_user_id: UUID, agent: dict) -> None:
     from ..services import agent_auth, scoped_curation_service
 
     if await scoped_curation_service.workspace_for_agent(agent) is not None:
-        scoped_curation_service.require_configured()
+        await scoped_curation_service.require_route(scope_user_id, agent)
         return
     await agent_auth.resolve(
         scope_user_id,

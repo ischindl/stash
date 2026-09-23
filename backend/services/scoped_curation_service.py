@@ -72,11 +72,36 @@ _TOOLS = [
 ]
 
 
-def require_configured() -> None:
-    if not settings.ANTHROPIC_API_KEY:
+async def require_route(user_id: UUID, agent: dict | None = None) -> llm.Route:
+    """One provider for one run, answered by configuration alone.
+
+    The backend's own key is the hosted product's provider; a stack with no key
+    is precisely the self-hosted box that must curate on its own endpoint. An
+    agent row may name which endpoint and may override its model id, but never a
+    base URL or a key — those stay the credential the console stored. Nothing
+    here tries one provider and then the other: a run that silently changed
+    providers would also silently change whose servers hold the customers'
+    transcripts, which is the one thing this path exists to control.
+    """
+    if settings.ANTHROPIC_API_KEY:
+        return llm.anthropic_route()
+    credential_id = agent.get("credential_id") if agent else None
+    if credential_id is not None:
+        doc = await agent_auth.local_endpoint_for_id(user_id, UUID(str(credential_id)))
+    else:
+        doc = await agent_auth.local_credential(user_id)
+    if doc is None:
         raise agent_auth.ProviderNotConfigured(
-            "Scoped curation requires the backend ANTHROPIC_API_KEY"
+            "Scoped curation requires the backend ANTHROPIC_API_KEY "
+            "or a connected local model endpoint"
         )
+    probe = await agent_auth.probe_local_endpoint(doc["base_url"], doc["api_key"])
+    if not probe["ok"]:
+        raise agent_auth.ProviderNotConfigured(
+            f"Local model endpoint {doc['base_url']} is not answering: {probe['error_detail']}"
+        )
+    model = (agent.get("model_id") if agent else None) or doc["model"]
+    return llm.local_route(doc["base_url"], model, doc["api_key"])
 
 
 async def workspace_for_agent(agent: dict) -> dict | None:
@@ -89,8 +114,8 @@ async def workspace_for_agent(agent: dict) -> dict | None:
     one wiki folder, so it runs on the credential its row names even when the
     workspace's scope account owns it. Activation gives that account an External
     wiki, so deciding by owner would sweep the project lanes into the path their
-    rows can never run on: scoped curation needs the backend's key, and a
-    self-hosted box is the one thing that needs no key at all.
+    rows can never run on: a scoped run has no credential of its own to name, so
+    it takes the provider the backend's configuration names (see require_route).
     """
     if not agent["is_curator"]:
         return None
@@ -105,7 +130,7 @@ async def workspace_for_agent(agent: dict) -> dict | None:
 
 async def require_run_auth(agent: dict) -> None:
     if await workspace_for_agent(agent) is not None:
-        require_configured()
+        await require_route(UUID(str(agent["user_id"])), agent)
         return
     await agent_auth.resolve(UUID(str(agent["user_id"])), agent["model_provider"])
 
@@ -378,8 +403,13 @@ async def load_scope(
     return scope
 
 
-async def run_scope(scope: CurationScope, instructions: str | None) -> str:
-    require_configured()
+async def run_scope(
+    scope: CurationScope, instructions: str | None, route: llm.Route | None = None
+) -> str:
+    # The route arrives from run() so one run resolves its provider once; a
+    # caller that comes straight to a scope (a test, a one-off repair) resolves
+    # it here rather than trusting an argument that may be stale.
+    route = route or await require_route(scope.owner_id)
     messages = [{"role": "user", "content": "Curate the permitted documents for this run."}]
     system = system_prompt(scope.purpose)
     if instructions is not None:
@@ -387,44 +417,39 @@ async def run_scope(scope: CurationScope, instructions: str | None) -> str:
     for _ in range(_MAX_TURNS):
         async with get_pool().acquire() as conn:
             await scope.check(conn)
-        response = await llm._get_client().messages.create(
-            model=llm._model_for(llm.ModelTier.QUALITY),
-            max_tokens=16384,
+        turn = await route.complete(
+            tier=llm.ModelTier.QUALITY,
             system=system,
             messages=messages,
             tools=_TOOLS,
+            max_tokens=16384,
         )
-        if response.stop_reason == "end_turn":
+        if turn.stop_reason == "end_turn":
             async with get_pool().acquire() as conn:
                 await scope.check(conn)
-            summary = "\n".join(b.text for b in response.content if b.type == "text")
-            if not summary.strip():
+            if not turn.text.strip():
                 raise ValueError("Curator returned no completion summary")
-            return summary
-        if response.stop_reason != "tool_use":
-            raise RuntimeError(f"Curator stopped before completing: {response.stop_reason}")
-        messages.append(
-            {"role": "assistant", "content": [b.model_dump() for b in response.content]}
-        )
+            return turn.text
+        if turn.stop_reason != "tool_use":
+            raise RuntimeError(f"Curator stopped before completing: {turn.stop_reason}")
+        messages.append({"role": "assistant", "content": turn.blocks})
         results = []
-        for block in response.content:
-            if block.type == "tool_use":
-                result = await scope.tool(block.name, block.input)
-                results.append(
-                    {
-                        "type": "tool_result",
-                        "tool_use_id": block.id,
-                        "content": json.dumps(result),
-                        "is_error": "error" in result,
-                    }
-                )
+        for call in turn.tool_calls:
+            result = await scope.tool(call.name, call.input)
+            results.append(
+                {
+                    "type": "tool_result",
+                    "tool_use_id": call.id,
+                    "content": json.dumps(result),
+                    "is_error": "error" in result,
+                }
+            )
         messages.append({"role": "user", "content": results})
     raise RuntimeError("Curator exhausted its tool turns before completing")
 
 
 async def run(agent: dict, workspace: dict, run_stamp: str) -> str:
     """Each private run and the shared run start with completely fresh model state."""
-    require_configured()
     if agent.get("curator_folder_id") is not None:
         # This path selects its inputs by end user and writes the wiki its
         # scope names. A project curator has neither: its whole contract is one
@@ -435,6 +460,10 @@ async def run(agent: dict, workspace: dict, run_stamp: str) -> str:
             f"{agent['curator_folder_id']}; scoped curation has no folder scope"
         )
     owner = workspace["scope_user_id"]
+    # One provider for the whole run — every scope of one run completes on the
+    # same provider it started on, and the probe is one knock per run, not per
+    # scope.
+    route = await require_route(owner, agent)
     position = curation_service.position_of(agent)
     since = position.at
     # This curator's own wiki is the widest feed the run reads — an internal
@@ -483,7 +512,7 @@ async def run(agent: dict, workspace: dict, run_stamp: str) -> str:
 
     async def curate(scope: CurationScope) -> str:
         async with concurrency:
-            summary = await run_scope(scope, agent["system_prompt"])
+            summary = await run_scope(scope, agent["system_prompt"], route)
             record = f"{scope.purpose} wiki {scope.destination}:\n{summary}"
             await memory_service.push_event(
                 owner,
