@@ -90,7 +90,16 @@ def _static(relative_path: str) -> Callable[[], str]:
 # The file (or composed string) each agent actually loads, per the STAS-211
 # preflight channel map. Static entries are repo-relative file paths; composed
 # entries are module-level strings the CLI builds at runtime.
+#
+# claude is registered in both maps: Claude Code loads the plugin's own CLAUDE.md
+# (it reaches machines through the marketplace, which is why
+# `test_assets_in_sync.py` mirrors only claude's `scripts/`) *and* the composed
+# project block and session-start hook. The other agents' shipped
+# `stashai/plugin/assets/<agent>/` mirrors need no entry here: the parity guard
+# pins them byte-for-byte to the sources below, so drift — or an identical edit
+# to both copies — still fails an assertion here.
 STATIC_CHANNELS: dict[str, list[str]] = {
+    "claude": ["plugins/claude-plugin/CLAUDE.md"],
     "cursor": ["plugins/cursor-plugin/stash.mdc"],
     "codex": ["plugins/codex-plugin/AGENTS.md"],
     "opencode": ["plugins/opencode-plugin/AGENTS.md"],
