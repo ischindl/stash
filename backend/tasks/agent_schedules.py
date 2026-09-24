@@ -147,10 +147,11 @@ async def _run_curator_now(
             # Seconds-resolution stamp so a manual run never shares a session
             # with the beat's minute-stamped run. The stamp separates history
             # only — single flight is `lock` above, not this.
-            await sprite_agent_service.run_scheduled(agent, now.strftime("%Y%m%d%H%M%S"))
-            # A scoped workspace run commits its own watermark under the same
-            # permission lock as its writes, so a concurrent opt-out's reset
-            # cannot be overwritten by this stamp.
+            await sprite_agent_service.run_scheduled(agent, now.strftime("%Y%m%d%H%M%S"), read)
+            # A scoped workspace run commits its own watermark inside its own
+            # transaction, fenced on this same `read`: a concurrent opt-out's reset
+            # or an overlapping run's advance refuses this completion rather than
+            # being stamped over by it.
             if await scoped_curation_service.workspace_for_agent(agent) is None:
                 # The boundary is computed from the position the run ACTUALLY read
                 # from, which the full_history override moved to `never`: a backfill
@@ -505,19 +506,23 @@ async def _run_scheduled_agent(agent_id: UUID, stamp: str) -> None:
         logger.info("agent %s has a run in flight — skipping this dispatch", agent_id)
         await agent_service.mark_run_skipped(agent_id, "already_running")
         return
+    # The position this dispatch loaded IS the position its run reads from, so it is
+    # captured before the run starts and handed to it: the scoped lane fences its own
+    # commit on this value, and the lanes that commit outside the run fence the
+    # `mark_curated` below on it — one value, so the position written against and the
+    # position read cannot drift; a move under the run fails loudly.
+    read = curation_service.position_of(agent)
     try:
-        await sprite_agent_service.run_scheduled(agent, stamp)
+        await sprite_agent_service.run_scheduled(agent, stamp, read)
         if agent["is_curator"] and await scoped_curation_service.workspace_for_agent(agent) is None:
             # `now` predates the run, so changes made during it stay ahead of
             # the watermark and are picked up next time. If the delta
             # overflowed the event cap, the watermark stops at the last event
             # that fit — the overflow drains on subsequent runs. Bookkeeping
             # failures share the run's try so they also record last_run_error
-            # and alert, instead of dying as a bare task error. The CAS anchor is
-            # the very position handed to `complete_through` as its cursor — one
-            # value, so the position written against and the position read cannot
-            # drift; a move under the run fails loudly here.
-            read = curation_service.position_of(agent)
+            # and alert, instead of dying as a bare task error. The cursor handed
+            # to `complete_through` is that same loaded position; a move under the
+            # run fails loudly here.
             through = await curation_service.complete_through(
                 user_id,
                 read,

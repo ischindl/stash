@@ -28,6 +28,7 @@ from cryptography.fernet import Fernet
 from backend.config import settings
 from backend.services import agent_auth, agent_service, llm
 from backend.services import scoped_curation_service as curation
+from backend.services.curation_service import position_of
 
 from .conftest import unique_name
 
@@ -587,7 +588,9 @@ async def test_the_external_wiki_curator_completes_on_the_box(
     )
     curator = await agent_service.get_curator_by_id(curator_id)
 
-    outcome = await curation.run(curator, scoped_dataset.workspace, "20260923000000")
+    outcome = await curation.run(
+        curator, scoped_dataset.workspace, "20260923000000", position_of(curator)
+    )
 
     assert outcome == "Scoped curation completed.", outcome
     assert box.requests, "the run asked the box, not the cloud"

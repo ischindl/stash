@@ -162,7 +162,7 @@ async def test_run_due_failure_sends_alert(client: AsyncClient, sprite_exec, mon
     async def fake_resolve(user_id, prefer_provider=None, model_id=None, credential_id=None):
         return None
 
-    async def fake_run_scheduled(agent, stamp):
+    async def fake_run_scheduled(agent, stamp, read_position):
         raise RuntimeError("agent turn failed: opencode error")
 
     monkeypatch.setattr(agent_auth, "resolve", fake_resolve)
@@ -197,7 +197,7 @@ async def test_run_bookkeeping_failure_sends_alert(client: AsyncClient, sprite_e
     user_id = await _register(client)
     agent = await _make_curator(user_id, curated_hours_ago=72, last_run_error=None)
 
-    async def fake_run_scheduled(agent, stamp):
+    async def fake_run_scheduled(agent, stamp, read_position):
         return ""
 
     async def boom(user_id, position, now, wiki, folder_id=None):

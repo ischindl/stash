@@ -29,7 +29,7 @@ from backend.services import (
     scoped_curation_service,
     sprite_agent_service,
 )
-from backend.services.curation_service import NEVER, Position
+from backend.services.curation_service import NEVER, Position, position_of
 from backend.tasks import agent_schedules
 
 from .test_curator import _auth, _push_events, _register
@@ -592,7 +592,7 @@ async def test_two_phase_run_digests_then_writes_from_the_report(
     )
     agent = await agent_service.get_curator_by_id(UUID(curator["id"]))
 
-    result = await sprite_agent_service.run_scheduled(agent, "20260102030405")
+    result = await sprite_agent_service.run_scheduled(agent, "20260102030405", position_of(agent))
     assert result == "LOG"
 
     assert len(calls) == 2
@@ -637,7 +637,7 @@ async def test_empty_digest_fails_the_run_before_the_writer(
     agent = await agent_service.get_curator_by_id(UUID(curator["id"]))
 
     with pytest.raises(RuntimeError, match="no extracts"):
-        await sprite_agent_service.run_scheduled(agent, "20260102030406")
+        await sprite_agent_service.run_scheduled(agent, "20260102030406", position_of(agent))
     assert len(calls) == 1  # the writer never ran
 
 
@@ -820,7 +820,7 @@ async def _run_once_auth(uid, agent: dict, monkeypatch) -> agent_auth.RunAuth:
 
     monkeypatch.setattr(agent_auth, "resolve", spy)
     with pytest.raises(sprite_agent_service.NeedsAuth):
-        await sprite_agent_service.run_scheduled(agent, "202601011200")
+        await sprite_agent_service.run_scheduled(agent, "202601011200", position_of(agent))
     monkeypatch.setattr(agent_auth, "resolve", real)
     assert len(calls) == 1  # digest NULL: one phase, one resolve
     return await agent_auth.resolve(uid, **calls[0])
@@ -1047,10 +1047,13 @@ async def test_the_two_scoped_lanes_stay_scoped_and_gated_on_a_provider(
 
     runs: list[tuple[str, str, str]] = []
 
-    async def scoped_run(agent, scoped_workspace, run_stamp):
+    async def scoped_run(agent, scoped_workspace, run_stamp, read_position):
         runs.append((str(agent["id"]), str(scoped_workspace["id"]), run_stamp))
         return "CURATED"
 
     monkeypatch.setattr(scoped_curation_service, "run", scoped_run)
-    assert await sprite_agent_service.run_scheduled(internal, "20260102030405") == "CURATED"
+    result = await sprite_agent_service.run_scheduled(
+        internal, "20260102030405", position_of(internal)
+    )
+    assert result == "CURATED"
     assert runs == [(str(internal["id"]), workspace["id"], "20260102030405")]

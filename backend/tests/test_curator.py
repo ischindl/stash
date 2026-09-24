@@ -1,5 +1,6 @@
 """The daily Memory curator: provisioning, change feed, cost gate, prompt."""
 
+import asyncio
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
@@ -519,7 +520,7 @@ async def test_failed_curator_run_preserves_watermark(
     watermark = datetime.now(UTC) - timedelta(minutes=2)
     await _make_due(_db_pool, curator["id"], watermark)
 
-    async def boom(agent, stamp):
+    async def boom(agent, stamp, read_position):
         raise RuntimeError("sprite exploded")
 
     monkeypatch.setattr(sprite_agent_service, "run_scheduled", boom)
@@ -556,7 +557,7 @@ async def test_failed_run_records_error_and_refunds_credit(
     )
     await _make_due(_db_pool, curator["id"], datetime.now(UTC) - timedelta(minutes=2))
 
-    async def boom(agent, stamp):
+    async def boom(agent, stamp, read_position):
         raise RuntimeError("sprite exploded")
 
     real_run_scheduled = sprite_agent_service.run_scheduled
@@ -649,7 +650,7 @@ async def test_failed_manual_recompute_records_error(
     key, uid = await _register(client)
     curator = await agent_service.get_or_create_curator(uid)
 
-    async def boom(agent, stamp):
+    async def boom(agent, stamp, read_position):
         raise RuntimeError("harness missing")
 
     monkeypatch.setattr(sprite_agent_service, "run_scheduled", boom)
@@ -1204,7 +1205,7 @@ async def test_stale_completion_cannot_regress_an_overlapping_run(
     await _db_pool.execute("UPDATE agents SET curated_through = $2 WHERE id = $1", cid, seeded)
     advanced = datetime.now(UTC) + timedelta(minutes=10)
 
-    async def overlapping_run_finished(agent, stamp):
+    async def overlapping_run_finished(agent, stamp, read_position):
         # Stands in for the other run completing mid-turn. It started from the
         # same stored position this run read, so ITS compare-and-set matches and
         # its (newer) watermark lands.
@@ -1291,7 +1292,7 @@ async def test_a_mid_run_ingest_rewind_fails_the_curator_run_loud(
     await _db_pool.execute("UPDATE agents SET curated_through = $2 WHERE id = $1", cid, position)
     meter_before = await _db_pool.fetchval("SELECT month_run_count FROM agents WHERE id = $1", cid)
 
-    async def ingest_older_history(agent, stamp):
+    async def ingest_older_history(agent, stamp, read_position):
         # A late import lands mid-turn; its rewind drags the stored watermark
         # below the position this run read at start. Real ingest path.
         await _push_one(client, key, "conv-late-import", datetime.now(UTC) - timedelta(days=3))
@@ -1341,7 +1342,7 @@ async def test_the_scheduled_curator_run_fails_loud_when_the_watermark_moves(
     await _db_pool.execute("UPDATE agents SET curated_through = $2 WHERE id = $1", cid, seeded)
     advanced = datetime.now(UTC) + timedelta(minutes=10)
 
-    async def overlapping_writer(agent, stamp):
+    async def overlapping_writer(agent, stamp, read_position):
         # The other run advanced the watermark mid-turn; its own CAS matches
         # (it started from the same stored position), so its write lands.
         await agent_service.mark_curated(cid, Position(seeded), Position(advanced))
@@ -1390,7 +1391,7 @@ async def test_double_dispatch_on_one_agent_runs_single_flight(
     turn_released = asyncio.Event()
     turns: list[str] = []
 
-    async def turn_holds_the_agent(agent, stamp):
+    async def turn_holds_the_agent(agent, stamp, read_position):
         turns.append(stamp)
         turn_started.set()
         await turn_released.wait()
@@ -1431,3 +1432,112 @@ async def test_double_dispatch_on_one_agent_runs_single_flight(
     turn_started.clear()
     await _run_curator_now(cid, metered=False)
     assert len(turns) == 2, "a dispatch after the run released the lock must execute"
+
+
+# --- The window the fence is responsible for (STAS-250). A compare-and-set only
+# protects what it covers: the statement refuses a position that already moved,
+# but it has to also hold the row from the moment it decides until the curation it
+# is stamping is committed. These two pin that window and the crash boundary.
+
+
+async def _fenced_commit(conn, cid: UUID, read: Position, through: Position) -> Position:
+    """One lane's whole commit: the fenced advance on the transaction that publishes
+    its writes. This is the shape `scoped_curation_service.run` commits under."""
+    async with conn.transaction():
+        return await agent_service.advance_watermark(conn, cid, read, through)
+
+
+@pytest.mark.asyncio
+async def test_the_fence_holds_the_agent_row_until_its_commit_lands(client: AsyncClient, _db_pool):
+    """The window between deciding and committing is the one a competing writer used
+    to fall into: two lanes reading the same position both pass their own fence, and
+    the second discards the first. Holding the row from the match to the commit is
+    what makes that impossible, so a rival that starts its fenced commit while the
+    first transaction is still open provably waits on it — and is then refused, so
+    the first run's progress stands. Nothing here assumes a duration: the test polls
+    until Postgres reports the rival blocked BY the holding backend (the row lock the
+    fence leaves uncommitted), then releases the holder, and a rival that finished
+    early fails the assertion outright rather than passing."""
+    _key, uid = await _register(client)
+    curator = await agent_service.get_or_create_curator(uid)
+    cid = UUID(curator["id"])
+    seed = Position(datetime(2026, 6, 1, tzinfo=UTC))
+    await _db_pool.execute(
+        "UPDATE agents SET curated_through = NULL, curated_through_event_id = NULL WHERE id = $1",
+        cid,
+    )
+    await agent_service.mark_curated(cid, NEVER, seed)
+
+    first = Position(datetime(2026, 7, 1, tzinfo=UTC))
+    rival = Position(datetime(2026, 8, 1, tzinfo=UTC))
+
+    async with _db_pool.acquire() as holder, _db_pool.acquire() as rival_conn:
+        holder_pid = await holder.fetchval("SELECT pg_backend_pid()")
+        rival_pid = await rival_conn.fetchval("SELECT pg_backend_pid()")
+        async with holder.transaction():
+            assert await agent_service.advance_watermark(holder, cid, seed, first) == first
+            rival_write = asyncio.create_task(_fenced_commit(rival_conn, cid, seed, rival))
+
+            for _ in range(600):  # a 3s ceiling on reaching the lock, not a timing bet
+                assert not rival_write.done(), (
+                    "the competing writer completed its advance while the first run's "
+                    "transaction was still open — the fence does not cover the commit window"
+                )
+                blocked_by = await _db_pool.fetchval(
+                    "SELECT pg_blocking_pids($1) @> array[$2::int]",
+                    rival_pid,
+                    holder_pid,
+                )
+                if blocked_by:
+                    break
+                await asyncio.sleep(0.005)
+            else:
+                pytest.fail("the competing writer never blocked on the first run's open fence")
+
+        with pytest.raises(agent_service.CuratorWatermarkConflict):
+            await rival_write
+
+    kept = await _db_pool.fetchrow(
+        "SELECT curated_through, curated_through_event_id FROM agents WHERE id = $1", cid
+    )
+    assert curation_service.position_of(kept) == first
+
+
+@pytest.mark.asyncio
+async def test_a_failure_after_the_fence_publishes_neither_the_watermark_nor_the_window(
+    client: AsyncClient, _db_pool
+):
+    """The crash boundary of the same window. A lane commits its watermark in the one
+    transaction that publishes its writes, so a failure raised after the fenced
+    statement has already matched must roll the stamp back with everything else: a
+    run that advanced the marker and then died would report a stretch of history as
+    curated that it never wrote, and the feed would never offer it again — which is
+    the loss this card exists to make impossible, in the opposite direction."""
+    key, uid = await _register(client)
+    curator = await agent_service.get_or_create_curator(uid)
+    cid = UUID(curator["id"])
+    read = Position(datetime(2026, 6, 1, tzinfo=UTC))
+    await _db_pool.execute(
+        "UPDATE agents SET curated_through = NULL, curated_through_event_id = NULL WHERE id = $1",
+        cid,
+    )
+    await agent_service.mark_curated(cid, NEVER, read)
+    await client.post(
+        "/api/v1/me/pages/new", json={"name": "After the fence", "content": "x"}, headers=_auth(key)
+    )
+
+    async with _db_pool.acquire() as conn:
+        with pytest.raises(RuntimeError, match="publish failed after the fence"):
+            async with conn.transaction():
+                await agent_service.advance_watermark(
+                    conn, cid, read, Position(datetime(2026, 7, 1, tzinfo=UTC))
+                )
+                raise RuntimeError("publish failed after the fence")
+
+    kept = await _db_pool.fetchrow(
+        "SELECT curated_through, curated_through_event_id FROM agents WHERE id = $1", cid
+    )
+    assert curation_service.position_of(kept) == read, "the crashed run advanced the marker"
+    assert await curation_service.has_changes_since(uid, uid, read, wiki="internal"), (
+        "the crashed run's window stopped being offered to the next one"
+    )

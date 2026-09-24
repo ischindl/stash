@@ -18,7 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from ..config import settings
 from ..database import get_pool
-from . import agent_auth, curation_service, files_tree_service, llm, memory_service
+from . import agent_auth, agent_service, curation_service, files_tree_service, llm, memory_service
 
 _READ_CHARS = 16_000
 _MAX_TURNS = 40
@@ -448,8 +448,21 @@ async def run_scope(
     raise RuntimeError("Curator exhausted its tool turns before completing")
 
 
-async def run(agent: dict, workspace: dict, run_stamp: str) -> str:
-    """Each private run and the shared run start with completely fresh model state."""
+async def run(
+    agent: dict,
+    workspace: dict,
+    run_stamp: str,
+    read_position: curation_service.Position,
+) -> str:
+    """Each private run and the shared run start with completely fresh model state.
+
+    `read_position` is the pair the dispatcher loaded from this agent row, which is
+    where the run read from — the position the committing compare-and-set fences
+    against. It is deliberately not re-read from the row here: this function's own
+    `agent` dict can carry a deliberately nulled `curated_through` (a `full_history`
+    backfill reads the whole corpus while staying allowed to write against the
+    position it started from), and a position read back out of the database at commit
+    time would fence on the value the commit is trying to replace."""
     if agent.get("curator_folder_id") is not None:
         # This path selects its inputs by end user and writes the wiki its
         # scope names. A project curator has neither: its whole contract is one
@@ -529,16 +542,14 @@ async def run(agent: dict, workspace: dict, run_stamp: str) -> str:
     async with asyncio.TaskGroup() as group:
         tasks = [group.create_task(curate(scope)) for scope in scopes]
     summaries = [task.result() for task in tasks]
-    # Commit progress under the same permission lock as writes. The scheduler
-    # must not later overwrite a concurrent opt-out's reset watermark.
+    # Commit progress under the same permission lock as the writes, and under the
+    # same fence every other forward writer obeys: one fenced statement, run on this
+    # transaction's conn, so the row stays locked against a competing writer from the
+    # fence until these writes commit and a concurrent opt-out's reset or an
+    # overlapping run's advance refuses this completion instead of being clobbered.
     async with get_pool().acquire() as conn, conn.transaction():
         await scopes[-1].check(conn)
-        await conn.execute(
-            "UPDATE agents SET curated_through=$2, curated_through_event_id=$3 WHERE id=$1",
-            UUID(str(agent["id"])),
-            until.at,
-            until.event_id,
-        )
+        await agent_service.advance_watermark(conn, UUID(str(agent["id"])), read_position, until)
     await memory_service.push_event(
         owner,
         agent["name"],

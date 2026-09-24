@@ -29,6 +29,7 @@ import redis.asyncio as aioredis
 from ..config import settings
 from . import agent_auth, agent_service, mcp_server_service, memory_service, prompts, sprite_service
 from . import harness as harness_mod
+from .curation_service import Position
 
 logger = logging.getLogger(__name__)
 
@@ -564,9 +565,16 @@ async def build_digest_turn(agent: dict, run_stamp: str) -> tuple[str, str]:
     return session_id, prompts.render_digest_prompt(changes_cmd, prompts.curator_window(since))
 
 
-async def run_scheduled(agent: dict, run_stamp: str) -> str:
+async def run_scheduled(agent: dict, run_stamp: str, read_position: Position) -> str:
     """Run a scheduled agent headless — one turn into a fresh per-run session —
     and return the result text.
+
+    `read_position` is the pair the dispatcher loaded from this row: the position the
+    run reads from, and therefore the one its watermark commit fences against. It
+    travels as an argument because the row the run finishes on is not the row it
+    started from — a mid-run rewind or overlapping advance means the stored pair has
+    moved, and a commit that asked the database what it holds would fence on the very
+    value it is about to overwrite.
 
     A developer-platform workspace's curator never reaches a sprite at all — it
     runs the backend's scoped curation, which is why the workspace is checked
@@ -588,7 +596,7 @@ async def run_scheduled(agent: dict, run_stamp: str) -> str:
         async with _turn_lock(f"{scheduled_session_prefix(agent)}{run_stamp}"):
             try:
                 return await asyncio.wait_for(
-                    scoped_curation_service.run(agent, workspace, run_stamp),
+                    scoped_curation_service.run(agent, workspace, run_stamp, read_position),
                     timeout=settings.AGENT_TURN_TIMEOUT_SECONDS,
                 )
             except TimeoutError as exc:

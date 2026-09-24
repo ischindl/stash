@@ -22,7 +22,12 @@ from cryptography.fernet import Fernet
 from httpx import AsyncClient
 
 from backend.config import settings
-from backend.services import agent_auth, agent_service, sprite_agent_service
+from backend.services import (
+    agent_auth,
+    agent_service,
+    curation_service,
+    sprite_agent_service,
+)
 
 from .test_curator import _register
 from .test_developer_platform import _developer
@@ -967,7 +972,9 @@ async def test_a_pinned_curators_run_resolves_through_the_pin(
 
     calls, undo = _spy_resolve(monkeypatch)
     with pytest.raises(sprite_agent_service.NeedsAuth):
-        await sprite_agent_service.run_scheduled(agent, "202601011200")
+        await sprite_agent_service.run_scheduled(
+            agent, "202601011200", curation_service.position_of(agent)
+        )
     assert calls == [{"prefer": "local", "model_id": "qwen", "cred": two}]
 
     undo()
@@ -987,7 +994,9 @@ async def test_an_unpinned_curator_run_still_dials_the_oldest_box(
 
     calls, undo = _spy_resolve(monkeypatch)
     with pytest.raises(sprite_agent_service.NeedsAuth):
-        await sprite_agent_service.run_scheduled(agent, "202601011200")
+        await sprite_agent_service.run_scheduled(
+            agent, "202601011200", curation_service.position_of(agent)
+        )
     assert calls == [{"prefer": "local", "model_id": None, "cred": None}]
 
     undo()
@@ -1028,7 +1037,9 @@ async def test_the_digest_phase_carries_the_pin_only_for_a_local_box(
     )
     calls, _undo = _spy_resolve(monkeypatch)
     with pytest.raises(sprite_agent_service.NeedsAuth):
-        await sprite_agent_service.run_scheduled(agent, "202601011200")
+        await sprite_agent_service.run_scheduled(
+            agent, "202601011200", curation_service.position_of(agent)
+        )
     assert calls == [{"prefer": "anthropic", "model_id": "haiku", "cred": None}]
 
     agent = await _pin_curator(
@@ -1041,7 +1052,9 @@ async def test_the_digest_phase_carries_the_pin_only_for_a_local_box(
     )
     calls, _undo = _spy_resolve(monkeypatch)
     with pytest.raises(sprite_agent_service.NeedsAuth):
-        await sprite_agent_service.run_scheduled(agent, "202601011200")
+        await sprite_agent_service.run_scheduled(
+            agent, "202601011200", curation_service.position_of(agent)
+        )
     assert calls == [{"prefer": "local", "model_id": "qwen-mini", "cred": two}]
 
 
@@ -1077,7 +1090,10 @@ async def test_a_pinned_two_phase_curator_dials_one_box_for_both_turns(
         return "EXTRACT: two sessions changed" if len(turns) == 1 else "LOG: wiki written"
 
     monkeypatch.setattr(sprite_agent_service, "run_chat", fake_run_chat)
-    assert await sprite_agent_service.run_scheduled(agent, "202601021200") == "LOG: wiki written"
+    result = await sprite_agent_service.run_scheduled(
+        agent, "202601021200", curation_service.position_of(agent)
+    )
+    assert result == "LOG: wiki written"
     assert len(turns) == 2
 
     auths = [

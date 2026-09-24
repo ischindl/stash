@@ -2,7 +2,7 @@
 
 import asyncio
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from uuid import UUID
 
@@ -296,7 +296,7 @@ async def test_shared_reads_recheck_consent_even_without_a_generation_change(dat
 async def test_separate_model_contexts_and_no_sprite_execution(
     dataset, pool, monkeypatch, sprite_exec
 ):
-    from backend.services import agent_service, sprite_agent_service
+    from backend.services import agent_service, curation_service, sprite_agent_service
 
     calls = []
     all_started = asyncio.Event()
@@ -315,8 +315,12 @@ async def test_separate_model_contexts_and_no_sprite_execution(
     monkeypatch.setattr(curation, "run_scope", fake_run)
     monkeypatch.setattr(sprite_agent_service, "run_chat", forbidden)
     agent = await agent_service.get_or_create_curator(dataset.owner, wiki="external")
+    # The whole corpus is this run's feed, so its position is nulled — but the
+    # watermark fence anchors on the position the caller loaded, exactly as
+    # `_run_curator_now` captures it before the same override.
+    read = curation_service.position_of(agent)
     agent["curated_through"] = None
-    await sprite_agent_service.run_scheduled(agent, "security-test")
+    await sprite_agent_service.run_scheduled(agent, "security-test", read)
     assert len([p for p, _ in calls if p == "private"]) == 2
     assert len([p for p, _ in calls if p == "shared"]) == 1
     assert all("SECRET_TRANSCRIPT" not in text for p, text in calls if p == "shared")
@@ -328,7 +332,7 @@ async def test_separate_model_contexts_and_no_sprite_execution(
 async def test_internal_developer_curator_cannot_read_customer_inputs(
     dataset, pool, monkeypatch, sprite_exec
 ):
-    from backend.services import agent_service, sprite_agent_service
+    from backend.services import agent_service, curation_service, sprite_agent_service
 
     calls = []
 
@@ -340,8 +344,9 @@ async def test_internal_developer_curator_cannot_read_customer_inputs(
 
     monkeypatch.setattr(curation, "run_scope", fake_run)
     agent = await agent_service.get_or_create_curator(dataset.owner, wiki="internal")
+    read = curation_service.position_of(agent)
     agent["curated_through"] = None
-    await sprite_agent_service.run_scheduled(agent, "security-test")
+    await sprite_agent_service.run_scheduled(agent, "security-test", read)
     assert len(calls) == 1 and calls[0].purpose == "internal"
     assert sprite_exec.calls == [] and sprite_exec.writes == []
     with pytest.raises(PermissionError):
@@ -529,7 +534,7 @@ async def test_developer_prompt_preview_describes_scoped_runner(dataset):
 async def test_failed_shared_run_does_not_report_success_or_advance_watermark(
     dataset, pool, monkeypatch, sprite_exec
 ):
-    from backend.services import agent_service, sprite_agent_service
+    from backend.services import agent_service, curation_service, sprite_agent_service
 
     private_started = set()
     private_cancelled = set()
@@ -550,12 +555,13 @@ async def test_failed_shared_run_does_not_report_success_or_advance_watermark(
 
     monkeypatch.setattr(curation, "run_scope", fail_shared)
     agent = await agent_service.get_or_create_curator(dataset.owner, wiki="external")
-    agent["curated_through"] = None
     before = await pool.fetchval(
         "SELECT curated_through FROM agents WHERE id=$1", UUID(agent["id"])
     )
+    read = curation_service.position_of(agent)
+    agent["curated_through"] = None
     with pytest.raises(ExceptionGroup) as failure:
-        await sprite_agent_service.run_scheduled(agent, "failed-test")
+        await sprite_agent_service.run_scheduled(agent, "failed-test", read)
     assert any(isinstance(exc, PermissionError) for exc in failure.value.exceptions)
     assert private_cancelled == private_started and len(private_cancelled) == 2
     assert (
@@ -595,3 +601,134 @@ async def test_scoped_run_timeout_preserves_progress_and_releases_lock(
     assert row["curated_through"] == before
     assert row["last_run_outcome"] == "failed" and "run time limit" in row["last_run_error"]
     assert sprite_exec.redis.data == {}
+
+
+# --- The scoped lane commits its watermark under the same compare-and-set every
+# other forward writer already uses (STAS-250). Before this, `run` stamped its own
+# boundary with a bare UPDATE, so the fence `mark_curated` enforces for the Memory
+# and folder curators stopped at the one lane that also moves the marker forward.
+
+
+@pytest.mark.asyncio
+async def test_a_scoped_run_cannot_discard_an_overlapping_run_watermark_advance(
+    dataset, pool, monkeypatch, sprite_exec
+):
+    """An overlapping run advanced this lane mid-turn: its progress stands, this
+    run's completion is refused loud, and the refused run claims no completion in
+    the curator log. This is the founder's 2026-09-05 loss (one run discarding
+    another's finished curation) reached through the second forward writer — the
+    lane's unconditional stamp discarded the other run's advance without a word."""
+    from backend.services import agent_service, curation_service
+    from backend.tasks.agent_schedules import _run_curator_now
+
+    agent = await agent_service.get_or_create_curator(dataset.owner, wiki="external")
+    curator = UUID(agent["id"])
+    read = datetime.now(UTC) - timedelta(minutes=5)
+    await pool.execute("UPDATE agents SET curated_through=$2 WHERE id=$1", curator, read)
+    advanced = curation_service.Position(datetime.now(UTC) + timedelta(minutes=10))
+
+    overlapped = False
+
+    async def overlapping_run_finished(scope, instructions, route=None):
+        # The other run started from this same stored position, so its own
+        # compare-and-set matches and its advance lands once, while this run is
+        # mid-turn. The guard is the other run's single completion: this run's
+        # fan-out visits several scopes, and one curation run advances the marker
+        # once however many scopes it walks.
+        nonlocal overlapped
+        if not overlapped:
+            overlapped = True
+            await agent_service.mark_curated(curator, curation_service.Position(read), advanced)
+        return "Completed this isolated wiki."
+
+    monkeypatch.setattr(curation, "run_scope", overlapping_run_finished)
+    with pytest.raises(agent_service.CuratorWatermarkConflict):
+        await _run_curator_now(curator, metered=False)
+
+    row = await pool.fetchrow(
+        "SELECT curated_through,curated_through_event_id,last_run_outcome FROM agents WHERE id=$1",
+        curator,
+    )
+    assert row["curated_through"] == advanced.at  # the other run's advance survives exactly
+    assert row["curated_through_event_id"] == advanced.event_id
+    assert row["last_run_outcome"] == "failed"
+    assert (
+        await pool.fetchval(
+            "SELECT count(*) FROM history_events "
+            "WHERE session_id LIKE 'agent-curate-%' AND event_type='assistant_message'"
+        )
+        == 0
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_scoped_run_cannot_swallow_a_concurrent_reset_to_never(
+    dataset, pool, monkeypatch, sprite_exec
+):
+    """The reset-to-NULL class, which only a compare-and-set can see: revoking a
+    shared wiki clears its curator's pair — what `end_user_service`'s `_archive_shared_wiki`
+    does — so re-sharing re-curates from the start. A run that read before the reset holds
+    a position the stored value no longer is, so its advance is refused: stamped over the
+    NULL it would have closed the corpus the reset deliberately re-opened."""
+    from backend.services import agent_service, curation_service
+    from backend.tasks.agent_schedules import _run_curator_now
+
+    agent = await agent_service.get_or_create_curator(dataset.owner, wiki="external")
+    curator = UUID(agent["id"])
+    read = datetime.now(UTC) - timedelta(minutes=5)
+    await pool.execute("UPDATE agents SET curated_through=$2 WHERE id=$1", curator, read)
+
+    async def revoked_mid_turn(scope, instructions, route=None):
+        # The revocation's own write, in its own shape: both halves cleared.
+        await pool.execute(
+            "UPDATE agents SET curated_through=NULL,curated_through_event_id=NULL WHERE id=$1",
+            curator,
+        )
+        return "Completed this isolated wiki."
+
+    monkeypatch.setattr(curation, "run_scope", revoked_mid_turn)
+    with pytest.raises(agent_service.CuratorWatermarkConflict):
+        await _run_curator_now(curator, metered=False)
+
+    row = await pool.fetchrow(
+        "SELECT curated_through,curated_through_event_id,last_run_outcome FROM agents WHERE id=$1",
+        curator,
+    )
+    assert row["curated_through"] is None and row["curated_through_event_id"] is None
+    assert row["last_run_outcome"] == "failed"
+    # The window the reset re-opened is still open — nothing was skipped unread.
+    assert await curation_service.has_changes_since(
+        dataset.owner, dataset.owner, curation_service.NEVER, curation_service.WIKI_EXTERNAL
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_full_history_scoped_run_advances_the_position_it_read(
+    dataset, pool, monkeypatch, sprite_exec
+):
+    """`full_history` re-reads the whole corpus from `never` and stays
+    compare-and-set on the position the dispatcher loaded, so a backfill onto a lane
+    that already curated is an ordinary advance rather than a conflict. The fence
+    anchors on the loaded position, not on the position the override nulled for the
+    feed — anchored on the nulled one, a backfill could never write at all."""
+    from backend.services import agent_service
+    from backend.tasks.agent_schedules import _run_curator_now
+
+    agent = await agent_service.get_or_create_curator(dataset.owner, wiki="external")
+    curator = UUID(agent["id"])
+    read = datetime.now(UTC) - timedelta(minutes=5)
+    await pool.execute("UPDATE agents SET curated_through=$2 WHERE id=$1", curator, read)
+
+    async def curated(scope, instructions, route=None):
+        return "Completed this isolated wiki."
+
+    monkeypatch.setattr(curation, "run_scope", curated)
+    await _run_curator_now(curator, metered=False, full_history=True)
+
+    row = await pool.fetchrow(
+        "SELECT curated_through,curated_through_event_id,last_run_outcome,last_run_error "
+        "FROM agents WHERE id=$1",
+        curator,
+    )
+    assert row["curated_through"] > read  # the backfill landed, it was not refused
+    assert row["last_run_outcome"] == "ran", row["last_run_error"]

@@ -761,23 +761,30 @@ class CuratorWatermarkConflict(Exception):
         )
 
 
-async def mark_curated(agent_id: UUID, read: Position, through: Position) -> Position:
-    """Advance the curator's delta watermark — only after a successful run, so a
-    failed run's window is re-covered next time. Returns the stored position.
+async def advance_watermark(conn, agent_id: UUID, read: Position, through: Position) -> Position:
+    """The one fenced forward write on the curator watermark — every writer that
+    moves it ahead runs THIS statement, on the connection that commits it.
 
-    The advance is a compare-and-set: it lands only while the stored value is
-    still the position the run read (`read`). If anything moved it in the interim
-    — an ingest rewind re-opening deliberately-re-read history, or an overlapping
-    run pushing ahead — the write is refused and raised as
-    CuratorWatermarkConflict, so a stale completion can neither swallow a rewind
-    nor discard the other run's progress. Inside a match the write stays monotonic:
+    Run it on your own transaction's `conn` (which is why it takes one rather than
+    borrowing the pool): the fence holds the agent row locked from the moment the
+    match is decided until that transaction commits, so a competing writer cannot
+    move the marker inside the window between the fence and the commit of the curation
+    it is stamping. It takes `read` — the position the run actually loaded, not what
+    the row holds when it finishes writing: a run reading one position and writing
+    against another would fence on the value it is trying to overwrite.
+
+    The write lands only while the stored pair is still `read`. If anything moved it
+    in the interim — an ingest rewind re-opening deliberately-re-read history, a
+    concurrent reset to never, or an overlapping run pushing ahead — no row matches,
+    the position is re-read to report where it actually stands, and the completion is
+    refused loud as CuratorWatermarkConflict. Inside a match the write stays monotonic:
     a matched read whose proposal sits behind the stored position clamps rather than
     regressing, and that clamp is logged naming the curator and the retained position
     (a run's number vanishing in silence is what read as "completed curation
-    discarded"). The one writer allowed to move the watermark backwards is the ingest
-    rewind in memory_service — a deliberate re-read, not a run's bookkeeping — and
-    this compare-and-set is precisely what makes that rewind un-clobberable by a run
-    that read before it.
+    discarded"). The only writers allowed to move the watermark backwards are the
+    deliberate re-reads — the ingest rewind in memory_service and the folder/revoke
+    resets — and this compare-and-set is precisely what makes them un-clobberable by a
+    run that read before them.
 
     Both halves are written by the same statement, and the clamp compares them as one
     position: `position_ahead` is the SQL form of `Position.ahead`, so Python and the
@@ -787,7 +794,7 @@ async def mark_curated(agent_id: UUID, read: Position, through: Position) -> Pos
     while the same proposal next to a mid-tie stored position must advance."""
     args: list = [agent_id, read.at, read.event_id]
     clamp = position_ahead(args, through, "curated_through", "curated_through_event_id")
-    row = await get_pool().fetchrow(
+    row = await conn.fetchrow(
         "UPDATE agents SET "
         "curated_through = CASE WHEN " + clamp + " THEN curated_through ELSE $4::timestamptz END, "
         "curated_through_event_id = CASE WHEN " + clamp + " THEN curated_through_event_id "
@@ -800,7 +807,7 @@ async def mark_curated(agent_id: UUID, read: Position, through: Position) -> Pos
     if row is None:
         # No row matched: the position moved under the run (or the agent row is
         # gone). Re-read to report where it actually stands, then fail loud.
-        current = await get_pool().fetchrow(
+        current = await conn.fetchrow(
             "SELECT curated_through, curated_through_event_id FROM agents WHERE id = $1",
             agent_id,
         )
@@ -809,12 +816,26 @@ async def mark_curated(agent_id: UUID, read: Position, through: Position) -> Pos
     if stored.ahead(through):
         logger.info(
             "curator %s watermark not moved: run proposed %s, stored position kept at %s "
-            "(advance is monotonic; see mark_curated)",
+            "(advance is monotonic; see advance_watermark)",
             agent_id,
             through,
             stored,
         )
     return stored
+
+
+async def mark_curated(agent_id: UUID, read: Position, through: Position) -> Position:
+    """Advance the curator's delta watermark — only after a successful run, so a
+    failed run's window is re-covered next time. Returns the stored position.
+
+    This is the completion write for the lanes whose commit sits outside the run's
+    own transaction (the Memory and project-folder curators); a scoped workspace run
+    calls `advance_watermark` on the transaction that publishes its writes instead.
+    Both go through that one statement — the contract is one primitive, so no forward
+    writer can hold a looser one (a bare UPDATE here clobbered ingest rewinds and
+    overlapping runs until STAS-250)."""
+    async with get_pool().acquire() as conn, conn.transaction():
+        return await advance_watermark(conn, agent_id, read, through)
 
 
 async def set_system_prompt(agent_id: UUID, text: str | None) -> dict:
