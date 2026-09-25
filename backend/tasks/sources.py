@@ -214,6 +214,11 @@ def respond_to_telegram_message(message: dict) -> None:
 
 
 async def _alert_stalled_syncs() -> int:
+    """One rule: sync_alerted_at records when the watchdog last resolved a
+    source — the alert was delivered, or delivery was deliberately suppressed
+    because this installation sends no operational alerts. A failed delivery is
+    not a resolution: send_alert propagates and the throttle write never runs,
+    so the next tick retries."""
     from ..database import get_pool
 
     rows = await get_pool().fetch(
@@ -235,16 +240,17 @@ async def _alert_stalled_syncs() -> int:
     )
     if not rows:
         return 0
-    lines = [
-        f"- {r['display_name']} ({r['id']}, {r['source_type']}): "
-        f"last successful sync {r['last_synced_at']}; claimed {r['sync_claimed_at']}"
-        for r in rows[:25]
-    ]
-    if len(rows) > 25:
-        lines.append(f"... and {len(rows) - 25} more sources.")
-    await alert_service.send_alert(
-        f"Source syncing stalled for {len(rows)} source(s):\n" + "\n".join(lines)
-    )
+    if alert_service.alerts_enabled():
+        lines = [
+            f"- {r['display_name']} ({r['id']}, {r['source_type']}): "
+            f"last successful sync {r['last_synced_at']}; claimed {r['sync_claimed_at']}"
+            for r in rows[:25]
+        ]
+        if len(rows) > 25:
+            lines.append(f"... and {len(rows) - 25} more sources.")
+        await alert_service.send_alert(
+            f"Source syncing stalled for {len(rows)} source(s):\n" + "\n".join(lines)
+        )
     await get_pool().execute(
         "UPDATE user_sources SET sync_alerted_at = now() WHERE id = ANY($1::uuid[])",
         [r["id"] for r in rows],

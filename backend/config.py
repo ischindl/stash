@@ -191,7 +191,10 @@ class Settings:
 
     # --- Ops alerts ---
     # The installed Slack bot must be a member of this operations channel.
-    # Missing configuration or failed delivery raises; logs are not delivery.
+    # Unset (either half) is a mode, not an error: this installation sends no
+    # operational alerts — the worker says so once at startup and watchdogs
+    # record their decisions without delivering. Configured-but-failed
+    # delivery still raises; logs are not delivery.
     ALERT_SLACK_TEAM_ID: str | None = os.getenv("ALERT_SLACK_TEAM_ID")
     ALERT_SLACK_CHANNEL_ID: str | None = os.getenv("ALERT_SLACK_CHANNEL_ID")
 

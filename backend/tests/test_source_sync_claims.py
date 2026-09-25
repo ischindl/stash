@@ -1,6 +1,7 @@
 """A slow queue must not turn periodic syncs into duplicate work or silent staleness."""
 
 import asyncio
+import logging
 from unittest.mock import AsyncMock
 from uuid import UUID
 
@@ -11,6 +12,18 @@ from backend.services import alert_service, source_service, source_sync_service
 from backend.tasks import sources
 
 from .test_sources import _auth, _register
+
+
+def _configure_alerts(monkeypatch):
+    # Neither conftest nor CI supplies ALERT_SLACK_*, and a developer's .env may:
+    # watchdog tests must declare their alert mode, never read the ambient value.
+    monkeypatch.setattr(settings, "ALERT_SLACK_TEAM_ID", "T_STASH")
+    monkeypatch.setattr(settings, "ALERT_SLACK_CHANNEL_ID", "C_INCIDENTS")
+
+
+def _disable_alerts(monkeypatch):
+    monkeypatch.setattr(settings, "ALERT_SLACK_TEAM_ID", None)
+    monkeypatch.setattr(settings, "ALERT_SLACK_CHANNEL_ID", None)
 
 
 async def make_source(client):
@@ -105,14 +118,19 @@ async def test_failed_alert_is_retried_and_successful_alert_is_rate_limited(
     await pool.execute(
         "UPDATE user_sources SET created_at = now() - interval '2 hours' WHERE id=$1", sid
     )
+    _configure_alerts(monkeypatch)
     send = AsyncMock(side_effect=ConnectionError("webhook down"))
     monkeypatch.setattr(alert_service, "send_alert", send)
     with pytest.raises(ConnectionError):
         await sources._alert_stalled_syncs()
+    # Catches the throttle UPDATE being moved above the send: a failed delivery
+    # is not a resolution, so a moved UPDATE would leave a timestamp here.
     assert await pool.fetchval("SELECT sync_alerted_at FROM user_sources WHERE id=$1", sid) is None
     send.side_effect = None
     assert await sources._alert_stalled_syncs() == 1
     assert "Skills" in send.call_args.args[0]
+    # Catches the post-delivery throttle write being dropped: an unthrottled tick
+    # would re-select this source instead of resolving zero.
     assert await sources._alert_stalled_syncs() == 0
 
 
@@ -124,6 +142,7 @@ async def test_watchdog_catches_queued_work_even_after_recent_success(client, po
         "sync_claimed_at=now()-interval '16 minutes' WHERE id=$1",
         sid,
     )
+    _configure_alerts(monkeypatch)
     send = AsyncMock()
     monkeypatch.setattr(alert_service, "send_alert", send)
     assert await sources._alert_stalled_syncs() == 1
@@ -133,6 +152,9 @@ async def test_watchdog_catches_queued_work_even_after_recent_success(client, po
 @pytest.mark.asyncio
 async def test_healthy_and_disabled_sources_do_not_alert(client, pool, monkeypatch):
     _, sid = await make_source(client)
+    # Configured mode, so send.assert_not_awaited() proves the candidate filter,
+    # not an accidentally suppressed alert mode.
+    _configure_alerts(monkeypatch)
     send = AsyncMock()
     monkeypatch.setattr(alert_service, "send_alert", send)
     assert await sources._alert_stalled_syncs() == 0
@@ -142,6 +164,67 @@ async def test_healthy_and_disabled_sources_do_not_alert(client, pool, monkeypat
     )
     assert await sources._alert_stalled_syncs() == 0
     send.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_unconfigured_install_throttles_without_delivery(client, pool, monkeypatch):
+    # The live founder-stack symptom: unconfigured alerting raised every tick,
+    # the throttle never landed, and the same traceback repeated forever.
+    _, sid = await make_source(client)
+    await pool.execute(
+        "UPDATE user_sources SET created_at = now() - interval '2 hours' WHERE id=$1", sid
+    )
+    _disable_alerts(monkeypatch)
+    send = AsyncMock()
+    monkeypatch.setattr(alert_service, "send_alert", send)
+    assert await sources._alert_stalled_syncs() == 1
+    assert (
+        await pool.fetchval("SELECT sync_alerted_at FROM user_sources WHERE id=$1", sid) is not None
+    )
+    assert await sources._alert_stalled_syncs() == 0
+    assert await sources._alert_stalled_syncs() == 0
+    send.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_unconfigured_ticks_stay_silent(client, pool, monkeypatch, caplog):
+    _, sid = await make_source(client)
+    await pool.execute(
+        "UPDATE user_sources SET created_at = now() - interval '2 hours' WHERE id=$1", sid
+    )
+    _disable_alerts(monkeypatch)
+    with caplog.at_level(logging.WARNING):
+        assert await sources._alert_stalled_syncs() == 1
+        assert await sources._alert_stalled_syncs() == 0
+        assert await sources._alert_stalled_syncs() == 0
+    # The disabled mode is stated at startup, not per tick.
+    assert [
+        r
+        for r in caplog.records
+        if r.name in ("backend.services.alert_service", "backend.tasks.sources")
+    ] == []
+
+
+def test_worker_startup_announces_disabled_mode(monkeypatch, caplog):
+    _disable_alerts(monkeypatch)
+    with caplog.at_level(logging.INFO, logger="backend.services.alert_service"):
+        alert_service._announce_alert_mode()
+    lines = [r for r in caplog.records if r.name == "backend.services.alert_service"]
+    assert len(lines) == 1
+    assert lines[0].levelno == logging.INFO
+    assert "ALERT_SLACK_TEAM_ID" in lines[0].getMessage()
+    assert "ALERT_SLACK_CHANNEL_ID" in lines[0].getMessage()
+
+
+def test_worker_startup_names_the_configured_destination(monkeypatch, caplog):
+    _configure_alerts(monkeypatch)
+    with caplog.at_level(logging.INFO, logger="backend.services.alert_service"):
+        alert_service._announce_alert_mode()
+    lines = [r for r in caplog.records if r.name == "backend.services.alert_service"]
+    assert len(lines) == 1
+    assert lines[0].levelno == logging.INFO
+    assert "T_STASH" in lines[0].getMessage()
+    assert "C_INCIDENTS" in lines[0].getMessage()
 
 
 @pytest.mark.asyncio
