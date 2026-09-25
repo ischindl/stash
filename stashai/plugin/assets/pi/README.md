@@ -44,6 +44,28 @@ with status 0. The hook files in `scripts/hooks/` are thin bash wrappers
 that delegate to `_run.sh`, which resolves the correct Python interpreter
 and dispatches to the corresponding `on_*.py` handler.
 
+## When a hook fails
+
+A hook that crashes is never silent. Every shipped handler runs its work inside
+`stashai.plugin.hooks.guard_hook_main`, which on a fatal error:
+
+- records the failure in `~/.stash/plugins/pi/upload_status.json` under the
+  `hook_run` operation — error text, timestamp, and a growing
+  `consecutive_failures` count. That file is what `stash status` reads, so Pi's
+  row turns `failing`, and the traceback is printed rather than swallowed; and
+- tells you in the conversation: a yellow `systemMessage` reading "Stash hook
+  failed; this conversation may not be visible to your team. Run `stash status`
+  for details."
+
+Pi requires exit status 0 and one JSON object on stdout, so a failed hook still
+exits 0 once it has announced itself — the record and the message are the point.
+
+The handlers copied into `~/.pi/` call into the installed `stashai` package, so
+the copied generation needs a package at least as new as itself: the floor is the
+first release whose `stashai.plugin.hooks` offers `guard_hook_main`. Convergence
+is the product's job, not a manual copy — `stash connect` (or `stash settings`)
+re-copies the handlers from the assets of the package you actually have installed.
+
 ## Commands
 
 Everything is a plain `stash` CLI subcommand — no slash commands or skills:

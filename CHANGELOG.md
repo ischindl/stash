@@ -56,6 +56,28 @@ everything before it is captured in git history (`git log`), not here.
 
 ### Fixed
 
+- A Pi hook that crashes is now recorded and announced, instead of being silent. Pi's
+  hooks are copied byte-for-byte into `~/.pi/` when you connect and then call into the
+  installed `stashai` package, so the copied generation and the package drift apart on
+  every release until something re-copies them — and when they drift, the copy loses:
+  on the machine where this was found, `~/.pi/hooks/session_start` and
+  `assistant_message` were dying on every session with
+  `ImportError: cannot import name 'echo_stdout' from 'cli.formatting'`, and nothing
+  said so anywhere, because Pi reads stdout and a hook that dies before printing looks
+  exactly like a session with nothing to report. Every shipped handler now runs its work
+  inside one guard — `stashai.plugin.hooks.guard_hook_main`, the same one behind the
+  `stash hook run` path the other agents use — which writes the failure, the error text
+  and a running `consecutive_failures` count into the `upload_status.json` that
+  `stash status` reads, so Pi's row turns `failing` instead of staying blank, and shows
+  the traceback. Pi still gets what Pi demands — exit status 0 and one JSON object —
+  which here is a yellow systemMessage reading: Stash hook failed; this conversation may
+  not be visible to your team. Run `stash status` for details. Pi keeps its own
+  generation and its own
+  installer rather than being routed through `stash hook run`. Copied handlers now
+  require a package at least as new as themselves, so `~/.pi/` converges through
+  `stash connect` or `stash settings` — once that package is installed — and not by a
+  hand copy into `~/.pi/`.
+
 - Guidance your agents read now converges to the version of Stash you have installed,
   instead of the version you first connected with. Every guided-behaviour file —
   `~/.codex/AGENTS.md`, `~/.pi/AGENTS.md`, and the OpenCode, Gemini and OpenClaw
