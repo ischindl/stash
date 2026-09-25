@@ -19,6 +19,7 @@ from pathlib import Path
 import pytest
 
 from cli.main import (
+    _HOOK_EVENTS,
     _INSTALLERS,
     __version__,
     _install_all_hooks,
@@ -345,3 +346,48 @@ def test_a_dead_deployed_generation_upgrades_without_force(pi_home: Path, monkey
     assert f"guidance_version={__version__}" in guidance
     assert "# my own rules" in guidance and "keep me" in guidance
     assert guidance.count("stash-plugin:begin") == 1
+
+
+def test_pi_keeps_its_own_generation_and_is_never_dispatched() -> None:
+    """Canonical-shape decision (STAS-267), locked so the rejected alternative
+    cannot be reintroduced by accident.
+
+    CHOSEN: pi owns its own shipped generation — `_install_pi` returns before the
+    dispatcher's table lookup and `_copy_pi_runtime` copies the whole tree into
+    `~/.pi/`, so pi's generation is replaced only by the installer, never by a
+    shared code path.
+
+    REJECTED (option (b)): give pi a `"pi": {...}` row in `_HOOK_EVENTS` and have
+    the five native hook wrappers call `stash hook run pi <event>`. Two costs were
+    measured against it:
+      1. It would delete the only copy of pi's generation that a running hook can
+         reach. Pi reads executables from `~/.pi/hooks/`; routing through the CLI
+         means a stale or broken installed CLI silently stops pi's telemetry with
+         nothing left on disk to fall back to — the exact invisibility this task
+         exists to fix.
+      2. It would move pi's runtime off the two files `_plugin_installed("pi")`
+         probes (`~/.pi/hooks/` plus `~/.pi/_run.sh`) — the only signal the CLI has
+         that pi is installed at all — and there is no per-event drift reporting to
+         replace it with: no agent's hooks are compared event-by-event anywhere in
+         the CLI (`_hook_desync_counts`, named in the task premise, does not exist on
+         this base). So (b) would spend a marker rewrite and still leave a dead pi
+         reporting itself healthy — the invisibility this task exists to remove.
+      3. Measurement, not design: a dispatching pi multiplies the first real-hook-run
+         proof burden across five events on a machine where proof is operator-gated.
+
+    So the dispatcher stays table-only and pi stays out of the table. If this test
+    fails because someone added the row, the decision to revisit it belongs in a
+    new task with the two costs above answered, not in a one-line table edit.
+    """
+    assert "pi" not in _HOOK_EVENTS, (
+        "`_HOOK_EVENTS` gained a pi row: pi's hooks are native ~/.pi/hooks/ executables "
+        "and must keep their own shipped generation (see "
+        "test_pi_keeps_its_own_generation_and_is_never_dispatched for the rejected "
+        "alternative and the two measured costs)"
+    )
+
+    installer_source = inspect.getsource(_install_pi)
+    assert "_HOOK_EVENTS" not in installer_source, (
+        "_install_pi must land pi's own shipped tree, not a generation derived from the "
+        "dispatcher's event table — that table is dispatchable-agent-only"
+    )

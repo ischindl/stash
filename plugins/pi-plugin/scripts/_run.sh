@@ -7,6 +7,14 @@
 # `stash` binary's symlink to find the venv it lives in, then exec its
 # python. Falls back to system `python3` for the plain `pip install --user`
 # case where stashai is on the user's site-packages directly.
+#
+# Canonical shape (STAS-267): pi owns this generation. Its handlers import only
+# `stashai.plugin.*` plus their sibling `adapt`/`config` — never `cli.*`, whose
+# module layout moves between released CLI builds — and pi has no `stash hook run`
+# dispatcher row, so `~/.pi/` is replaced only by `_install_pi`. The rejected
+# alternative (route these wrappers through `stash hook run pi <event>`) and its
+# two measured costs are recorded in
+# cli/tests/test_install_pi.py::test_pi_keeps_its_own_generation_and_is_never_dispatched.
 set -euo pipefail
 
 SCRIPT="$1"
