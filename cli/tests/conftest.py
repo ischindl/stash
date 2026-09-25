@@ -18,6 +18,7 @@ import importlib.util
 import tomllib
 from pathlib import Path
 
+import pytest
 from packaging.requirements import Requirement
 
 CHECKOUT_ROOT = Path(__file__).resolve().parents[2]
@@ -87,3 +88,24 @@ def _assert_test_environment() -> None:
 
 
 _assert_test_environment()
+
+
+@pytest.fixture(autouse=True)
+def _plugin_data_dirs_stay_inside_the_test(monkeypatch, tmp_path):
+    """Point every registered agent's data dir at this test's own ``tmp_path``.
+
+    ``hook run`` records what it saw into ``<agent data dir>/upload_status.json``
+    — the file ``stash status`` reads — and it records the invocations it refuses
+    on purpose, because a wrapper calling an event this release dropped is drift
+    worth seeing. So a test that merely exercises a reject path wrote a failing
+    row into whoever's home directory ran the suite: the machine this feature was
+    built on ended up with 44 failures attributed to a hook that never ran
+    (STAS-267). A test that asserts on a data dir sets it to its own path.
+    """
+    import cli.main as cli_main
+
+    monkeypatch.setattr(
+        cli_main,
+        "PLUGIN_DATA_DIRS",
+        {agent: tmp_path / agent for agent in cli_main.PLUGIN_DATA_DIRS},
+    )

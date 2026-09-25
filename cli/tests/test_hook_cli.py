@@ -56,6 +56,21 @@ def test_hook_run_rejects_unknown_event(agent: str) -> None:
     assert result.exit_code == 1
 
 
+def test_no_hook_record_can_reach_the_real_home(tmp_path: Path) -> None:
+    """Every data dir this suite can record into must live under the test's own path.
+
+    ``hook run`` records what it saw, including the invocations it refuses, so
+    without the suite-wide redirect a reject-path test writes a failing row into
+    the home directory of whoever ran the suite. That is how dozens of failures
+    attributed to a hook that never ran appeared on the machine this record was
+    introduced on (STAS-267). If the fixture goes away, this says so here rather
+    than ``stash status`` saying so later.
+    """
+    assert cli.main.PLUGIN_DATA_DIRS, "every registered agent must be covered"
+    for agent, dest in cli.main.PLUGIN_DATA_DIRS.items():
+        assert dest.is_relative_to(tmp_path), f"{agent} would record into {dest}"
+
+
 def test_hook_events_table_matches_script_files() -> None:
     """Every dispatchable (agent, event) must have a script in the shipped
     assets, and every script must be dispatchable — a drifting table means
