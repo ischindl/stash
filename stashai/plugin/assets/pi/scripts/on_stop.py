@@ -23,6 +23,7 @@ from config import (
 
 from stashai.plugin.hooks import (
     color_upload_health_warning,
+    guard_hook_main,
     remember_transcript_path,
     stream_assistant_message,
     upload_health_warning,
@@ -59,4 +60,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    guard_hook_main(DATA_DIR, main, host_exits_zero=True)

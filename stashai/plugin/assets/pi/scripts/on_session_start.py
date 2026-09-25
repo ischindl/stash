@@ -16,6 +16,7 @@ from config import (
 from stashai.plugin.hooks import (
     color_upload_health_warning,
     create_session_record,
+    guard_hook_main,
     reset_session_record_state,
     uploads_disabled_warning,
     uploads_enabled,
@@ -64,4 +65,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    guard_hook_main(DATA_DIR, main, host_exits_zero=True)

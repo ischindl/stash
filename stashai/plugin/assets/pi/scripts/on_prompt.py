@@ -11,7 +11,7 @@ from config import (
     is_fusion_managed,
 )
 
-from stashai.plugin.hooks import stream_user_message
+from stashai.plugin.hooks import guard_hook_main, stream_user_message
 from stashai.plugin.state import load_state
 
 
@@ -30,4 +30,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    guard_hook_main(DATA_DIR, main, host_exits_zero=True)

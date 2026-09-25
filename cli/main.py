@@ -30,6 +30,7 @@ from typer import rich_utils
 
 from stashai.plugin.doctor import shadow_install_warning
 from stashai.plugin.guidance import SKILL_MODEL
+from stashai.plugin.hooks import guard_hook_main
 from stashai.plugin.session_upload import (
     guidance_refresh_command,
     spawn_guidance_refresh_if_stale,
@@ -1301,17 +1302,24 @@ def hook_run(agent: str = typer.Argument(...), event: str = typer.Argument(...))
     if event == "on_session_start":
         spawn_guidance_refresh_if_stale([dest for _, dest in _guidance_targets()], __version__)
 
-    events = _HOOK_EVENTS.get(agent)
-    if events is None:
-        _exit_user_error(f"Unknown hook agent: {agent}")
-    if event not in events:
-        _exit_user_error(f"Unknown {agent} hook event: {event}")
+    def dispatch() -> None:
+        events = _HOOK_EVENTS.get(agent)
+        if events is None:
+            _exit_user_error(f"Unknown hook agent: {agent}")
+        if event not in events:
+            _exit_user_error(f"Unknown {agent} hook event: {event}")
 
-    import runpy
+        import runpy
 
-    script = _assets_dir(agent) / "scripts" / f"{event}.py"
-    sys.path.insert(0, str(script.parent))
-    runpy.run_path(str(script), run_name="__main__")
+        script = _assets_dir(agent) / "scripts" / f"{event}.py"
+        sys.path.insert(0, str(script.parent))
+        runpy.run_path(str(script), run_name="__main__")
+
+    # A hook that dies must leave a record `stash status` can read, and the agent
+    # must keep the non-zero exit and stdout shape it has always had (STAS-267).
+    # An agent with no registered data dir is handed None, so it gains no status
+    # file and no directory.
+    guard_hook_main(PLUGIN_DATA_DIRS.get(agent), dispatch, host_exits_zero=False)
 
 
 @hook_app.command("auto-update")

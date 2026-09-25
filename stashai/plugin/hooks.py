@@ -19,7 +19,10 @@ Never call `stream_session_end` from a per-turn hook — you'll emit a bogus
 
 from __future__ import annotations
 
+import json
 import shutil
+import traceback
+from collections.abc import Callable
 from pathlib import Path
 
 from stashai.plugin.event import HookEvent
@@ -434,6 +437,54 @@ def color_upload_health_warning(message: str) -> str:
     return f"{_YELLOW}{message}{_RESET}"
 
 
+# --- Fatal hook failures ---
+
+
+_FATAL_HOOK_OPERATION = "hook_run"
+_FATAL_HOOK_MESSAGE = (
+    "Stash hook failed; this conversation may not be visible to your team. "
+    "Run `stash status` for details."
+)
+
+
+def guard_hook_main(
+    data_dir: Path | None,
+    hook_main: Callable[[], None],
+    *,
+    host_exits_zero: bool,
+) -> None:
+    """Run a hook's entry point so a fatal failure can never be invisible.
+
+    Exactly two production entry points call this, and both are load-bearing:
+    ``cli.main.hook_run`` (every dispatchable agent) and the ``__main__`` of each
+    shipped pi handler (pi's hooks never enter ``hook_run``). A crash is recorded
+    in the same ``upload_status.json`` that ``stash status`` reads, and the
+    traceback is always shown — never swallowed, and never replaced by a success
+    record for work the hook did not do.
+
+    ``host_exits_zero`` is a per-host tail, not a second mechanism. pi requires
+    exit 0 and reads one JSON object on stdout, so its failure is additionally
+    announced as a ``systemMessage`` and the hook returns normally. Every
+    dispatchable agent keeps the exit status and stdout shape it has always had:
+    the exception is re-raised once the record has landed.
+
+    ``data_dir`` records only when the directory already exists. An agent that
+    never ran has no status file to update, and ``_write_json`` would otherwise
+    create one — plus its parent directory — for a mistyped agent name, which
+    ``stash status`` would then report as a failing plugin. Suppressing that is
+    the caller's job: pass None.
+    """
+    try:
+        hook_main()
+    except Exception as error:
+        if data_dir is not None and data_dir.is_dir():
+            record_upload_failure(data_dir, _FATAL_HOOK_OPERATION, error)
+        if not host_exits_zero:
+            raise
+        traceback.print_exc()
+        print(json.dumps({"systemMessage": color_upload_health_warning(_FATAL_HOOK_MESSAGE)}))
+
+
 # --- Session end (conversation over) ---
 
 
@@ -518,7 +569,7 @@ def stream_session_end(
                     transcript_path=sa_jsonl,
                     agent_name="claude-subagent",
                     cwd=event.cwd,
-                        )
+                )
             except Exception:
                 pass
 

@@ -11,7 +11,11 @@ from config import (
     is_fusion_managed,
 )
 
-from stashai.plugin.hooks import finalize_session_upload, stream_session_end
+from stashai.plugin.hooks import (
+    finalize_session_upload,
+    guard_hook_main,
+    stream_session_end,
+)
 from stashai.plugin.state import load_state, save_state
 
 
@@ -35,4 +39,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    guard_hook_main(DATA_DIR, main, host_exits_zero=True)
