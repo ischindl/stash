@@ -210,11 +210,10 @@ def test_feed_eligibility_text_survives_the_shared_builder():
     assert curation_service._CURATOR_FEED_ELIGIBILITY == (
         "AND (he.session_id IS NULL OR he.session_id NOT LIKE 'agent-curate-%')"
     )
-    # Tightened in the implementation commit to assert the builder directly:
-    # the list splices exactly what it renders.
-    assert getattr(curation_service, "curator_run_exclusion_clause", None) is None or (
-        curation_service.curator_run_exclusion_clause("he.session_id")
-        == "he.session_id NOT LIKE 'agent-curate-%'"
+    # The Sessions list splices exactly what this builder renders, so pinning
+    # its bytes pins the one classification both surfaces share.
+    assert curation_service.curator_run_exclusion_clause("he.session_id") == (
+        "he.session_id NOT LIKE 'agent-curate-%'"
     )
 
 

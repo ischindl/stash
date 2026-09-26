@@ -339,7 +339,7 @@ async def load_scope(
             "FROM history_events he JOIN sessions s ON s.owner_user_id=he.owner_user_id "
             "AND s.session_id=he.session_id WHERE he.owner_user_id=$1 AND s.deleted_at IS NULL "
             "AND (s.end_user_id=ANY($2::uuid[]) OR ($3 AND s.end_user_id IS NULL)) "
-            "AND he.session_id NOT LIKE 'agent-curate-%' "
+            f"AND {curation_service.curator_run_exclusion_clause('he.session_id')} "
             "AND ($4::timestamptz IS NULL OR he.created_at>$4) AND he.created_at<=$5 "
             "AND (NOT $6 OR he.tool_name IS NULL OR he.tool_name<>ALL($7::text[])) "
             f"AND (NOT $8 OR {curation_service.cleared_project_clause('s')}) "
@@ -486,7 +486,7 @@ async def run(
     until = await curation_service.complete_through(
         owner, position, datetime.now(UTC), agent["curator_wiki"]
     )
-    session = f"agent-curate-{agent['id']}-{run_stamp}"
+    session = f"{curation_service.CURATOR_SESSION_ID_PREFIX}{agent['id']}-{run_stamp}"
     scopes = []
     if agent["curator_wiki"] == "internal":
         memory = await files_tree_service.get_or_create_memory_folder(owner, owner)

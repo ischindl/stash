@@ -309,7 +309,31 @@ _SHARE_WIKI_EVENT_SCOPE = (
 # all splice this one text, because "the gate fired" has to mean "the feed has
 # work", and a backlog that counted these rows could never reach zero — every
 # successful run appends its own transcript behind the position it just wrote.
-_CURATOR_FEED_ELIGIBILITY = "AND (he.session_id IS NULL OR he.session_id NOT LIKE 'agent-curate-%')"
+# Every session id the curator's runs mint starts with this, whichever wiki it
+# writes. Sessions have no agent foreign key, so this prefix is the only signal
+# that a session belongs to the curator rather than to a person. It lives with
+# the feed because the feed is what decides those transcripts are internal
+# noise; `sprite_agent_service.scheduled_session_prefix` reads it back from
+# here when it mints the ids.
+CURATOR_SESSION_ID_PREFIX = "agent-curate-"
+
+
+def curator_run_exclusion_clause(sessions_column: str) -> str:
+    """The predicate that withholds the curator's own run transcripts.
+
+    The curator must never feed on itself, so the feed has always refused
+    `agent-curate-%` sessions — and the human-read Sessions list adopts that
+    same decision rather than re-deciding it: what the machine calls noise
+    cannot be content for the person on the very next screen. Spliced under
+    whichever column a reader aliases its sessions to, exactly like
+    `cleared_project_clause`.
+    """
+    return f"{sessions_column} NOT LIKE '{CURATOR_SESSION_ID_PREFIX}%'"
+
+
+_CURATOR_FEED_ELIGIBILITY = (
+    "AND (he.session_id IS NULL OR " + curator_run_exclusion_clause("he.session_id") + ")"
+)
 
 # One event, no matter how many times its session was re-uploaded. A re-import
 # (onboarding, a client resending a transcript) inserts rows that differ only in

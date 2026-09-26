@@ -18,6 +18,7 @@ from ..auth import get_current_user, get_scope
 from ..config import settings
 from ..database import get_pool
 from ..services import (
+    curation_service,
     linear_ticket_service,
     memory_service,
     permission_service,
@@ -26,7 +27,6 @@ from ..services import (
     session_ref_service,
     session_service,
     session_title_service,
-    sprite_agent_service,
     storage_service,
 )
 
@@ -98,7 +98,6 @@ def _session_list_conditions(
     folder_id: UUID | None = None,
     agent: str | None = None,
     title_query: str | None = None,
-    hide_curator: bool = False,
 ) -> list[str]:
     """WHERE clauses for the sessions list, appending each value to `args` so
     placeholder numbers keep matching. Callers start `args` with the requesting
@@ -117,6 +116,10 @@ def _session_list_conditions(
         "          AND shell_he.session_id = s.session_id)",
         f"s.owner_user_id IN {accessible_ws}",
         permission_service.readable_content_condition("session", "s", 1),
+        # The curator's own run transcripts never reach human eyes — the same
+        # classification the curation feed lives by, spliced unconditionally
+        # and bound to no parameter nobody may ask to lift.
+        curation_service.curator_run_exclusion_clause("s.session_id"),
     ]
     if owner_user_id is not None:
         args.append(owner_user_id)
@@ -139,9 +142,6 @@ def _session_list_conditions(
         # generated yet has NULL title, so it cannot match — the honest cost of
         # searching the stored title instead of every event body.
         where.append(f"strpos(lower(s.title), lower(${len(args)})) > 0")
-    if hide_curator:
-        args.append(sprite_agent_service.CURATOR_SESSION_ID_PREFIX)
-        where.append(f"NOT starts_with(s.session_id, ${len(args)})")
     return where
 
 
@@ -152,7 +152,6 @@ async def list_my_sessions(
     folder_id: UUID | None = Query(None),
     agent: str | None = Query(None, max_length=64),
     q: str | None = Query(None, max_length=200),
-    hide_curator: bool = Query(False),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     current_user: dict = Depends(get_current_user),
@@ -169,8 +168,9 @@ async def list_my_sessions(
     `folder_id`, `agent` and `q` are the Sessions list's prefilters; they run in
     SQL rather than in the browser because the list pages, so a client-side
     filter would only ever see the page already loaded.
-    `hide_curator` drops the curator's own run transcripts, which otherwise
-    bury a person's sessions a night after the curator first runs.
+    The curator's own run transcripts never appear here, by any request: they
+    are internal noise by the same classification the curation feed enforces,
+    and a person's list must not open as a landfill of them.
     `offset` pages through the (last_event_at DESC) order; `has_more` in the
     response says whether another page exists."""
     # The personal view spans every accessible scope (own + shared + workspace);
@@ -186,7 +186,6 @@ async def list_my_sessions(
         folder_id=folder_id,
         agent=agent,
         title_query=q,
-        hide_curator=hide_curator,
     )
     # Sessions rows are the unit here, not events: pick the page of sessions
     # first (ordered by the last_event_at column ingest maintains), then read

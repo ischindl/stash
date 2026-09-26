@@ -29,7 +29,7 @@ import redis.asyncio as aioredis
 from ..config import settings
 from . import agent_auth, agent_service, mcp_server_service, memory_service, prompts, sprite_service
 from . import harness as harness_mod
-from .curation_service import Position
+from .curation_service import CURATOR_SESSION_ID_PREFIX, Position
 
 logger = logging.getLogger(__name__)
 
@@ -451,12 +451,6 @@ def agent_run_lock(agent_id: UUID | str, ttl_seconds: int) -> _TurnLock:
 def _system_prompt(owner_name: str, persona: str | None) -> str:
     base = prompts.render_sprite_system(owner_name)
     return f"{base}\n\n{persona}" if persona else base
-
-
-# Every session id the curator's runs mint starts with this, whichever wiki it
-# writes. Sessions have no agent foreign key, so this prefix is the only signal
-# that a session belongs to the curator rather than to a person.
-CURATOR_SESSION_ID_PREFIX = "agent-curate-"
 
 
 def scheduled_session_prefix(agent: dict) -> str:
