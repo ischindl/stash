@@ -50,7 +50,6 @@ type ViewKey = "list" | "day" | "user" | "agent" | "ticket";
 type SortKey = "recent" | "oldest" | "events" | "name";
 
 const VIEW_STORAGE_KEY = "stash_sessions_view";
-const HIDE_CURATOR_STORAGE_KEY = "stash_sessions_hide_curator";
 
 // One page of sessions. The list used to ask for 200 rows in one shot and stop,
 // so anyone with real history silently never saw past the newest 200.
@@ -95,11 +94,6 @@ export default function SkillSessionsPage() {
   const [debouncedQuery, setDebouncedQuery] = useState("");
   const [folderId, setFolderId] = useState("");
   const [agent, setAgent] = useState("");
-  const [hideCurator, setHideCurator] = useState(false);
-  // The persisted curator preference lands a tick after the first render, so the
-  // list waits for it rather than fetching an unfiltered page one moment and a
-  // filtered one the next.
-  const [prefsReady, setPrefsReady] = useState(false);
   // Bumped by every page-1 load so an in-flight append can tell that the list it
   // was about to extend has since been replaced.
   const queryToken = useRef(0);
@@ -115,15 +109,12 @@ export default function SkillSessionsPage() {
 
   useBreadcrumbs([{ label: "Sessions" }], "sessions");
 
-  // Restore last-used view and curator preference from localStorage on mount.
-  // Sort and the text search are intentionally not persisted — they read as
-  // ad-hoc filters, whereas hiding curator runs is a standing preference.
+  // Restore last-used view from localStorage on mount. Sort and the text
+  // search are intentionally not persisted — they read as ad-hoc filters.
   useEffect(() => {
     if (typeof window === "undefined") return;
     const saved = window.localStorage.getItem(VIEW_STORAGE_KEY) as ViewKey | null;
     if (saved && VIEWS.some((v) => v.key === saved)) setView(saved);
-    setHideCurator(window.localStorage.getItem(HIDE_CURATOR_STORAGE_KEY) === "true");
-    setPrefsReady(true);
   }, []);
 
   useEffect(() => {
@@ -137,9 +128,8 @@ export default function SkillSessionsPage() {
       folderId: folderId || undefined,
       agent: agent || undefined,
       query: debouncedQuery || undefined,
-      hideCurator,
     }),
-    [folderId, agent, debouncedQuery, hideCurator],
+    [folderId, agent, debouncedQuery],
   );
 
   // The dropdown's options are scope-wide, so one fetch covers every page. A
@@ -169,7 +159,6 @@ export default function SkillSessionsPage() {
   // visitor's 401 is invisible: the !user guard below keeps the error from
   // rendering while the login redirect happens.
   useEffect(() => {
-    if (!prefsReady) return;
     const token = ++queryToken.current;
     setSessions(null);
     setHasMore(false);
@@ -188,7 +177,7 @@ export default function SkillSessionsPage() {
       }
     }
     loadFirstPage();
-  }, [prefsReady, filters, reloadToken]);
+  }, [filters, reloadToken]);
 
   const loadMore = useCallback(async () => {
     if (!sessions || !hasMore || loadingMore) return;
@@ -260,23 +249,13 @@ export default function SkillSessionsPage() {
     }
   }
 
-  function setHideCuratorPersisted(next: boolean) {
-    setHideCurator(next);
-    try {
-      window.localStorage.setItem(HIDE_CURATOR_STORAGE_KEY, String(next));
-    } catch {
-      /* localStorage unavailable */
-    }
-  }
-
-  // Clears everything, the standing curator preference included: the least
-  // surprising reading of "show me the whole list again".
+  // Clears every ad-hoc filter: the least surprising reading of "show me the
+  // whole list again".
   function clearFilters() {
     setQuery("");
     setDebouncedQuery("");
     setFolderId("");
     setAgent("");
-    setHideCuratorPersisted(false);
   }
 
   function setViewPersisted(next: ViewKey) {
@@ -359,17 +338,7 @@ export default function SkillSessionsPage() {
             onChange={setAgent}
           />
 
-          <label className="inline-flex cursor-pointer items-center gap-1.5 text-[12px] text-muted-foreground hover:text-foreground">
-            <input
-              type="checkbox"
-              checked={hideCurator}
-              onChange={(e) => setHideCuratorPersisted(e.target.checked)}
-              className="cursor-pointer accent-brand"
-            />
-            Hide curator runs
-          </label>
-
-          {(activeFilterCount > 0 || hideCurator) && (
+          {activeFilterCount > 0 && (
             <button
               type="button"
               onClick={clearFilters}
@@ -388,7 +357,7 @@ export default function SkillSessionsPage() {
           selectedIds={selectedIds}
           onToggleSelect={toggleSelect}
           empty={
-            activeFilterCount > 0 || hideCurator ? (
+            activeFilterCount > 0 ? (
               <NoMatchesFound onClear={clearFilters} />
             ) : (
               <SessionsEmptyState />

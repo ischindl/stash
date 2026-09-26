@@ -1569,7 +1569,6 @@ export interface SessionListFilters {
   folderId?: string;
   agent?: string;
   query?: string;
-  hideCurator?: boolean;
 }
 
 export interface SessionPage {
@@ -1589,7 +1588,6 @@ export async function listMySessions(
   if (filters.folderId) qs.set("folder_id", filters.folderId);
   if (filters.agent) qs.set("agent", filters.agent);
   if (filters.query) qs.set("q", filters.query);
-  if (filters.hideCurator) qs.set("hide_curator", "true");
   const data = await apiFetch<{ sessions: SessionSummary[]; has_more: boolean }>(
     `${ME}/sessions?${qs.toString()}`
   );

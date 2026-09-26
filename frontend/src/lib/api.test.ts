@@ -285,7 +285,6 @@ describe("listMySessions", () => {
       folderId: "f-1",
       agent: "claude",
       query: "quarterly",
-      hideCurator: true,
     });
 
     const params = sentQuery();
@@ -294,7 +293,6 @@ describe("listMySessions", () => {
     expect(params.get("folder_id")).toBe("f-1");
     expect(params.get("agent")).toBe("claude");
     expect(params.get("q")).toBe("quarterly");
-    expect(params.get("hide_curator")).toBe("true");
   });
 
   it("omits unset filters instead of sending them blank", async () => {
@@ -307,7 +305,6 @@ describe("listMySessions", () => {
     expect(params.get("folder_id")).toBeNull();
     expect(params.get("agent")).toBeNull();
     expect(params.get("q")).toBeNull();
-    expect(params.get("hide_curator")).toBeNull();
     expect(params.get("session_id_prefix")).toBeNull();
   });
 
