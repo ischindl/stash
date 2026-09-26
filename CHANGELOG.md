@@ -54,6 +54,19 @@ everything before it is captured in git history (`git log`), not here.
   folder through that URL for exactly as long as the folder is open by link or published
   as a skill — the same gate the MCP endpoint itself enforces.
 
+- Your Sessions list is your work, not the curator's diary. The curator files a
+  transcript of every run it performs as its own session, and those transcripts used
+  to bury everything else: measured live on the founder stack, 897 of 1,285 listable
+  sessions were the curator's own, and 28 of the 50 rows on the first page. The list
+  hid them only if you once found a checkbox that defaults off — and nobody did.
+  The list now applies the same classification the curator's feed has always enforced
+  so it never feeds on its own transcripts: `agent-curate-` sessions simply never
+  appear in the human-read list, with no parameter to flip and no setting to
+  discover. Nothing is deleted — a curator transcript still opens by direct link,
+  and the curator's own runs page is untouched; non-curator scheduled agents stay
+  visible. The checkbox, the `hide_curator` parameter, and the stored preference are
+  removed outright.
+
 ### Fixed
 
 - A Pi hook that crashes is now recorded and announced, instead of being silent. Pi's
