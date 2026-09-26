@@ -1,9 +1,14 @@
-"""The Sessions list's server-side prefilters and page-2 marker.
+"""The Sessions list's server-side prefilters, page-2 marker, and the curator
+exclusion that is not a filter but a classification.
 
 Every filter runs in SQL rather than in the browser because the list pages: a
 client-side filter could only ever see the page already loaded, so "Load more"
 would append rows that contradict the filter. These tests pin that contract for
 each prefilter plus `has_more`.
+
+The curator's own run transcripts are the one exception to "the caller chooses
+what to see": they never reach the human-read list, under any parameter, per
+the same classification the curation feed enforces.
 """
 
 from datetime import UTC, datetime
@@ -140,18 +145,77 @@ async def test_pages_partition_the_list_when_sessions_share_a_timestamp(
 
 
 @pytest.mark.asyncio
-async def test_hide_curator_drops_curator_run_transcripts(client: AsyncClient, _db_pool):
-    """The curator files its own nightly runs as `agent-curate-…` sessions. Left
-    in the list they bury a person's own sessions the first night it runs."""
+async def test_curator_run_transcripts_never_reach_the_human_list(client: AsyncClient, _db_pool):
+    """The curator files its own runs — plain and digest turns — as
+    `agent-curate-…` sessions. They are internal noise by the same
+    classification the curation feed already applies, so the human-read list
+    withholds them unconditionally: no query parameter can ask for them back,
+    and hiding them never deletes them."""
     key = await _register(client)
     await _push(client, key, "my-work")
     await _push(client, key, "agent-curate-a1b2c3d4-2026-08-01")
+    await _push(client, key, "agent-curate-a1b2c3d4-2026-08-01-digest")
 
-    shown, _ = await _ids(client, key, hide_curator=True)
+    # The list route with NO parameters is what every human surface reads.
+    shown, _ = await _ids(client, key)
     assert shown == ["my-work"]
 
-    unfiltered, _ = await _ids(client, key)
-    assert "agent-curate-a1b2c3d4-2026-08-01" in unfiltered
+    # A stale client still sending the removed flag gets the same answer —
+    # there is no opt-back-in surface, only an ignored parameter.
+    legacy, _ = await _ids(client, key, hide_curator="false")
+    assert legacy == ["my-work"]
+
+    # Hidden, not deleted: the transcript still resolves through the detail route.
+    resp = await client.get(
+        "/api/v1/me/sessions/detail",
+        params={"session_id": "agent-curate-a1b2c3d4-2026-08-01"},
+        headers=_auth(key),
+    )
+    assert resp.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_curator_runs_stay_out_while_the_list_pages(client: AsyncClient, _db_pool):
+    """The exclusion runs in SQL beside the cursor, so paging past the first
+    page cannot leak a curator row that a single-page filter merely hid."""
+    key = await _register(client)
+    for sid in (
+        "human-1",
+        "agent-curate-a1b2c3d4-2026-09-01",
+        "human-2",
+        "agent-curate-a1b2c3d4-2026-09-02",
+    ):
+        await _push(client, key, sid)
+
+    collected: list[str] = []
+    offset = 0
+    for _ in range(6):
+        ids, has_more = await _ids(client, key, limit=1, offset=offset)
+        collected += ids
+        if not has_more:
+            break
+        offset += 1
+
+    assert sorted(collected) == ["human-1", "human-2"]
+
+
+def test_feed_eligibility_text_survives_the_shared_builder():
+    """The Sessions list adopts the feed's own classification through a shared
+    clause builder, but the feed's SQL text must not move: the beat's gate, the
+    watermark advance, and the backlog splice the SAME string, and a wording
+    change would let gate and feed disagree about what the curator may read.
+    These exact bytes are the contract the refactor must preserve."""
+    from backend.services import curation_service
+
+    assert curation_service._CURATOR_FEED_ELIGIBILITY == (
+        "AND (he.session_id IS NULL OR he.session_id NOT LIKE 'agent-curate-%')"
+    )
+    # Tightened in the implementation commit to assert the builder directly:
+    # the list splices exactly what it renders.
+    assert getattr(curation_service, "curator_run_exclusion_clause", None) is None or (
+        curation_service.curator_run_exclusion_clause("he.session_id")
+        == "he.session_id NOT LIKE 'agent-curate-%'"
+    )
 
 
 @pytest.mark.asyncio
