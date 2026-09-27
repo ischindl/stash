@@ -21,6 +21,18 @@ everything before it is captured in git history (`git log`), not here.
 
 ### Changed
 
+- A local-model turn that answers nothing no longer passes for success. A reasoning/hybrid
+  model can spend a turn's whole output budget on its reasoning channel and come back with a
+  null message body (`finish_reason=length`) — and the harness still exits 0, so the run
+  reported a turn with no text and no error. Now the turn is named: "pi produced no answer
+  content: reasoning budget exhausted at the output limit (finish_reason=length,
+  output=8, reasoning=8)", carried through the same redacted error channel a real endpoint
+  failure uses. The mid-reasoning transport death is named the same way instead of repeating
+  the transport word pi itself offers (`terminated`), which is what a model-agnostic word for
+  "the stream died" gets mistaken for. A genuine endpoint error still shows the endpoint's
+  own words, a turn that ends in a tool call stays green, and a turn that got no evidence at
+  all reports what was observed rather than guessing a budget.
+
 - The backend can run its completions on the model endpoint you connected, not only on a
   cloud key. Before this, one question decided every curator run — is `ANTHROPIC_API_KEY`
   set? — and a self-hosted server, which by design has no cloud key, answered "no" to its

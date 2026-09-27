@@ -343,6 +343,56 @@ def _map_opencode(obj: dict, state: TurnState) -> list[dict]:
 # --- pi (--mode json) -------------------------------------------------------
 
 
+_PI_NO_ANSWER = "pi produced no answer content"
+
+
+def _pi_text(message: dict, block_type: str) -> str:
+    """pi's content blocks carry their payload under the block type's own name:
+    type 'text' is the answer, type 'thinking' is the model's reasoning."""
+    return "".join(
+        str(block.get(block_type) or "")
+        for block in message.get("content") or []
+        if isinstance(block, dict) and block.get("type") == block_type
+    )
+
+
+def _pi_has_tool_call(message: dict) -> bool:
+    return any(
+        isinstance(block, dict) and block.get("type") == "toolCall"
+        for block in message.get("content") or []
+    )
+
+
+def _pi_endpoint_error(message: dict) -> str:
+    return str(message.get("errorMessage") or "local model error")
+
+
+def _pi_no_answer_cause(message: dict) -> str:
+    """Why a terminal assistant turn carries neither answer text nor a tool call.
+
+    pi exits 0 on all of these, so this string is the only cause the operator
+    will ever read. Reasoning content with no answer is itself the evidence:
+    the endpoint spent the turn's output budget on the reasoning channel and
+    reports it as finish_reason=length with a null message content. Where the
+    event shows no budget at all, report what was observed instead of inventing
+    one — pi's own endpoint error still names a plain transport failure.
+    """
+    thinking = _pi_text(message, "thinking").strip()
+    stop = str(message.get("stopReason") or "none")
+    finish = str(message.get("rawStopReason") or "none")
+    usage = message.get("usage") or {}
+    counts = f"output={usage.get('output') or 0}, reasoning={usage.get('reasoning') or 0}"
+    budget_spent_on_reasoning = bool(thinking) or stop == "length" or finish == "length"
+    if budget_spent_on_reasoning:
+        return (
+            f"{_PI_NO_ANSWER}: reasoning budget exhausted at the output limit "
+            f"(finish_reason={finish}, {counts})"
+        )
+    if message.get("errorMessage"):
+        return _pi_endpoint_error(message)
+    return f"{_PI_NO_ANSWER} (stopReason={stop}, finish_reason={finish}, {counts})"
+
+
 def _map_pi(obj: dict, state: TurnState) -> list[dict]:
     kind = obj.get("type")
     if kind == "session":
@@ -378,21 +428,27 @@ def _map_pi(obj: dict, state: TurnState) -> list[dict]:
         message = obj.get("message") or {}
         if message.get("role") != "assistant":
             return []
+        text = _pi_text(message, "text")
+        if not text.strip() and not _pi_has_tool_call(message):
+            # A terminal assistant turn that answered nothing and called no tool
+            # did nothing, and pi still exits 0 — naming it here is the only way
+            # the turn stops looking like a success.
+            state.error = _pi_no_answer_cause(message)
+            return []
         if message.get("stopReason") == "error":
             # pi exits 0 on a dead endpoint after its own retries; this (and
             # auto_retry_end below) is the error path — never the exit code.
-            state.error = str(message.get("errorMessage") or "local model error")
+            state.error = _pi_endpoint_error(message)
             return []
-        text = "".join(
-            block.get("text") or ""
-            for block in message.get("content") or []
-            if isinstance(block, dict) and block.get("type") == "text"
-        )
         if text.strip():
             state.result_text = text.strip()
         return []
     if kind == "auto_retry_end":
-        if not obj.get("success", True):
+        if not obj.get("success", True) and state.error is None:
+            # The retry summary only carries pi's own transport word for the
+            # attempt that failed. The message_end of that attempt already
+            # named the cause from its content and usage, and pi repeats the
+            # same failure once per attempt — the first named cause wins.
             state.error = str(obj.get("finalError") or "local model endpoint retries exhausted")
         return []
     return []
