@@ -405,10 +405,16 @@ async def test_session_end_sets_finished_at(client: AsyncClient, pool):
 
 
 @pytest.mark.asyncio
-async def test_session_end_without_timestamp_leaves_finished_at_null(client: AsyncClient, pool):
-    """If the agent forgets to stamp the closing event, we don't guess.
-    finished_at stays null, which is the same as a session the harness
-    crashed before sending an end hook."""
+async def test_session_end_without_client_timestamp_closes_at_its_event_time(
+    client: AsyncClient, pool
+):
+    """A closing event closes the session even when the agent left its timestamp
+    out: the close is that event's stored time, the one rule the shared ingestion
+    path applies to every caller (test_session_close_ingestion). The demo invents
+    a per-event timeline for its events, so here that stored time is the invented
+    timeline's; a caller that sends no timeline at all is closed at the instant
+    the server records its close row — which is the shape the shipped plugin
+    sends, and the reason the rule may not read the optional timestamp field."""
     resp = await client.post(
         "/api/v1/demo/sessions",
         json={
@@ -421,10 +427,14 @@ async def test_session_end_without_timestamp_leaves_finished_at_null(client: Asy
         },
     )
     assert resp.status_code == 201
-    finished_at = await pool.fetchval(
-        "SELECT finished_at FROM sessions WHERE id = $1", resp.json()["session_id"]
+    session_id = resp.json()["session_id"]
+    finished_at, close_event_time = await pool.fetchrow(
+        "SELECT s.finished_at, e.created_at FROM sessions s "
+        "JOIN history_events e ON e.session_id = s.session_id "
+        "WHERE s.id = $1 AND e.event_type = 'session_end'",
+        session_id,
     )
-    assert finished_at is None
+    assert finished_at == close_event_time
 
 
 @pytest.mark.asyncio

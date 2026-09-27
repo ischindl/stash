@@ -69,6 +69,27 @@ everything before it is captured in git history (`git log`), not here.
 
 ### Fixed
 
+- Sessions you ended are now shown as ended. The Stash plugin has announced the end of
+  every recorded session since its first release — one `session_end` event on the same
+  ingestion endpoint its turns use — and the server stored that event and then ignored it.
+  `sessions.finished_at` had exactly one writer, the demo router, which never runs for a
+  real account, so the column was empty for every session ever recorded (measured: 1,289
+  of 1,289 rows on the dogfood stack), and the sessions list — which calls a row open when
+  that column is empty — listed weeks-old work as running, with no way to spot the one
+  session actually still going. Ingestion now consumes its own close signal: the
+  `session_end` event stamps the close at the instant the close itself was recorded, the
+  same basis `last_event_at` already rests on, because the shipped plugin sends no
+  per-event timestamp at all. It moves forward only, so replaying a month of transcript
+  cannot rewind a close that really happened, and activity after a close moves recency
+  and nothing else. Nothing derives a close from silence or from age: an imported or idle
+  session with no close event keeps the column empty and stays open, and the accompanying
+  migration closes only rows whose close event is already in the database. Verified by
+  driving the real `stash hook run claude on_session_end` against a throwaway stack — the
+  session came back closed at the close event's own stored instant. Caveat: rows that
+  never received a close event at all — curator runs, and sessions an integration created
+  without hook wiring — still stay open, because inventing their end is the guess this
+  fix refuses to make.
+
 - A Pi hook that crashes is now recorded and announced, instead of being silent. Pi's
   hooks are copied byte-for-byte into `~/.pi/` when you connect and then call into the
   installed `stashai` package, so the copied generation and the package drift apart on

@@ -39,6 +39,28 @@ def _normalize_ts(ts: datetime) -> datetime:
     return ts
 
 
+def _close_instant(event_type: str | None, stored_at: datetime) -> datetime | None:
+    """The close this event carries, if any: the instant its row was stored at,
+    when and only when the event names the close signal.
+
+    No other event type ends a session — a transcript import delivers months of
+    turns in one batch and says nothing about the session having ended, so any
+    other rule here (the last event, the quiet after it) would fabricate a close
+    for every imported session.
+
+    The instant is the one the event row itself got, not the caller's optional
+    `created_at` field: the shipped plugin sends no per-event times at all
+    (`stashai/plugin/stash_client.py::push_event`), so a rule reading that field
+    would leave every real close invisible — the exact bug this task removes. A
+    caller that does send an event time gets its own instant; everyone else gets
+    the moment the server recorded the close, which is the same basis
+    `last_event_at` already rests on.
+    """
+    if event_type != session_service.CLOSE_EVENT_TYPE:
+        return None
+    return _normalize_ts(stored_at)
+
+
 def _strip_nuls(value):
     """Postgres text/jsonb cannot store \\u0000, so scrub it from every string.
 
@@ -260,6 +282,10 @@ async def push_event(
             end_user_id=end_user["id"] if end_user else None,
             session_folder_id=session_folder_id,
             last_event_at=ts,
+            # The close rides on `ts`: the caller's event time when it sent one,
+            # otherwise the instant this row was stored at — the time the event
+            # row itself carries is the only instant a close is allowed to claim.
+            finished_at=_close_instant(event_type, ts),
         )
         if linear_ticket_service.has_ticket_hint([content]):
             await linear_ticket_service.sync_session_labels(
@@ -425,9 +451,14 @@ async def _upsert_sessions_for_events(
         session_id = event.get("session_id")
         if not session_id:
             continue
+        close_at = _close_instant(event.get("event_type"), ts)
         if session_id in sessions:
             existing = sessions[session_id]
             existing["last_event_at"] = max(existing["last_event_at"], ts)
+            # A batch is not ordered by event time, so the close is the latest one
+            # anywhere in it — a close arriving before a trailing turn still closes.
+            if close_at and (existing["close_at"] is None or close_at > existing["close_at"]):
+                existing["close_at"] = close_at
             continue
         metadata = event.get("metadata") or {}
         sessions[session_id] = {
@@ -437,6 +468,7 @@ async def _upsert_sessions_for_events(
             "user_name": event.get("user_name"),
             "session_folder_id": event.get("session_folder_id"),
             "last_event_at": ts,
+            "close_at": close_at,
         }
 
     end_user_rows = await _resolve_event_end_users(owner_user_id, sessions.values())
@@ -452,6 +484,7 @@ async def _upsert_sessions_for_events(
             end_user_id=end_user["id"] if end_user else None,
             session_folder_id=session["session_folder_id"],
             last_event_at=session["last_event_at"],
+            finished_at=session["close_at"],
         )
         contents = [
             event.get("content") or "" for event in events if event.get("session_id") == session_id

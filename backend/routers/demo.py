@@ -141,7 +141,6 @@ async def create_page(request: Request, req: DemoPageCreate = Body(...)) -> dict
 @router.post("/sessions", status_code=201)
 @limiter.limit(_POST_LIMIT)
 async def create_session(request: Request, req: DemoSessionCreate = Body(...)) -> dict[str, Any]:
-    from ..database import get_pool
     from ..services import session_service
 
     owner_user_id, owner_id = await demo_service.get_demo_scope()
@@ -189,19 +188,9 @@ async def create_session(request: Request, req: DemoSessionCreate = Body(...)) -
         events=payload,
     )
 
-    # If the agent included a closing `session_end` event, stamp the
-    # session's finished_at to that event's time. Real captured sessions
-    # set finished_at when the agent's harness emits its end-of-session
-    # hook; the demo equivalent is the agent saying "I'm done."
-    last = req.events[-1]
-    if last.event_type == "session_end" and last.created_at is not None:
-        pool = get_pool()
-        await pool.execute(
-            "UPDATE sessions SET finished_at = $1 WHERE id = $2",
-            last.created_at,
-            session["id"],
-        )
-
+    # A closing `session_end` in the payload closes the session through the same
+    # ingestion path every other caller uses — the demo equivalent of the
+    # harness's end-of-session hook is the agent saying "I'm done."
     return {
         "session_id": session["id"],
         "session_external_id": session_id,

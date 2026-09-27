@@ -13,6 +13,13 @@ _SELECT_COLS = (
     "started_at, finished_at, created_by, end_user_id, last_event_at"
 )
 
+# The event_type that says a session is over. Emitted by the agent plugin
+# (`stashai/plugin/hooks.py` streams it when the harness ends a session) and
+# consumed by every writer of `sessions.finished_at`: the event ingestion paths
+# and the backfill migration. Named once because a second spelling of the same
+# signal is a close the server silently stops honoring.
+CLOSE_EVENT_TYPE = "session_end"
+
 
 async def upsert_session(
     owner_user_id: UUID,
@@ -25,6 +32,7 @@ async def upsert_session(
     session_folder_id: UUID | None = None,
     started_at: datetime | None = None,
     last_event_at: datetime | None = None,
+    finished_at: datetime | None = None,
 ) -> dict:
     """Idempotent: return the session row, creating it if missing.
 
@@ -50,20 +58,33 @@ async def upsert_session(
     `last_event_at` is the recency the sessions list orders by. Event pushes
     pass their newest event time; it only ever moves forward (GREATEST), so a
     replayed old transcript never rewinds a session's recency.
+
+    `finished_at` is the one and only SQL write site for the close, and callers
+    pass it for exactly one event type — `CLOSE_EVENT_TYPE`. Nothing here
+    infers a close: no argument keeps the session open, and an existing close is
+    kept when a later push carries none. Like recency it moves forward only, so
+    replaying an older close cannot undo one that really happened.
+
+    A close can be the first event ever stored for a session id, and that row is
+    then created with a start after its own close: nothing in the product reads a
+    duration out of that pair, and guessing when an unrecorded session began is
+    the inference the close column refuses to make.
     """
     pool = get_pool()
     row = await pool.fetchrow(
         "INSERT INTO sessions "
         "  (owner_user_id, session_id, agent_name, cwd, created_by, end_user_id, "
-        "   session_folder_id, started_at, last_event_at) "
+        "   session_folder_id, started_at, last_event_at, finished_at) "
         "VALUES ($1, $2, $3, $4, $5, $6, $7, COALESCE($8, now()), "
-        "        COALESCE($9, $8, now())) "
+        "        COALESCE($9, $8, now()), $10) "
         "ON CONFLICT (owner_user_id, session_id) DO UPDATE SET "
         "  agent_name = COALESCE(NULLIF(EXCLUDED.agent_name, ''), sessions.agent_name), "
         "  cwd = COALESCE(EXCLUDED.cwd, sessions.cwd), "
         "  created_by = COALESCE(sessions.created_by, EXCLUDED.created_by), "
         "  last_event_at = GREATEST(sessions.last_event_at, "
-        "                           COALESCE($9, sessions.last_event_at)) "
+        "                           COALESCE($9, sessions.last_event_at)), "
+        "  finished_at = GREATEST(sessions.finished_at, "
+        "                          COALESCE($10, sessions.finished_at)) "
         f"RETURNING {_SELECT_COLS}",
         owner_user_id,
         session_id,
@@ -74,6 +95,7 @@ async def upsert_session(
         session_folder_id,
         started_at,
         last_event_at,
+        finished_at,
     )
     return dict(row)
 
