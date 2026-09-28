@@ -72,7 +72,18 @@ _PI_TRANSPORT_DEATH_LINE = (
     '"responseModel":"mock","errorMessage":"terminated"}}'
 )
 
-_PI_ENDPOINT_ERROR_LINE = _PI_TRANSPORT_DEATH_LINE.replace('"terminated"', '"Connection error."')
+# pi's own words, verbatim: a transport failure with no reasoning content to
+# blame, the one shape STAS-288 leaves the endpoint's message as the cause for.
+# Deriving it from the transport-death line above instead would attach a thinking
+# block, whose cause is the reasoning budget and whose endpoint word STAS-288
+# deliberately drops (test_pi_reasoning_only_stream.py).
+_PI_ENDPOINT_ERROR_LINE = (
+    '{"type":"message_end","message":{"role":"assistant","content":[],'
+    '"api":"openai-completions","provider":"local","model":"mock-1",'
+    '"usage":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"totalTokens":0,'
+    '"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}},'
+    '"stopReason":"error","timestamp":1787416676209,"errorMessage":"Connection error."}}'
+)
 
 
 async def _lane() -> dict:
@@ -242,9 +253,7 @@ def test_soft_time_limit_escape_of_an_unmetered_run_refunds_nothing(
     assert _held_lane_locks(lane_locks) == []
 
 
-def test_escape_before_the_run_is_metered_invents_no_failure(
-    monkeypatch, lane_locks, worker_loop
-):
+def test_escape_before_the_run_is_metered_invents_no_failure(monkeypatch, lane_locks, worker_loop):
     """Dying before `mark_run` leaves a lane that never started: the guard's
     resolution is a compare-and-set on `started`, so it must write nothing — and
     still hand back the lock it did take, or the lane is wedged for its TTL."""
@@ -412,7 +421,12 @@ def test_reaper_waits_out_the_lock_ttl_it_replaces():
 # --- the evidence a bad turn loses (Step 3) ---
 
 
-async def _drive_harness(monkeypatch: pytest.MonkeyPatch, frames: list[dict], exit_code: int):
+async def _drive_harness(
+    monkeypatch: pytest.MonkeyPatch,
+    frames: list[dict],
+    exit_code: int,
+    provider_env: dict[str, str] | None = None,
+):
     """Run one `_run_harness` turn over canned exec frames.
 
     Frames use the `{"stream": "stdout"|"stderr", "data": bytes}` shape both exec
@@ -432,7 +446,7 @@ async def _drive_harness(monkeypatch: pytest.MonkeyPatch, frames: list[dict], ex
         sprite_service.Sprite(name="test-sprite"),
         ["pi", "--mode", "json"],
         state,
-        {},
+        provider_env or {},
     ):
         events.append(event)
     return state, events
@@ -483,6 +497,21 @@ async def test_stderr_never_enters_the_json_parse_buffer(monkeypatch):
 
     assert list(state.unparsed) == []
     assert "npm warn unknown config" in state.error
+
+
+async def test_stderr_evidence_is_redacted(monkeypatch):
+    """A CLI dying on auth echoes the env prefix it was started with, so the tail
+    being kept is a secret-carrying string. It lands in a lane row that the API
+    surfaces to the user, so the injected key has to be scrubbed before it does."""
+    state, _ = await _drive_harness(
+        monkeypatch,
+        [{"stream": "stderr", "data": b"Authorization: Bearer sk-live-secret\n"}],
+        exit_code=127,
+        provider_env={"ANTHROPIC_API_KEY": "sk-live-secret"},
+    )
+
+    assert "sk-live-secret" not in state.error
+    assert "Authorization: Bearer [redacted]" in state.error
 
 
 async def test_clean_turn_records_no_failure_evidence(monkeypatch):

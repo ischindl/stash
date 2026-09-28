@@ -36,6 +36,10 @@ logger = logging.getLogger(__name__)
 # Agent name stamped on chat history events — shows up in Sessions "By agent".
 AGENT_NAME = "Stash Agent"
 
+# How much of a failed turn's non-transcript output is kept as evidence. The
+# last lines are the ones that name the death; a full npm log is not the record.
+_FAILURE_TAIL_CHARS = 400
+
 # Reseeded turns replay at most this many stored turns into the fresh prompt.
 _RESEED_MAX_TURNS = 40
 _RESEED_MAX_CHARS = 24_000
@@ -110,35 +114,57 @@ async def _run_harness(
     state.error / state.resume_missing on failure instead of raising, so the
     caller decides between reseed and surfacing the error."""
     stdout_decoder = codecs.getincrementaldecoder("utf-8")("replace")
+    stderr_decoder = codecs.getincrementaldecoder("utf-8")("replace")
     buffer = ""
+    stderr_tail = ""
     exit_code: int | None = None
 
     # The open exec stream itself keeps the sprite awake — Sprites only sleeps
-    # after activity stops, and a live connection is activity. stderr merges
-    # into stdout on Sprites, so we parse everything from the stdout stream.
+    # after activity stops, and a live connection is activity. Only stdout
+    # frames are transcript lines: stderr is CLI progress and crash text that
+    # can never parse, and concatenating it into the buffer fabricated unparsed
+    # transcript lines over the one line carrying the cause. It is kept apart,
+    # bounded, for the failure record below.
     async for event in sprite_service.exec_stream(
         sprite, argv, env=provider_env, cwd=sprite_service.SPRITE_WORKDIR
     ):
         if "exit_code" in event:
             exit_code = event["exit_code"]
             break
-        buffer += stdout_decoder.decode(event["data"])
-        while "\n" in buffer:
-            line, buffer = buffer.split("\n", 1)
-            if line.strip():
-                for mapped in harness_mod.map_line(harness, line, state):
-                    yield _redact_event(mapped, provider_env)
+        if event["stream"] == "stdout":
+            buffer += stdout_decoder.decode(event["data"])
+            while "\n" in buffer:
+                line, buffer = buffer.split("\n", 1)
+                if line.strip():
+                    for mapped in harness_mod.map_line(harness, line, state):
+                        yield _redact_event(mapped, provider_env)
+        else:
+            stderr_tail = (stderr_tail + stderr_decoder.decode(event["data"]))[
+                -_FAILURE_TAIL_CHARS:
+            ]
+    assert exit_code is not None, "exec stream ended without an exit frame"
     if buffer.strip():
         for mapped in harness_mod.map_line(harness, buffer, state):
             yield _redact_event(mapped, provider_env)
 
-    if exit_code != 0 and state.error is None and not state.resume_missing:
-        state.error = f"agent exited with code {exit_code}"
-        # The cause is in the CLI's plain-text output (auth failures, missing
-        # binaries, crashes) — without it this error is undebuggable.
-        tail = _redact(" ".join(state.unparsed), provider_env)[-400:]
-        if tail:
-            state.error += f": {tail}"
+    if exit_code != 0 or state.error is not None:
+        # Everything the CLI said that was not a transcript line, newest last:
+        # stderr frames (local exec separates them) and unparsed stdout (Sprites
+        # merges the two streams, so there the CLI's words land here).
+        spoken = " ".join(t for t in [stderr_tail.strip(), *state.unparsed] if t)
+        tail = _redact(spoken, provider_env)[-_FAILURE_TAIL_CHARS:]
+        if state.error is None:
+            # Nothing in the transcript named a cause, so the exit code and the
+            # CLI's own words are the whole record (missing binary, auth failure,
+            # crash before the first stream line).
+            state.error = f"agent exited with code {exit_code}" + (f": {tail}" if tail else "")
+        else:
+            # The turn already has a named cause, and this is the only moment
+            # that knows the code: pi exits 0 on its most common failures, so
+            # `exit=0` is what separates "the endpoint died mid-reasoning" from
+            # "the client stopped waiting".
+            evidence = [state.error, f"exit={exit_code}"] + ([f"stderr: {tail}"] if tail else [])
+            state.error = " | ".join(evidence)
     if state.error:
         # Harness-emitted errors can carry raw request/response fragments
         # (the mappers now preserve them) — scrub the injected key like the
