@@ -474,6 +474,20 @@ def agent_run_lock(agent_id: UUID | str, ttl_seconds: int) -> _TurnLock:
     return _TurnLock(f"agent-run:{agent_id}", ttl_seconds)
 
 
+async def drop_agent_run_lock(agent_id: UUID) -> None:
+    """Delete a run lock that no live holder is left to release.
+
+    `_TurnLock.release` returns a lock only to its owner, and only the coroutine
+    that took it can ask. A run whose task body was escaped by the worker's own
+    timeout machinery — or whose `finally` never got to run — has no holder left
+    to ask, and waiting out the TTL would keep the lane reading as "run in
+    flight" for another 6600 s after nothing had been running for hours. Both
+    callers (the escape guard in `tasks.agent_schedules` and the stranded-run
+    sweep) reach this only once the lane itself is resolved as a failure, so
+    there is no run left that could own the key."""
+    await _get_redis().delete(f"agent-run:{agent_id}")
+
+
 def _system_prompt(owner_name: str, persona: str | None) -> str:
     base = prompts.render_sprite_system(owner_name)
     return f"{base}\n\n{persona}" if persona else base

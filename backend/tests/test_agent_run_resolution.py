@@ -333,6 +333,164 @@ def test_catchable_turn_failure_keeps_its_own_cause(monkeypatch, lane_locks, wor
     assert any("provider exploded" in text for text in alerts)
 
 
+def test_nightly_body_escape_resolves_the_lane_too(monkeypatch, lane_locks, worker_loop):
+    """`run_scheduled_agent` is the other task body, and the one the beat drives.
+    It swallows a run's own failure to alert instead of re-raising, so a guard
+    written only for the manual task would strand every nightly escape — and the
+    nightly dispatch is what the founder's lanes live on."""
+    lane = worker_loop.run_until_complete(_lane())
+    # The nightly task never calls `mark_run` itself — the beat consumed the tick
+    # and stamped `started` when it dispatched, so the escape has to be modelled
+    # from the beat's side or this test runs a lane that never started.
+    worker_loop.run_until_complete(agent_service.mark_run(lane["id"]))
+
+    async def stalled_turn(*args):
+        _arm_soft_time_limit()
+        await _stall()
+
+    monkeypatch.setattr(sprite_agent_service, "run_scheduled", stalled_turn)
+
+    with _billiard_soft_time_limit(), pytest.raises(SoftTimeLimitExceeded):
+        agent_schedules.run_scheduled_agent.run(str(lane["id"]), "202609281200")
+
+    row = worker_loop.run_until_complete(_row(lane["id"]))
+    assert row["last_run_outcome"] == "failed"
+    assert "run aborted" in row["last_run_error"]
+    assert "SoftTimeLimitExceeded" in row["last_run_error"]
+    # The credit the beat charged for this dispatch comes back: the same refund
+    # rule the run's own failure path applies, one credit, no more.
+    assert row["month_run_count"] == MONTH_COUNT
+    assert _held_lane_locks(lane_locks) == []
+
+
+def test_worker_shutdown_cancellation_resolves_the_lane(monkeypatch, lane_locks, worker_loop):
+    """A SIGTERM makes Celery cancel the task, and `CancelledError` is a
+    `BaseException`: the coroutine's `except Exception` cannot catch it, so the
+    lane would be left `started` while the worker exits for a deploy. The guard
+    sits at `BaseException` level for exactly this escape."""
+    lane = worker_loop.run_until_complete(_lane())
+
+    async def cancelled_turn(*args):
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr(sprite_agent_service, "run_scheduled", cancelled_turn)
+
+    with pytest.raises(asyncio.CancelledError):
+        agent_schedules.run_curator_now.run(str(lane["id"]))
+
+    row = worker_loop.run_until_complete(_row(lane["id"]))
+    assert row["last_run_outcome"] == "failed"
+    assert "CancelledError" in row["last_run_error"]
+    assert row["month_run_count"] == MONTH_COUNT
+    assert _held_lane_locks(lane_locks) == []
+
+
+def test_guard_releases_the_lock_when_the_coroutine_release_blows_up(
+    monkeypatch, lane_locks, worker_loop
+):
+    """The `finally` that hands the lane back is itself an await on Redis. When
+    it raises, the run has already recorded its outcome and the lock is the only
+    thing left behind — 6600 s of a healthy lane reading as busy. The guard's
+    release is its own delete, not a second call to the seam that just failed.
+    """
+    lane = worker_loop.run_until_complete(_lane())
+
+    async def finished_turn(*args):
+        return None
+
+    async def exploding_release(self) -> None:
+        raise RuntimeError("redis is unreachable")
+
+    monkeypatch.setattr(sprite_agent_service, "run_scheduled", finished_turn)
+    monkeypatch.setattr(sprite_agent_service._TurnLock, "release", exploding_release)
+
+    with pytest.raises(RuntimeError, match="redis is unreachable"):
+        agent_schedules.run_curator_now.run(str(lane["id"]))
+
+    row = worker_loop.run_until_complete(_row(lane["id"]))
+    # The run recorded its own success on the way out. A guard that stamped on
+    # the way through would report a finished curation as an outage and refund a
+    # credit the user genuinely spent.
+    assert row["last_run_outcome"] == "ran"
+    assert row["month_run_count"] == MONTH_COUNT + 1
+    assert _held_lane_locks(lane_locks) == []
+
+
+def test_a_failing_resolution_still_propagates_the_original_escape(
+    monkeypatch, lane_locks, worker_loop
+):
+    """Losing the resolution write must not lose the fact that the run died. The
+    worker has to report its own exception, and the lane stays `started` — the
+    one state the reaper is built to read — rather than being logged away."""
+    lane = worker_loop.run_until_complete(_lane())
+
+    async def stalled_turn(*args):
+        _arm_soft_time_limit()
+        await _stall()
+
+    def broken_resolve(*args, **kwargs):
+        raise RuntimeError("db is unreachable")
+
+    monkeypatch.setattr(sprite_agent_service, "run_scheduled", stalled_turn)
+    monkeypatch.setattr(agent_service, "resolve_started_runs", broken_resolve)
+
+    with _billiard_soft_time_limit(), pytest.raises(SoftTimeLimitExceeded):
+        agent_schedules.run_curator_now.run(str(lane["id"]))
+
+    row = worker_loop.run_until_complete(_row(lane["id"]))
+    assert row["last_run_outcome"] == "started"
+    # The charged credit stays charged: the guard never got to refund it, and the
+    # sweep that picks the lane up later deliberately does not guess at metering.
+    assert row["month_run_count"] == MONTH_COUNT + 1
+
+
+# --- the one write both rescuers share (Step 4's resolver) ---
+
+
+@pytest.mark.parametrize(
+    "outcome",
+    ["ran", "skipped_already_running", "failed", None],
+    ids=["ran", "contended-dispatch-skip", "failed-earlier", "never-started"],
+)
+async def test_the_resolver_leaves_a_lane_that_is_not_started_alone(pool, outcome):
+    """Both rescuers write from outside the run, so the row they meet may already
+    have resolved: a finished curation, the designed `already_running` skip a
+    contended dispatch records in the lane of the run in flight, an earlier
+    failure, or a lane whose run died before `mark_run` ever stamped it. Rewriting
+    any of those as `failed` reports work that happened as an outage and moves an
+    allowance nobody spent, so the `started` test is in the statement itself."""
+    lane = await _lane()
+    if outcome is None:
+        await get_pool().execute("UPDATE agents SET last_run_at = now() WHERE id = $1", lane["id"])
+    else:
+        await _stamp_run(lane["id"], outcome, age_seconds=60)
+
+    flipped = await agent_service.resolve_started_runs([lane["id"]], "run aborted", metered=True)
+
+    assert flipped == []
+    row = await _row(lane["id"])
+    assert row["last_run_outcome"] == outcome
+    assert row["last_run_error"] is None
+    assert row["month_run_count"] == MONTH_COUNT
+
+
+async def test_the_resolver_flips_a_started_lane_once_and_names_its_cause(pool):
+    lane = await _lane()
+    await _stamp_run(lane["id"], "started", age_seconds=60)
+
+    flipped = await agent_service.resolve_started_runs([lane["id"]], "run aborted", metered=True)
+
+    assert [str(row["id"]) for row in flipped] == [str(lane["id"])]
+    row = await _row(lane["id"])
+    assert row["last_run_outcome"] == "failed"
+    assert row["last_run_error"] == "run aborted"
+    # A run that charged the month credit is refunded exactly as
+    # `mark_run_failed` refunds it; a second sweep meeting the resolved lane
+    # flips nothing, so the refund cannot be applied twice.
+    assert row["month_run_count"] == MONTH_COUNT - 1
+    assert await agent_service.resolve_started_runs([lane["id"]], "run aborted", metered=True) == []
+
+
 # --- the escape no in-process handler can catch (Step 5's reaper) ---
 
 
@@ -376,6 +534,27 @@ async def test_reaper_resolves_only_lanes_past_the_run_lock_ttl(pool, monkeypatc
     # what it did to the allowance.
     assert str(stranded["id"]) in alerts[0]
     assert "allowance untouched" in alerts[0]
+
+
+async def test_reaper_resolves_a_lane_whose_owner_parked_it_mid_run(pool, monkeypatch, lane_locks):
+    """Pausing a curator between the beat's dispatch and the run's own gate
+    produces exactly one stranded lane: `run_mode` is checked inside the
+    coroutine, after `mark_run` had already stamped `started`. The sweep must not
+    condition on the lane being runnable, or the lane it exists to free is the
+    one lane it will never free."""
+    stranded = await _lane()
+    await _stamp_run(
+        stranded["id"], "started", age_seconds=agent_schedules.AGENT_RUN_LOCK_TTL + 600
+    )
+    await get_pool().execute("UPDATE agents SET run_mode = 'manual' WHERE id = $1", stranded["id"])
+    await lane_locks.set(f"agent-run:{stranded['id']}", "token-of-a-dead-worker", ex=1)
+
+    alerts = _capture_alerts(monkeypatch)
+    assert await agent_schedules._reap_stranded_runs() == 1
+
+    assert (await _row(stranded["id"]))["last_run_outcome"] == "failed"
+    assert f"agent-run:{stranded['id']}" not in lane_locks.data
+    assert len(alerts) == 1
 
 
 async def test_reaper_resolves_lanes_even_when_alerting_is_broken(pool, monkeypatch, lane_locks):

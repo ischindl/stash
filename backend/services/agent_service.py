@@ -741,6 +741,40 @@ async def mark_run_succeeded(agent_id: UUID) -> None:
     )
 
 
+async def resolve_started_runs(agent_ids: list[UUID], error: str, *, metered: bool) -> list[dict]:
+    """Close lanes that are still `started` as failures, in one statement, and
+    return the ones this call flipped.
+
+    Two rescuers face the same moment from outside the run — the escape guard in
+    `tasks.agent_schedules` and the stranded-run sweep — and they share this one
+    write. `started` is in the WHERE clause rather than in the caller's reasoning
+    because the lane may have resolved itself between being noticed and being
+    written: a run that recorded `ran`, a contended dispatch's designed
+    `skipped_already_running`, an earlier failure, or a lane whose run died
+    before `mark_run` ever stamped it. Rewriting any of those would report work
+    that happened as an outage and hand back an allowance nobody spent, and it
+    would erase the cause the founder's `last_run_error` needs.
+
+    `metered` follows `mark_run_failed`: a run that charged the month credit is
+    refunded, one that never charged it is not.
+    """
+    rows = await get_pool().fetch(
+        """
+        UPDATE agents SET
+            last_run_error = left($2, 500),
+            last_run_outcome = 'failed',
+            month_run_count = CASE WHEN $3
+                THEN greatest(month_run_count - 1, 0) ELSE month_run_count END
+        WHERE id = ANY($1::uuid[]) AND last_run_outcome = 'started'
+        RETURNING id, name
+        """,
+        agent_ids,
+        error,
+        metered,
+    )
+    return [dict(row) for row in rows]
+
+
 class CuratorWatermarkConflict(Exception):
     """The curator watermark moved between the position a run read and the
     advance it earned, so the completion is refused rather than allowed to write

@@ -145,6 +145,17 @@ celery.conf.update(
             # lane already running is stepped past by the next tick.
             "schedule": 300.0,
         },
+        "reap-stranded-agent-runs": {
+            "task": "backend.tasks.agent_schedules.reap_stranded_runs",
+            # The backstop for a run whose worker died without resolving its lane
+            # (hard timeout, OOM recycle, SIGKILL): nothing in that process can
+            # run, so only a sweep can free the lane. Five minutes on the default
+            # queue is the latency floor between a kill and a dispatchable lane —
+            # the sweep is one indexed UPDATE, so the cadence costs nothing, and
+            # it must not be rarer than the strike age it enforces or every
+            # stranded lane waits that much longer to be freed.
+            "schedule": 300.0,
+        },
         "agent-schedules-alert-stale-curators": {
             "task": "backend.tasks.agent_schedules.alert_stale_curators",
             # A crontab, not an interval: interval timers restart from zero on
