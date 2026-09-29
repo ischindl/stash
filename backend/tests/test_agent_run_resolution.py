@@ -416,6 +416,40 @@ def test_guard_releases_the_lock_when_the_coroutine_release_blows_up(
     assert _held_lane_locks(lane_locks) == []
 
 
+def test_nightly_body_releases_the_lock_without_stamping_the_resolved_lane(
+    monkeypatch, lane_locks, worker_loop
+):
+    """The beat-driven body is the one the founder's lanes live on, so the
+    no-clobber rule is tested through it too: a run that recorded `ran` and then
+    lost only its Redis release must come out as `ran` with its credit spent.
+    The same guard covers both bodies, but a guard written against one body's
+    resolution order would strand the other's bookkeeping, and the nightly
+    refund rule differs (`_run_scheduled_agent` never refunds on the happy
+    path), so the values asserted here are not the manual task's."""
+    lane = worker_loop.run_until_complete(_lane())
+    worker_loop.run_until_complete(agent_service.mark_run(lane["id"]))
+
+    async def finished_turn(*args):
+        return None
+
+    async def exploding_release(self) -> None:
+        raise RuntimeError("redis is unreachable")
+
+    monkeypatch.setattr(sprite_agent_service, "run_scheduled", finished_turn)
+    monkeypatch.setattr(sprite_agent_service._TurnLock, "release", exploding_release)
+
+    with pytest.raises(RuntimeError, match="redis is unreachable"):
+        agent_schedules.run_scheduled_agent.run(str(lane["id"]), "202609281200")
+
+    row = worker_loop.run_until_complete(_row(lane["id"]))
+    assert row["last_run_outcome"] == "ran"
+    assert row["last_run_error"] is None
+    # Spent, not refunded: the curation happened, and the guard's metered refund
+    # rides on the same compare-and-set that refuses to stamp the outcome.
+    assert row["month_run_count"] == MONTH_COUNT + 1
+    assert _held_lane_locks(lane_locks) == []
+
+
 def test_a_failing_resolution_still_propagates_the_original_escape(
     monkeypatch, lane_locks, worker_loop
 ):
@@ -470,6 +504,39 @@ async def test_the_resolver_leaves_a_lane_that_is_not_started_alone(pool, outcom
     assert flipped == []
     row = await _row(lane["id"])
     assert row["last_run_outcome"] == outcome
+    assert row["last_run_error"] is None
+    assert row["month_run_count"] == MONTH_COUNT
+
+
+async def test_a_lane_resolved_while_the_sweep_is_looking_is_not_flipped(pool):
+    """The race the compare-and-set exists for. A sweep SELECTs its candidates,
+    and between that read and its write the run itself can finish — the guard's
+    resolution is a second `run_async` on the same loop, and the escaped
+    coroutine is only unscheduled, not dead. The UPDATE that follows must find
+    no `started` row and move nothing: the recorded success and the spent credit
+    belong to the run that actually finished."""
+    old_age = agent_schedules.REAP_STRIKE_AGE_SECONDS + 60
+    lane = await _lane()
+    await _stamp_run(lane["id"], "started", age_seconds=old_age)
+
+    # The sweep's own SELECT, captured before the lane resolves itself.
+    candidates = await get_pool().fetch(
+        "SELECT id FROM agents WHERE last_run_outcome = 'started'"
+        " AND last_run_at < now() - make_interval(secs => $1)",
+        agent_schedules.REAP_STRIKE_AGE_SECONDS,
+    )
+    assert [str(row["id"]) for row in candidates] == [str(lane["id"])]
+
+    await agent_service.mark_run_succeeded(lane["id"])
+
+    assert (
+        await agent_service.resolve_started_runs(
+            [row["id"] for row in candidates], "run aborted", metered=True
+        )
+        == []
+    )
+    row = await _row(lane["id"])
+    assert row["last_run_outcome"] == "ran"
     assert row["last_run_error"] is None
     assert row["month_run_count"] == MONTH_COUNT
 
@@ -534,6 +601,36 @@ async def test_reaper_resolves_only_lanes_past_the_run_lock_ttl(pool, monkeypatc
     # what it did to the allowance.
     assert str(stranded["id"]) in alerts[0]
     assert "allowance untouched" in alerts[0]
+
+
+async def test_a_second_reaper_pass_resolves_nothing_and_skipped_lanes_are_not_its_business(
+    pool, monkeypatch, lane_locks
+):
+    """Two properties the first pass cannot show. The sweep is periodic, so its
+    own second pass must find nothing left to do — that is what makes the refund
+    in the resolver safe to run unattended. And `skipped_already_running` is an
+    outcome the CHECK constraint admits: a sweep that counted the lanes it had
+    already resolved as still stranded would report a healthy fleet as an outage
+    on every tick."""
+    stranded = await _lane()
+    contended = await _lane()
+    old_age = agent_schedules.REAP_STRIKE_AGE_SECONDS + 60
+    await _stamp_run(stranded["id"], "started", age_seconds=old_age)
+    await _stamp_run(contended["id"], "skipped_already_running", age_seconds=old_age)
+    await lane_locks.set(f"agent-run:{stranded['id']}", "token-of-a-dead-worker", ex=1)
+
+    alerts = _capture_alerts(monkeypatch)
+    assert await agent_schedules._reap_stranded_runs() == 1
+    assert await agent_schedules._reap_stranded_runs() == 0
+
+    assert len(alerts) == 1
+    contended_row = await _row(contended["id"])
+    assert contended_row["last_run_outcome"] == "skipped_already_running"
+    assert contended_row["last_run_error"] is None
+    assert contended_row["month_run_count"] == MONTH_COUNT
+    # The alert names one lane, and the second tick names none.
+    assert str(stranded["id"]) in alerts[0]
+    assert str(contended["id"]) not in alerts[0]
 
 
 async def test_reaper_resolves_a_lane_whose_owner_parked_it_mid_run(pool, monkeypatch, lane_locks):
