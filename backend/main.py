@@ -1,5 +1,6 @@
 import logging
 import sys
+import traceback
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -42,6 +43,7 @@ from .routers import (
     mini_programs,
     pins,
     publish,
+    reward_models,
     security_audit,
     session_folders,
     sessions,
@@ -173,6 +175,7 @@ app.include_router(session_folders.public_router)
 app.include_router(sessions.router)
 app.include_router(trash.router)
 app.include_router(pins.router)
+app.include_router(reward_models.router)
 app.include_router(mcp_servers.router)
 app.include_router(publish.router)
 app.include_router(security_audit.router)
@@ -212,10 +215,14 @@ async def add_security_headers(request: Request, call_next):
         response = await call_next(request)
     except Exception as exc:
         logger.error(
-            "Unhandled request failed method=%s path=%s exception_type=%s",
+            "Unhandled request failed method=%s path=%s exception_type=%s frames=%s",
             request.method,
             request.url.path,
             type(exc).__name__,
+            [
+                (frame.filename, frame.lineno, frame.name)
+                for frame in traceback.extract_tb(exc.__traceback__)
+            ],
         )
         response = JSONResponse(status_code=500, content={"detail": "Internal server error"})
     for key, value in SECURITY_HEADERS.items():
