@@ -64,8 +64,8 @@ import re
 from alembic import op
 from sqlalchemy import text
 
-revision = "0218"
-down_revision = "0209"
+revision = "0222"
+down_revision = "0221"
 branch_labels = None
 depends_on = None
 

@@ -34,8 +34,8 @@ from sqlalchemy import text
 
 from backend.services.session_service import CLOSE_EVENT_TYPE
 
-revision = "0221"
-down_revision = "0220"
+revision = "0225"
+down_revision = "0224"
 branch_labels = None
 depends_on = None
 

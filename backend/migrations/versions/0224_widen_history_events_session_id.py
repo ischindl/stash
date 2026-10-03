@@ -38,8 +38,8 @@ Revises: 0219
 
 from alembic import op
 
-revision = "0220"
-down_revision = "0219"
+revision = "0224"
+down_revision = "0223"
 branch_labels = None
 depends_on = None
 

@@ -28,8 +28,8 @@ from urllib.parse import urlparse
 import sqlalchemy as sa
 from alembic import op
 
-revision = "0216"
-down_revision = "0215"
+revision = "0220"
+down_revision = "0219"
 branch_labels = None
 depends_on = None
 
