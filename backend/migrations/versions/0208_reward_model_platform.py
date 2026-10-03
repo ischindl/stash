@@ -1,13 +1,13 @@
 """Reward model platform: traces, annotations, reward models, scores, GEPA runs.
 
-Revision ID: 0222
-Revises: 0221
+Revision ID: 0208
+Revises: 0207
 """
 
 from alembic import op
 
-revision = "0222"
-down_revision = "0221"
+revision = "0208"
+down_revision = "0207"
 branch_labels = None
 depends_on = None
 

@@ -1,13 +1,13 @@
 """Keep inferred feedback separate from human annotations, including abstentions.
 
-Revision ID: 0226
-Revises: 0225
+Revision ID: 0212
+Revises: 0211
 """
 
 from alembic import op
 
-revision = "0226"
-down_revision = "0225"
+revision = "0212"
+down_revision = "0211"
 branch_labels = None
 depends_on = None
 
