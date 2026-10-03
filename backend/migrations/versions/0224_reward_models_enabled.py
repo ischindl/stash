@@ -1,13 +1,13 @@
 """Enable reward models only for accounts created after this rollout.
 
-Revision ID: 0210
-Revises: 0209
+Revision ID: 0224
+Revises: 0223
 """
 
 from alembic import op
 
-revision = "0210"
-down_revision = "0209"
+revision = "0224"
+down_revision = "0223"
 branch_labels = None
 depends_on = None
 

@@ -1,13 +1,13 @@
 """Persist training evidence and private model artifacts.
 
-Revision ID: 0211
-Revises: 0210
+Revision ID: 0225
+Revises: 0224
 """
 
 from alembic import op
 
-revision = "0211"
-down_revision = "0210"
+revision = "0225"
+down_revision = "0224"
 branch_labels = None
 depends_on = None
 

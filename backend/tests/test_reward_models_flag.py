@@ -15,7 +15,7 @@ from .conftest import unique_name
 
 @pytest.mark.asyncio
 async def test_migration_preserves_existing_accounts_and_flags_future_accounts(pool):
-    migration = importlib.import_module("backend.migrations.versions.0210_reward_models_enabled")
+    migration = importlib.import_module("backend.migrations.versions.0224_reward_models_enabled")
     engine = create_async_engine(
         os.environ["TEST_DATABASE_URL"].replace("postgresql://", "postgresql+asyncpg://", 1)
     )
