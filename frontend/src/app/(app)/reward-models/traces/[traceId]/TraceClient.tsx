@@ -1,5 +1,8 @@
 "use client";
 
+import { useProductCheckpoint } from "@/components/ProductCheckpointContext";
+import FloodgateComponent from "@/checkpoints/floodgate-2026-10-05/TraceClient";
+
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState, type MouseEvent, type ReactNode } from "react";
 import { toast } from "sonner";
@@ -58,7 +61,7 @@ function inView(row: TraceRow, view: View): boolean {
   return row.kind === "prompt" || row.kind === "assistant";
 }
 
-export default function TraceClient({ traceId }: { traceId: string }) {
+function LatestTraceClient({ traceId }: { traceId: string }) {
   const { user } = useAuth();
   const confirm = useConfirm();
   const [trace, setTrace] = useState<RmTraceDetail | null>(null);
@@ -423,4 +426,10 @@ function composerLabel(target: ComposerTarget, trace: RmTraceDetail): string {
   if (target.stepId === null) return "Comment on the whole trace";
   const step = trace.steps.find((s) => s.id === target.stepId)!;
   return target.quote ? `Comment on selection in step ${step.index + 1}` : `Comment on step ${step.index + 1} (${step.role})`;
+}
+
+export default function TraceClient(props: React.ComponentProps<typeof LatestTraceClient>) {
+  return useProductCheckpoint() === "floodgate-2026-10-05"
+    ? <FloodgateComponent {...props} />
+    : <LatestTraceClient {...props} />;
 }

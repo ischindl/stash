@@ -1,5 +1,8 @@
 "use client";
 
+import { useProductCheckpoint } from "@/components/ProductCheckpointContext";
+import FloodgateComponent from "@/checkpoints/floodgate-2026-10-05/TraceMinimap";
+
 import { useEffect, useRef, useState, type PointerEvent, type RefObject } from "react";
 import { cn } from "@/lib/utils";
 import { isThinking, looksLikeError } from "./trace-rows";
@@ -23,7 +26,7 @@ function kindOf(step: RmStep): keyof typeof KINDS {
   return step.tool_name === null ? "assistant" : "tool";
 }
 
-export default function TraceMinimap({ steps, annotations, actionScores, scroller, navigation, onJump }: {
+function LatestTraceMinimap({ steps, annotations, actionScores, scroller, navigation, onJump }: {
   steps: RmStep[];
   annotations: RmAnnotation[];
   actionScores?: Map<string, RmActionScore>;
@@ -161,4 +164,10 @@ export default function TraceMinimap({ steps, annotations, actionScores, scrolle
       </div>
     </nav>
   );
+}
+
+export default function TraceMinimap(props: React.ComponentProps<typeof LatestTraceMinimap>) {
+  return useProductCheckpoint() === "floodgate-2026-10-05"
+    ? <FloodgateComponent {...props} />
+    : <LatestTraceMinimap {...props} />;
 }

@@ -1,5 +1,7 @@
 "use client";
 
+import FloodgateComponent from "@/checkpoints/floodgate-2026-10-05/RewardRail";
+
 import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
 import { Settings } from "lucide-react";
@@ -15,7 +17,7 @@ const PRIMARY = [
   { label: "Research", href: "/reward-models/models", match: (path: string) => path.startsWith("/reward-models/models") || path.startsWith("/reward-models/gepa/") },
 ];
 
-export default function RewardRail({ user, onLogout }: { user: User; onLogout: () => void }) {
+function LatestRewardRail({ user, onLogout }: { user: User; onLogout: () => void }) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const inSkillFolder = searchParams.get("section") === "skills";
@@ -53,4 +55,10 @@ export default function RewardRail({ user, onLogout }: { user: User; onLogout: (
       </div>
     </aside>
   );
+}
+
+export default function RewardRail(props: React.ComponentProps<typeof LatestRewardRail>) {
+  return props.user.product_checkpoint === "floodgate-2026-10-05"
+    ? <FloodgateComponent {...props} />
+    : <LatestRewardRail {...props} />;
 }

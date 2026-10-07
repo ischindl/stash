@@ -1,5 +1,8 @@
 "use client";
 
+import { useProductCheckpoint } from "@/components/ProductCheckpointContext";
+import FloodgateComponent from "@/checkpoints/floodgate-2026-10-05/ActionScoringPanel";
+
 import Link from "next/link";
 import { ChevronDown } from "lucide-react";
 import { Popover } from "radix-ui";
@@ -10,7 +13,7 @@ import type { RmRewardModel, RmTraceDetail } from "@/lib/types";
 import { errorMessage } from "./rm-text";
 import { actionModelId } from "./action-credit";
 
-export default function ActionScoringPanel({ trace, selectedModelId, onModelChange, onReload }: {
+function LatestActionScoringPanel({ trace, selectedModelId, onModelChange, onReload }: {
   trace: RmTraceDetail;
   selectedModelId: string | null;
   onModelChange: (id: string | null) => void;
@@ -114,4 +117,10 @@ export default function ActionScoringPanel({ trace, selectedModelId, onModelChan
       </Popover.Portal>
     </Popover.Root>
   );
+}
+
+export default function ActionScoringPanel(props: React.ComponentProps<typeof LatestActionScoringPanel>) {
+  return useProductCheckpoint() === "floodgate-2026-10-05"
+    ? <FloodgateComponent {...props} />
+    : <LatestActionScoringPanel {...props} />;
 }

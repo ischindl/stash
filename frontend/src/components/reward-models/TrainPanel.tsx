@@ -1,5 +1,8 @@
 "use client";
 
+import { useProductCheckpoint } from "@/components/ProductCheckpointContext";
+import FloodgateComponent from "@/checkpoints/floodgate-2026-10-05/TrainPanel";
+
 import { useEffect, useState } from "react";
 import { ChevronDown, Loader2 } from "lucide-react";
 import { toast } from "sonner";
@@ -20,7 +23,7 @@ const BASE_MODEL_SUGGESTIONS = ["Qwen/Qwen3-0.6B", "Qwen/Qwen3-1.7B", "Qwen/Qwen
  * "Options" exposes them. A selection needs at least two independent tasks;
  * the server validates the resulting training/evaluation split.
  */
-export default function TrainPanel({
+function LatestTrainPanel({
   traceIds,
   summary,
   onTrained,
@@ -128,4 +131,10 @@ function TrainStatus({ summary, error }: { summary: SelectionSummary; error: str
       Select at least two independent tasks for training and evaluation.
     </p>
   );
+}
+
+export default function TrainPanel(props: React.ComponentProps<typeof LatestTrainPanel>) {
+  return useProductCheckpoint() === "floodgate-2026-10-05"
+    ? <FloodgateComponent {...props} />
+    : <LatestTrainPanel {...props} />;
 }

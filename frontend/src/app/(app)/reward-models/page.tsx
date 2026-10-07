@@ -1,5 +1,8 @@
 "use client";
 
+import { useProductCheckpoint } from "@/components/ProductCheckpointContext";
+import FloodgateComponent from "@/checkpoints/floodgate-2026-10-05/TracesPage";
+
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useState } from "react";
@@ -22,7 +25,7 @@ import type { RmTraceSummary } from "@/lib/types";
 // New runs stream in over OpenTelemetry, so the list refreshes itself.
 const POLL_MS = 5000;
 
-export default function TracesPage() {
+function LatestTracesPage() {
   return (
     <Suspense fallback={<RmPageSkeleton />}>
       <Traces />
@@ -148,4 +151,10 @@ function Traces() {
       </RmPage>
     </TraceDropzone>
   );
+}
+
+export default function TracesPage() {
+  return useProductCheckpoint() === "floodgate-2026-10-05"
+    ? <FloodgateComponent />
+    : <LatestTracesPage />;
 }

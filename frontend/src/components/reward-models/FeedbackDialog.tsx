@@ -1,5 +1,8 @@
 "use client";
 
+import { useProductCheckpoint } from "@/components/ProductCheckpointContext";
+import FloodgateComponent from "@/checkpoints/floodgate-2026-10-05/FeedbackDialog";
+
 import Link from "next/link";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
@@ -8,7 +11,7 @@ import { rmGetRewardModel } from "@/lib/api";
 import type { RmRewardModelDetail } from "@/lib/types";
 import { errorMessage } from "./rm-text";
 
-export default function FeedbackDialog({ modelId }: { modelId: string }) {
+function LatestFeedbackDialog({ modelId }: { modelId: string }) {
   const [model, setModel] = useState<RmRewardModelDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -71,4 +74,10 @@ export default function FeedbackDialog({ modelId }: { modelId: string }) {
       </DialogContent>
     </Dialog>
   );
+}
+
+export default function FeedbackDialog(props: React.ComponentProps<typeof LatestFeedbackDialog>) {
+  return useProductCheckpoint() === "floodgate-2026-10-05"
+    ? <FloodgateComponent {...props} />
+    : <LatestFeedbackDialog {...props} />;
 }

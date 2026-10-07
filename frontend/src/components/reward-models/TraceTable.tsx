@@ -1,5 +1,8 @@
 "use client";
 
+import { useProductCheckpoint } from "@/components/ProductCheckpointContext";
+import FloodgateComponent from "@/checkpoints/floodgate-2026-10-05/TraceTable";
+
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState, type MouseEvent } from "react";
@@ -25,7 +28,7 @@ const COLUMNS: { key: TraceSortKey; label: string; className: string }[] = [
  * annotation view and rows can be deleted. "picker" is the train sheet:
  * clicking anywhere on a row toggles it.
  */
-export default function TraceTable({
+function LatestTraceTable({
   traces,
   selected,
   onSelectedChange,
@@ -262,4 +265,10 @@ function Checkbox({
       className="size-3.5 cursor-pointer accent-brand-500"
     />
   );
+}
+
+export default function TraceTable(props: React.ComponentProps<typeof LatestTraceTable>) {
+  return useProductCheckpoint() === "floodgate-2026-10-05"
+    ? <FloodgateComponent {...props} />
+    : <LatestTraceTable {...props} />;
 }
