@@ -19,6 +19,7 @@ from backend.services import (
 from backend.services.curation_service import NEVER, Position
 
 from .conftest import unique_name
+from .test_source_sync_claims import _configure_alerts
 
 
 async def _register(client: AsyncClient) -> tuple[str, UUID]:
@@ -509,6 +510,8 @@ async def test_failed_curator_run_preserves_watermark(
     from backend.services import sprite_agent_service
     from backend.tasks.agent_schedules import _run_due, _run_scheduled_agent, run_scheduled_agent
 
+    # A patched `send_alert` claims configured mode (STAS-268 gates the call).
+    _configure_alerts(monkeypatch)
     send_alert = AsyncMock()
     monkeypatch.setattr(alert_service, "send_alert", send_alert)
 
@@ -547,6 +550,8 @@ async def test_failed_run_records_error_and_refunds_credit(
     from backend.services import sprite_agent_service
     from backend.tasks.agent_schedules import _run_due, _run_scheduled_agent, run_scheduled_agent
 
+    # A patched `send_alert` claims configured mode (STAS-268 gates the call).
+    _configure_alerts(monkeypatch)
     send_alert = AsyncMock()
     monkeypatch.setattr(alert_service, "send_alert", send_alert)
 
@@ -1327,6 +1332,8 @@ async def test_the_scheduled_curator_run_fails_loud_when_the_watermark_moves(
     from backend.tasks.session_titles import generate_session_title
 
     monkeypatch.setattr(generate_session_title, "delay", lambda *a, **k: None)
+    # A patched `send_alert` claims configured mode (STAS-268 gates the call).
+    _configure_alerts(monkeypatch)
     alerts: list[str] = []
 
     async def capture_alert(text: str) -> None:

@@ -618,9 +618,14 @@ async def _run_scheduled_agent(agent_id: UUID, stamp: str) -> None:
         logger.exception("agent schedule: run failed for agent %s", agent_id)
         await agent_service.mark_run_failed(agent_id, str(e))
         email = await get_pool().fetchval("SELECT email FROM users WHERE id = $1", user_id)
-        await alert_service.send_alert(
-            f"Scheduled agent run failed: {agent['name']!r} for {email}: {str(e)[:300]}"
-        )
+        # Asked before the call, never caught after it: a delivery in a mode that
+        # sends no operational alerts raises, and a raise from inside this handler
+        # would replace the run's own failure — the one thing this handler exists
+        # to report. The `logger.exception` above already is the record here.
+        if alert_service.alerts_enabled():
+            await alert_service.send_alert(
+                f"Scheduled agent run failed: {agent['name']!r} for {email}: {str(e)[:300]}"
+            )
     finally:
         await lock.release()
 
@@ -687,12 +692,16 @@ async def _reap_stranded_runs() -> int:
     )
     for lane in flipped:
         await sprite_agent_service.drop_agent_run_lock(lane["id"])
-    for lane in flipped:
-        await alert_service.send_alert(
-            f"Stranded agent run resolved: lane {lane['id']} ({lane['name']}) held "
-            f"'started' past the {REAP_STRIKE_AGE_SECONDS}s run-lock TTL. Recorded as "
-            f"failed and its run lock released; allowance untouched. Cause: {cause}"
-        )
+    # The resolution and the lock drop above are already durable, so a mode that
+    # sends no operational alerts may not cost a lane its repair. The sweep's own
+    # summary line below is the record in that mode.
+    if alert_service.alerts_enabled():
+        for lane in flipped:
+            await alert_service.send_alert(
+                f"Stranded agent run resolved: lane {lane['id']} ({lane['name']}) held "
+                f"'started' past the {REAP_STRIKE_AGE_SECONDS}s run-lock TTL. Recorded as "
+                f"failed and its run lock released; allowance untouched. Cause: {cause}"
+            )
     logger.error("stranded-run sweep resolved %d lane(s): %s", len(flipped), cause)
     return len(flipped)
 
@@ -708,11 +717,12 @@ def alert_stale_curators() -> int:
 
 
 async def _alert_stale_curators() -> int:
-    """Alert on curators whose watermark stopped advancing despite pending
-    changes. Alerting on the stale *outcome* catches every cause — dead
-    provider keys, harness bugs, a wedged beat — where per-run failure alerts
-    only catch runs that started. A failed outcome or an unresolved started
-    outcome qualifies. Designed skips resolve explicitly and stay quiet.
+    """Record curators whose watermark stopped advancing despite pending
+    changes, and deliver that record where this installation sends operational
+    alerts. Alerting on the stale *outcome* catches every cause — dead provider
+    keys, harness bugs, a wedged beat — where per-run failure alerts only catch
+    runs that started. A failed outcome or an unresolved started outcome
+    qualifies. Designed skips resolve explicitly and stay quiet.
     """
     from ..database import get_pool
     from ..services import alert_service, curation_service
@@ -748,8 +758,15 @@ async def _alert_stale_curators() -> int:
         f"({(r['last_run_error'] or 'run started but never resolved')[:200]})"
         for r in stale
     ]
-    await alert_service.send_alert(
+    report = (
         f"{len(stale)} Memory curator(s) stale >{STALE_CURATOR_HOURS}h with pending changes:\n"
         + "\n".join(lines)
     )
+    # The record comes first and in every mode: a watchdog that only speaks by
+    # delivering goes silent on exactly the installations that never deliver.
+    # The cause it names is already on the agent row (`mark_run_failed`), so the
+    # row needs no second write.
+    logger.error("stale curator watchdog: %s", report)
+    if alert_service.alerts_enabled():
+        await alert_service.send_alert(report)
     return len(stale)

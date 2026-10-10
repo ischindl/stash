@@ -30,7 +30,8 @@ def _announce_alert_mode(**_: Any) -> None:
         return
     logger.info(
         "operational alerts disabled: ALERT_SLACK_TEAM_ID and ALERT_SLACK_CHANNEL_ID "
-        "are unset, so the stall and curator watchdogs record their decisions without delivering"
+        "are unset, so scheduled-run failures, the stranded-run sweep, and the stall and "
+        "curator watchdogs record their decisions without delivering"
     )
 
 
