@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 
 from backend.services import end_user_service, permission_service, shared_skill_service
 
+from .migration_ids import module_for_slug
 from .test_developer_platform import _developer, _event, _mint_workspace_key, _push
 from .test_permissions import _auth, _register_with_email
 
@@ -62,9 +63,7 @@ async def test_existing_optout_archives_shared_tree_and_revokes_every_share(clie
         UUID(stranger["id"]),
     )
     _, _, unaffected = await _developer(client)
-    migration = importlib.import_module(
-        "backend.migrations.versions.0204_curation_permission_generation"
-    )
+    migration = importlib.import_module(module_for_slug("curation_permission_generation"))
     engine = create_async_engine(
         os.environ["TEST_DATABASE_URL"].replace("postgresql://", "postgresql+asyncpg://", 1)
     )

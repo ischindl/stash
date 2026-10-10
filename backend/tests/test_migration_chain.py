@@ -17,6 +17,7 @@ from pathlib import Path
 
 from alembic.config import Config
 from alembic.script import ScriptDirectory
+from alembic.util.exc import CommandError
 
 from backend.migrations import check_heads
 
@@ -105,7 +106,7 @@ def test_migration_ids_disjoint_from_stamped_builds():
     A DB stamped `0206` cannot say *which* `0206` it ran: the founder (dogfood)
     image shipped `0206` as `dogfood_lineage_reconcile` while trunk's `0206` is
     `source_sync_claims`, and its `0203`–`0209` are re-numbered copies of trunk's
-    `0210`–`0216`. A branch that takes an already-shipped id therefore gets its
+    `0214`–`0220`. A branch that takes an already-shipped id therefore gets its
     migration treated as applied — `upgrade head` skips its schema on every
     stamped DB, permanently, while CI stays green because the branch alone is
     self-consistent. That is how the founder DB ended up missing trunk's
@@ -113,13 +114,19 @@ def test_migration_ids_disjoint_from_stamped_builds():
 
     Keyed by `(id, slug)`: an id the manifest holds only passes with the very
     slug that was shipped. Ids a build stamped but this tree never shipped live
-    in `stamp_only` and may gain a file only once registered as an absorbed
-    no-op node in `absorbed` — `0209`, whose content trunk already ships as
-    `0216`. The declaration is checked in both directions: a registered absorb node
-    whose file is gone is red too, because that stamp still resolves to nothing. Ids
+    in `stamp_only`, and each one has to end up with a node: an absorb node
+    registered in `absorbed`, whose content trunk already ships. The stamp does not
+    care how the tree chose to answer it — a stamp naming nothing is the same boot
+    death whether `absorbed` forgot the id or the file went missing after it was
+    declared — so both directions are policed. (`stamp_only` is empty today: the
+    founder stamp this rule was written for was renumbered away in `3670aa97` and no
+    database holding it survives, measured 2026-10-03. The rule stays because the
+    next stranded stamp is a merge away, not because one is open now.) Ids
     newer than the highest booked one must form one unbroken run that ends at the head, so
-    a branch cannot start a parallel series either. That rule
-    is imported from `check_heads` rather than restated here: the two guards have
+    a branch cannot start a parallel series either. And `captured_at.head` has to name
+    the head the graph actually has: a manifest silently left behind by the last
+    landed migration stops describing the tree it guards. Those rules
+    are imported from `check_heads` rather than restated here: the two guards have
     to say the same thing in the same words, or CI and the suite drift apart.
     """
     manifest = _shipped_manifest()
@@ -182,6 +189,21 @@ def test_migration_ids_disjoint_from_stamped_builds():
     assert not run_errors, "revision numbering is not one contiguous run:\n" + "\n".join(run_errors)
 
 
+def test_the_real_manifest_passes_every_guard_ci_applies():
+    """The suite must not be greener than the CI check it mirrors.
+
+    `check_heads.py` is what a PR gate runs, so the real tree and the real manifest
+    have to pass *that* function, not a hand-restated approximation of it. Asserting
+    through the same entry point is what keeps the two guards from drifting: the
+    stale-`captured_at` rot this card exists to close sat on `main` unnoticed
+    precisely because nothing here called the guard on the real tree.
+    """
+    errors = check_heads.manifest_collisions(
+        check_heads.revision_files(), list(_script().get_heads())
+    )
+    assert not errors, "the real manifest fails its own guard:\n" + "\n".join(errors)
+
+
 def _booked_ceiling(manifest: dict) -> int:
     """The highest revision id a deployed build already holds a claim on."""
     booked = {int(revision) for revision in (*manifest["revisions"], *manifest["stamp_only"])}
@@ -194,16 +216,22 @@ def test_each_manifest_rule_fires_on_the_mistake_it_exists_for(tmp_path, monkeyp
     Each rule above is pointed at a synthetic tree that makes exactly the mistake it
     exists to catch: an id re-booked from a stamped build (the STAS-232 collision
     class), an absorb node that was never registered, a mis-named absorb node, an
-    absorb node the tree does not actually ship, a manifest entry whose file is gone,
+    absorb node the tree does not actually ship, a stamped id the tree never absorbs
+    at all, a manifest entry whose file is gone, a manifest whose `captured_at.head`
+    names something other than the graph's head,
     and numbering that leaves a gap, forks into a
     parallel series, or strands its head. The numbers come from the real manifest so
     they stay honest as it grows; two chained migrations must stay green, because a
-    branch is allowed to add more than one.
+    branch is allowed to add more than one. The stamped-but-unshipped id is invented
+    rather than read from `stamp_only`, which is legitimately empty now that no
+    database holds such a stamp: a rule that can only be shown red while an
+    outstanding incident happens to be open is not a tested rule.
     """
     manifest = _shipped_manifest()
     shipped, stamp_only = manifest["revisions"], manifest["stamp_only"]
     ceiling = _booked_ceiling(manifest)
     first, second, forked = (f"{ceiling + offset:04d}" for offset in (1, 2, 3))
+    stamped_id, stamped_slug = f"{ceiling + 4:04d}", "a_migration_no_build_shipped"
 
     def use_manifest(**overrides):
         path = tmp_path / "shipped_revisions.json"
@@ -221,12 +249,11 @@ def test_each_manifest_rule_fires_on_the_mistake_it_exists_for(tmp_path, monkeyp
     rebooked = collide({a_shipped_id: [Path(f"{a_shipped_id}_other_thing.py")]})
     assert any(f'shipped as "{shipped_slug}"' in error for error in rebooked), rebooked
 
-    use_manifest(absorbed=[])
-    stamped_id = sorted(stamp_only)[0]
+    use_manifest(stamp_only={stamped_id: stamped_slug}, absorbed=[])
     unregistered = collide({stamped_id: [Path(f"{stamped_id}_anything.py")]})
     assert any("never" in error and "shipped" in error for error in unregistered), unregistered
 
-    use_manifest(absorbed=[stamped_id])
+    use_manifest(stamp_only={stamped_id: stamped_slug}, absorbed=[stamped_id])
     misnamed = collide({stamped_id: [Path(f"{stamped_id}_renamed.py")]})
     assert any("absorbed node" in error for error in misnamed), misnamed
 
@@ -234,6 +261,30 @@ def test_each_manifest_rule_fires_on_the_mistake_it_exists_for(tmp_path, monkeyp
     assert any(
         "absorbed node" in error and "no file for it" in error for error in declared_but_absent
     ), declared_but_absent
+
+    declared_and_shipped = collide({stamped_id: [Path(f"{stamped_id}_{stamped_slug}.py")]})
+    assert not [error for error in declared_and_shipped if stamped_id in error], (
+        declared_and_shipped
+    )
+
+    # The same stranded stamp with the declaration missing entirely: the database
+    # dies at boot exactly as loudly, so the guard has to be as loud.
+    use_manifest(stamp_only={stamped_id: stamped_slug}, absorbed=[])
+    stranded_stamp = collide({})
+    assert any(
+        "Can't locate revision" in error for error in stranded_stamp if stamped_id in error
+    ), stranded_stamp
+
+    use_manifest(stamp_only=stamp_only, captured_at={**manifest["captured_at"], "head": "0001"})
+    stale_capture = collide({first: [Path(f"{first}_one.py")]}, [first])
+    assert any(
+        "captured_at" in error and "0001" in error and first in error for error in stale_capture
+    ), stale_capture
+
+    use_manifest(stamp_only=stamp_only)
+    named_head = manifest["captured_at"]["head"]
+    correct_capture = collide({first: [Path(f"{first}_one.py")]}, [named_head])
+    assert not any("captured_at" in error for error in correct_capture), correct_capture
 
     use_manifest(revisions={**shipped, "9999": "a_deleted_migration"})
     stranded = collide({})
@@ -259,6 +310,84 @@ def test_each_manifest_rule_fires_on_the_mistake_it_exists_for(tmp_path, monkeyp
         )
     )
     assert len(duplicates) == 1 and first in duplicates[0], duplicates
+
+
+def test_a_stamp_only_id_with_no_node_is_red(tmp_path):
+    """Every id recorded as stamped has to resolve, whether or not it was declared.
+
+    A database whose `alembic_version` holds an id this tree ships no file for dies on
+    every boot with `Can't locate revision identified by '<id>'` — the STAS-232
+    outage. `stamp_only` is exactly the list of such ids, so an entry there is a
+    promise the tree answers the stamp with a node. The original rule only reddened a
+    missing node for ids already registered in `absorbed`, which is the shape a
+    *forgotten* declaration never arrives in: a stranded stamp is recorded in
+    `stamp_only` first and registered later, if at all, so the undeclared case is the
+    one that walks through the blind spot. The two repairs are different, so the two
+    messages stay textually distinct.
+    """
+    stamped = f"{_booked_ceiling(_shipped_manifest()) + 1:04d}"
+    stamp_only = {stamped: "a_migration_no_build_shipped"}
+    node = tmp_path / f"{stamped}_{stamp_only[stamped]}.py"
+
+    unregistered = check_heads.stamp_only_node_errors(stamp_only, [], {})
+    assert any("no node" in error for error in unregistered), unregistered
+    assert any(
+        f"Can't locate revision identified by '{stamped}'" in error for error in unregistered
+    ), unregistered
+
+    registered = check_heads.stamp_only_node_errors(stamp_only, [stamped], {})
+    assert any("absorbed node" in error and "no file for it" in error for error in registered), (
+        registered
+    )
+    assert not any("no node" in error for error in registered), registered
+
+    assert not check_heads.stamp_only_node_errors(stamp_only, [], {stamped: [node]})
+    assert not check_heads.stamp_only_node_errors(stamp_only, [stamped], {stamped: [node]})
+
+
+def test_captured_at_head_must_be_the_tree_head():
+    """The manifest cannot be allowed to describe an older tree and read as current.
+
+    Every other rule asks a question about ids, so a manifest left behind by the last
+    landed migration passes them all while claiming a head that is not the graph's:
+    that is how `main` sat with `captured_at` naming a head five revisions back, and
+    nothing in CI or the suite noticed. The repair is stated in the error because the
+    fix is a booking update, not a renumber, so the guard's usual `FIX` prose would
+    send a reviewer to the wrong file.
+
+    The carve-outs are load-bearing: when the graph itself has no head or more than
+    one, this rule has no opinion, because `migration_heads` and `main`'s head count
+    already own that failure and every synthetic tree in the rule-fires test calls in
+    with no heads at all.
+    """
+    manifest = _shipped_manifest()
+    (head,) = _script().get_heads()
+    stale = f"{int(head) - 5:04d}"
+
+    def captured_as(value):
+        captured = {**manifest["captured_at"], **value}
+        return {**manifest, "captured_at": captured}
+
+    mismatch = check_heads.captured_at_errors(captured_as({"head": stale}), [head])
+    assert any(stale in error and head in error for error in mismatch), mismatch
+
+    assert not check_heads.captured_at_errors(captured_as({"head": head}), [head])
+
+    for label, broken in (
+        ("absent", {key: value for key, value in manifest.items() if key != "captured_at"}),
+        ("empty", captured_as({"head": ""})),
+    ):
+        errors = check_heads.captured_at_errors(broken, [head])
+        assert any("captured_at" in error for error in errors), f"{label}: {errors}"
+
+    stale_manifest = captured_as({"head": stale})
+    assert not check_heads.captured_at_errors(stale_manifest, []), (
+        "an unresolvable graph is the graph rule's to report, not this one's"
+    )
+    forked = [head, f"{int(head) + 1:04d}"]
+    assert not check_heads.captured_at_errors(stale_manifest, forked), (
+        "a forked graph is main's head-count check to report, not this one's"
+    )
 
 
 def test_an_unresolvable_graph_is_reported_rather_than_raised(tmp_path):
@@ -293,21 +422,44 @@ def test_an_unresolvable_graph_is_reported_rather_than_raised(tmp_path):
         assert check_heads.FIX in errors[0], f"{label}: error has to carry the fix: {errors[0]}"
 
 
-def test_every_stamped_revision_resolves_as_an_ancestor_of_head():
+def test_every_booked_revision_resolves_as_an_ancestor_of_head():
     """A database's stamp must resolve through alembic, not just through a regex.
 
-    The founder build left its database stamped `0209`, an id this tree shipped no
-    file for, and every boot of the new chain died in `alembic upgrade head` with
-    `Can't locate revision identified by '0209'` — STAS-232. The ids that build's
-    stamp and its absorb node can name therefore have to be resolvable and on the
-    path to `head`, which is what alembic itself checks at boot: `0209` only
-    converges if `0217` (its parent) and `0218` (the node that owes it trunk's
-    `0203`-`0207`) both resolve too.
+    The founder build left its database stamped with an id this tree shipped no file
+    for, and every boot of the new chain died in `alembic upgrade head` with
+    `Can't locate revision identified by '0209'` — STAS-232. So every revision id the
+    manifest books has to resolve through alembic and sit on the path to `head`,
+    which is exactly what alembic itself demands at boot. The ids are read from the
+    manifest rather than named here: hardcoding them is how this test went stale at
+    the `3670aa97` renumber, when `0209`/`0217`/`0218` became three unrelated
+    migrations while the story in its docstring stayed true of different numbers.
+
+    An id alembic cannot resolve is reported as the boot failure it causes rather than
+    as a traceback, because that traceback is what the operator would see and this test
+    exists to spare them it.
     """
     script = _script()
     (head,) = script.get_heads()
     ancestors = {revision.revision for revision in script.iterate_revisions(head, "base")}
+    manifest = _shipped_manifest()
+    booked = sorted({*manifest["revisions"], *manifest["stamp_only"], *manifest["absorbed"]})
+    assert booked, f"{MANIFEST.name} books no revision at all, which is not a guard"
 
-    for revision in ("0209", "0217", "0218"):
-        assert script.get_revision(revision).revision == revision
-        assert revision in ancestors, f"{revision} is not an ancestor of head {head}"
+    unresolvable = []
+    for revision in booked:
+        try:
+            resolved = script.get_revision(revision)
+        except (CommandError, KeyError) as exc:
+            # Two shapes, one outcome: a never-shipped id raises alembic's own boot
+            # error, while an id whose file vanished but is still somebody's parent
+            # raises a raw KeyError out of the revision map.
+            unresolvable.append(
+                f"{revision} is booked in {MANIFEST.name} but alembic cannot resolve it ({exc}), "
+                f"so a database stamped {revision} dies on every boot with \"Can't locate "
+                f"revision identified by '{revision}'\""
+            )
+            continue
+        assert resolved.revision == revision
+        if revision not in ancestors:
+            unresolvable.append(f"{revision} is booked but is not an ancestor of head {head}")
+    assert not unresolvable, "\n".join(unresolvable)

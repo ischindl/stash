@@ -74,12 +74,11 @@ def duplicate_errors(duplicates: dict[str, list[str]]) -> list[str]:
 
 
 def revision_slug(path: Path) -> str:
-    """The `dogfood_lineage_reconcile` half of `0213_dogfood_lineage_reconcile.py`.
+    """The descriptive half of a migration filename, after the id and its underscore.
 
-    Bare ids are ambiguous in this repo: the founder (dogfood) build shipped
-    `0206` as `dogfood_lineage_reconcile` while trunk's `0206` is
-    `source_sync_claims`. Every shipped revision is therefore keyed by
-    `(id, slug)`, never by id alone.
+    Bare ids are ambiguous in this repo: two builds have shipped the same number for
+    different migrations, and a whole chain has been renumbered once. Every shipped
+    revision is therefore keyed by `(id, slug)`, never by id alone.
     """
     return path.stem.split("_", 1)[1]
 
@@ -92,18 +91,20 @@ def manifest_collisions(files_by_id: dict[str, list[Path]], heads: list[str]) ->
     migration applied and skips its schema on every stamped DB — permanently, and
     green in CI because each branch still looks self-consistent. The founder
     image's chain is the live example: its `0203`–`0209` are re-numbered copies
-    of trunk's `0210`–`0216`, so trunk `0203`–`0207` were never applied there.
+    of trunk's `0214`–`0220`, so trunk `0203`–`0207` were never applied there.
 
     `shipped_revisions.json` freezes the `(id, slug)` pairs that any deployed
     build shipped, which turns the collision red at PR time. An id that a build
-    stamped but this tree never shipped lives in `stamp_only`; it may only gain a
-    file once it is registered as an absorbed node in `absorbed` — a no-op
-    revision whose content trunk already ships (STAS-232 registers `0209` that
-    way). The declaration is checked both ways: the node has to exist, because a
-    stamped database that resolves to nothing is the outage the node was added to
-    close. Ids newer than the highest booked one have to form one unbroken run
-    that ends at the graph head, so a branch cannot quietly start a parallel
-    numbering series either — see `new_revision_run_errors`.
+    stamped but this tree never shipped lives in `stamp_only`, and it has to end up
+    with a node: an absorb node — a no-op revision whose content trunk already
+    ships — registered in `absorbed`. A stamp naming nothing is the same boot death
+    however the tree chose not to answer it, so `stamp_only_node_errors` polices both
+    the undeclared id and the declared node whose file went missing. Ids newer than
+    the highest booked one have to form one unbroken run that ends at the graph head,
+    so a branch cannot quietly start a parallel numbering series either — see
+    `new_revision_run_errors`. And the manifest's own `captured_at.head` has to name
+    the head the graph actually has, or the file describes a tree older than the one
+    it is guarding — see `captured_at_errors`.
     """
     if not MANIFEST.exists():
         return [
@@ -158,18 +159,91 @@ def manifest_collisions(files_by_id: dict[str, list[Path]], heads: list[str]) ->
                 f"every DB stamped {revision} unresolvable at boot.\n{FIX}"
             )
 
+    errors.extend(stamp_only_node_errors(stamp_only, absorbed, files_by_id))
+    errors.extend(captured_at_errors(manifest, heads))
+    errors.extend(new_revision_run_errors(files_by_id, shipped, stamp_only, heads))
+    return errors
+
+
+def stamp_only_node_errors(
+    stamp_only: dict[str, str],
+    absorbed: list[str],
+    files_by_id: dict[str, list[Path]],
+) -> list[str]:
+    """Errors for a revision id a deployed build stamped that this tree cannot resolve.
+
+    A database's stamp is only a number, so alembic has to find a node under that
+    number before it can upgrade: a stamped id with no file dies on every boot with
+    `Can't locate revision identified by ...`. `stamp_only` is where the manifest
+    records exactly those ids, which makes each entry a promise the tree can answer
+    it — and a promise is worth policing whether or not anyone wrote down how. The
+    registered case (the id is in `absorbed` but its file is gone) and the unregistered
+    one are the same outage, so neither may stay silent while the other reds.
+
+    The two messages name different repairs and so read differently: a registered node
+    that went missing has to come back, while an unregistered id may be answered either
+    by shipping a node or by measuring that no database holds the stamp at all.
+    """
+    errors: list[str] = []
     for revision, slug in sorted(stamp_only.items()):
-        if revision in absorbed and revision not in files_by_id:
+        if revision in files_by_id:
+            continue
+        boot_failure = f"Can't locate revision identified by '{revision}'"
+        if revision in absorbed:
             errors.append(
                 f'{MANIFEST.name} registers {revision} ("{slug}") as an absorbed node, but '
                 f"versions/ has no file for it: a database stamped {revision} still dies at "
-                f"boot with \"Can't locate revision identified by '{revision}'\", which is "
-                f"the outage the declaration exists to close. Re-add the no-op node or "
-                f'drop it from "absorbed".\n{FIX}'
+                f'boot with "{boot_failure}", which is the outage the declaration exists to '
+                f'close. Re-add the no-op node or drop it from "absorbed".\n{FIX}'
             )
-
-    errors.extend(new_revision_run_errors(files_by_id, shipped, stamp_only, heads))
+            continue
+        errors.append(
+            f'{MANIFEST.name} records {revision} ("{slug}") as a stamp a deployed build '
+            f"holds, but versions/ has no node for it and it is not registered as an "
+            f"absorbed node: a database stamped {revision} dies on every boot with "
+            f'"{boot_failure}". Either ship a no-op node named after the stamped slug '
+            f"({revision}_{slug}.py) whose content trunk already ships and register it "
+            f'in "{MANIFEST.name}" -> "absorbed", or measure that no database holds this '
+            "stamp — read `SELECT version_num FROM alembic_version` on the databases that "
+            f"build ran on — and drop the entry."
+        )
     return errors
+
+
+def captured_at_errors(manifest: dict, heads: list[str]) -> list[str]:
+    """Error unless the manifest describes the tree it is guarding.
+
+    Every other rule reads this file as the record of what shipped, so a manifest left
+    behind by the last landed migration makes those reads quietly wrong: `captured_at`
+    still names an older head, the bookings stop covering the newest landed ids, and
+    one of them can be re-booked by a branch while the guard stays green.
+
+    Silent when the graph cannot name exactly one head, because the head count and
+    `migration_heads` already report that and this rule's claim would be noise on top.
+    The repair is a booking update rather than a renumber, so the message says so
+    instead of pointing at `FIX`.
+    """
+    if len(heads) != 1:
+        return []
+    head = heads[0]
+    head_field = f'"captured_at" -> "head" in {MANIFEST.name}'
+    captured = manifest.get("captured_at")
+    recorded = captured.get("head", "") if isinstance(captured, dict) else ""
+    if not recorded:
+        return [
+            f"{head_field} is missing or empty, so the manifest cannot say which tree it "
+            f"describes: a guard that cannot answer its own question is broken, not green. "
+            f'Set it to {{"commit": ..., "date": ..., "head": "{head}"}}.'
+        ]
+    if recorded == head:
+        return []
+    return [
+        f"{MANIFEST.name} is captured at head {recorded}, but this tree's alembic head is "
+        f"{head}: the manifest is describing an older tree than the one it guards, so the "
+        f"ids landed since {recorded} are unbooked and a branch may re-book one of them "
+        f'without any rule firing. Book those landed `(id, slug)` pairs in "revisions" '
+        f'and set {head_field} to "{head}".'
+    ]
 
 
 def _files_by_revision(files_by_id: dict[str, list[Path]]):

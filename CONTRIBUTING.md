@@ -155,12 +155,31 @@ npm test
    ```bash
    python backend/migrations/check_heads.py
    ```
-   It prints the graph head and, when something is wrong, the next free id. Two rules
-   it enforces cannot be inferred from the tree: `backend/migrations/shipped_revisions.json`
-   freezes every `(id, slug)` pair a deployed build has stamped — a database stamped `0206`
-   cannot say *which* `0206` it ran, so a migration that re-books a shipped id is treated as
-   already applied and silently skips its schema on every stamped DB — and ids above the
-   highest booked one have to form one unbroken run that ends at the head.
+   It prints the graph head and, when something is wrong, the next free id. Four rules
+   it enforces cannot be inferred from the tree:
+   - `backend/migrations/shipped_revisions.json` freezes every `(id, slug)` pair a
+     deployed build has stamped — a database stamped `0206` cannot say *which* `0206` it
+     ran, so a migration that re-books a shipped id is treated as already applied and
+     silently skips its schema on every stamped DB. Repair: renumber your branch's
+     migration onto main's current head.
+   - Ids above the highest booked one have to form one unbroken run that ends at the
+     head, so a branch cannot quietly start a parallel numbering series.
+   - The manifest has to describe the tree it guards. A `captured_at.head` left behind
+     by the last landed migration reddens with: `shipped_revisions.json is captured at
+     head 0220, but this tree's alembic head is 0225: the manifest is describing an
+     older tree than the one it guards, so the ids landed since 0220 are unbooked and a
+     branch may re-book one of them without any rule firing.` Repair: book those landed
+     `(id, slug)` pairs in `"revisions"` and set `"captured_at" -> "head"` to the head
+     the guard printed.
+   - An id recorded as stamped (`"stamp_only"`) needs a node — a file in `versions/` or
+     a no-op node registered in `"absorbed"`. For a hypothetical entry the message
+     reads: `shipped_revisions.json records 0299 ("my_old_feature") as a stamp a
+     deployed build holds, but versions/ has no node for it and it is not registered as
+     an absorbed node: a database stamped 0299 dies on every boot with "Can't locate
+     revision identified by '0299'"`. Repair: ship a no-op node named after the stamped
+     slug whose content trunk already ships and register it in `"absorbed"`, or first
+     measure that no database holds the stamp (`SELECT version_num FROM
+     alembic_version` on the databases that build ran on) and drop the entry.
 2. Create a new Alembic migration:
    ```bash
    python -m alembic revision -m "add_my_column"
@@ -170,9 +189,13 @@ npm test
 4. Run `python -m alembic upgrade head` to verify.
 5. Add a corresponding test in `backend/tests/test_migrations.py` if the
    migration has non-trivial data logic.
-6. When the migration reaches a deployed build, add its `(id, slug)` to
-   `shipped_revisions.json` in the same change. Forgetting it does not break anything
-   today; it only surfaces as a red guard on the next PR that needs to know.
+6. Book the migration when it lands, not when it reaches a deployed build: add its
+   `(id, slug)` to `shipped_revisions.json` in the same change and move `captured_at`
+   to `{commit, date, head}` of the new head. Booking is a reservation, not a claim
+   that code shipped — a booked id can never be booked again by anyone, which is the
+   race `#712`/`#965` turn on — so reserving at landing is the safe direction. What it
+   costs is that an id booked by a branch that never deploys stays booked. The guard
+   enforces the rule: a manifest whose `captured_at.head` is behind the tree is red.
 
 ---
 

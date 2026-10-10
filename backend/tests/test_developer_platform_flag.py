@@ -11,11 +11,12 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from .conftest import unique_name
+from .migration_ids import module_for_slug
 
 
 @pytest.mark.asyncio
 async def test_migration_preserves_existing_accounts_and_flags_future_accounts(pool):
-    migration = importlib.import_module("backend.migrations.versions.0205_developer_platform_only")
+    migration = importlib.import_module(module_for_slug("developer_platform_only"))
     engine = create_async_engine(
         os.environ["TEST_DATABASE_URL"].replace("postgresql://", "postgresql+asyncpg://", 1)
     )

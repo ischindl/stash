@@ -1,13 +1,13 @@
 """Converge a founder-lineage database onto the trunk schema and data.
 
 The founder (dogfood) image shipped its own chain `0203`-`0209`, which are
-re-numbered copies of trunk's `0210`-`0216`. A database it left stamped `0209`
+re-numbered copies of trunk's `0214`-`0220`. A database it left stamped `0209`
 therefore resolved trunk's revisions under founder ids — except for trunk
 `0203`-`0207`, which that build never had a number for and so never ran. Nothing
 else re-adds what those five migrations did, so the founder instance ran for
 weeks against a schema missing nine columns and against shared wikis that trunk
 had since moved private data out of. Measured founder-at-`0209` versus
-trunk-at-`0216` is exactly this migration's scope:
+trunk-at-`0220` is exactly this migration's scope:
 
   * ``workspaces.curation_generation``   (trunk 0204)
   * ``users.developer_platform_only``    (trunk 0205)
@@ -15,7 +15,7 @@ trunk-at-`0216` is exactly this migration's scope:
   * ``drive_documents`` extraction claim  (trunk 0207)
   * the curator-log archival trunk 0203 performed on data, not schema
 
-The nine columns and trunk `0217`'s table arrive as idempotent DDL. The data effects are carried
+The nine columns and trunk `0221`'s table arrive as idempotent DDL. The data effects are carried
 verbatim from the originals and run only when the database has not had them:
 ``workspaces.curation_generation`` is trunk 0204's fingerprint and trunk 0203
 always ran one revision earlier, so the column being absent *before this
@@ -37,25 +37,40 @@ build's `0203`-`0207` are unrelated (`session_folders_share_wiki` through
 `curator_scope_and_model`). `shipped_revisions.json` keys every shipped
 revision by `(id, slug)` for the same reason.
 
+The 2026-10-03 id collision fix renumbered this repository's own chain, so the
+numbers the paragraphs below quote for trunk migrations are the pre-renumber
+ones: the same files now carry numbers four higher (then `0210`-`0218`, today
+`0214`-`0222`, this file among them). Trunk `0203`-`0207` and the founder build's
+own `0203`-`0209` keep the numbers used here.
+
 Each trunk revision the founder stamp owes is carried or excused, per trunk
 revision:
 
   * `0203`, `0204` — carried here. The founder build had no number for either, so
     its databases have neither the log archival nor `curation_generation`.
   * `0205`-`0208` — already applied under the founder build's own numbers, so
-    their data work must not run twice. `0208` was never stamped by anything.
-  * `0209`, `0210`-`0216` — the founder chain's own content, which the absorb
-    node's ancestry accounts for.
+    their data work must not run twice. `0208` named no migration of ours then,
+    and the number is origin's `reward_model_platform` today.
+  * `0209`, `0210`-`0216` — the founder chain's own content. The absorb node that
+    used to account for it, `0209_local_endpoint_endpoints`, was deleted by the
+    2026-10-03 collision fix, so a database still stamped in that range now
+    resolves these numbers to unrelated trunk migrations. That stranded founder
+    lineage is a measured gap owned by separate work, not something this
+    migration answers from inside the trunk chain.
 
-It is numbered `0218` rather than `0217` because trunk booked `0217` for
-`folder_mcp_tokens` while this convergence was in flight, and that collision is
-not cosmetic: `0209_local_endpoint_endpoints` parents onto `0217`, so alembic
-reads `0217` as applied on a database that never ran it. Its table therefore
-arrives here too — `SCHEMA_SQL` is the one place allowed to know that a revision
-can be an ancestor without having been executed.
+It was numbered `0218` rather than `0217` because trunk booked `0217` for
+`folder_mcp_tokens` while this convergence was in flight, and that collision was
+not cosmetic: the absorb node `0209_local_endpoint_endpoints` parented onto
+`0217`, so alembic read `0217` as applied on a database that never ran it — hence
+its table arriving here too, `SCHEMA_SQL` being the one place allowed to know
+that a revision can be an ancestor without having been executed. The collision
+fix deleted that absorb node, so this file is `0222` on `0221` and
+`folder_mcp_tokens` is an ordinary ancestor that every path executes: its
+`CREATE TABLE IF NOT EXISTS` below is a no-op on every path today and stays only
+because dropping migration SQL is a decision of its own.
 
-Revision ID: 0218
-Revises: 0209
+Revision ID: 0222
+Revises: 0221
 """
 
 import hashlib
@@ -69,12 +84,13 @@ down_revision = "0221"
 branch_labels = None
 depends_on = None
 
-# The nine columns trunk 0204/0205/0206/0207 added, plus trunk 0217's table.
+# The nine columns trunk 0204/0205/0206/0207 added, plus trunk 0221's table.
 # `IF NOT EXISTS` is what makes this list a no-op on a database that already ran
 # them, which the founder path never did.
 SCHEMA_SQL = [
-    # Carried for trunk 0217, which a database stamped 0209 counts as applied
-    # without ever having run it — see the header.
+    # trunk's `folder_mcp_tokens`, carried from when the absorb node made a 0209 stamp
+    # swallow the id this table was booked under; the node is gone, so this statement is
+    # the no-op guard the header describes.
     """CREATE TABLE IF NOT EXISTS folder_mcp_tokens (
         folder_id UUID PRIMARY KEY REFERENCES folders(id) ON DELETE CASCADE,
         token VARCHAR(64) NOT NULL UNIQUE,

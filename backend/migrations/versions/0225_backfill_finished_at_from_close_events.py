@@ -25,8 +25,8 @@ sessions on that deployment today. It is the repair for the databases where the
 close rows do join, and the no-op path is what proves the rule above rather than
 a guess about it.
 
-Revision ID: 0221
-Revises: 0220
+Revision ID: 0225
+Revises: 0224
 """
 
 from alembic import op

@@ -25,8 +25,8 @@ marker into one owner's ordering at one instant, not a reference to live
 material: history is prunable, and the watermark must stay readable (and the
 pair comparable) after the row it names is gone.
 
-Revision ID: 0219
-Revises: 0218
+Revision ID: 0223
+Revises: 0222
 """
 
 from alembic import op

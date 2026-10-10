@@ -19,8 +19,8 @@ silently break the client every owner already configured. Revocation lives in
 `permission_service.get_visibility`, not here: the row keeps the handle alive,
 the share switch decides whether it is honoured.
 
-Revision ID: 0217
-Revises: 0216
+Revision ID: 0221
+Revises: 0220
 """
 
 from alembic import op

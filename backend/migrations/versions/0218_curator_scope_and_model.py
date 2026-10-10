@@ -14,8 +14,8 @@ Wiki home: a project's wiki is a file-tree folder (pages only hang off
 `folders`), so session_folders grows the link to it — wiki_folder_id — which
 the first folder curator of a project creates and every later one reuses.
 
-Revision ID: 0214
-Revises: 0213
+Revision ID: 0218
+Revises: 0217
 """
 
 from alembic import op

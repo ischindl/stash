@@ -1,6 +1,6 @@
-"""Data-level test for the multi-endpoint credential migration (0215 -> 0216).
+"""Data-level test for the multi-endpoint credential migration (`local_endpoint_endpoints`).
 
-0216 reshapes `user_agent_credentials` while it holds live data: the
+`local_endpoint_endpoints` reshapes `user_agent_credentials` while it holds live data: the
 (user_id, provider) primary key becomes an `id` primary key plus a partial
 unique index, and every pre-existing row has to arrive with a name its owner
 will recognise. `test_migrations.py` only proves `alembic upgrade head` does not
@@ -30,6 +30,8 @@ import uuid
 import asyncpg
 from cryptography.fernet import Fernet
 
+from backend.tests.migration_ids import down_revision_of_slug
+
 _BASE_URL = os.environ.get(
     "TEST_DATABASE_URL",
     "postgresql://stash:stash@localhost:5432/stash_test",
@@ -42,7 +44,9 @@ _MIG_URL = _BASE_URL.rsplit("/", 1)[0] + "/" + _MIG_DB
 # backfill needs in order to read a base_url out of them.
 _KEY = Fernet.generate_key().decode()
 _BOX_ONE = Fernet(_KEY.encode())
-_PREVIOUS_REVISION = "0215"
+# The stamp to seed legacy rows at: whatever the migration under test is parented
+# on, looked up rather than remembered, so a renumber cannot move it in silence.
+_PREVIOUS_REVISION = down_revision_of_slug("local_endpoint_endpoints")
 
 _LEGACY_DOC = {"base_url": "http://box-one.lan:11434/v1", "model": "qwen2.5:7b", "api_key": None}
 # Encrypted ONCE, here, so the post-migration bytes can be compared to it.
