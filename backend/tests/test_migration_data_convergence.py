@@ -5,7 +5,7 @@ never ran there. Nine missing columns are the visible half of that gap, and a
 schema-only test passes on a database whose shared wikis still hold everything trunk
 revoked everywhere else: customer-private pages readable by strangers, live shares, a
 published skill built from compiled profiles, and the curator's own Log page full of
-customer details. `0218_converge_dogfood_lineage` is the migration that has to undo
+customer details. The `converge_dogfood_lineage` migration is the one that has to undo
 all of it, so this asserts the undoing — the revocation, the archival, the watermark
 and queue resets — and, just as loudly, that it happens exactly once: the second pass
 must not re-archive a live wiki or double-increment a generation counter.
@@ -22,14 +22,18 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
+from backend.tests.migration_ids import module_for_slug
+
 from .conftest import unique_name
 
-CONVERGENCE = "backend.migrations.versions.0218_converge_dogfood_lineage"
+CONVERGENCE = module_for_slug("converge_dogfood_lineage")
 
 # What the founder build never ran, taken back off the test schema so the migration
-# meets the database it will really meet: trunk 0204-0207's nine columns and trunk
-# 0217's table (whose id a database stamped 0209 counts as applied without having
-# run it, so 0218 has to create it).
+# meets the database it will really meet: trunk 0204-0207's nine columns, which sit under
+# the founder stamp of 0209 and so can never re-run there. `folder_mcp_tokens` is dropped
+# for a different reason — trunk books it above that stamp, so the ordinary ancestor path
+# would create it — and removing it here is what makes the assertion below prove this
+# node's own `CREATE TABLE IF NOT EXISTS` rather than somebody else's.
 FOUNDER_SCHEMA_SQL = [
     "DROP TABLE IF EXISTS folder_mcp_tokens",
     "ALTER TABLE workspaces DROP COLUMN IF EXISTS curation_generation CASCADE",
@@ -45,8 +49,9 @@ FOUNDER_SCHEMA_SQL = [
         DROP COLUMN IF EXISTS extraction_retry_at CASCADE""",
 ]
 
-# The trunk 0204-0207 columns plus trunk 0217's table: what the schema half of 0218
-# owes a founder database, checked by name so a renamed column cannot slip past.
+# The trunk 0204-0207 columns plus trunk's `folder_mcp_tokens` table: what the schema
+# half of the convergence node carries, checked by name so a renamed column cannot slip
+# past.
 CONVERGED_SCHEMA = [
     ("workspaces", "curation_generation"),
     ("users", "developer_platform_only"),
@@ -283,7 +288,7 @@ async def _rolled_back(work) -> None:
 
 @pytest.mark.asyncio
 async def test_founder_database_revokes_shared_wiki_and_archives_curator_log():
-    """The whole point of 0218: a founder database ends up as unshared as trunk's."""
+    """The whole point of this migration: a founder database ends up as unshared as trunk's."""
 
     def work(conn):
         for statement in FOUNDER_SCHEMA_SQL:
@@ -303,7 +308,7 @@ async def test_founder_database_revokes_shared_wiki_and_archives_curator_log():
             conn,
             "SELECT 1 FROM information_schema.tables WHERE table_schema = current_schema() "
             "AND table_name = 'folder_mcp_tokens'",
-        ), "trunk 0217's table never arrived, though a 0209 database counts it as applied"
+        ), "this node's own DDL did not create trunk's folder_mcp_tokens table"
 
         # Every object in the old tree loses its public read, its shares, and its
         # link to the customer whose data it is.

@@ -11,8 +11,8 @@ turn onto it, and that outcome needs to be storable.
 
 The existing values stay untouched; this only widens the set by one.
 
-Revision ID: 0211
-Revises: 0210
+Revision ID: 0215
+Revises: 0214
 """
 
 from alembic import op

@@ -18,8 +18,8 @@ Backfill reads every existing row once: an endpoint row is named from the
 host in its own (encrypted) base_url, a key row from its provider. An empty
 database therefore never touches the encryption keyring at all.
 
-Revision ID: 0216
-Revises: 0215
+Revision ID: 0220
+Revises: 0219
 """
 
 import json

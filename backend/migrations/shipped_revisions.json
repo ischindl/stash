@@ -1,9 +1,9 @@
 {
- "note": "Every revision id any deployed build has stamped, keyed by (id, slug) -- bare ids are ambiguous here: the founder (dogfood) image shipped 0203-0209 as re-numbered copies of trunk 0210-0216, so trunk 0206 is source_sync_claims while the founder build's 0206 was dogfood_lineage_reconcile. A database stamped 0206 cannot say which 0206 it ran, so no new migration may book an id listed below: 'alembic upgrade head' would treat it as applied and skip its schema on every stamped DB. 'stamp_only' holds ids a build stamped that this tree never shipped a file for; one may gain a file only after being registered in 'absorbed' as a no-op node whose content trunk already ships. check_heads.py and test_migration_chain.py enforce this. 2026-10-03: founder (dogfood) absorbcia zrusena - founder DB na tomto stroji neexistuje, takze stamp_only/absorbed su prazdne a 0208/0209 patria origin reward-model retazcu; nase lokalne migracie boli posunute nad origin 0213_rm_learning_source. MAINTENANCE: ked migracia dosiahne deploynuty build, pridaj jej (id, slug)",
+ "note": "Every revision id any build has stamped into a real database, keyed by (id, slug) -- bare ids are ambiguous here: the founder (dogfood) image shipped 0203-0209 as re-numbered copies of trunk 0214-0220, so trunk 0206 is source_sync_claims while the founder build's 0206 was dogfood_lineage_reconcile. A database stamped 0206 cannot say which 0206 it ran, so no new migration may book an id listed below: 'alembic upgrade head' would treat it as applied and skip its schema on every stamped DB. 'stamp_only' records ids a build stamped that this tree shipped no file for; it is not a parking lot -- the guard refuses to leave an entry unresolved, so one either gains a file or is registered in 'absorbed' as a no-op node whose content trunk already ships, and an id no measured database still holds is dropped from here. An empty 'stamp_only' is therefore a claim about the databases that were measured, not a global one: the day a build stamps an id this tree ships no node for, that entry needs a node, and the guard reddens until it has one. check_heads.py and test_migration_chain.py enforce all of this. 2026-10-03: founder (dogfood) absorption cancelled -- 0208/0209 belong to origin's reward-model chain (0208_reward_model_platform, 0209_rm_trace_spans) and have nodes, so they are booked normally; our local migrations were moved above origin's 0213_rm_learning_source. 2026-10-05: measured every database on this machine (28 carrying a stamp, read-only), the highest real stamp is 0225 and no database held an id without a node -- 'stamp_only' and 'absorbed' are empty because nothing is an orphan, not because the founder DB is missing: it exists (stash-postgres-1, db stash) and sits exactly on 0225. MAINTENANCE: when a migration lands on trunk, book its (id, slug) in 'revisions' and refresh 'captured_at' to the tree's current head -- a booked id can never be booked again, so reserving at landing is the safe direction. check_heads.py errors when 'captured_at.head' differs from the graph head, so this file can no longer describe an older tree, and the ids between the last booking and the new head stay protected.",
  "captured_at": {
-  "commit": "1c27e5a3",
-  "date": "2026-09-19",
-  "head": "0220"
+  "commit": "3670aa97",
+  "date": "2026-10-03",
+  "head": "0225"
  },
  "revisions": {
   "0001": "initial_schema",
@@ -221,7 +221,12 @@
   "0217": "dogfood_lineage_reconcile",
   "0218": "curator_scope_and_model",
   "0219": "curator_digest_model",
-  "0220": "local_endpoint_endpoints"
+  "0220": "local_endpoint_endpoints",
+  "0221": "folder_mcp_tokens",
+  "0222": "converge_dogfood_lineage",
+  "0223": "curator_watermark_event",
+  "0224": "widen_history_events_session_id",
+  "0225": "backfill_finished_at_from_close_events"
  },
  "stamp_only": {},
  "absorbed": []

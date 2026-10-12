@@ -4,6 +4,8 @@ import pytest
 
 from backend.services import skill_service
 
+from .migration_ids import module_for_slug
+
 
 def test_skill_template_round_trips_yaml_sensitive_metadata():
     markdown = skill_service.skill_md_template(
@@ -45,7 +47,7 @@ def test_skill_migration_leaves_valid_files_untouched():
     whole database: a file that already validates — even in the legacy
     unquoted style — must not be rewritten (no updated_at churn, no sync
     re-pulls, no forced trip through the web editor's frontmatter handling)."""
-    migration = importlib.import_module("backend.migrations.versions.0183_valid_skill_frontmatter")
+    migration = importlib.import_module(module_for_slug("valid_skill_frontmatter"))
 
     unquoted_but_valid = (
         "---\n\nname: Brake Shoes and Linings\n\n"
@@ -59,7 +61,7 @@ def test_skill_migration_leaves_valid_files_untouched():
 
 
 def test_skill_migration_repairs_blank_legacy_metadata():
-    migration = importlib.import_module("backend.migrations.versions.0183_valid_skill_frontmatter")
+    migration = importlib.import_module(module_for_slug("valid_skill_frontmatter"))
 
     migrated = migration._valid_markdown(
         "---\nname: Legacy skill\ndescription: \n---\n\n# Instructions\n",

@@ -28,8 +28,10 @@ Both violate the invariant `agent_service.mark_run` states: every path after
 from __future__ import annotations
 
 import asyncio
+import logging
 import signal
 from contextlib import contextmanager
+from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
 import pytest
@@ -38,11 +40,13 @@ from billiard.exceptions import SoftTimeLimitExceeded
 from backend import database
 from backend.celery_app import celery
 from backend.database import get_pool
+from backend.integrations.slack import client as slack_client
 from backend.services import agent_service, alert_service, sprite_agent_service, sprite_service
 from backend.services import harness as harness_mod
 from backend.tasks import _celery_helpers, agent_schedules
 
 from .conftest import FakeRedis, unique_name
+from .test_source_sync_claims import _configure_alerts, _disable_alerts
 
 # Seeded away from zero so a missing refund OR a double refund is a visible
 # number rather than a NULL.
@@ -118,6 +122,10 @@ async def _stamp_run(agent_id: UUID, outcome: str, *, age_seconds: int) -> None:
 
 
 def _capture_alerts(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    # Patching `send_alert` is a claim about configured mode: a stack with no
+    # alert destination is never asked to deliver at all (STAS-268). Declare the
+    # mode rather than reading whatever the developer's .env happens to hold.
+    _configure_alerts(monkeypatch)
     sent: list[str] = []
 
     async def fake_send_alert(text: str) -> None:
@@ -654,26 +662,64 @@ async def test_reaper_resolves_a_lane_whose_owner_parked_it_mid_run(pool, monkey
     assert len(alerts) == 1
 
 
-async def test_reaper_resolves_lanes_even_when_alerting_is_broken(pool, monkeypatch, lane_locks):
-    """The founder stack has no Slack credentials, so `send_alert` raises. Lane
-    resolution is one UPDATE committed before any alerting, or a missing env var
-    strands every lane the reaper was written to free."""
+async def test_reaper_resolves_a_lane_without_alerting_when_the_mode_is_disabled(
+    pool, monkeypatch, lane_locks, caplog
+):
+    """The five-minute sweep on an installation that sends no operational
+    alerts: resolving the lane and dropping its lock is the whole job, and the
+    sweep's own summary line is the record. An unset destination is a mode, so
+    nothing may be raised here — the sweep that exists to repair stranded lanes
+    must not itself end in a Slack traceback after its write already landed.
+    """
     stranded = await _lane()
     await _stamp_run(
         stranded["id"], "started", age_seconds=agent_schedules.AGENT_RUN_LOCK_TTL + 600
     )
+    await lane_locks.set(f"agent-run:{stranded['id']}", "token-of-a-dead-worker", ex=1)
+    _disable_alerts(monkeypatch)
+    post = AsyncMock()
+    monkeypatch.setattr(slack_client, "post_message", post)
 
-    async def broken_alert(text: str) -> None:
-        raise RuntimeError("ALERT_SLACK_TEAM_ID and ALERT_SLACK_CHANNEL_ID are required")
+    with caplog.at_level(logging.INFO):
+        assert await agent_schedules._reap_stranded_runs() == 1
 
-    monkeypatch.setattr(alert_service, "send_alert", broken_alert)
+    row = await _row(stranded["id"])
+    assert row["last_run_outcome"] == "failed"
+    assert "never resolved" in row["last_run_error"]
+    assert f"agent-run:{stranded['id']}" not in lane_locks.data
+    assert post.await_count == 0
+    # `send_alert` logs `ALERT: …` before it delivers: silence from that logger
+    # is the proof that no delivery was attempted.
+    assert [r for r in caplog.records if r.name == "backend.services.alert_service"] == []
+    assert any("stranded-run sweep resolved 1 lane" in r.getMessage() for r in caplog.records)
 
-    with pytest.raises(RuntimeError, match="ALERT_SLACK"):
+
+async def test_reaper_reports_a_configured_delivery_failure_after_resolving_the_lane(
+    pool, monkeypatch, lane_locks
+):
+    """Where alerts are configured, a delivery that genuinely fails is still an
+    incident and stays loud. What the mode must never reach is the lane: the
+    compare-and-set and the lock drop are one committed write that precedes any
+    alert, so the sweep frees the lane even when the page about it fails."""
+    stranded = await _lane()
+    await _stamp_run(
+        stranded["id"], "started", age_seconds=agent_schedules.AGENT_RUN_LOCK_TTL + 600
+    )
+    await lane_locks.set(f"agent-run:{stranded['id']}", "token-of-a-dead-worker", ex=1)
+    _configure_alerts(monkeypatch)
+
+    async def undeliverable(text: str) -> None:
+        raise ConnectionError("slack transport is down")
+
+    monkeypatch.setattr(alert_service, "send_alert", undeliverable)
+
+    with pytest.raises(ConnectionError, match="slack transport is down"):
         await agent_schedules._reap_stranded_runs()
 
     row = await _row(stranded["id"])
     assert row["last_run_outcome"] == "failed"
     assert "never resolved" in row["last_run_error"]
+    assert f"agent-run:{stranded['id']}" not in lane_locks.data
 
 
 def test_reaper_runs_on_beat_without_harness_limits():

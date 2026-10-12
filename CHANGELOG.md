@@ -81,6 +81,46 @@ everything before it is captured in git history (`git log`), not here.
 
 ### Fixed
 
+- A curator that dies partway through a run no longer cancels every later run. When a run
+  was cut short — its own time limit firing, or a deploy killing the worker underneath it —
+  nothing was left alive to record that it had failed. Its row stayed "started", which is
+  exactly what the scheduler reads as *a run is already in flight*, so every later dispatch
+  stood down and the row never changed again. Measured on the founder's account on
+  2026-09-28: five curators froze this way, their daily runs stopped silently, Settings kept
+  showing the last-known state as though it were current, and pressing the run button
+  answered *"Curator run in flight for this agent"* about a run that had been dead for hours
+  — the same message that correctly refuses two people starting a run in the same second.
+  Two things close the lane now. The dispatch itself notices a run that was killed before it
+  could report, and writes the failure with its cause before the worker's own error goes
+  out, so the reason the run died stays what gets logged and paged. And a sweep runs every
+  five minutes for the deaths no process could ever report — the hard limit, a memory
+  recycle, a kill from a deploy — claiming any run that has reported itself as started for
+  longer than the wait its own lane lock already allows, and announcing each one it closes:
+  the failure, its cause, the released lane. It never overwrites a truth already on the
+  record: a run that logged its own success, a dispatch that stood down because someone else
+  genuinely held the lane, an earlier failure, and a run that stopped at a designed gate
+  (nothing changed to curate, no credential, allowance spent) are all left exactly as they
+  are, and a curator that has never run at all is not a stranded one. One thing is
+  deliberately not repaid: a dead run's place in your monthly allowance, because the record
+  keeps no note of which runs were yours to spend and guessing would move your count either
+  way. A stranded run is repaired, not refunded.
+
+- A curator run that ends badly now says how it ended. Two things were lost before. A
+  failure that already had a name — "agent turn failed: terminated" — recorded that name
+  alone, without the command's exit code, and the code is the one thing that separates an
+  endpoint that died mid-reasoning from a client that simply stopped waiting, because the
+  harness exits 0 on most of the ways it fails. And everything the command line printed to
+  its error stream was poured into the same stream as the transcript, so on a run on your own
+  machine the progress noise could bury the single line carrying the cause and the failure
+  came back with nothing in it. Those are kept apart now: the transcript stays the
+  transcript, and what the command said on its error stream is held on its own, bounded to
+  the last few hundred characters and redacted like everything else that leaves the machine.
+  A named failure gains the code and those words — what the founder's curators read on
+  2026-10-04 was `agent turn failed: terminated | exit=0`, where the same run used to record
+  the bare word — a failure with no named cause becomes the exit code plus what the command
+  said, so a missing binary or a refused login reads as itself instead of as an empty row,
+  and a run that finishes cleanly still records no failure at all.
+
 - Sessions you ended are now shown as ended. The Stash plugin has announced the end of
   every recorded session since its first release — one `session_end` event on the same
   ingestion endpoint its turns use — and the server stored that event and then ignored it.

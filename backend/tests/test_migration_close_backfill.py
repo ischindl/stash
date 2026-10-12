@@ -1,6 +1,6 @@
 """The backfill gives closed sessions their end time and invents none.
 
-`0221_backfill_finished_at_from_close_events` runs against databases whose
+The `backfill_finished_at_from_close_events` migration runs against databases whose
 `sessions.finished_at` is NULL for every real session, because the server stored
 agent close events for months without consuming them. Two failures are possible
 and only one is visible in the product: too little leaves a finished session
@@ -23,9 +23,11 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
+from backend.tests.migration_ids import module_for_slug
+
 from .conftest import unique_name
 
-BACKFILL = "backend.migrations.versions.0221_backfill_finished_at_from_close_events"
+BACKFILL = module_for_slug("backfill_finished_at_from_close_events")
 
 _T0 = datetime(2026, 6, 1, 9, 0, tzinfo=UTC)
 _LATER = _T0 + timedelta(hours=3)

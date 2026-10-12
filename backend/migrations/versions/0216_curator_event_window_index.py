@@ -19,8 +19,8 @@ the same table: this owner's events, after this instant. The `id` column is what
 makes the walk's tie order match the feed's `ORDER BY created_at, id`, so the LIMIT
 cuts in the right place rather than mid-timestamp.
 
-Revision ID: 0212
-Revises: 0211
+Revision ID: 0216
+Revises: 0215
 """
 
 from alembic import op

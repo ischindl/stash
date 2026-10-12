@@ -8,8 +8,8 @@ instead of rereading transcripts. When it is NULL the curator runs the single
 phase it always has. The split pays on a long window — the expensive model
 sees compressed extracts, not 500 raw events.
 
-Revision ID: 0215
-Revises: 0214
+Revision ID: 0219
+Revises: 0218
 """
 
 from alembic import op

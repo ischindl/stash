@@ -32,8 +32,8 @@ Downgrade shortens the column back: if any stored session id exceeds 64
 characters, PostgreSQL raises ``value too long`` and the downgrade fails loud
 rather than silently truncating run history.
 
-Revision ID: 0220
-Revises: 0219
+Revision ID: 0224
+Revises: 0223
 """
 
 from alembic import op
