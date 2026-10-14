@@ -27,7 +27,15 @@ from uuid import UUID
 import redis.asyncio as aioredis
 
 from ..config import settings
-from . import agent_auth, agent_service, mcp_server_service, memory_service, prompts, sprite_service
+from . import (
+    agent_auth,
+    agent_service,
+    mcp_server_service,
+    memory_service,
+    prompts,
+    session_service,
+    sprite_service,
+)
 from . import harness as harness_mod
 from .curation_service import CURATOR_SESSION_ID_PREFIX, Position
 
@@ -500,6 +508,22 @@ def scheduled_session_prefix(agent: dict) -> str:
     return f"{base}{agent['id']}-"
 
 
+# The two-phase run's summary turn writes its own session, named after the run it
+# summarizes. One spelling, because the run's close has to name the same id the
+# turn minted (scheduled_session_ids) and a test pins the id's column width.
+DIGEST_SESSION_SUFFIX = "-digest"
+
+
+def scheduled_session_ids(agent: dict, run_stamp: str) -> tuple[str, ...]:
+    """Every session id one scheduled run of this agent can write, in the order
+    its phases happen. The scoped lane mints the run session itself
+    (scoped_curation_service.run) under the identical id and the same owner."""
+    run_session = f"{scheduled_session_prefix(agent)}{run_stamp}"
+    if agent.get("is_curator") and agent.get("digest_provider") is not None:
+        return (f"{run_session}{DIGEST_SESSION_SUFFIX}", run_session)
+    return (run_session,)
+
+
 def _feed_window(agent: dict) -> tuple[str | None, str | None]:
     """The lane's read position, as the two strings a feed command carries.
 
@@ -592,11 +616,55 @@ async def build_digest_turn(agent: dict, run_stamp: str) -> tuple[str, str]:
         # call to make. Internal wikis (Memory + project folders) are the
         # owner's own material.
         raise ValueError("digest runs cover the internal curators only")
-    session_id = f"{scheduled_session_prefix(agent)}{run_stamp}-digest"
+    session_id = f"{scheduled_session_prefix(agent)}{run_stamp}{DIGEST_SESSION_SUFFIX}"
     since, since_event = _feed_window(agent)
     folder_id = str(agent["curator_folder_id"]) if agent.get("curator_folder_id") else None
     changes_cmd = prompts.curator_changes_cmd(since, folder_id, since_event)
     return session_id, prompts.render_digest_prompt(changes_cmd, prompts.curator_window(since))
+
+
+RUN_CLOSE_NOTE = "Session ended. The scheduled run ended."
+
+
+async def _close_run_sessions(
+    owner_user_id: UUID, agent_name: str, session_ids: tuple[str, ...]
+) -> None:
+    """Push the named close for every session a finished scheduled run could have
+    written (evidence E2 of the close rule: this is the place the server observes
+    its own run die, so it is the place the close has to be emitted — no one else
+    can, and a row left open reads "still running" forever).
+
+    The close travels the ordinary ingestion path (`memory_service.push_event`), so
+    `session_service` stays the only writer of `sessions.finished_at`.
+
+    Two obligations:
+      - a session the run never created is skipped, never minted: a turn refused
+        before its first event has no row, and a close that inserted one would
+        invent a transcript that never happened.
+      - a failed close is recorded, not raised — including the read that checks
+        the row exists, which is a database call too. This runs in a `finally`, so
+        an exception here would replace the run's own outcome: a lane whose run
+        actually returned would be marked failed, alerted on, and stepped past
+        until the next nightly tick. It is why
+        `tasks.agent_schedules._resolve_escaped_run` likewise refuses to raise.
+    """
+    for session_id in session_ids:
+        try:
+            if await session_service.get_session(owner_user_id, session_id) is None:
+                continue
+            await memory_service.push_event(
+                owner_user_id,
+                agent_name,
+                session_service.CLOSE_EVENT_TYPE,
+                RUN_CLOSE_NOTE,
+                owner_user_id,
+                session_id=session_id,
+            )
+        except Exception:
+            logger.exception(
+                "could not close session %s after its scheduled run; it will read as still running",
+                session_id,
+            )
 
 
 async def run_scheduled(agent: dict, run_stamp: str, read_position: Position) -> str:
@@ -618,7 +686,23 @@ async def run_scheduled(agent: dict, run_stamp: str, read_position: Position) ->
     reads the raw feed and reports extracts, then the curator's own model
     writes the wiki from the report. The split is what makes a long backlog
     affordable — the expensive model never rereads transcripts. A digest that
-    yields nothing fails the run rather than spending the writer on emptiness."""
+    yields nothing fails the run rather than spending the writer on emptiness.
+
+    Whatever the shape of the run — scoped, two-phase, plain sprite, a success, a
+    timeout, or a raise — this function is also where the run's sessions close, for
+    the reason stated in `_close_run_sessions`.
+    """
+    owner_user_id = UUID(str(agent["user_id"]))
+    try:
+        return await _run_scheduled_turn(agent, run_stamp, read_position)
+    finally:
+        await _close_run_sessions(
+            owner_user_id, agent["name"], scheduled_session_ids(agent, run_stamp)
+        )
+
+
+async def _run_scheduled_turn(agent: dict, run_stamp: str, read_position: Position) -> str:
+    """The dispatch itself; `run_scheduled` is what closes what this leaves behind."""
     from . import scoped_curation_service, user_service
 
     user_id = UUID(str(agent["user_id"]))
