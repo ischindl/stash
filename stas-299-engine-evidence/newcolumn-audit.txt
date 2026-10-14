@@ -1,0 +1,39 @@
+# STAS-299 — audit of every details.newColumn reply site in the engine
+# reviewed commit date: 2026-10-13T06:27:18+02:00  (byte-stable output; regenerate with stas-299-engine-evidence/generate.sh)
+# tip: dc40314375bd29b3b6262b467ebfe8ea8ed99e7e
+# Expected end state: no hardcoded lane literal anywhere — each site carries a resolved target
+# (retryTarget / executionRetryTarget) or the card's own column (task.column).
+#
+--------------------------------------------------------------------------------
+### packages/cli/src/extension.ts
+--------------------------------------------------------------------------------
+3016:        FNXC:WorkflowResolvedColumns 2026-07-30-22:20: census-invisible moveTask DESTINATION — a call argument, not a comparison. This is an OPERATOR-triggered Retry: on a board that does not declare `todo` the move is REJECTED and the retry fails in the operator's face. The reply text, the task log line and `details.newColumn` all carry the SAME resolved value — resolve it before the log line, or the log names a lane the card may never have visited. `details.newColumn` is machine-readable output another tool can act on, so a literal there is not cosmetic (same finding as the chat tool's #3152 conversion).
+3025:          details: { taskId: params.id, newColumn: retryTarget },
+3038:          /* FNXC:WorkflowResolvedColumns 2026-07-30-22:20: census-invisible moveTask DESTINATION — same operator Retry path as above. Resolved BEFORE the log line so the log, the reply text and `details.newColumn` all name the lane the card actually goes to. */
+3050:            details: { taskId: params.id, newColumn: executionRetryTarget },
+3064:          details: { taskId: params.id, newColumn: task.column },
+3079:      `"todo"` in the log, the response text and `details.newColumn`. This CLI retry had the identical
+3096:        details: { taskId: params.id, newColumn: retryTarget },
+
+--------------------------------------------------------------------------------
+### packages/engine/src/agent-tools.ts
+--------------------------------------------------------------------------------
+3622:              details: { taskId: params.id, newColumn: task.column },
+3676:            details: { taskId: params.id, newColumn: task.column },
+3714:        and `details.newColumn`. Converting only the `moveTask` argument left three places still
+3719:        `details.newColumn` is the one that travels: it is machine-readable output other tooling can
+3725:        return { content: [{ type: "text" as const, text: `Retried ${params.id} → ${retryTarget}` }], details: { taskId: params.id, newColumn: retryTarget } };
+
+--------------------------------------------------------------------------------
+### packages/dashboard/src/routes/register-task-workflow-routes.ts
+--------------------------------------------------------------------------------
+
+--------------------------------------------------------------------------------
+### packages/cli/src/commands/task.ts
+--------------------------------------------------------------------------------
+
+================================================================================
+hardcoded lane literals in a newColumn payload, extension + chat surfaces, at the tip: 0 (expected 0)
+the identical count at 0dd24e8d46 (the reviewed tip these two commits answer): 3
+# The second number is what makes the first one mean something: the counter is not vacuous,
+# it measured the literals that were there before the fix and reports them gone.

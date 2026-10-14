@@ -1,0 +1,1371 @@
+# STAS-299 — line-numbered excerpts at the reviewed tip dc40314375bd29b3b6262b467ebfe8ea8ed99e7e
+# Every block is the committed content of the named engine file, line numbers = real file lines.
+# reviewed commit date: 2026-10-13T06:27:18+02:00  (byte-stable output; regenerate with stas-299-engine-evidence/generate.sh)
+
+================================================================================
+### packages/cli/src/extension.ts  lines 386-480
+### why: boot budget const, TaskStoreBootTransientError, isTransientStoreBootFailure (P0 site), buildStoreBootStallResult
+================================================================================
+   386 | FNXC:BootTimeoutTransience 2026-10-13-03:05 (STAS-299, requirement 3):
+   387 | A store boot that burns its budget is a STALL, not a verdict. Both operator-visible fingerprints of
+   388 | that branch — the bare `… boot timed out after Nms` (wall-clock race) and the backoff-window sentence
+   389 | `… recently failed (cooldown Nms): abandoned after …` (the orphan is still booting and will serve the
+   390 | next caller) — were carried to the caller as an undifferentiated failure, so a policy-gated tool
+   391 | answered `denied … Failing closed — ask the operator to run this tool` and a read tool answered a raw
+   392 | `failed: …`. That is how STAS-281's agent lost its escape hatch twice: the denial named a permission
+   393 | problem that did not exist, and nothing told the agent that simply calling again was the fix.
+   394 | 
+   395 | The two claims are now separate types: a transient boot stall carries `TaskStoreBootTransientError`,
+   396 | which every surface must answer with "retry this call", and a real boot failure keeps the honest
+   397 | fail-closed denial. The distinction is by branch, not by message-guessing: only the wall-clock
+   398 | deadline and the cooldown entry it leaves behind are transient; anything the factory itself raised
+   399 | stays a real failure.
+   400 | */
+   401 | const BOOT_DEADLINE_CLASS = /timed out after \d+ms/;
+   402 | 
+   403 | export class TaskStoreBootTransientError extends Error {
+   404 |   readonly transient = true as const;
+   405 |   readonly bootTimeoutMs: number;
+   406 |   constructor(message: string, bootTimeoutMs: number) {
+   407 |     super(message);
+   408 |     this.name = "TaskStoreBootTransientError";
+   409 |     this.bootTimeoutMs = bootTimeoutMs;
+   410 |   }
+   411 | }
+   412 | 
+   413 | /** @internal Whether a store-boot rejection is a momentary stall the caller should retry. */
+   414 | export function isTransientStoreBootFailure(error: unknown): boolean {
+   415 |   /*
+   416 |   FNXC:BootTransienceTypeOnly 2026-10-13-06:30 (STAS-299 code review — a tool over its own budget
+   417 |   was being answered as a stalled store boot):
+   418 |   TYPE ONLY, deliberately not by message. `raceWithTimeoutAndAbort` builds its sentence as
+   419 |   `${label} timed out after ${ms}ms`, and `wrapExtensionToolExecute` passes `label = toolName` — so
+   420 |   `fn_task_merge timed out after 60000ms` (the tool ran out of its OWN budget mid-work) carries the
+   421 |   byte-identical fingerprint of `fn extension TaskStore boot timed out after 30000ms`. Matching the
+   422 |   sentence at an ANSWER site made a possibly-mutating tool that stopped half-applied answer
+   423 |   `transient: taskstore-boot-timeout, retryable: true … the boot is still running in the background,
+   424 |   nothing was denied, do not ask the operator` — a verdict about an operation whose effects are
+   425 |   unknown, which is the one thing a stall answer must never claim.
+   426 | 
+   427 |   The type is also COMPLETE, so narrowing loses nothing: `getStore` raises
+   428 |   `TaskStoreBootTransientError` on both transient branches — the wall-clock expiry and the cooldown
+   429 |   entry its deadline left behind — and those are the only two paths either answer site can meet.
+   430 |   The message fingerprint keeps the two jobs it is honest about, both inside the boot itself: it
+   431 |   decides the transient branch in `getStore`'s catch, which sees nothing but boot errors (including
+   432 |   the pool's `connection timed out after 20242ms`, RUFU-377's real stall cause), and it picks the
+   433 |   console stream in `wrapExtensionToolExecute`, which changes only how loud the line is, never what
+   434 |   the agent is told.
+   435 |   */
+   436 |   return (
+   437 |     error instanceof TaskStoreBootTransientError
+   438 |     || (error instanceof Error && error.name === "TaskStoreBootTransientError")
+   439 |   );
+   440 | }
+   441 | 
+   442 | /** @internal The actionable answer every extension surface gives for a stalled store boot. */
+   443 | export function buildStoreBootStallResult(toolName: string, error: unknown): {
+   444 |   content: Array<{ type: "text"; text: string }>;
+   445 |   // `error` stays a required member: this result also leaves `wrapExtensionToolExecute`, whose
+   446 |   // declared error branch is `details: { error: string }`.
+   447 |   details: {
+   448 |     transient: "taskstore-boot-timeout";
+   449 |     retryable: true;
+   450 |     bootTimeoutMs: number;
+   451 |     tool: string;
+   452 |     error: string;
+   453 |   };
+   454 |   isError: true;
+   455 | } {
+   456 |   const message = error instanceof Error ? error.message : String(error);
+   457 |   const budgetMs = error instanceof TaskStoreBootTransientError ? error.bootTimeoutMs : EXTENSION_STORE_BOOT_TIMEOUT_MS;
+   458 |   return {
+   459 |     content: [
+   460 |       {
+   461 |         /* The shipped attribution contract stays intact: `X failed: ` plus the store-boot subject on
+   462 |            the first line — RUFU-377's KTD-2 keeps the wrapper prefix outside the store attribution —
+   463 |            and the retry instruction rides below it instead of replacing it. */
+   464 |         type: "text" as const,
+   465 |         text: `${toolName} failed: ${message}\n` +
+   466 |           `Retry this same call — the boot is still running in the background and the next call is served ` +
+   467 |           `from it. Nothing was denied on policy grounds and nothing was lost; do not ask the operator.`,
+   468 |       },
+   469 |     ],
+   470 |     details: {
+   471 |       transient: "taskstore-boot-timeout",
+   472 |       retryable: true,
+   473 |       bootTimeoutMs: budgetMs,
+   474 |       tool: toolName,
+   475 |       error: message,
+   476 |     },
+   477 |     isError: true as const,
+   478 |   };
+   479 | }
+   480 | /*
+
+================================================================================
+### packages/cli/src/extension.ts  lines 530-600
+### why: raceWithTimeoutAndAbort — the shared '<label> timed out after <N>ms' sentence builder
+================================================================================
+   530 |  * Race a promise against a wall-clock timeout and optional AbortSignal.
+   531 |  * Does not cancel the underlying work (Node has no structured cancel for store boot),
+   532 |  * but unblocks the tool caller so the agent session can fail closed instead of wedging forever.
+   533 |  *
+   534 |  * @internal Exported for unit tests of the hang-prevention budget.
+   535 |  */
+   536 | export async function raceWithTimeoutAndAbort<T>(
+   537 |   promise: Promise<T>,
+   538 |   timeoutMs: number,
+   539 |   signal: AbortSignal | undefined,
+   540 |   label: string,
+   541 | ): Promise<T> {
+   542 |   if (signal?.aborted) {
+   543 |     throw new DOMException(`${label} aborted`, "AbortError");
+   544 |   }
+   545 |   let timer: ReturnType<typeof setTimeout> | undefined;
+   546 |   let onAbort: (() => void) | undefined;
+   547 |   let settled = false;
+   548 |   try {
+   549 |     return await new Promise<T>((resolve, reject) => {
+   550 |       const settle = (fn: () => void) => {
+   551 |         if (settled) return;
+   552 |         settled = true;
+   553 |         if (timer !== undefined) clearTimeout(timer);
+   554 |         if (onAbort && signal) signal.removeEventListener("abort", onAbort);
+   555 |         fn();
+   556 |       };
+   557 |       // Late settlement after timeout/abort is no-op'd; the .then handlers keep the promise from becoming unhandledRejection.
+   558 |       promise.then(
+   559 |         (value) => settle(() => resolve(value)),
+   560 |         (error) => settle(() => reject(error)),
+   561 |       );
+   562 |       if (timeoutMs > 0 && Number.isFinite(timeoutMs)) {
+   563 |         timer = setTimeout(() => {
+   564 |           settle(() =>
+   565 |             reject(new Error(`${label} timed out after ${timeoutMs}ms`)),
+   566 |           );
+   567 |         }, timeoutMs);
+   568 |         if (typeof timer === "object" && timer && "unref" in timer && typeof timer.unref === "function") {
+   569 |           timer.unref();
+   570 |         }
+   571 |       }
+   572 |       if (signal) {
+   573 |         onAbort = () => settle(() => reject(new DOMException(`${label} aborted`, "AbortError")));
+   574 |         signal.addEventListener("abort", onAbort, { once: true });
+   575 |       }
+   576 |     });
+   577 |   } finally {
+   578 |     if (timer !== undefined) clearTimeout(timer);
+   579 |     if (onAbort && signal) signal.removeEventListener("abort", onAbort);
+   580 |   }
+   581 | }
+   582 | 
+   583 | /**
+   584 |  * FNXC:MergeQueue 2026-07-15-11:15:
+   585 |  * Wrap every extension tool execute with timeout + AbortSignal so a wedged store call cannot park the agent forever (FN-7956 fn_task_show hang).
+   586 |  * Errors become isError tool results so the model can continue rather than leaving the turn blocked on an open tool call.
+   587 |  * FNXC:MergeQueue 2026-07-15-11:20: Timeout budget is per-tool (resolveExtensionToolTimeoutMs) unless an explicit timeoutMs is passed.
+   588 |  * FNXC:MergeQueue 2026-07-15-11:50:
+   589 |  * On timeout, abort a linked AbortController so tools that honor signal (e.g. fn_skills_install npx) actually stop work instead of racing forever after the wrap rejects.
+   590 |  */
+   591 | export function wrapExtensionToolExecute<TArgs extends unknown[], TResult>(
+   592 |   toolName: string,
+   593 |   execute: (...args: TArgs) => TResult | Promise<TResult>,
+   594 |   timeoutMs?: number,
+   595 | ): (...args: TArgs) => Promise<TResult | {
+   596 |   content: Array<{ type: "text"; text: string }>;
+   597 |   details: { error: string };
+   598 |   isError: true;
+   599 | }> {
+   600 |   return async (...args: TArgs) => {
+
+================================================================================
+### packages/cli/src/extension.ts  lines 620-700
+### why: wrapExtensionToolExecute catch — the P0 answer site (tool budget vs typed boot stall)
+================================================================================
+   620 |     while (invokeArgs.length < 2) invokeArgs.push(undefined);
+   621 |     if (invokeArgs.length === 2) {
+   622 |       invokeArgs.push(controller.signal);
+   623 |     } else {
+   624 |       invokeArgs[2] = controller.signal;
+   625 |     }
+   626 | 
+   627 |     try {
+   628 |       return await extensionToolSignal.run(controller.signal, () =>
+   629 |         raceWithTimeoutAndAbort(
+   630 |           Promise.resolve(execute(...(invokeArgs as TArgs))),
+   631 |           budgetMs,
+   632 |           controller.signal,
+   633 |           toolName,
+   634 |         ),
+   635 |       );
+   636 |     } catch (error) {
+   637 |       // Ensure nested work observing the tool signal stops on budget expiry (not only on parent abort).
+   638 |       if (!controller.signal.aborted) {
+   639 |         controller.abort();
+   640 |       }
+   641 |       if (isAbortError(error)) {
+   642 |         console.warn(`[fusion-extension] ${toolName} aborted`);
+   643 |         return {
+   644 |           content: [{ type: "text" as const, text: `${toolName} aborted.` }],
+   645 |           details: { error: "aborted" },
+   646 |           isError: true as const,
+   647 |         };
+   648 |       }
+   649 |       const message = error instanceof Error ? error.message : String(error);
+   650 |       /*
+   651 |       FNXC:BootTimeoutTransience 2026-10-13-03:05 (STAS-299, requirement 3): read-only tools were the
+   652 |       other half of the measured failure — `fn_task_logs_read` died twice on the raw boot sentence and
+   653 |       the agent had nothing to act on. A stalled boot answers with the retry instruction on every
+   654 |       surface, gated or not. The predicate is the TYPE, so this branch fires only for the store's own
+   655 |       boot: a tool that overran its own budget falls through to the plain failure shape below, because
+   656 |       its effects are unknown and no amount of reassurance about a background boot is honest about them.
+   657 |       */
+   658 |       if (isTransientStoreBootFailure(error)) {
+   659 |         console.warn(`[fusion-extension] ${toolName}: ${message}`);
+   660 |         return buildStoreBootStallResult(toolName, error);
+   661 |       }
+   662 |       if (BOOT_DEADLINE_CLASS.test(message)) {
+   663 |         console.warn(`[fusion-extension] ${toolName}: ${message}`);
+   664 |       } else {
+   665 |         console.error(`[fusion-extension] ${toolName} failed: ${message}`);
+   666 |       }
+   667 |       return {
+   668 |         content: [{ type: "text" as const, text: `${toolName} failed: ${message}` }],
+   669 |         details: { error: message },
+   670 |         isError: true as const,
+   671 |       };
+   672 |     } finally {
+   673 |       parentSignal?.removeEventListener("abort", onParentAbort);
+   674 |     }
+   675 |   };
+   676 | }
+   677 | 
+   678 | /*
+   679 | FNXC:MergeQueue 2026-07-15-11:40:
+   680 | When dashboard/serve/daemon injects the live engine TaskStore via setHostTaskStore, getStore must never call createTaskStoreForBackend for that project root — dual-boot was the FN-7956 hang class (second pool + schema advisory lock). CLI one-shot sessions without a host store still boot a short-lived cache entry.
+   681 | */
+   682 | let extensionStoreBootFactory: typeof createTaskStoreForBackend = createTaskStoreForBackend;
+   683 | 
+   684 | /*
+   685 | FNXC:TaskStoreBootAttribution 2026-09-28-08:55:
+   686 | RUFU-388 rewrote this comment's closing sentence. It promised a durable record: that the lines were
+   687 | written to a log the engine keeps and that a later stall gets diagnosed from them. RUFU-377 measured that
+   688 | promise and found no such rows anywhere in the sighting window, because nothing in the machine persists
+   689 | them. The function writes with `console.warn`, so the line reaches only the console of the process that
+   690 | loaded the extension, and what becomes of that console is the loader's choice: the runtime that hosts the
+   691 | extension forks it with `silent: true` and forwards IPC alone
+   692 | (`packages/engine/src/runtimes/child-process-runtime.ts`), so a forked worker's stdout/stderr are piped
+   693 | and stored nowhere, while a dashboard/serve/daemon host surfaces its own process console instead. Neither
+   694 | shape produces a run-audit row. So the line attributes a boot stall only for whoever is watching that
+   695 | process while it is live, and a stall that already happened is not recoverable from it. The durable form
+   696 | of this invariant is the "`[taskstore-boot]` is process-local console output, not telemetry" bullet of
+   697 | "Extension TaskStore boot budget" in docs/architecture.md.
+   698 | */
+   699 | /**
+   700 |  * Emit one machine-readable line per boot outcome. Every boot used to end as either silence
+
+================================================================================
+### packages/cli/src/extension.ts  lines 750-845
+### why: boot factory deadline + getStore: the one place allowed to classify a timeout sentence
+================================================================================
+   750 |         await boot.shutdown().catch(() => undefined);
+   751 |         reportStoreBoot(projectRoot, deadlineReported ? "late-success" : "ok", Date.now() - startedAtMs, "host-injected store served instead");
+   752 |         return raced.store;
+   753 |       }
+   754 |       /* FNXC:TaskLifecycleTools 2026-08-15-06:35: Agent tools intentionally install the protective baseline with no force path; only a human CLI invocation can override live removal. */
+   755 |       storeCache.set(projectRoot, { store: boot.taskStore, shutdown: boot.shutdown });
+   756 |       reportStoreBoot(projectRoot, deadlineReported ? "late-success" : "ok", Date.now() - startedAtMs);
+   757 |       return boot.taskStore;
+   758 |     } catch (error) {
+   759 |       const message = error instanceof Error ? error.message : String(error);
+   760 |       storeBootFailureCooldown.set(projectRoot, {
+   761 |         untilMs: Date.now() + BOOT_FAILURE_COOLDOWN_MS,
+   762 |         error: message,
+   763 |       });
+   764 |       reportStoreBoot(projectRoot, deadlineReported ? "late-failure" : "failed", Date.now() - startedAtMs, message);
+   765 |       throw error;
+   766 |     } finally {
+   767 |       storeBootInflight.delete(projectRoot);
+   768 |     }
+   769 |   })();
+   770 |   // Keep a handler attached so timed-out waiters cannot leave an unhandledRejection when boot fails late.
+   771 |   void promise.catch(() => undefined);
+   772 | 
+   773 |   return {
+   774 |     promise,
+   775 |     startedAtMs,
+   776 |     reportDeadline(budgetMs: number): void {
+   777 |       deadlineReported = true;
+   778 |       const elapsedMs = Date.now() - startedAtMs;
+   779 |       const detail = `abandoned after ${elapsedMs}ms (budget ${budgetMs}ms); orphan boot continues and may still populate the cache`;
+   780 |       storeBootFailureCooldown.set(projectRoot, {
+   781 |         untilMs: Date.now() + BOOT_FAILURE_COOLDOWN_MS,
+   782 |         error: detail,
+   783 |         fromDeadline: true,
+   784 |       });
+   785 |       reportStoreBoot(projectRoot, "deadline", elapsedMs, detail);
+   786 |     },
+   787 |   };
+   788 | }
+   789 | 
+   790 | async function getStore(
+   791 |   cwd: string,
+   792 |   signal?: AbortSignal,
+   793 |   bootTimeoutMs = EXTENSION_STORE_BOOT_TIMEOUT_MS,
+   794 | ): Promise<TaskStore> {
+   795 |   const projectRoot = resolveProjectRoot(cwd);
+   796 |   const existing = storeCache.get(projectRoot);
+   797 |   if (existing) return existing.store;
+   798 | 
+   799 |   const cooldown = storeBootFailureCooldown.get(projectRoot);
+   800 |   if (cooldown && Date.now() < cooldown.untilMs) {
+   801 |     const cooldownMessage = `fn extension TaskStore boot recently failed (cooldown ${BOOT_FAILURE_COOLDOWN_MS}ms): ${cooldown.error}`;
+   802 |     /* The deadline's own backoff entry means the orphan boot is still in flight and will serve the
+   803 |        next caller, so this is the same stall, not a new failure. */
+   804 |     if (cooldown.fromDeadline) throw new TaskStoreBootTransientError(cooldownMessage, EXTENSION_STORE_BOOT_TIMEOUT_MS);
+   805 |     throw new Error(cooldownMessage);
+   806 |   }
+   807 | 
+   808 |   const effectiveSignal = signal ?? extensionToolSignal.getStore();
+   809 | 
+   810 |   /*
+   811 |   FNXC:PostgresFinalCutover 2026-07-14-17:20: Agent tools cache only the
+   812 |   PostgreSQL factory result; the removed SQLite opt-out is an explicit error.
+   813 | 
+   814 |   FNXC:MergeQueue 2026-07-15-11:08:
+   815 |   First extension tool call without a host-injected store boots a TaskStore (CLI path).
+   816 |   Coalesce concurrent callers so a wedged boot cannot park every fn_* tool forever.
+   817 |   */
+   818 |   const attempt = storeBootInflight.get(projectRoot) ?? startStoreBoot(projectRoot);
+   819 |   storeBootInflight.set(projectRoot, attempt);
+   820 | 
+   821 |   try {
+   822 |     return await raceWithTimeoutAndAbort(
+   823 |       attempt.promise,
+   824 |       bootTimeoutMs,
+   825 |       effectiveSignal,
+   826 |       "fn extension TaskStore boot",
+   827 |     );
+   828 |   } catch (error) {
+   829 |     /* Only an expired budget abandons the attempt; a rejected boot already recorded itself. */
+   830 |     const message = error instanceof Error ? error.message : String(error);
+   831 |     if (isAbortError(error)) {
+   832 |       reportStoreBoot(projectRoot, "aborted", Date.now() - attempt.startedAtMs);
+   833 |     } else if (BOOT_DEADLINE_CLASS.test(message)) {
+   834 |       attempt.reportDeadline(bootTimeoutMs);
+   835 |       throw new TaskStoreBootTransientError(message, bootTimeoutMs);
+   836 |     }
+   837 |     throw error;
+   838 |   }
+   839 | }
+   840 | 
+   841 | /**
+   842 |  * FNXC:MergeQueue 2026-07-15-11:40:
+   843 |  * Publish the live engine/dashboard TaskStore into the host extension cache so in-process agent tools share one pool and never dual-boot embedded PostgreSQL.
+   844 |  * The entry is external: closeCachedStores / clearHostTaskStores will not shut it down — the host owns lifecycle.
+   845 |  */
+
+================================================================================
+### packages/cli/src/extension.ts  lines 1332-1400
+### why: policy gate — typed transient vs typed infra error (requirement 3)
+================================================================================
+  1332 | async function applyAgentPolicyGateForExtensionTool(
+  1333 |   toolName: string,
+  1334 |   args: Record<string, unknown>,
+  1335 |   ctx: ExtensionCallerContext,
+  1336 | ): Promise<
+  1337 |   | AgentGateDenyResult
+  1338 |   | { content: Array<{ type: "text"; text: string }>; details: Record<string, unknown> }
+  1339 |   | null
+  1340 | > {
+  1341 |   const principal = resolveExtensionCallerPrincipal(ctx);
+  1342 |   if (principal.kind === "operator") return null;
+  1343 |   const callerAgentId = principal.kind === "agent" ? principal.identity.agentId : undefined;
+  1344 |   const cwd = typeof ctx.cwd === "string" && ctx.cwd ? ctx.cwd : process.cwd();
+  1345 |   const taskId = typeof ctx.taskId === "string" && ctx.taskId ? ctx.taskId : undefined;
+  1346 |   const runId = typeof ctx.runId === "string" && ctx.runId ? ctx.runId : undefined;
+  1347 | 
+  1348 |   try {
+  1349 |     /*
+  1350 |     FNXC:TaskStoreLightBoot 2026-09-26-19:30 (RUFU-275):
+  1351 |     Honest denial cause. A store that cannot BOOT is not a permission-policy failure — the
+  1352 |     field incident denied every fn_* call with `agent-permission-policy-unavailable` while the
+  1353 |     real cause was the 30 s boot timeout, sending operators hunting the wrong settings. The
+  1354 |     boot phase fails closed under its own `taskstore-boot-unavailable` cause (same deny shape,
+  1355 |     carrying the concrete boot error); the outer catch below stays the home of genuine
+  1356 |     policy-resolution unavailability. Operator/principal precedence is unchanged above.
+  1357 |     */
+  1358 |     let store: TaskStore;
+  1359 |     try {
+  1360 |       store = await getStore(cwd);
+  1361 |     } catch (error) {
+  1362 |       /*
+  1363 |       FNXC:BootTimeoutTransience 2026-10-13-03:05 (STAS-299, requirement 3 + Invariant B):
+  1364 |       A stalled boot is not a policy verdict. Denying it as one sent STAS-281's agent the sentence
+  1365 |       "the agent permission policy could not be resolved … Failing closed — ask the operator", which
+  1366 |       named a permission problem that did not exist and told the agent the one action that would have
+  1367 |       worked (calling again) was unavailable. The stall is answered as what it is: retryable, with the
+  1368 |       boot still in flight. A real boot failure below keeps RUFU-275's honest fail-closed denial.
+  1369 |       */
+  1370 |       if (isTransientStoreBootFailure(error)) return buildStoreBootStallResult(toolName, error);
+  1371 |       const bootMessage = error instanceof Error ? error.message : String(error);
+  1372 |       return {
+  1373 |         content: [
+  1374 |           {
+  1375 |             type: "text" as const,
+  1376 |             text: `${toolName} denied: the project TaskStore could not be started (${bootMessage}). Failing closed — ask the operator to run this tool.`,
+  1377 |           },
+  1378 |         ],
+  1379 |         isError: true as const,
+  1380 |         details: {
+  1381 |           deniedFor: "taskstore-boot-unavailable",
+  1382 |           tool: toolName,
+  1383 |           error: bootMessage,
+  1384 |           ...(callerAgentId ? { agentId: callerAgentId } : {}),
+  1385 |         },
+  1386 |       };
+  1387 |     }
+  1388 |     const settings = await store.getSettings();
+  1389 | 
+  1390 |     let agentRow: { name?: string; permissionPolicy?: AgentPermissionPolicy } | null = null;
+  1391 |     if (callerAgentId) {
+  1392 |       try {
+  1393 |         const agentStore = await getAgentStore(cwd);
+  1394 |         await agentStore.init();
+  1395 |         agentRow = await agentStore.resolveAgent(callerAgentId);
+  1396 |       } catch {
+  1397 |         // Unknown/unreadable agent row: fall through to the project default policy (still an
+  1398 |         // agent principal — never an operator).
+  1399 |         agentRow = null;
+  1400 |       }
+
+================================================================================
+### packages/cli/src/extension.ts  lines 1540-1580
+### why: a real policy-resolution denial still denies (deniedFor agent-permission-policy-unavailable)
+================================================================================
+  1540 |     return {
+  1541 |       content: [
+  1542 |         {
+  1543 |           type: "text" as const,
+  1544 |           text: `${toolName} requires operator approval. Request ${request.id} created and pending — approve via POST /api/approvals/:id/decision.`,
+  1545 |         },
+  1546 |       ],
+  1547 |       details: {
+  1548 |         outcome: "pending_approval",
+  1549 |         approvalRequestId: request.id,
+  1550 |         tool: toolName,
+  1551 |         ...(callerAgentId ? { agentId: callerAgentId } : {}),
+  1552 |       },
+  1553 |     };
+  1554 |   } catch (error) {
+  1555 |     const message = error instanceof Error ? error.message : String(error);
+  1556 |     return {
+  1557 |       content: [
+  1558 |         {
+  1559 |           type: "text" as const,
+  1560 |           text: `${toolName} denied: the agent permission policy could not be resolved (${message}). Failing closed — ask the operator to run this tool.`,
+  1561 |         },
+  1562 |       ],
+  1563 |       isError: true as const,
+  1564 |       details: {
+  1565 |         deniedFor: "agent-permission-policy-unavailable",
+  1566 |         tool: toolName,
+  1567 |         error: message,
+  1568 |         ...(callerAgentId ? { agentId: callerAgentId } : {}),
+  1569 |       },
+  1570 |     };
+  1571 |   }
+  1572 | }
+  1573 | 
+  1574 | /** @internal Test-only: exercise the policy gate's admission answers against an injected store boot. */
+  1575 | export const __applyAgentPolicyGateForTesting = applyAgentPolicyGateForExtensionTool;
+  1576 | 
+  1577 | function normalizeNullableStringInput(value: string | null | undefined): string | null | undefined {
+  1578 |   if (value === undefined) {
+  1579 |     return undefined;
+  1580 |   }
+
+================================================================================
+### packages/cli/src/extension.ts  lines 2830-2900
+### why: fn_task_retry tool description - the stranded-gate half is stated; its 'moves to todo' wording is the disclosed not-implemented item
+================================================================================
+  2830 |   // ── fn_task_retry ────────────────────────────────────────────────
+  2831 | 
+  2832 |   pi.registerTool({
+  2833 |     name: "fn_task_retry",
+  2834 |     label: "fn: Retry Task",
+  2835 |     description:
+  2836 |       "Retry a failed task — clears the error state. Non-review failures move to todo; in-review execution failures move to todo preserving progress; in-review merge failures stay in-place for auto-merge retry. Also reaches a card stranded by a dead workflow gate (a required Plan/Code Review row that failed with no verdict while the card sits in a pre-execution lane with an approved plan) and discharges that gate in place — no move, no discarded plan.",
+  2837 |     promptSnippet: "Retry a failed Fusion task (clears error, moves to todo or stays in in-review)",
+  2838 |     promptGuidelines: [
+  2839 |       "Use when a task has failed and needs to be retried",
+  2840 |       "A card parked in a pre-execution lane whose only failure is a verdict-less failed Plan/Code Review row is retryable too — the gate is discharged in place and the approved plan is preserved",
+  2841 |       "Only tasks in 'failed' or 'stuck-killed' state, stranded in-review tasks with incomplete execution or prior merge attempts, and pre-execution cards parked behind a verdict-less failed gate, can be retried",
+  2842 |       "In-review tasks with incomplete steps (pending/in-progress) move to todo with preserveProgress so execution can resume",
+  2843 |       "In-review tasks with all steps done stay in in-review and reset merge retry state for auto-merge re-attempt",
+  2844 |       "Tasks in other columns are moved to the todo column with error state cleared; a stranded-gate card is discharged in place instead of moved",
+  2845 |     ],
+  2846 |     parameters: Type.Object({
+  2847 |       id: Type.String({ description: "Task ID to retry (e.g. FN-001). Accepts a 'failed'/'stuck-killed' card, a stalled in-review card, and a pre-execution card parked behind a verdict-less failed gate." }),
+  2848 |     }),
+  2849 | 
+  2850 |     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+  2851 |       // FNXC:ToolPermissionGates 2026-07-26-13:55: policy-gated for agent principals; operators unaffected.
+  2852 |       const gated = await applyAgentPolicyGateForExtensionTool("fn_task_retry", params as Record<string, unknown>, ctx as ExtensionCallerContext);
+  2853 |       if (gated) return gated;
+  2854 |       const store = await getStore(ctx.cwd);
+  2855 | 
+  2856 |       // Validate task exists
+  2857 |       let task;
+  2858 |       try {
+  2859 |         task = await store.getTask(params.id);
+  2860 |       } catch {
+  2861 |         return {
+  2862 |           content: [{ type: "text", text: `Task ${params.id} not found` }],
+  2863 |           isError: true,
+  2864 |           details: { error: "Task not found" },
+  2865 |         };
+  2866 |       }
+  2867 |       
+  2868 |       /*
+  2869 |       FNXC:WorkflowLifecycleColumns 2026-08-02-12:40 (PR #2728 review — the retry gate exists THREE times):
+  2870 |       This is `fn_task_retry`, the MCP tool AGENTS call — the third copy of the same classifier, after the
+  2871 |       dashboard route (#2713) and the CLI command (this PR). Converting two of three is worse than converting
+  2872 |       none: the operator retries from the board and it works, the agent retries the same card and is told it
+  2873 |       is not retryable, and nothing in either message mentions columns.
+  2874 | 
+  2875 |       Same SET semantics as the other two surfaces (mergeBlocker / humanReview can sit on different columns,
+  2876 |       #2713), and the same note applies: three copies of one predicate is the argument for a set-returning
+  2877 |       resolver in core, which is a follow-up rather than a rider on this PR.
+  2878 |       */
+  2879 |       /*
+  2880 |       FNXC:WorkflowLifecycleColumns 2026-08-02-22:15 (consolidation onto #2730's core resolver):
+  2881 |       CORE'S `resolveReviewColumns` — see the fuller note in `commands/task.ts`. This copy carried
+  2882 |       `.slice(0, 1)` on the merge-orchestration lanes while the CLI command took the full union, so
+  2883 |       `fn_task_retry` refused a card in a SECOND merge lane that `fn task retry` accepted: two surfaces, one
+  2884 |       operator action, two answers. That is the exact defect #2728 was opened to remove, reproduced by two
+  2885 |       copies of one definition drifting apart within a single PR.
+  2886 |       */
+  2887 |       const retryIr = await resolveWorkflowIrForTask(store, params.id).catch(() => undefined);
+  2888 |       const resolvedRetryReviewColumns = retryIr === undefined ? [] : resolveReviewColumns(retryIr);
+  2889 |       const retryReviewColumns = new Set<string>(
+  2890 |         resolvedRetryReviewColumns.length > 0 ? resolvedRetryReviewColumns : ["in-review"],
+  2891 |       );
+  2892 |       const isInReviewStatusNone =
+  2893 |         retryReviewColumns.has(task.column) && (task.status === null || task.status === undefined);
+  2894 |       /*
+  2895 |       FNXC:MergeRetryAdmission 2026-09-20-02:52:
+  2896 |       A status-none completed card is a retryable lost handoff only when effective auto-merge is on.
+  2897 |       Manual review holds share its durable shape and must remain untouched on this tool surface.
+  2898 |       */
+  2899 |       const effectiveAutoMergeDisabled = fusionCore.resolveEffectiveAutoMerge(task, await store.getSettings()) === false;
+  2900 |       const hasIncompleteSteps = task.steps.some(
+
+================================================================================
+### packages/cli/src/extension.ts  lines 2975-3110
+### why: fn_task_retry re-queues — P1: resolved target in log, reply text and details.newColumn
+================================================================================
+  2975 |         });
+  2976 |         if (!applied) throw new Error("Retry was superseded by a newer task lifecycle update");
+  2977 |         return updated;
+  2978 |       };
+  2979 |       // FNXC:TaskWedgeNotifications 2026-08-10-20:15: an operator retry ends the prior terminal-failure episode and mints a fresh budget.
+  2980 |       await store.resetTerminalFailureAutoRecoveryBudget(params.id);
+  2981 | 
+  2982 |       /*
+  2983 |       FNXC:StrandedGateRetry 2026-10-13-04:00 (STAS-299 req 4 + Invariant C):
+  2984 |       The non-destructive answer for a card whose only failure evidence is a gate row that died with no
+  2985 |       verdict: clear the failure state, drop those rows so the gate re-evaluates as `missing`, and
+  2986 |       touch nothing else. Deliberately NOT a `moveTask` — the card already sits in the lane a retry
+  2987 |       would send it to, and RUFU-261's `parkOnHold: false` exists precisely because a user-sourced move
+  2988 |       into a hold lane can park the card the operator just asked to run.
+  2989 |       */
+  2990 |       if (strandedGateStepIds.length > 0) {
+  2991 |         await applyRetryReset(fusionCore.buildStrandedGateRetryPatch(task, strandedGateStepIds));
+  2992 |         await store.logEntry(
+  2993 |           params.id,
+  2994 |           `Retry requested via Fusion extension (verdict-less ${strandedGateStepIds.join(", ")} gate row(s) discharged in ${task.column}; approved plan, step list and worktree preserved)`,
+  2995 |         );
+  2996 |         return {
+  2997 |           content: [{
+  2998 |             type: "text" as const,
+  2999 |             text: `Retried ${params.id} in ${task.column}: the verdict-less ${strandedGateStepIds.join(", ")} gate row(s) were discharged, so the gate re-runs against the approved plan. The card did not move and its steps, plan and worktree are intact.`,
+  3000 |           }],
+  3001 |           details: { taskId: params.id, column: task.column, strandedGateRetried: true, gateStepIds: strandedGateStepIds },
+  3002 |         };
+  3003 |       }
+  3004 | 
+  3005 |       if (isMissingWorktreeSessionRetry) {
+  3006 |         await applyRetryReset({
+  3007 |           status: null,
+  3008 |           error: null,
+  3009 |           worktree: null,
+  3010 |           branch: null, branchWriteOrigin: "engine" as const,
+  3011 |           sessionFile: null,
+  3012 |           ...autoPauseClearPatch,
+  3013 |           ...buildManualRetryResetPatch({ resetMergeRetries: true }),
+  3014 |         });
+  3015 |         /*
+  3016 |         FNXC:WorkflowResolvedColumns 2026-07-30-22:20: census-invisible moveTask DESTINATION — a call argument, not a comparison. This is an OPERATOR-triggered Retry: on a board that does not declare `todo` the move is REJECTED and the retry fails in the operator's face. The reply text, the task log line and `details.newColumn` all carry the SAME resolved value — resolve it before the log line, or the log names a lane the card may never have visited. `details.newColumn` is machine-readable output another tool can act on, so a literal there is not cosmetic (same finding as the chat tool's #3152 conversion).
+  3017 |         */
+  3018 |         const retryTarget = await fusionCore.resolveReboundTargetForTask(store, params.id);
+  3019 |         await store.logEntry(params.id, `Retry requested via Fusion extension (unusable worktree session-start recovery → ${retryTarget}, preserving progress${retryLogSuffix})`);
+  3020 |         /* FNXC:ToolPermissionGates 2026-07-30-13:55: fn_task_retry is a user-facing lever — carry the user move source (target resolves by role). */
+  3021 |         /* FNXC:TaskRetryReleaseIntent 2026-09-22-07:39 (RUFU-261): the user source is the AUDIT trail; `parkOnHold: false` states RELEASE intent so the hold-lane park (reserved for a drag-back-to-stop) does not park the card the operator just asked to run — the collision with the AGENTS.md Move-Task contract ("Engine rebounds must not set userPaused") is gone. */
+  3022 |         await store.moveTask(params.id, retryTarget, { preserveProgress: true, moveSource: "user", parkOnHold: false });
+  3023 |         return {
+  3024 |           content: [{ type: "text", text: `Retried ${params.id} → ${retryTarget} (unusable worktree session metadata cleared)` }],
+  3025 |           details: { taskId: params.id, newColumn: retryTarget },
+  3026 |         };
+  3027 |       }
+  3028 | 
+  3029 |       // In-review retry: distinguish between execution failures and merge failures.
+  3030 |       if (isInReviewRetry) {
+  3031 |         if (isExecutionFailureInReview) {
+  3032 |           await applyRetryReset({
+  3033 |             status: null,
+  3034 |             error: null,
+  3035 |             ...autoPauseClearPatch,
+  3036 |             ...buildManualRetryResetPatch(),
+  3037 |           });
+  3038 |           /* FNXC:WorkflowResolvedColumns 2026-07-30-22:20: census-invisible moveTask DESTINATION — same operator Retry path as above. Resolved BEFORE the log line so the log, the reply text and `details.newColumn` all name the lane the card actually goes to. */
+  3039 |           const executionRetryTarget = await fusionCore.resolveReboundTargetForTask(store, params.id);
+  3040 |           await store.logEntry(
+  3041 |             params.id,
+  3042 |             isInReviewExecutionStall
+  3043 |               ? `Retry requested via Fusion extension (stranded in-review execution retry → ${executionRetryTarget}, preserving progress${retryLogSuffix})`
+  3044 |               : `Retry requested via Fusion extension (execution failure in-review → ${executionRetryTarget}, preserving progress${retryLogSuffix})`,
+  3045 |           );
+  3046 |           /* FNXC:ToolPermissionGates 2026-07-30-13:55: fn_task_retry is a user-facing lever — carry the user move source (target resolves by role). FNXC:TaskRetryReleaseIntent 2026-09-22-07:39 (RUFU-261): parkOnHold:false = release intent, the user source stays as audit attribution. */
+  3047 |           await store.moveTask(params.id, executionRetryTarget, { preserveProgress: true, moveSource: "user", parkOnHold: false });
+  3048 |           return {
+  3049 |             content: [{ type: "text", text: `Retried ${params.id} → ${executionRetryTarget} (execution failure, preserving step progress)` }],
+  3050 |             details: { taskId: params.id, newColumn: executionRetryTarget },
+  3051 |           };
+  3052 |         }
+  3053 | 
+  3054 |         await applyRetryReset({
+  3055 |           status: null,
+  3056 |           error: null,
+  3057 |           ...autoPauseClearPatch,
+  3058 |           ...buildManualRetryResetPatch({ resetMergeRetries: true }),
+  3059 |         });
+  3060 |         await store.logEntry(params.id, `Retry requested via Fusion extension (in-review merge retry, mergeRetries reset${retryLogSuffix})`);
+  3061 |         return {
+  3062 |           content: [{ type: "text", text: `Retried ${params.id} in ${task.column} (merge retry state cleared)` }],
+  3063 |           /* FNXC:RetryReportCarriesTarget 2026-10-13-06:30 (STAS-299 code review, P1 — third site of the same lie): this branch moves NOTHING, so the column it reports is the one the card is already in. A literal `in-review` named a lane a renamed board does not declare (the chat tool's sibling already answers `task.column`). */
+  3064 |           details: { taskId: params.id, newColumn: task.column },
+  3065 |         };
+  3066 |       }
+  3067 | 
+  3068 |       // Clear failure state and move to todo for other columns
+  3069 |       await applyRetryReset({
+  3070 |         status: null,
+  3071 |         error: null,
+  3072 |         ...autoPauseClearPatch,
+  3073 |         ...buildManualRetryResetPatch({ resetMergeRetries: true }),
+  3074 |       });
+  3075 |       
+  3076 |       /*
+  3077 |       FNXC:TaskRetry 2026-07-31-23:59 (the SECOND instance of the review finding on #3152):
+  3078 |       A reviewer caught the chat `fn_task_retry` tool resolving its move target while still reporting
+  3079 |       `"todo"` in the log, the response text and `details.newColumn`. This CLI retry had the identical
+  3080 |       gap — same PR, same conversion, same three unconverted report sites — so it is fixed with it
+  3081 |       rather than waiting for the same comment on the next surface.
+  3082 | 
+  3083 |       Resolve once, then use that value everywhere the operator or a downstream tool reads it.
+  3084 |       */
+  3085 |       // FNXC:ToolPermissionGates 2026-07-26-13:55: user-facing retry move carries the user/hard-cancel source (Move-Task contract).
+  3086 |       // FNXC:TaskRetryReleaseIntent 2026-09-22-07:39 (RUFU-261): parkOnHold:false states release intent —
+  3087 |       // without it this generic branch self-inflicted the hold-lane park (RUFU-195 et al.) on a user-sourced move.
+  3088 |       const retryTarget = await fusionCore.resolveReboundTargetForTask(store, params.id);
+  3089 |       await store.moveTask(params.id, retryTarget, { moveSource: "user", parkOnHold: false });
+  3090 | 
+  3091 |       // Log the retry action
+  3092 |       await store.logEntry(params.id, "Retry requested via Fusion extension", `Task reset to ${retryTarget} for retry`);
+  3093 | 
+  3094 |       return {
+  3095 |         content: [{ type: "text", text: `Retried ${params.id} → ${retryTarget} (failure state cleared)` }],
+  3096 |         details: { taskId: params.id, newColumn: retryTarget },
+  3097 |       };
+  3098 |     },
+  3099 |   });
+  3100 | 
+  3101 |   // ── fn_task_bypass_review ────────────────────────────────────────
+  3102 | 
+  3103 |   /*
+  3104 |    * FNXC:ReviewLaneBypass 2026-07-09-00:00:
+  3105 |    * Policy-gated escape hatch (FN-7720) for a card stranded in `in-review`
+  3106 |    * solely by a failed pre-merge review step — the leading real-world cause
+  3107 |    * being the Runfusion/Fusion#1946 `(no feedback captured)` no-verdict
+  3108 |    * dispatch defect. Registered ONLY on this pi-extension/CLI operator tool
+  3109 |    * surface — deliberately NOT wired into packages/engine/src/executor.ts or
+  3110 |    * packages/engine/src/agent-heartbeat.ts autonomous per-role tool lists, and
+
+================================================================================
+### packages/cli/src/commands/task.ts  lines 1884-1935
+### why: CLI retry classifier — the same shared class (parity)
+================================================================================
+  1884 | export async function runTaskRetry(id: string, projectName?: string) {
+  1885 |   // FNXC:CliBoardMutation 2026-07-09-00:00 (FN-7734): MULTI-STEP mutation
+  1886 |   // (moveTask + updateTask + logEntry, in one of three branches). Resolution
+  1887 |   // is retried once via `resolveBoardContext`; each discrete write is
+  1888 |   // retried independently via `retryBoardCall` rather than retrying the
+  1889 |   // WHOLE sequence, so a lock error on a LATER write does not redo an
+  1890 |   // already-committed earlier one (e.g. double-moving to todo or
+  1891 |   // double-logging the retry entry). The store is closed in a `finally`
+  1892 |   // covering every return path.
+  1893 |   const context = await resolveBoardContext(projectName, id, "resolve project");
+  1894 |   try {
+  1895 |     // Fetch task and validate it exists
+  1896 |     let task;
+  1897 |     try {
+  1898 |       task = await retryBoardCall(context, id, "read task", () => context.store.getTask(id));
+  1899 |     } catch {
+  1900 |       throw new Error(`Task ${id} not found`);
+  1901 |     }
+  1902 | 
+  1903 |     /*
+  1904 |     FNXC:WorkflowLifecycleColumns 2026-08-02-08:30 (fleet: CLI surface — the retry gate exists TWICE):
+  1905 |     This is the CLI's copy of the dashboard route's retry classifier, and #2713 converted only the route. So
+  1906 |     after that PR `POST /tasks/:id/retry` accepted a renamed board's stalled review card while
+  1907 |     `fn task retry` still refused it with "not in a retryable state" — the same operator action answering
+  1908 |     differently depending on which surface they used.
+  1909 |     Worth stating as a rule: when a gate is duplicated across surfaces, converting one of them creates a
+  1910 |     DISAGREEMENT that is harder to diagnose than the original inert guard. Grep for the classifier by name
+  1911 |     before claiming a lane is converted.
+  1912 |     */
+  1913 |     /*
+  1914 |     FNXC:WorkflowLifecycleColumns 2026-08-02-22:10 (consolidation onto #2730's core resolver):
+  1915 |     ONE DEFINITION, IN CORE. `resolveReviewColumns` is now the authoritative answer to "which columns are
+  1916 |     review", and this inline union was one of THREE in-tree copies that disagreed with each other:
+  1917 | 
+  1918 |       core (#2730):         mergeOrchestration u mergeBlocker u humanReview — ALL columns
+  1919 |       dashboard routes:     mergeBlocker u humanReview u FIRST mergeOrchestration
+  1920 |       cli/src/extension.ts: mergeBlocker u humanReview u FIRST mergeOrchestration
+  1921 |       this copy:            all three, full union
+  1922 | 
+  1923 |     The two `.slice(0, 1)` variants were MINE, from #2723's review round: I narrowed to core's then-single
+  1924 |     `.review` because the reviewer was right that a superset let the dashboard act on a lane the engine did not
+  1925 |     own. #2730 answered that question authoritatively in the other direction, so the narrowing is obsolete — and
+  1926 |     keeping any local copy means re-litigating arity per call site forever, which is what produced three answers.
+  1927 | 
+  1928 |     The legacy fallback stays: an unresolvable or column-less IR keeps `in-review`, so boards that never declared
+  1929 |     traits are unchanged.
+  1930 |     */
+  1931 |     const retryIr = await resolveWorkflowIrForTask(context.store, id).catch(() => undefined);
+  1932 |     const resolvedReviewColumns = retryIr === undefined ? [] : resolveReviewColumns(retryIr);
+  1933 |     const retryReviewColumns = new Set(resolvedReviewColumns.length > 0 ? resolvedReviewColumns : ["in-review"]);
+  1934 |     const autoPauseClearPatch = buildAutoPauseClearPatch(task);
+  1935 |     const clearedDeadlockAutoPause = Object.keys(autoPauseClearPatch).length > 0;
+
+================================================================================
+### packages/cli/src/commands/task.ts  lines 2010-2200
+### why: CLI generic re-queue — P1: reports name the resolved hold lane
+================================================================================
+  2010 |     /*
+  2011 |     FNXC:MissingWorktreeRetry 2026-07-10-18:28:
+  2012 |     Upstream #1992 requires operator retry to recover an in-review task whose session start refused a missing/incomplete/unregistered worktree even when the row is stuck in an invalid merge-active status. This signature-only bypass clears stale session metadata instead of requiring a valid `merging` transition.
+  2013 |     */
+  2014 |     const isMissingWorktreeSessionRetry = isInReviewMissingWorktreeSessionStartFailure(task, retryReviewColumns.has(task.column));
+  2015 | 
+  2016 |     // Validate task is in a retryable state
+  2017 |     if (noVerdictReviewRetry) {
+  2018 |       throw new Error(`Task ${id} has a failed review with no verdict; retry it through the running dashboard or wait for engine recovery`);
+  2019 |     }
+  2020 |     if (task.status !== 'failed' && task.status !== 'stuck-killed' && !isInReviewRetry && !isMissingWorktreeSessionRetry && strandedGateStepIds.length === 0) {
+  2021 |       throw new Error(`Task ${id} is not in a retryable state (status: ${task.status || 'none'})`);
+  2022 |     }
+  2023 | 
+  2024 |     /*
+  2025 |     FNXC:WorkflowLifecycleColumns 2026-07-31-11:20 (fleet — the retry TARGET, live regression on main):
+  2026 |     Retry re-queues the card to its board's HOLD column, resolved from the task's own workflow.
+  2027 | 
+  2028 |     #2728 converted the retry CLASSIFIER above (`retryReviewColumns.has(task.column)`) and left all
+  2029 |     three re-queue targets below on the literal `"todo"`. That combination is strictly worse than the
+  2030 |     bug it fixed: before, `fn task retry` silently did nothing on a renamed board; after, it
+  2031 |     correctly decides to retry and then THROWS
+  2032 | 
+  2033 |         TransitionRejectionError: Invalid transition: 'checking' -> 'todo'. Unknown column for this workflow.
+  2034 | 
+  2035 |     because `todo` is not a column that board declares.
+  2036 | 
+  2037 |     The census cannot see this: it counts COMPARISONS, and a move target contains none. So the file
+  2038 |     reads 0 guards while the crash is live — which is exactly why the classifier and the target must
+  2039 |     move together.
+  2040 | 
+  2041 |     Fail-soft to `"todo"` when the workflow cannot be resolved, matching every other fallback here.
+  2042 | 
+  2043 |     THE REPORTS TRAVEL WITH THE TARGET. Each of the three re-queues below logged and printed `→ todo`
+  2044 |     while moving to `retryHoldColumn`, so on a renamed board the operator's own terminal and the card's
+  2045 |     audit trail both named a column that board does not define — the same half-conversion #3152 caught
+  2046 |     on the chat tool and this file's own dashboard route already fixed ("resolve the rebound destination
+  2047 |     BEFORE logging"). A builtin board prints `todo` either way, which is why only the renamed case shows it.
+  2048 |     */
+  2049 |     const retryHoldColumn = (await resolveTaskLifecycleColumns(context.store, id))?.hold ?? "todo";
+  2050 | 
+  2051 |     // FNXC:TaskWedgeNotifications 2026-08-10-20:15: a human Retry proves intervention and mints a fresh bounded terminal-failure budget.
+  2052 |     await context.store.resetTerminalFailureAutoRecoveryBudget(id);
+  2053 | 
+  2054 |     /*
+  2055 |     FNXC:StrandedGateRetry 2026-10-13-04:10 (STAS-299 Invariant C):
+  2056 |     THIS branch exists because the generic fallthrough at the bottom of this command is destructive
+  2057 |     for this shape: it clears `worktree`, `branch`, `baseBranch` and `baseCommitSha` so a retry can
+  2058 |     pick a fresh base — which discards the branch the executor already built, on a card that lost
+  2059 |     nothing but a verdict. The shared patch clears the failure state and drops only the verdict-less
+  2060 |     gate rows, and the card is not moved: it already sits in the lane a re-queue would send it to,
+  2061 |     and RUFU-261 exists because a move into a hold lane can park the card a retry was asked to run.
+  2062 |     */
+  2063 |     if (strandedGateStepIds.length > 0) {
+  2064 |       await retryBoardCall(context, id, "update task", () => applyRetryReset(buildStrandedGateRetryPatch(task, strandedGateStepIds)));
+  2065 |       await retryBoardCall(context, id, "log entry", () => context.store.logEntry(
+  2066 |         id,
+  2067 |         `Retry requested from CLI (verdict-less ${strandedGateStepIds.join(", ")} gate row(s) discharged in ${task.column}; approved plan, step list and worktree preserved)`,
+  2068 |       ));
+  2069 | 
+  2070 |       console.log();
+  2071 |       console.log(`  ✓ Retried ${id} in ${task.column} (verdict-less ${strandedGateStepIds.join(", ")} gate discharged; approved plan, steps and worktree intact)`);
+  2072 |       console.log();
+  2073 |       return;
+  2074 |     }
+  2075 | 
+  2076 |     /*
+  2077 |     FNXC:TaskRetryReleaseIntent 2026-09-22-07:39 (RUFU-261):
+  2078 |     All three `fn task retry` re-queues below carry `parkOnHold: false` — the explicit RELEASE
+  2079 |     statement at the hold-lane park seam. On HEAD these moves derive `moveSource: "engine"`
+  2080 |     (moves.ts default) and therefore already do not park, but the published CLI surface reproduced
+  2081 |     the retry-parked-card failure on-board (RUFU-196); stating release intent here makes the
+  2082 |     guarantee explicit and regression-proof should the source attribution ever mirror the
+  2083 |     extension tool's `moveSource: "user"` (FNXC:ToolPermissionGates symmetry). `fn task move`
+  2084 |     (a genuine manual gesture) deliberately keeps parking.
+  2085 |     */
+  2086 |     if (isMissingWorktreeSessionRetry) {
+  2087 |       /*
+  2088 |       FNXC:CliRetryFence 2026-10-04-08:01:
+  2089 |       The atomic reset fences the snapshot captured before retry. Clear stale session metadata before
+  2090 |       moving columns, otherwise the move changes `columnMovedAt` and correctly rejects the reset as stale.
+  2091 |       */
+  2092 |       await retryBoardCall(context, id, "update task", () => applyRetryReset({
+  2093 |         status: null,
+  2094 |         error: null,
+  2095 |         worktree: null,
+  2096 |         branch: null, branchWriteOrigin: "engine" as const,
+  2097 |         sessionFile: null,
+  2098 |         ...autoPauseClearPatch,
+  2099 |         ...buildManualRetryResetPatch({ resetMergeRetries: true }),
+  2100 |       }));
+  2101 |       await retryBoardCall(context, id, "move task", () => context.store.moveTask(id, retryHoldColumn as never, { preserveProgress: true }));
+  2102 |       await retryBoardCall(context, id, "log entry", () => context.store.logEntry(id, `Retry requested from CLI (unusable worktree session-start recovery → ${retryHoldColumn}, preserving progress${retryLogSuffix})`));
+  2103 | 
+  2104 |       console.log();
+  2105 |       console.log(`  ✓ Retried ${id} → ${retryHoldColumn} (unusable worktree session metadata cleared)`);
+  2106 |       console.log();
+  2107 |       return;
+  2108 |     }
+  2109 | 
+  2110 |     // In-review retry: distinguish between execution failures (incomplete steps)
+  2111 |     // and merge failures (all steps done).
+  2112 |     if (isInReviewRetry) {
+  2113 |       /*
+  2114 |       FNXC:CliRetryDeadlockRecovery 2026-09-25-00:05:
+  2115 |       `parkOnHold: false` (RUFU-261 release intent) is kept on BOTH retry branches: an explicit
+  2116 |       operator Retry that resurrects an automatic deadlock pause re-queues the card to be RUN, so
+  2117 |       re-parking it in the hold lane would re-create the deadlock FN-9384 exists to clear.
+  2118 |       */
+  2119 |       if (isExecutionFailureInReview || isDeadlockAutoPauseRecovery) {
+  2120 |         await retryBoardCall(context, id, "move task", () => context.store.moveTask(id, retryHoldColumn as never, { preserveProgress: true, parkOnHold: false }));
+  2121 |         await retryBoardCall(context, id, "update task", () => applyRetryReset({
+  2122 |           status: null,
+  2123 |           error: null,
+  2124 |           ...autoPauseClearPatch,
+  2125 |           ...buildManualRetryResetPatch({ resetMergeRetries: isDeadlockAutoPauseRecovery }),
+  2126 |         }));
+  2127 |         await retryBoardCall(context, id, "log entry", () => context.store.logEntry(
+  2128 |           id,
+  2129 |           isInReviewExecutionStall
+  2130 |             ? `Retry requested from CLI (stranded in-review execution retry → ${retryHoldColumn}, preserving progress${retryLogSuffix})`
+  2131 |             : `Retry requested from CLI (execution failure in-review → ${retryHoldColumn}, preserving progress${retryLogSuffix})`,
+  2132 |         ));
+  2133 | 
+  2134 |         console.log();
+  2135 |         console.log(`  ✓ Retried ${id} → ${retryHoldColumn} (execution failure, preserving step progress)`);
+  2136 |         console.log();
+  2137 |         return;
+  2138 |       }
+  2139 | 
+  2140 |       await retryBoardCall(context, id, "update task", () => applyRetryReset({
+  2141 |         status: null,
+  2142 |         error: null,
+  2143 |         ...autoPauseClearPatch,
+  2144 |         ...buildManualRetryResetPatch({ resetMergeRetries: true }),
+  2145 |       }));
+  2146 |       await retryBoardCall(context, id, "log entry", () => context.store.logEntry(id, `Retry requested from CLI (in-review merge retry, mergeRetries reset${retryLogSuffix})`));
+  2147 | 
+  2148 |       console.log();
+  2149 |       console.log(`  ✓ Retried ${id} in review (merge retry state cleared)`);
+  2150 |       console.log();
+  2151 |       return;
+  2152 |     }
+  2153 | 
+  2154 |     // Move to the hold column before applying retry resets. `moveTask` reads from the
+  2155 |     // store's durable index and may overwrite task.json-only updates, so apply the
+  2156 |     // manual retry reset patch after the move to make the cleared counters stick.
+  2157 |     /*
+  2158 |     FNXC:WorkflowLifecycleColumns 2026-07-31-12:30 (PR #2752 review — greptile P1):
+  2159 |     THE FOURTH TARGET, and the one that matters most.
+  2160 | 
+  2161 |     This is the GENERIC retry fallthrough — a plainly `failed` or `stuck-killed` card, which is the
+  2162 |     ordinary case, not the in-review stall paths above. It was written with SINGLE quotes while its
+  2163 |     three siblings used double, so my first pass converted three of four and left the common path
+  2164 |     crashing. Found by review, not by me, and not by any tool: the census counts comparisons and sees
+  2165 |     none of these, and a same-file grep for the double-quoted form reports clean.
+  2166 |     */
+  2167 |     await retryBoardCall(context, id, "move task", () => context.store.moveTask(id, retryHoldColumn as never, { parkOnHold: false }));
+  2168 | 
+  2169 |     // Clear failure state and stale branch refs so retry can choose a fresh base.
+  2170 |     await retryBoardCall(context, id, "update task", () => applyRetryReset({
+  2171 |       status: null,
+  2172 |       error: null,
+  2173 |       worktree: null,
+  2174 |       branch: null, branchWriteOrigin: "engine" as const,
+  2175 |       baseBranch: null,
+  2176 |       baseCommitSha: null,
+  2177 |       ...autoPauseClearPatch,
+  2178 |       ...buildManualRetryResetPatch({ resetMergeRetries: true }),
+  2179 |     }));
+  2180 | 
+  2181 |     // Log the retry action
+  2182 |     await retryBoardCall(context, id, "log entry", () => context.store.logEntry(
+  2183 |       id,
+  2184 |       clearedDeadlockAutoPause ? "Retry requested from CLI (cleared deadlock auto-pause)" : "Retry requested from CLI",
+  2185 |       `Task reset to ${retryHoldColumn} for retry`,
+  2186 |     ));
+  2187 | 
+  2188 |     console.log();
+  2189 |     console.log(`  ✓ Retried ${id} → ${retryHoldColumn} (failure state cleared)`);
+  2190 |     console.log();
+  2191 |   } finally {
+  2192 |     await closeProjectStore(context).catch(() => {});
+  2193 |   }
+  2194 | }
+  2195 | 
+  2196 | export async function runTaskDelete(id: string, force?: boolean, allowResurrection?: boolean, projectName?: string) {
+  2197 |   // FNXC:CliBoardMutation 2026-07-09-00:00 (FN-7734): MULTI-STEP mutation
+  2198 |   // (existence check, interactive confirm prompt, delete). Resolution and
+  2199 |   // the existence check are retried together; the interactive confirm
+  2200 |   // prompt runs with the context still open (no board call inside it, so no
+
+================================================================================
+### packages/engine/src/self-healing.ts  lines 11280-11360
+### why: the sweep that finds the orphaned gate row, and the hold-lane gate it must respect
+================================================================================
+ 11280 | 
+ 11281 |   async reconcileOrphanedPendingStepResults(): Promise<number> {
+ 11282 |     try {
+ 11283 |       /* Resolved once per sweep, outside the paging loop, so a large board still pays one resolve. */
+ 11284 |       const orphanedPendingWipColumns = await resolveProjectColumnsForRoles(this.store, ["countsTowardWip"]);
+ 11285 |       /*
+ 11286 |       FNXC:OrphanedPendingSteps 2026-10-07 (STAS-299):
+ 11287 |       The hold-lane set for the lifecycle write below. Resolved by trait role and asked as SET
+ 11288 |       MEMBERSHIP, because `todo` is only this board's current name for the lane.
+ 11289 |       */
+ 11290 |       const orphanedPendingHoldColumns = await resolveProjectColumnsForRoles(this.store, ["hold"]);
+ 11291 |       const pageSize = 500;
+ 11292 |       let offset = 0;
+ 11293 |       let recovered = 0;
+ 11294 |       // FNXC:WorkflowReviewGates 2026-07-26-15:55: read once per sweep, used only to LABEL the
+ 11295 |       // audit event (needsOperatorBypass). This sweep takes no auto-merge-dependent action.
+ 11296 |       const settings = await this.store.getSettings().catch(() => undefined);
+ 11297 | 
+ 11298 |       const isSessionLive = (taskId: string): boolean => {
+ 11299 |         const livePaths = activeSessionRegistry.pathsForTask(taskId);
+ 11300 |         return livePaths.some((path) => activeSessionRegistry.isPathActive(path))
+ 11301 |           || executingTaskLock.has(taskId)
+ 11302 |           || this.options.isTaskActive?.(taskId) === true;
+ 11303 |       };
+ 11304 | 
+ 11305 |       for (;;) {
+ 11306 |         const tasks = await this.store.listTasks({ slim: true, includeArchived: false, limit: pageSize, offset, excludeLog: true });
+ 11307 |         for (const task of tasks) {
+ 11308 |           // An operator park is authoritative; this sweep must not reach through it.
+ 11309 |           if (task.userPaused === true) continue;
+ 11310 |           /*
+ 11311 |           FNXC:WorkflowResolvedColumns 2026-07-31-16:45 (fleet, self-healing round 2):
+ 11312 |           The executor-owned skip is a WIP-ROLE question. Keyed on the id it stopped firing on a renamed
+ 11313 |           board, so this sweep would rewrite `pending` step results out from under a LIVE executor run —
+ 11314 |           the one thing its own header says it must never do.
+ 11315 |           */
+ 11316 |           if (orphanedPendingWipColumns.has(task.column)) continue;
+ 11317 |           if (!task.workflowStepResults?.some((result) => result.status === "pending" || (result.status === "failed" && result.verdict === undefined && result.reviewKind === "code"))) continue;
+ 11318 |           if (isSessionLive(task.id)) continue;
+ 11319 | 
+ 11320 |           // Re-read the live row before mutating: the page snapshot can be stale against
+ 11321 |           // a merger/planner that wrote a fresh pending lease after the page was fetched.
+ 11322 |           const fresh = await this.store.getTask(task.id);
+ 11323 |           if (!fresh || fresh.userPaused === true || orphanedPendingWipColumns.has(fresh.column)) continue;
+ 11324 |           /*
+ 11325 |           FNXC:WorkflowReviewGates 2026-07-26-15:50:
+ 11326 |           Honor a LIVE review-gate lease, not just in-process session liveness.
+ 11327 |           Plan Review has always had lease semantics here (`classifyReviewLease`: a `leaseOwner`
+ 11328 |           with a `startedAt` inside the staleness floor is adopted, never re-dispatched), but the
+ 11329 |           `code-review` / `browser-verification` optional groups write a bare `pending` record with
+ 11330 |           no such guard. That asymmetry became reachable when those gates moved into `in-review`:
+ 11331 |           this sweep also runs from PERIODIC MAINTENANCE, in the same live process as an active
+ 11332 |           graph run, so a tick landing between the lease write and the session-registry
+ 11333 |           registration could stamp a gate that just started — and is genuinely running — as
+ 11334 |           `failed`, closing the merge gate against a task nothing is wrong with.
+ 11335 |           Treating a within-floor lease as live closes that window. It does NOT defeat FN-8492: a
+ 11336 |           lease past the floor classifies as `reclaim` and is still marked failed, so cleanup of a
+ 11337 |           genuinely dead lease is delayed by at most the staleness floor — the same floor Plan
+ 11338 |           Review already relies on. Restart-orphaned gates are unaffected in substance: nothing
+ 11339 |           re-attaches an in-review graph run after a restart, so those leases simply age out and
+ 11340 |           are then marked failed as before.
+ 11341 |           */
+ 11342 |           /*
+ 11343 |           FNXC:PlanReviewLease 2026-07-26-20:26:
+ 11344 |           FN-8603 follow-up. The paragraph above accepts that "restart-orphaned gates simply age
+ 11345 |           out" — that acceptance is what cost FN-8603 ~14 minutes of dead wait after an engine
+ 11346 |           restart killed its Code Review session 34s in. Passing this node's identity lets
+ 11347 |           classifyReviewLease reclaim a lease THIS node's previous process took (proven dead: it
+ 11348 |           predates our boot) without touching the floor that protects peer-owned and legacy
+ 11349 |           unattributed leases. When localNodeId is unset the argument is undefined and behavior is
+ 11350 |           exactly as before.
+ 11351 |           */
+ 11352 |           const localNodeLeaseIdentity = this.options.localNodeId
+ 11353 |             ? { nodeId: this.options.localNodeId, processBootAt: this.processBootStartedAt }
+ 11354 |             : undefined;
+ 11355 |           const hasLiveReviewLease = (result: WorkflowStepResult): boolean => {
+ 11356 |             if (!result.leaseOwner || !result.startedAt) return false;
+ 11357 |             return classifyReviewLease(
+ 11358 |               [result],
+ 11359 |               result.workflowStepId,
+ 11360 |               Date.now(),
+
+================================================================================
+### packages/engine/src/self-healing.ts  lines 11440-11560
+### why: the lifecycle write that fails the stranded hold-lane card (requirements 1-2)
+================================================================================
+ 11440 |                 }
+ 11441 |               }
+ 11442 |             }
+ 11443 |           }
+ 11444 |           /*
+ 11445 |           FNXC:OrphanedPendingSteps 2026-09-07-05:09:
+ 11446 |           FN-9270 proved a persistence failure can leave a pending row without any restart. This
+ 11447 |           sweep observes only missing session and lease evidence, so its diagnostic must state that
+ 11448 |           fact rather than inventing a crash while retaining FN-8492's failed-row contract.
+ 11449 |           */
+ 11450 |           const { results, orphanedCount } = resolveOrphanedPendingStepResults<WorkflowStepResult>(
+ 11451 |             fresh.workflowStepResults,
+ 11452 |             (result) => isSessionLive(task.id) || hasLiveReviewLease(result),
+ 11453 |             {
+ 11454 |               output: "Pending step result had no live session or lease; marked failed by self-healing (FN-8492).", 
+ 11455 |               completedAt: new Date().toISOString(),
+ 11456 |             },
+ 11457 |           );
+ 11458 |           if (orphanedCount === 0) continue;
+ 11459 | 
+ 11460 |           /*
+ 11461 |           FNXC:OrphanedPendingSteps 2026-10-07 (STAS-299, from the STAS-281 stall):
+ 11462 |           Failing the row closes the merge door but owns nothing else. On a plan-in-place board the
+ 11463 |           card then sat in its hold lane with `status:null`: the graph will not re-dispatch a failed
+ 11464 |           gate, the scheduler does not re-plan a card whose gate row already exists, and every retry
+ 11465 |           surface admits only a card-level failure — so one dead review session stranded the card
+ 11466 |           with no recovery owner for 2.2 days. Owning the lifecycle here means a card-level
+ 11467 |           `status:"failed"` + `error`, written in the SAME patch as the row rewrite.
+ 11468 | 
+ 11469 |           It is not a move. On this board failure is a status, not a lane — `COLUMNS` and
+ 11470 |           `VALID_TRANSITIONS` declare no `failed` entry — so a lane change would be an invention.
+ 11471 | 
+ 11472 |           Scoped to the trait-resolved hold set and only when the card carries no status yet: a
+ 11473 |           review-lane card is already owned by the in-review no-verdict recovery route, a
+ 11474 |           complete-lane card is done, and a card that already reports a failure keeps its own reason.
+ 11475 |           */
+ 11476 |           const needsFailureStatus = !fresh.status && orphanedPendingHoldColumns.has(fresh.column);
+ 11477 |           const selfHealedFailure = needsFailureStatus
+ 11478 |             ? `${orphanedCount} workflow step result(s) had no live session or lease and were marked failed by self-healing (FN-8492). The card stays in its lane; retry it to re-run the step.`
+ 11479 |             : undefined;
+ 11480 | 
+ 11481 |           try {
+ 11482 |             await this.store.updateTask(task.id, {
+ 11483 |               workflowStepResults: results,
+ 11484 |               ...(needsFailureStatus ? { status: "failed", error: selfHealedFailure } : {}),
+ 11485 |             });
+ 11486 |             // Counted on the successful mutation; a failed audit emit below must not
+ 11487 |             // understate how many tasks were actually recovered.
+ 11488 |             recovered += 1;
+ 11489 |           } catch (error) {
+ 11490 |             log.warn(`reconcileOrphanedPendingStepResults: failed for ${task.id}: ${error instanceof Error ? error.message : String(error)}`);
+ 11491 |             continue;
+ 11492 |           }
+ 11493 |           try {
+ 11494 |             await createRunAuditor(this.store, {
+ 11495 |               runId: generateSyntheticRunId("reconcile-orphaned-pending-steps", task.id),
+ 11496 |               agentId: "self-healing",
+ 11497 |               taskId: task.id,
+ 11498 |               taskLineageId: task.lineageId,
+ 11499 |               phase: "reconcile-orphaned-pending-step-results",
+ 11500 |             }).database({
+ 11501 |               type: "task:reconcile-orphaned-pending-step-results",
+ 11502 |               target: task.id,
+ 11503 |               /*
+ 11504 |               FNXC:WorkflowReviewGates 2026-07-26-15:55:
+ 11505 |               `needsOperatorBypass` labels the case that has no automatic way out. When the row is
+ 11506 |               not auto-merge-eligible (`autoMerge:false` / PR-based human-review contract),
+ 11507 |               `recoverReviewTasksWithFailedPreMergeSteps` deliberately skips it, so the `failed`
+ 11508 |               result this sweep just wrote will never be auto-recovered — the only resolution is an
+ 11509 |               operator running `fn_task_bypass_review` / `POST /tasks/:id/bypass-review` (FN-7720).
+ 11510 |               Without this flag the event is indistinguishable from an ordinary auto-recoverable
+ 11511 |               rewrite, and the board shows only a generic merge-blocked badge, so the card sits
+ 11512 |               silently. Metadata stays ids/counts/outcomes-only — this is a boolean label, and the
+ 11513 |               event takes no lifecycle action, so the autoMerge:false terminal-until-human contract
+ 11514 |               is untouched.
+ 11515 |               */
+ 11516 |               // ids/counts/outcomes only — never step output or reviewer prose.
+ 11517 |               metadata: {
+ 11518 |                 taskId: task.id,
+ 11519 |                 column: task.column,
+ 11520 |                 orphanedCount,
+ 11521 |                 resultCount: results.length,
+ 11522 |                 /* Which lifecycle status the card ends the sweep with — `failed` only for the
+ 11523 |                    hold-lane write above, otherwise whatever status it already reported. */
+ 11524 |                 lifecycleStatus: needsFailureStatus ? "failed" : (fresh.status ?? null),
+ 11525 |                 needsOperatorBypass: settings ? !allowsAutoMergeProcessing(fresh, settings) : undefined,
+ 11526 |               },
+ 11527 |             });
+ 11528 |           } catch (error) {
+ 11529 |             log.warn(`reconcileOrphanedPendingStepResults: audit emit failed for ${task.id}: ${error instanceof Error ? error.message : String(error)}`);
+ 11530 |           }
+ 11531 |         }
+ 11532 |         if (tasks.length < pageSize) break;
+ 11533 |         offset += tasks.length;
+ 11534 |       }
+ 11535 |       if (recovered > 0) log.log(`Marked orphaned pending step results failed on ${recovered} task(s)`);
+ 11536 |       return recovered;
+ 11537 |     } catch (error) {
+ 11538 |       log.error(`reconcileOrphanedPendingStepResults failed: ${error instanceof Error ? error.message : String(error)}`);
+ 11539 |       return 0;
+ 11540 |     }
+ 11541 |   }
+ 11542 | 
+ 11543 |   /*
+ 11544 |   FNXC:ReviewLaneDispatch 2026-10-05-00:24 (RUFU-559):
+ 11545 |   `task_reviewer_runs` had no liveness reconcile, so an attempt whose session died stayed `status='running'`
+ 11546 |   forever. Measured on production: 275 rows running, NONE live, oldest 19 days; 20 in-review cards were held by
+ 11547 |   one, and each engine restart manufactures more, because the reviewer session dies with the process and nothing
+ 11548 |   closes its row. The dispatch sweep then reads the zombie as an unfinished attempt and the stall classifier
+ 11549 |   disposes the card as `completed-review-status-none` — which is how a whole review lane stops moving while every
+ 11550 |   individual guard is behaving correctly.
+ 11551 | 
+ 11552 |   Modelled on FN-8492 (`reconcileOrphanedPendingStepResults`), keeping its two hard rules:
+ 11553 |   - never act on age alone. The ledger's floor selects a CANDIDATE; death is PROVEN with the canonical liveness
+ 11554 |     triple (active session registry paths for the task, the executing-task lock, `options.isTaskActive`) — the
+ 11555 |     same triple FN-8492 uses. A reviewer session legitimately runs for minutes.
+ 11556 |   - never delete or rewrite history. The row takes a terminal status through `completeReviewerRunForTask`, whose
+ 11557 |     one-way guard (still-running, still-live) is the race protection: a verdict landing between this read and
+ 11558 |     this write wins, and this pass records `already-settled`.
+ 11559 | 
+ 11560 |   The close reason carries `engine-lost:`, the shared prefix `isEngineLossReviewerRun` exempts from the dispatch
+
+================================================================================
+### packages/dashboard/src/routes/register-task-workflow-routes.ts  lines 3795-3900
+### why: retry route — the class guard that runs before the destructive branch
+================================================================================
+  3795 |       it for the merged shape (it keys on `todo` when the workflow declares no `triage`), so
+  3796 |       this was not a stall — but it worked by accident of the two conditions overlapping,
+  3797 |       not because either was right.
+  3798 |       */
+  3799 |       /*
+  3800 |       FNXC:ManualRetry 2026-07-30-02:10 (supersedes the 2026-07-13 gate and #2614's intake resolve):
+  3801 |       The question this branch must answer is "does this card sit where its workflow PLANS?", because
+  3802 |       the yes-branch is DESTRUCTIVE: it stamps needs-replan AND deletes PROMPT.md.
+  3803 | 
+  3804 |       Two predicates stood in for it and neither answered it. #2614 resolved the INTAKE column, which
+  3805 |       is right for the merged lineage but wrong wherever intake and the planning column differ. The
+  3806 |       older arm asked `!workflowHasColumn(ir, "triage")`, and MEASURED across all 12 builtins: NOT ONE
+  3807 |       plans in `triage`, while SEVEN still declare that column. So for the five that declare `triage`
+  3808 |       AND run every plan node in `todo` — quick-fix, review-heavy, compound-engineering, design,
+  3809 |       legacy-coding — the predicate was FALSE and a planning/needs-replan card sitting in its own
+  3810 |       planning column was refused outright:
+  3811 |         400 "Task is not in a retryable state (current status: needs-replan)"
+  3812 |       The operator had no button at all on a card parked mid-planning. Verified still live on main
+  3813 |       after #2614: 9 of this file's 14 retry tests fail without the change below.
+  3814 | 
+  3815 |       The mirror-image fault is destructive rather than obstructive: a workflow that plans anywhere
+  3816 |       other than `todo` had a `todo` card's PROMPT.md deleted for a re-plan nobody asked for.
+  3817 | 
+  3818 |       Ask the graph directly. `workflowPlansInColumn` recognises planning nodes by the semantic markers
+  3819 |       the builtins carry (`config.seam`, an exact `workflowAction` set) with node ids as a backstop.
+  3820 |       */
+  3821 |       const workflowIr = await resolveWorkflowIrForTask(scopedStore, task.id);
+  3822 |       /*
+  3823 |       FNXC:StrandedGateRetry 2026-10-13-03:40 (STAS-299 req 4 + Invariant C):
+  3824 |       A card sitting in a pre-execution lane whose ONLY failure evidence is a required gate row that
+  3825 |       died with no verdict (self-heal's FN-8492 orphan flip) is not "a stage to restart": the locked
+  3826 |       stage planner serves a hold-lane card with `scope: "plan"`, which stamps `needs-replan`, empties
+  3827 |       `steps`, clears `approvedPlanFingerprint` and deletes PROMPT.md. That trades a hiccuped review
+  3828 |       session for the loss of the very plan the reviewer was reading — and `needs-replan` is refused
+  3829 |       by every release mode in `evaluateUnplannedForExecution`, so the Retry would have swapped a
+  3830 |       recoverable dead zone for a permanent one.
+  3831 | 
+  3832 |       Core's single classification answers the shape here and on every other retry surface, against
+  3833 |       the SAME workflow resolution this route already performs, so the board, the CLI, the chat tool
+  3834 |       and the engine tool cannot disagree about what Retry means for one card (the
+  3835 |       FNXC:WorkflowLifecycleColumns three-copies defect, measured on this same route).
+  3836 |       */
+  3837 |       const strandedGateRetry = classifyStrandedGateRetry({ task, ir: workflowIr });
+  3838 |       const strandedGateStepIds = strandedGateRetry.kind === "stranded-gate" ? strandedGateRetry.gateStepIds : [];
+  3839 |       const retrySpecification = retrySpecificationStatus && workflowPlansInColumn(workflowIr, task.column);
+  3840 |       /*
+  3841 |       Narrowing the DESTRUCTIVE branch must not narrow RETRYABILITY — those were one boolean and are
+  3842 |       two concerns. A planning-status card parked outside its planning column would otherwise fail the
+  3843 |       gate below and answer "not in a retryable state", leaving the operator NO button: that trades a
+  3844 |       card which loses its spec for a card nothing can rescue. Such a card stays retryable and takes
+  3845 |       the ordinary, non-destructive execution retry.
+  3846 | 
+  3847 |       A v1 IR declares neither columns nor nodes, so the placement question is UNANSWERABLE rather than
+  3848 |       answered "no"; treating that silence as "past planning" is what produced a 400 for a v1 planning
+  3849 |       card. Scoped to pre-WIP columns otherwise, so no in-progress/in-review status gains a retry path
+  3850 |       it did not have.
+  3851 |       */
+  3852 |       let strandedSpecificationRetry = false;
+  3853 |       if (retrySpecificationStatus && !retrySpecification) {
+  3854 |         if (!workflowDeclaresColumnModel(workflowIr)) {
+  3855 |           /*
+  3856 |           FNXC:ManualRetry 2026-07-30-03:10 (greptile #2621) DELIBERATE-LITERAL:
+  3857 |           This branch runs ONLY when the IR declares no columns and no nodes (a v1 workflow), so there
+  3858 |           is no role to resolve — `resolveLifecycleColumns` returns nothing and the legacy
+  3859 |           pre-implementation ids are the only pre-WIP signal in existence here. Converting it is not
+  3860 |           possible, not merely unfinished; the sibling `else` two lines down is the trait path for every
+  3861 |           IR that CAN answer.
+  3862 | 
+  3863 |           Marked because this raised the census count 22 -> 23 when #2621 merged, leaving `--strict`
+  3864 |           red on main. A rise that is genuinely correct belongs at the site, not in the baseline.
+  3865 | 
+  3866 |           Still PRE-WIP ONLY. Admitting every column here was a real regression: a v1 workflow with a
+  3867 |           planning/needs-replan status on an `in-progress` or `in-review` card would be admitted, and
+  3868 |           the generic branch then clears worktree/branch/retry counters and rebounds the card — losing
+  3869 |           live execution or review state that was never in question. A v1 IR yields no roles, so the
+  3870 |           legacy pre-implementation ids are the only pre-WIP signal available.
+  3871 | 
+  3872 | /*
+  3873 |           FNXC:WorkflowLifecycleColumns 2026-07-29-23:40 DELIBERATE-LITERAL: the v1-IR arm only.
+  3874 |           A v1 workflow declares no roles, so there is no trait to read — this is not an unconverted
+  3875 |           guard, it is the answer for IRs that cannot express the question. The v2 branch below
+  3876 |           resolves it properly. Retires when v1 IRs do.
+  3877 |           */
+  3878 |           strandedSpecificationRetry = task.column === "triage" || task.column === "todo";
+  3879 |         } else {
+  3880 |           const lifecycle = resolveLifecycleColumns(workflowIr);
+  3881 |           strandedSpecificationRetry = lifecycle !== undefined
+  3882 |             && (task.column === lifecycle.intake || task.column === lifecycle.hold);
+  3883 |         }
+  3884 |       }
+  3885 |       /*
+  3886 |       FNXC:WorkflowResolvedColumns 2026-07-31-04:15 (fleet: register-task-workflow-routes.ts):
+  3887 |       Resolved ONCE for the whole retry handler and reused by all three review checks below, so they
+  3888 |       cannot disagree about which column is the review lane.
+  3889 |       */
+  3890 |       const retryReviewColumns = await resolveReviewColumnsForTask(scopedStore, task.id);
+  3891 |       const isInReviewStatusNone =
+  3892 |         retryReviewColumns.has(task.column) && (task.status === null || task.status === undefined);
+  3893 |       /*
+  3894 |       FNXC:MergeRetryAdmission 2026-09-20-02:52:
+  3895 |       Retry must distinguish a lost merge handoff from an intentional manual-review hold.
+  3896 |       Both persist as completed status-none cards, but only effective auto-merge may restart merge recovery.
+  3897 |       */
+  3898 |       const effectiveAutoMergeDisabled = resolveEffectiveAutoMerge(task, await scopedStore.getSettings()) === false;
+  3899 |       const hasIncompleteSteps = task.steps.some(
+  3900 |         (s: { status: string }) => s.status === "pending" || s.status === "in-progress",
+
+================================================================================
+### packages/dashboard/src/routes/register-task-workflow-routes.ts  lines 3990-4075
+### why: the destructive continuation + the class's own non-destructive discharge
+================================================================================
+  3990 |         }
+  3991 |       }
+  3992 | 
+  3993 |       /*
+  3994 |       FNXC:ColumnRestart 2026-09-17-09:16:
+  3995 |       FN-499: `preserveWork` is an explicit opt-in read from the request body. An absent body, a
+  3996 |       non-boolean value, and every existing caller therefore keep today's destructive restart, so no
+  3997 |       wire-compatible client changes behavior.
+  3998 |       */
+  3999 |       const preserveWork = (req.body as { preserveWork?: unknown } | undefined)?.preserveWork === true;
+  4000 |       let stageRestartRefusal: Extract<Awaited<ReturnType<typeof restartTaskStage>>, { kind: "refused" }> | undefined;
+  4001 |       if (!isMissingWorktreeSessionRetry && strandedGateStepIds.length === 0) {
+  4002 |         // FNXC:TaskRecoveryVocabulary 2026-08-28-01:11: Retry must ask the locked restart
+  4003 |         // planner about every non-missing-worktree shape. Its shape-based refusal, including a
+  4004 |         // v1 no-column-model result, is preserved before legacy recovery gets a chance to handle
+  4005 |         // its older failure-state contracts.
+  4006 |         const stageResult = await restartTaskStage({
+  4007 |           store: scopedStore,
+  4008 |           engine,
+  4009 |           taskId: req.params.id,
+  4010 |           confirm: true,
+  4011 |           onRefusal: "signal",
+  4012 |           preserveWork,
+  4013 |           activeMergeTaskId: selfHealingManager?.getActiveMergeTaskId?.() ?? null,
+  4014 |           getActiveMergeTaskId: () => selfHealingManager?.getActiveMergeTaskId?.() ?? null,
+  4015 |           staleMergingStatusMinAgeMs: selfHealingManager?.getStaleMergingStatusMinAgeMs?.(),
+  4016 |         });
+  4017 |         if (!("kind" in stageResult) || stageResult.kind !== "refused") {
+  4018 |           res.json(stageResult);
+  4019 |           return;
+  4020 |         }
+  4021 |         stageRestartRefusal = stageResult;
+  4022 |       }
+  4023 | 
+  4024 |       if (task.status !== "failed" && task.status !== "stuck-killed" && !retrySpecification && !strandedSpecificationRetry && !isInReviewRetry && !isMissingWorktreeSessionRetry && strandedGateStepIds.length === 0) {
+  4025 |         const stageReason = stageRestartRefusal?.reason ?? "unavailable";
+  4026 |         throw badRequest(`Retry cannot restart this stage (${stageReason}) and the task is not in a legacy retryable state (current status: ${task.status || "none"})`);
+  4027 |       }
+  4028 | 
+  4029 |       /*
+  4030 |       FNXC:ManualRetry 2026-06-29-00:57:
+  4031 |       Dashboard retry is a fresh run boundary. Clear executor-only pause-abort provenance before mutating task state so stale pause/resume markers cannot relabel the next Plan Review or execution failure as an engine pause.
+  4032 |       */
+  4033 |       engine?.clearTaskPauseAbortState?.(req.params.id);
+  4034 | 
+  4035 |       const autoPauseClearPatch = buildAutoPauseClearPatch(task);
+  4036 |       const clearedDeadlockAutoPause = Object.keys(autoPauseClearPatch).length > 0;
+  4037 |       const retryLogSuffix = clearedDeadlockAutoPause ? ", cleared deadlock auto-pause" : "";
+  4038 |       const applyRetryReset = async (patch: Parameters<typeof scopedStore.updateTask>[1]) => {
+  4039 |         let applied = false;
+  4040 |         const updated = await scopedStore.updateTaskAtomic(req.params.id, (live) => {
+  4041 |           const guardedPatch = buildManualRetryResetPatchIfCurrent(live, task, patch);
+  4042 |           if (guardedPatch) applied = true;
+  4043 |           return guardedPatch;
+  4044 |         });
+  4045 |         if (!applied) throw new Error("Retry was superseded by a newer task lifecycle update");
+  4046 |         return updated;
+  4047 |       };
+  4048 |       // FNXC:TaskWedgeNotifications 2026-08-10-20:15: dashboard Retry is explicit operator intervention, so it clears the spent generic-terminal budget.
+  4049 |       await scopedStore.resetTerminalFailureAutoRecoveryBudget(req.params.id);
+  4050 | 
+  4051 |       /*
+  4052 |       FNXC:StrandedGateRetry 2026-10-13-03:40 (STAS-299 req 4 + Invariant C):
+  4053 |       THE non-destructive answer, first branch of the handler: clear the failure state and drop ONLY
+  4054 |       the verdict-less gate rows, so the graph's own gate re-evaluates as `missing` and Plan Review
+  4055 |       re-runs against the plan that was already approved. The card does not move — a hold lane is
+  4056 |       where it already sits, and `moveTask` would restamp `columnMovedAt` for a lane change that
+  4057 |       never happened — and its `steps`, `currentStep`, approved-plan fingerprint, PROMPT.md, worktree
+  4058 |       and branch all stay exactly as they are. Recovery then has a named owner again: with the
+  4059 |       failure status discharged, self-healing's stranded-hold continuation sweep re-arms the gate
+  4060 |       (`retry-owned` is the reason it refused to while the park stood).
+  4061 |       */
+  4062 |       if (strandedGateStepIds.length > 0) {
+  4063 |         await applyRetryReset(buildStrandedGateRetryPatch(task, strandedGateStepIds));
+  4064 |         await scopedStore.logEntry(
+  4065 |           req.params.id,
+  4066 |           `Retry requested from dashboard (verdict-less ${strandedGateStepIds.join(", ")} gate row(s) discharged in ${task.column}; approved plan, step list and worktree preserved)`,
+  4067 |         );
+  4068 |         res.json(await scopedStore.getTask(req.params.id));
+  4069 |         return;
+  4070 |       }
+  4071 | 
+  4072 |       if (isMissingWorktreeSessionRetry) {
+  4073 |         /*
+  4074 |         FNXC:WorkflowColumns 2026-07-19-11:05 (U12 review):
+  4075 |         Resolve the rebound destination BEFORE logging so the audit entry reports the real
+

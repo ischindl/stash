@@ -1,0 +1,375 @@
+# STAS-299 — engine commit series (chronological, non-merge)
+# engine repo: /home/schindler/git/Fusion   branch: fusion/stas-299-selfheal-lifecycle
+# fork base:   47fe311d6d        reviewed tip: dc40314375bd29b3b6262b467ebfe8ea8ed99e7e
+# reviewed commit date: 2026-10-13T06:27:18+02:00  (byte-stable output; regenerate with stas-299-engine-evidence/generate.sh)
+#
+# reproduce with:  git --git-dir=/home/schindler/git/Fusion/.git log -1 --stat <sha>
+================================================================================
+commit 1e00f94c9b02d8004d3d27f6223186822d1be47e
+Author: Imrich Schindler <ischindl@progis.sk>
+Date:   Tue Oct 13 01:45:34 2026 +0200
+
+STAS-299: stamp the stranded hold-lane card failed when self-heal fails its gate row
+
+FN-8492's sweep rewrote a dead pending step result to failed and stopped. On a
+plan-in-place board the card stayed in its hold lane with status:null: the graph
+will not re-dispatch a failed gate, the scheduler does not re-plan a card whose
+gate row exists, and every retry surface admits only a card-level failure - so a
+dead review session left the card with no recovery owner (STAS-281, 2.2 days).
+
+Failure on this board is a status, not a lane (COLUMNS and VALID_TRANSITIONS
+declare no failed entry), so ownership is status+error written in the same patch,
+with no move, scoped to the trait-resolved hold-lane set and only when the card
+carries no status yet.
+
+
+ ...ng-orphaned-pending-lifecycle-ownership.test.ts | 168 +++++++++++++++++++++
+ .../engine/src/run-audit/run-audit-catalogue.ts    |   2 +-
+ packages/engine/src/self-healing.ts                |  35 ++++-
+ packages/engine/src/util/run-audit.ts              |   8 +-
+ 4 files changed, 210 insertions(+), 3 deletions(-)
+
+================================================================================
+commit 3b55220aeee5cbb03f697f9a44e7e302a552ab5e
+Author: Imrich Schindler <ischindl@progis.sk>
+Date:   Tue Oct 13 02:38:46 2026 +0200
+
+STAS-299: name the stranded-gate retry class once, in core
+
+Every retry surface re-derived its own idea of what is retryable, so an agent's fn_task_retry, the
+CLI, the chat tool and the board's Retry button could answer one card four ways — the
+FNXC:WorkflowLifecycleColumns defect class. The board's answer for this shape was also the worst
+available: the locked stage restart serves a hold-lane card with scope "plan", which stamps
+needs-replan, empties the step list, clears the approved-plan fingerprint and force-deletes
+PROMPT.md — and needs-replan refuses every release mode, so the retry would have traded one dead
+zone for a permanent one.
+
+classifyStrandedGateRetry + buildStrandedGateRetryPatch are now the single classification and patch:
+pre-execution (hold/intake) lane by trait role, an approved plan still on the card, and failure
+evidence that is only a required pre-merge gate row which failed without ever carrying a verdict
+(RUFU-217's class, so a re-run overturns no reviewer authority). The patch re-queues through the
+shipped manual-retry reset, clears the failure state, and discharges exactly those verdict-less gate
+rows — the same row-level discard a column restart already does, narrowed — while leaving lane,
+steps, currentStep, fingerprint, PROMPT.md and the checkout untouched.
+
+
+ .../core/src/__tests__/stranded-gate-retry.test.ts | 157 +++++++++++++++++++++
+ packages/core/src/index.gate.ts                    |   5 +
+ packages/core/src/index.ts                         |   5 +
+ packages/core/src/tasks/stranded-gate-retry.ts     | 108 ++++++++++++++
+ 4 files changed, 275 insertions(+)
+
+================================================================================
+commit 533ebc973dc63cc406ac9db804209a85f5ef1997
+Author: Imrich Schindler <ischindl@progis.sk>
+Date:   Tue Oct 13 02:53:34 2026 +0200
+
+core: answer *why* a card is not the stranded-gate retry class
+
+A retry surface that refuses can only be trusted if it says why. `classifyStrandedGateRetry`
+returned a bare `null` for six structurally different refusals, so every surface (board Retry, CLI,
+chat tool) would have to re-derive the reason to explain itself — the same duplication this module
+exists to remove.
+
+The classification is now a discriminated union: `{kind:"stranded-gate", gateStepIds}` or
+`{kind:"not-stranded", reason}`, where the reason names the leg that failed — legacy board with no
+column model, column not on the board, a lane that owns its own recovery (WIP/review/complete), a
+status another lane wrote (replan/approval/merge keeps its path), no approved plan, or no verdict-less
+required gate. The refusal set is also what lets a surface tell "not this class" from "malformed
+request".
+
+
+ .../core/src/__tests__/stranded-gate-retry.test.ts | 20 +++++----
+ packages/core/src/tasks/stranded-gate-retry.ts     | 52 ++++++++++++++--------
+ 2 files changed, 45 insertions(+), 27 deletions(-)
+
+================================================================================
+commit 83afa895423895f3ce4effeb53d9c0c9c6a7a0b9
+Author: Imrich Schindler <ischindl@progis.sk>
+Date:   Tue Oct 13 02:53:47 2026 +0200
+
+engine: a failure park owns the card until a retry discharges it
+
+STAS-299's first half stamps a hold-lane card `failed` when self-heal has to fail its orphaned gate
+row. That only fixes the dead zone if the park is real, and it was not: the stranded-hold continuation
+sweep — the recovery owner that re-arms a gate with no live session — reads a hold-lane card with an
+approved plan and no satisfied review as exactly that shape, so within one sweep interval it would
+have re-seeded Plan Review on the card the sweep had just parked. A park the engine immediately
+re-runs is an auto-retry wearing a different hat, and the spec's whole point is that this shape gets a
+deliberate owner.
+
+Both seams now name the owner instead of acting: the evaluator and the seeder bail `retry-owned` (the
+same "another owner holds this card" family as `triage-owned`) for a card whose status is a failure
+park, the runtime treats it as a quiet park rather than a seed failure worth warning about, and an
+explicit plan approval — an operator action, so an honest exit from the park by the same rule that
+makes an operator retry clear a skip-bypass taint — discharges the status inside the planning
+lifecycle fence before arming the gate.
+
+Proved both ways: the sweep leaves a parked card untouched and re-seeds the moment the status is gone;
+the evaluator reports `retry-owned` parked and `ready` after; approval resumes; self-heal parks once
+(no re-stamp, no re-audit) and leaves no card in the forbidden shape when judged by the classifier the
+retry surfaces consume.
+
+
+ ...ng-orphaned-pending-lifecycle-ownership.test.ts |  41 ++++-
+ .../__tests__/stranded-gate-park-ownership.test.ts | 185 +++++++++++++++++++++
+ packages/engine/src/plan-review-continuation.ts    |  38 ++++-
+ packages/engine/src/runtimes/in-process-runtime.ts |   1 +
+ 4 files changed, 261 insertions(+), 4 deletions(-)
+
+================================================================================
+commit 87196c65b9fd4b465cb63fb8cc3c7c81869a5c58
+Author: Imrich Schindler <ischindl@progis.sk>
+Date:   Tue Oct 13 03:09:40 2026 +0200
+
+cli: a stalled TaskStore boot answers with a retry, not a denial (STAS-299 req 3)
+
+The incident sentence an agent got when its escape hatch was slow:
+
+  fn_task_retry denied: the agent permission policy could not be resolved (fn extension
+  TaskStore boot timed out after 30000ms). Failing closed — ask the operator to run this tool.
+
+STAS-281, twice. No permission was involved: the store open in a second backend inside a live
+dashboard process simply burned its budget, and the boot kept running. Two separate claims got
+merged into one verdict — "this cannot be answered right now" and "you are not allowed" — and the
+merged form forbade the only action that works, because the next call is served from the boot already
+in flight. The read path had the mirror defect: fn_task_logs_read returned the raw boot sentence with
+nothing actionable in it.
+
+A stall is now its own class, `TaskStoreBootTransientError`, raised from the two branches that produce
+it and nowhere else: the wall-clock budget expiry, and the cooldown entry a deadline leaves behind
+(marked `fromDeadline`). One fingerprint defines the class — the shipped `timed out after Nms` marker
+that `getStore` already records as `"outcome":"deadline"` — so the answer an agent gets cannot
+disagree with the record an operator hunts. A boot that failed for a reason other than waiting stays
+untyped, keeping RUFU-275's honest fail-closed denial under `taskstore-boot-unavailable`.
+
+Every surface answers a stall with the same built result. The first line keeps RUFU-377's attribution
+contract exactly (`X failed: ` prefix + the store-boot subject), and the retry instruction rides below
+it: retry this call, nothing was denied on policy grounds, nothing was lost, do not ask the operator.
+Two shipped expectations in the agent-class boot suite were updated to pin both lines, because the
+bare deadline sentence they used to anchor is precisely what STAS-281 measured as unactionable.
+
+RUFU-377's shipped contract is otherwise untouched: same messages, same telemetry, and a caller
+arriving inside the backoff window is still answered in milliseconds instead of re-paying the boot
+budget — it is simply typed as the same stall rather than as a fresh failure.
+
+STAS-299 requirement 3.
+
+
+ .../extension-agent-class-boot-budget.test.ts      |  10 +-
+ .../extension-store-boot-transience.test.ts        | 158 +++++++++++++++++++++
+ packages/cli/src/extension.ts                      | 114 ++++++++++++++-
+ 3 files changed, 274 insertions(+), 8 deletions(-)
+
+================================================================================
+commit d8480855a6573b5ed6ade6b10e9546b4fbab9740
+Author: Imrich Schindler <ischindl@progis.sk>
+Date:   Tue Oct 13 03:19:08 2026 +0200
+
+core: classify the stranded-gate retry class against the card's own workflow
+
+Retry surfaces hold a TaskStore, not an IR. Letting each surface resolve the IR itself is how
+two surfaces end up classifying the same card against two different boards, so the class now
+ships one store-backed classifier that every surface calls.
+
+Refs STAS-299 (req 4)
+
+
+ packages/core/src/index.ts                     |  7 ++++-
+ packages/core/src/tasks/stranded-gate-retry.ts | 41 ++++++++++++++++++++------
+ 2 files changed, 38 insertions(+), 10 deletions(-)
+
+================================================================================
+commit ffff0ff38a18ea317ffc809f308e3620cc141dbb
+Author: Imrich Schindler <ischindl@progis.sk>
+Date:   Tue Oct 13 03:42:02 2026 +0200
+
+core: keep the stranded-gate class a pure function of the card and its workflow
+
+Every retry surface already resolves the task's workflow IR for its own predicates, so the
+store-backed wrapper would have been a second IR resolution per retry — and two resolutions are
+exactly how two surfaces end up classifying one card against two different boards. The class stays
+a pure function of (task, ir), and the refusal + structural-input types are exported so surfaces can
+name why a card is NOT this class.
+
+
+ packages/core/src/index.ts                     |  1 -
+ packages/core/src/tasks/stranded-gate-retry.ts | 21 ---------------------
+ 2 files changed, 22 deletions(-)
+
+================================================================================
+commit f322d89502786fc813f982b296bb9f7d4eaa09fc
+Author: Imrich Schindler <ischindl@progis.sk>
+Date:   Tue Oct 13 03:44:14 2026 +0200
+
+retry: one verdict-less gate answer on the board, the CLI, the extension and chat
+
+STAS-299 req 4 + Invariant C. A card self-heal stranded in a hold lane — an approved plan whose
+required Plan/Code Review row was flipped to `failed` with no verdict while the card itself carries
+no status — was retryable on NO surface: each one admitted only a card-level `failed` /
+`stuck-killed`, or an in-review stall. Where a surface did answer, its answer was destructive: the
+dashboard asked the locked stage planner, which serves a hold-lane card with `scope: "plan"` and
+answers `needs-replan` + emptied `steps` + cleared `approvedPlanFingerprint` + deleted PROMPT.md,
+and `fn task retry`'s generic fallthrough clears `worktree`, `branch`, `baseBranch` and
+`baseCommitSha`. Both trade away the work for a verdict that never arrived — and `needs-replan` is
+refused by every release mode, so the dashboard Retry converted a recoverable dead zone into a
+permanent one.
+
+Each surface now classifies the card against the workflow IR it already resolved and, for this one
+class, applies core's shared patch: clear the failure state, drop only the verdict-less gate rows so
+the graph's own gate re-evaluates as `missing`, touch nothing else. The card does NOT move — a hold
+lane is where it already sits, and RUFU-261 exists because a user-sourced move into a hold lane can
+park the card a retry was asked to run. The branch sits first after the recovery-budget reset, so no
+later branch can run for this shape; the classification excludes review lanes, so no existing
+branch's shape changes and a genuine planning/replan card keeps the destructive restart.
+
+Also tightens `buildStoreBootStallResult`'s declared `details`: Step 3's `Record<string, unknown>`
+erased the `error` member the extension tool wrapper's error branch requires, which is a latent
+compile error in packages/cli that only a full `tsc -p` shows. Surfaced while typechecking here.
+
+Verified: tsc clean for core/engine/dashboard/cli; cli `task-retry`, `task-retry-renamed-review`
+(PG), `extension-store-boot-transience` and `extension-agent-class-boot-budget` suites green.
+
+
+ packages/cli/src/commands/task.ts                  | 36 ++++++++++++++-
+ packages/cli/src/extension.ts                      | 53 +++++++++++++++++++---
+ .../src/routes/register-task-workflow-routes.ts    | 44 +++++++++++++++++-
+ packages/engine/src/agent-tools.ts                 | 30 +++++++++++-
+ 4 files changed, 152 insertions(+), 11 deletions(-)
+
+================================================================================
+commit 806529251e5cf5c6712443965aeff0eb29f52b20
+Author: Imrich Schindler <ischindl@progis.sk>
+Date:   Tue Oct 13 03:56:32 2026 +0200
+
+test: prove the gate discharge on every retry surface (STAS-299 req 4)
+
+Refs STAS-299
+
+
+ .../extension-stranded-gate-retry.test.ts          | 132 +++++++++++++++++
+ packages/cli/src/__tests__/task-retry.test.ts      |  88 ++++++++++++
+ ...ask-workflow-routes.stranded-gate-retry.test.ts | 157 +++++++++++++++++++++
+ .../src/__tests__/agent-tools-task-retry.test.ts   |  78 ++++++++++
+ 4 files changed, 455 insertions(+)
+
+================================================================================
+commit 60efd08b5049b741f6ca624ba2f6c3fac33b8f1a
+Author: Imrich Schindler <ischindl@progis.sk>
+Date:   Tue Oct 13 04:00:44 2026 +0200
+
+test: carry the STAS-281 card from the sweep through the park to the hatch (STAS-299 reqs 1-3)
+
+Refs STAS-299
+
+
+ ...ng-orphaned-pending-lifecycle-ownership.test.ts | 92 ++++++++++++++++++++++
+ 1 file changed, 92 insertions(+)
+
+================================================================================
+commit 56c776747131938a851b2dc0dbc37dcffc989689
+Author: Imrich Schindler <ischindl@progis.sk>
+Date:   Tue Oct 13 04:10:45 2026 +0200
+
+docs: name the gate park, its retry owner, and the transient boot answer (STAS-299)
+
+Refs STAS-299
+
+
+ .changeset/self-heal-gate-park-and-retry.md                |  7 +++++++
+ docs/architecture.md                                       | 14 ++++++++++++++
+ docs/task-management.md                                    | 12 ++++++++++++
+ packages/cli/skill/fusion/references/extension-tools.md    |  4 ++--
+ .../cli/skill/fusion/references/fusion-capabilities.md     |  2 +-
+ 5 files changed, 36 insertions(+), 3 deletions(-)
+
+================================================================================
+commit 50b1771f52d6637379508fc47ec2a2d1d7648d68
+Author: Imrich Schindler <ischindl@progis.sk>
+Date:   Tue Oct 13 06:20:20 2026 +0200
+
+STAS-299: answer a tool's own budget expiry as the tool's failure, and let a retry report name the lane it resolved
+
+Code review retry 3 found two defects in what this branch ships. Both are
+fixed with a failing test first, each verified red against the pre-fix code
+and green after.
+
+P0 — the stall answer was reachable by a tool that merely ran long.
+`raceWithTimeoutAndAbort` builds its sentence as `<label> timed out after
+<N>ms` and `wrapExtensionToolExecute` passes `label = toolName`, so
+`fn_task_merge timed out after 60000ms` carries the byte-identical
+fingerprint of the store boot's own deadline sentence. Because
+`isTransientStoreBootFailure` classified by that sentence, every tool-budget
+expiry — including one that stopped a possibly-mutating tool half-applied —
+answered `transient: taskstore-boot-timeout, retryable: true, the boot is
+still running in the background, nothing was denied`. That is a verdict about
+an operation whose effects nobody knows. The predicate is now the TYPE: the
+narrowing loses nothing because `getStore` raises the typed error on both of
+its transient branches (the deadline and the cooldown it arms), and those are
+the only two paths either answer site can meet. The message fingerprint keeps
+the two jobs it is honest about, both inside the boot itself: the transient
+branch in `getStore`'s catch, which sees only boot errors, and the
+console-stream choice in the wrapper, which changes loudness, never what the
+agent is told.
+
+The pre-existing timeout test could not see this because `toMatchObject`
+ignores the extra fields the stall path adds; the new test pins the absent
+fields, not just the present ones.
+
+P1 — a retry reported a lane the card did not go to. Both `fn_task_retry`
+re-queues moved the card to the resolved hold lane and then answered
+`details.newColumn: 'todo'`, a machine-readable field another tool can act
+on, while the `logEntry` line wrote the same literal into the card's audit
+trail; a third branch moves nothing and still answered `in-review`. The CLI
+`fn task retry` had the same gap in its log line and terminal output. Now the
+target resolves before the log line and every report — log, reply text,
+payload — carries that one resolved value, matching the dashboard route, which
+resolved before logging from the start. `extension.test.ts` cannot catch this
+class: every retry fixture there sits on `builtin:coding`, whose hold lane IS
+`todo`, so pre-fix and post-fix bytes agree. The new test file pins it on a
+board that renames all three lanes.
+
+Docs: the architecture boot-budget section said `isTransientStoreBootFailure`
+fingerprints the deadline shapes; it now says what actually classifies, and
+why the shared `<label> timed out after <N>ms` suffix is the reason an answer
+site may not key on the sentence.
+
+Verification: new P0 test fails pre-fix, passes post-fix; the typed-stall test
+in `extension-store-boot-transience.test.ts` passes on both, which is the
+point — narrowing must not lose a real stall. All 3 new P1 tests fail pre-fix,
+pass post-fix. `pnpm typecheck` clean, eslint clean on all touched files,
+`pnpm test:gate:static` green, `check:move-target-literals` population still
+empty. CLI package suite: 15 failures measured IDENTICAL with and without this
+diff (14 `commands/task.test.ts` project-routing mocks, 1
+`workflow-docs-current` doc-string pin whose subject doc diverges in this
+base lineage) — pre-existing, not caused here.
+
+
+ .changeset/self-heal-gate-park-and-retry.md        |   2 +-
+ docs/architecture.md                               |  15 +-
+ .../extension-retry-resolved-target-report.test.ts | 199 +++++++++++++++++++++
+ .../extension-store-boot-transience.test.ts        |  32 ++++
+ .../src/__tests__/extension-tool-timeout.test.ts   |  39 ++++
+ packages/cli/src/commands/task.ts                  |  20 ++-
+ packages/cli/src/extension.ts                      |  60 ++++---
+ 7 files changed, 333 insertions(+), 34 deletions(-)
+
+================================================================================
+commit dc40314375bd29b3b6262b467ebfe8ea8ed99e7e
+Author: Imrich Schindler <ischindl@progis.sk>
+Date:   Tue Oct 13 06:27:18 2026 +0200
+
+STAS-299: pin the one place allowed to read a timeout sentence
+
+The review asked that classification of a stalled boot live at the boot
+boundary and nowhere downstream. Deleting the message leg at the answer
+sites made that the design; this pins it. The pool's lock-expiry sentence
+arrives as a rejected boot rather than an expired budget, so the typed
+wrap in getStore's catch is the only reader it can have now - and the
+neighbouring case, a lock failure that names no expired budget, is the
+pair that makes the assertion mean something rather than merely pass.
+
+
+ .../extension-store-boot-transience.test.ts        | 22 ++++++++++++++++++++++
+ 1 file changed, 22 insertions(+)
+
