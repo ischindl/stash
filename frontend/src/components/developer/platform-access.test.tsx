@@ -36,7 +36,7 @@ vi.mock("@/lib/api", () => ({
   activateDeveloperPlatform: vi.fn(),
 }));
 vi.mock("@/components/workspace/topbar", () => ({ default: () => <div>Internal navigation</div> }));
-vi.mock("@/components/workspace/rail", () => ({ default: () => null }));
+vi.mock("@/components/workspace/rail", () => ({ default: () => <div>Legacy navigation</div> }));
 vi.mock("@/components/workspace/reward-rail", () => ({ default: () => <div>Reward navigation</div> }));
 vi.mock("@/components/workspace/persistence", () => ({ default: () => null }));
 vi.mock("@/components/workspace/explorer", () => ({ default: () => null }));
@@ -143,4 +143,29 @@ it.each([true, false])("the stored rollout flag controls reward navigation (%s)"
   state.pathname = "/skills";
   render(<WorkspaceShell user={state.user} onLogout={vi.fn()}>Skills</WorkspaceShell>);
   expect(screen.queryByText("Reward navigation") !== null).toBe(enabled);
+});
+
+// Upstream #1128's contract, pinned so nobody reintroduces the /developer lock:
+// the cohort that #1128 created (BOTH flags true) is not locked anywhere in the
+// consumer app — its own file browser renders, with its own navigation.
+it("leaves the new-signup cohort's file browser unlocked and navigable", () => {
+  state.user.developer_platform_only = true;
+  state.user.reward_models_enabled = true;
+  state.pathname = "/files";
+  render(<WorkspaceShell user={state.user} onLogout={vi.fn()}>My files</WorkspaceShell>);
+  expect(screen.getByText("My files")).toBeInTheDocument();
+  expect(screen.getByText("Reward navigation")).toBeInTheDocument();
+  expect(screen.queryByText("Legacy navigation")).not.toBeInTheDocument();
+  expect(screen.queryByText("Run Stash for your product's users")).not.toBeInTheDocument();
+  expect(state.replace).not.toHaveBeenCalled();
+});
+
+it("keeps an account without the reward flag on the legacy rail", () => {
+  state.user.developer_platform_only = false;
+  state.user.reward_models_enabled = false;
+  state.pathname = "/files";
+  render(<WorkspaceShell user={state.user} onLogout={vi.fn()}>My files</WorkspaceShell>);
+  expect(screen.getByText("Legacy navigation")).toBeInTheDocument();
+  expect(screen.queryByText("Reward navigation")).not.toBeInTheDocument();
+  expect(state.replace).not.toHaveBeenCalled();
 });
