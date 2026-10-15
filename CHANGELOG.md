@@ -19,6 +19,17 @@ everything before it is captured in git history (`git log`), not here.
   untouched. It answers "is this box alive right now", not "what does it serve today";
   reload Settings for the row's model list to refresh.
 
+- A brand-new account can open its own files without being told a URL. The navigation an
+  account gets after signing up listed Traces, Reward models, Skills and Settings, so a
+  person who just registered had no way in to the file browser from inside the product:
+  the page existed only as an address someone had to know and type, which is exactly why
+  a folder shared with them, or a skill their agent published, stayed invisible to them.
+  That navigation now carries **Files**, between Reward models and Skills, and it lights
+  up while you are anywhere in your files — the browser itself, a folder, a page, a table
+  — so you always have a way back. One click opens it; the account's shared folders are
+  right there. Nothing about who is shown which navigation changed, and the page you land
+  on after signing up is the same one as before.
+
 ### Changed
 
 - A local-model turn that answers nothing no longer passes for success. A reasoning/hybrid
