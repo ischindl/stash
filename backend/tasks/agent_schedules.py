@@ -344,6 +344,9 @@ async def _maybe_dispatch_first_day_run(scope_user_id: UUID, agent: dict, now: d
     try:
         await _require_run_auth(scope_user_id, agent)
     except (agent_auth.NeedsAuth, agent_auth.ProviderNotConfigured):
+        # Silent by design, unlike the beat's tick: this path re-asks on every
+        # event and costs nothing while no model exists, so the block is stated
+        # once a day by _run_due instead of once per conversation here.
         return
     if not await curation_service.has_changes_since(
         scope_user_id,
@@ -389,11 +392,21 @@ async def _run_due() -> int:
             logger.info("agent schedule: curator credits exhausted for user %s — skipping", user_id)
             await agent_service.mark_run_skipped(agent["id"], "credits")
             continue
-        # No runnable credential (unconnected free user) → nothing can run.
+        # No runnable model for this scope (no backend key and no connected
+        # endpoint) → nothing can run, and nothing about the row improves on its
+        # own.
         try:
             await _require_run_auth(user_id, agent)
         except (agent_auth.NeedsAuth, agent_auth.ProviderNotConfigured):
-            logger.info("agent schedule: no credential for agent %s — skipping", agent["id"])
+            # WARNING, not INFO: this skip recurs every tick forever, INFO drowns
+            # in a beat that ticks every minute, and `docker compose logs` is the
+            # first place a self-hoster looks. The row shows the same block.
+            logger.warning(
+                "agent schedule: no runnable model for agent %s — every tick will skip until "
+                "ANTHROPIC_API_KEY is set on the backend or a model endpoint is connected "
+                "under Settings → Cloud agent model",
+                agent["id"],
+            )
             await agent_service.mark_run_skipped(agent["id"], "no_credential")
             continue
         # Cost gate: skip the curator (and the sprite wake) when nothing changed

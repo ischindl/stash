@@ -106,6 +106,11 @@ Before starting:
 - Replace `app.example.com` in [Caddyfile](../Caddyfile) with your domain.
 - Configure any optional model providers, file storage, or OAuth integrations
   you intend to use, following `.env.example`.
+- Give the curators a model to run on, or they never run: set
+  `ANTHROPIC_API_KEY` here, or connect a local model endpoint in Settings after
+  your first login. With neither, every scheduled curator skips every tick — the
+  backend logs `no runnable model` at WARNING and each curator row reads
+  `No model connected` until a model exists.
 
 ```bash
 docker compose -f docker-compose.prod.yml config --quiet

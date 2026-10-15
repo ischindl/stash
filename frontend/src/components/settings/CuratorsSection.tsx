@@ -119,6 +119,11 @@ function CuratorRow({
 
   const isFolderCurator = curator.curator_folder_id !== null;
   const isIdle = curator.schedule_cron === null;
+  // The beat records why a tick refused to run. A skip for having no model is the
+  // one that never fixes itself — it repeats every tick until a model exists — and
+  // it is a *resolved* outcome, so the watchdog stays quiet and `last_run_error`
+  // stays empty: this row is the only place the block can surface.
+  const noModel = !isIdle && curator.last_run_outcome === "skipped_no_credential";
   const backlog = curator.event_backlog;
 
   async function save(patch: Parameters<typeof patchCurator>[1]) {
@@ -190,6 +195,10 @@ function CuratorRow({
               <span className="rounded-full bg-raised px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
                 Idle
               </span>
+            ) : noModel ? (
+              <span className="rounded-full border border-error/40 bg-error/10 px-2 py-0.5 text-[11px] font-medium text-error">
+                No model connected
+              </span>
             ) : (
               curator.next_run_at && (
                 <span className="rounded-full bg-raised px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
@@ -198,6 +207,12 @@ function CuratorRow({
               )
             )}
           </div>
+          {noModel && (
+            <p className="mt-0.5 text-[12.5px] text-error">
+              Every scheduled run is skipping: connect a model under “Cloud agent model” above, or
+              set ANTHROPIC_API_KEY on the backend.
+            </p>
+          )}
           {isFolderCurator && backlog && (
             <p className="mt-0.5 text-[12.5px] text-muted-foreground">
               {backlog.distinct_events} unread events

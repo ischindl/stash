@@ -100,7 +100,11 @@ For CLI setup, local development, and self-hosting, see [Running this repository
    events from your own agents.
 2. **Extract durable lessons.** A scheduled curator reads new sessions and
    source material, then updates linked pages in your Memory wiki. The knowledge
-   stays available after the original session ends.
+   stays available after the original session ends. A curator needs a model to
+   run on — the backend's `ANTHROPIC_API_KEY`, or a model endpoint you connect in
+   Settings. A self-hosted stack with neither skips every schedule instead of
+   guessing, and says so: each curator row reads `No model connected` until a
+   model exists.
 3. **Make lessons reusable.** Agents search and read that knowledge through the
    CLI, MCP, API, or virtual filesystem. You and your agents can package related
    instructions and files into a Skill: a folder containing a `SKILL.md`.

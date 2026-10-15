@@ -78,6 +78,16 @@ function Curator() {
         />
       </section>
 
+      {/* A curator with no model to run on skips every tick, and a designed skip is
+          a resolved outcome: it never writes `last_run_error`, so reading only the
+          error would render this page as healthy forever. */}
+      {data.curator.last_run_outcome === "skipped_no_credential" && (
+        <p className="mb-12 rounded border border-error/40 bg-error/5 px-5 py-4 text-[14px] text-error">
+          Skipped: no model connected — set ANTHROPIC_API_KEY on the backend so the curator can
+          run.
+        </p>
+      )}
+
       {data.curator.last_run_error && (
         <p className="mb-12 rounded border border-error/40 bg-error/5 px-5 py-4 text-[14px] text-error">
           Last run failed: {data.curator.last_run_error}

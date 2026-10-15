@@ -92,6 +92,17 @@ everything before it is captured in git history (`git log`), not here.
 
 ### Fixed
 
+- A self-hosted stack with no model no longer lets its curators idle in silence. With
+  neither `ANTHROPIC_API_KEY` on the backend nor a local model endpoint connected, every
+  scheduled curator refused every tick forever — the Memory wiki was never written, while
+  Settings still showed a calm "Next run" date and the console page looked healthy. The
+  scheduler already knew the reason, but a designed skip is a *resolved* outcome: it records
+  no error, the stale-curator watchdog deliberately does not page for it, and no screen read
+  the column that held the verdict. Each curator row now reads "No model connected" above the
+  line saying what to connect, the developer console's curator page carries the same banner,
+  and the beat logs the block at WARNING naming both remedies, so `docker compose logs`
+  explains itself to someone who never opens Settings. Connect a model and the state clears
+  itself on the next run — there is nothing to dismiss.
 - Claude sessions now close in Stash. `~/.claude/settings.json` carried no stash
   hooks at all — the marketplace plugin was supposed to wire them and silently
   never did — and the hook scripts died with a `KeyError` outside that plugin

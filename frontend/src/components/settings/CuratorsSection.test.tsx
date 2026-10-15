@@ -386,3 +386,53 @@ describe("CuratorsSection create and delete", () => {
     expect(screen.getAllByRole("button", { name: "Delete" })).toHaveLength(2);
   });
 });
+
+// On a stack with no backend key and no connected model endpoint, every tick of
+// every scheduled curator records `skipped_no_credential` and the watchdog stays
+// quiet by design — a designed skip is a resolved outcome. The row is therefore
+// the only place that state can become visible, and a self-hoster reading
+// "Next run tomorrow" while the Memory wiki never grows is the failure this
+// guards against.
+describe("CuratorsSection blocked state", () => {
+  it("states which curator cannot run and exactly what to connect", async () => {
+    listCurators.mockResolvedValue([
+      curator({ id: "cur-blocked", last_run_outcome: "skipped_no_credential" }),
+    ]);
+
+    renderSection();
+    const row = await rowNamed("Workspace curator");
+
+    expect(within(row).getByText("No model connected")).toBeDefined();
+    // The badge alone is not actionable: the row has to name both remedies.
+    expect(within(row).getByText(/ANTHROPIC_API_KEY/).textContent).toMatch(/Cloud agent model/);
+    // A blocked curator's next tick is another skip, so the date is not its state.
+    expect(within(row).queryByText(/Next run/)).toBeNull();
+  });
+
+  it("says nothing for the outcomes that are not a block", async () => {
+    listCurators.mockResolvedValue([
+      curator({ id: "cur-ran", last_run_outcome: "ran" }),
+      curator({ id: "cur-clean", last_run_outcome: "skipped_no_changes" }),
+      curator({ id: "cur-credits", last_run_outcome: "skipped_credits" }),
+      curator({ id: "cur-never", last_run_outcome: null }),
+    ]);
+
+    renderSection();
+    // All four are healthy scheduled rows: each keeps its own schedule chip.
+    expect(await screen.findAllByText(/Next run/)).toHaveLength(4);
+    expect(screen.queryByText("No model connected")).toBeNull();
+  });
+
+  it("leaves a paused curator labelled Idle even after a blocked tick", async () => {
+    listCurators.mockResolvedValue([
+      curator({ id: "cur-paused", schedule_cron: null, next_run_at: null, last_run_outcome: "skipped_no_credential" }),
+    ]);
+
+    renderSection();
+    const row = await rowNamed("Workspace curator");
+
+    // The user turned it off; the block is not why it is not running.
+    expect(within(row).getByText("Idle", { selector: "span.rounded-full" })).toBeDefined();
+    expect(within(row).queryByText("No model connected")).toBeNull();
+  });
+});
