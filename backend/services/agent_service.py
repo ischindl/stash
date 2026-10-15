@@ -669,7 +669,9 @@ async def mark_run(agent_id: UUID, metered: bool = True) -> int:
     must not eat the user's free allowance.
 
     Also clears last_run_error and stamps the outcome as started. Every path
-    after this call must resolve the outcome as ran, failed, or skipped."""
+    after this call must resolve the outcome as ran, failed, or skipped — except
+    a dispatch that never acquired the agent's run lock: it owns nothing and
+    writes nothing, and the run in flight resolves the row."""
     if not metered:
         return await get_pool().fetchval(
             """
@@ -749,9 +751,9 @@ async def resolve_started_runs(agent_ids: list[UUID], error: str, *, metered: bo
     `tasks.agent_schedules` and the stranded-run sweep — and they share this one
     write. `started` is in the WHERE clause rather than in the caller's reasoning
     because the lane may have resolved itself between being noticed and being
-    written: a run that recorded `ran`, a contended dispatch's designed
-    `skipped_already_running`, an earlier failure, or a lane whose run died
-    before `mark_run` ever stamped it. Rewriting any of those would report work
+    written: a run that recorded `ran`, a pre-STAS-317 row still carrying the
+    `skipped_already_running` its contended dispatch used to write, an earlier
+    failure, or a lane whose run died before `mark_run` ever stamped it. Rewriting any of those would report work
     that happened as an outage and hand back an allowance nobody spent, and it
     would erase the cause the founder's `last_run_error` needs.
 

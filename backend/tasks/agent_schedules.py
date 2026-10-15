@@ -114,8 +114,8 @@ def _resolve_escaped_run(agent_uuid: UUID, exc: BaseException, *, metered: bool)
 
     The write is the shared compare-and-set (`agent_service.resolve_started_runs`)
     because the lane may already have resolved itself — a run that recorded `ran`
-    before the raise reached the loop, a contended dispatch's designed skip — and
-    neither may be stamped over as a failure.
+    before the raise reached the loop, or a pre-STAS-317 row a contended dispatch
+    had already stamped as its skip — and neither may be stamped over as a failure.
 
     Nothing here outranks the escaped exception. If the write fails, the lane is
     left `started` for the stranded-run sweep, which exists for exactly that, and
@@ -520,9 +520,10 @@ async def _drain_curator_backlog() -> int:
         if dispatched >= CURATOR_DRAIN_LANES_PER_TICK:
             break
         user_id = UUID(str(agent["user_id"]))
-        # Busy first: a lane whose run is mid-turn would resolve as the designed
-        # `already_running` skip anyway, but stepping past it here is what stops
-        # one long-running lane from eating the tick's whole budget of two lanes.
+        # Busy first: a lane whose run is mid-turn resolves nothing when a copy
+        # lands on its guard (see `_run_scheduled_agent`), so this dispatch would
+        # be pure queue noise — and stepping past it here is what stops one
+        # long-running lane from eating the tick's whole budget of two lanes.
         if _run_in_flight(agent, now):
             logger.debug("curator drain: lane %s has a run in flight", agent["id"])
             continue
@@ -595,11 +596,20 @@ async def _run_scheduled_agent(agent_id: UUID, stamp: str) -> None:
     try:
         await lock.acquire()
     except sprite_agent_service.TurnInProgress:
-        # The beat already consumed this tick and its credit when it dispatched
-        # — the same accounting as every other designed skip in this module.
-        # The run this one deferred to is doing the work right now.
-        logger.info("agent %s has a run in flight — skipping this dispatch", agent_id)
-        await agent_service.mark_run_skipped(agent_id, "already_running")
+        # Writes nothing, and that is the whole rule (the same rule
+        # `_run_curator_now` states for the drain/manual path). The beat consumed
+        # this tick and its credit at dispatch time — the same accounting as every
+        # other designed skip in this module — and the run holding the lock is the
+        # only writer of this lane's outcome. A skip written here would overwrite
+        # the operator-readable verdict of a run that never skipped and mute
+        # `alert_stale_curators`, which pages on an unresolved 'started'.
+        # Measured on the founder stack 2026-10-01: a 60-minute broker requeue
+        # landed inside a 5400-second run and reported `skipped_already_running`
+        # while the original was still curating.
+        logger.info(
+            "agent %s has a run in flight — this dispatch defers to it and writes nothing",
+            agent_id,
+        )
         return
     # The position this dispatch loaded IS the position its run reads from, so it is
     # captured before the run starts and handed to it: the scoped lane fences its own

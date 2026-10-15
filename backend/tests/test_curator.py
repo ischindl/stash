@@ -1374,8 +1374,8 @@ async def test_double_dispatch_on_one_agent_runs_single_flight(
     """The live fingerprint: two `run_curator_now` dispatches for the same agent
     arriving seconds apart, each holding a 13–80 minute turn. Overlap is what
     made one run discard the other's finished curation, so the second dispatch
-    must not get a second turn — it resolves as the designed skip and touches
-    neither the meter nor the watermark the run in flight is responsible for."""
+    must not get a second turn — it writes nothing at all, leaving the meter and
+    the watermark the run in flight is responsible for untouched."""
     import asyncio
 
     from backend.services import sprite_agent_service
@@ -1439,6 +1439,84 @@ async def test_double_dispatch_on_one_agent_runs_single_flight(
     turn_started.clear()
     await _run_curator_now(cid, metered=False)
     assert len(turns) == 2, "a dispatch after the run released the lock must execute"
+
+
+@pytest.mark.asyncio
+async def test_a_requeued_beat_dispatch_never_resolves_the_run_in_flight_outcome(
+    client: AsyncClient, sprite_exec, _db_pool, monkeypatch
+):
+    """The founder fingerprint of 2026-10-01 (schedule 9f0cab42, task 11c28222):
+    the beat consumed the tick at 11:42:20Z and the run worked for 90 minutes;
+    at 12:42:21Z the broker's 3600-second visibility timeout re-delivered the
+    SAME still-unacked dispatch, the copy hit the single-flight guard, and it
+    stamped `skipped_already_running` over the live run's row. The original died
+    only at 13:12:20Z to the soft-time-limit kill, so for half an hour the
+    operator-readable outcome column reported a verdict that had not happened —
+    and because `alert_stale_curators` pages on an unresolved 'started', the
+    false skip muted the alarm too.
+
+    A dispatch that never acquired the run lock owns no outcome, so it writes
+    nothing: the row keeps reading 'started' until the run that holds the lock
+    resolves it as 'ran' or 'failed'. This is the same rule `_run_curator_now`
+    already enforces, applied to the beat's path."""
+    import asyncio
+
+    from backend.services import sprite_agent_service
+    from backend.tasks.agent_schedules import _run_scheduled_agent
+    from backend.tasks.session_titles import generate_session_title
+
+    monkeypatch.setattr(generate_session_title, "delay", lambda *a, **k: None)
+
+    key, uid = await _register(client)
+    curator = await agent_service.get_or_create_curator(uid)
+    cid = UUID(curator["id"])
+    await _push_one(client, key, "conv-requeued", datetime.now(UTC) - timedelta(minutes=30))
+    seeded = datetime.now(UTC) - timedelta(hours=2)
+    await _db_pool.execute("UPDATE agents SET curated_through = $2 WHERE id = $1", cid, seeded)
+
+    turn_started = asyncio.Event()
+    turn_released = asyncio.Event()
+    turns: list[str] = []
+
+    async def turn_holds_the_agent(agent, stamp, read_position):
+        turns.append(stamp)
+        turn_started.set()
+        await turn_released.wait()
+        return "curated"
+
+    monkeypatch.setattr(sprite_agent_service, "run_scheduled", turn_holds_the_agent)
+
+    # The beat: `_run_due` consumes the tick and meters the run BEFORE dispatching.
+    await agent_service.mark_run(cid)
+    metered = await _db_pool.fetchval("SELECT month_run_count FROM agents WHERE id = $1", cid)
+
+    running = asyncio.create_task(_run_scheduled_agent(cid, "202610011142"))
+    await turn_started.wait()
+
+    # The re-delivered copy of that same dispatch, carrying the same minute stamp.
+    await _run_scheduled_agent(cid, "202610011142")
+
+    row = await _db_pool.fetchrow(
+        "SELECT curated_through, last_run_outcome, last_run_error, month_run_count "
+        "FROM agents WHERE id = $1",
+        cid,
+    )
+    assert row["last_run_outcome"] == "started", (
+        "the requeued copy wrote its own skip over the in-flight run's outcome — "
+        "the operator column now reports a verdict no run made"
+    )
+    assert row["month_run_count"] == metered, "the contended dispatch must not re-meter the tick"
+    assert row["last_run_error"] is None
+    assert len(turns) == 1, "the contended dispatch must not wake a second harness turn"
+    assert row["curated_through"] == seeded
+
+    turn_released.set()
+    await running
+    done = await _db_pool.fetchrow(
+        "SELECT curated_through, last_run_outcome FROM agents WHERE id = $1", cid
+    )
+    assert done["last_run_outcome"] == "ran", "the run in flight still owns its terminal outcome"
+    assert done["curated_through"] > seeded
 
 
 # --- The window the fence is responsible for (STAS-250). A compare-and-set only

@@ -82,6 +82,22 @@ celery.conf.update(
     task_acks_late=True,
     task_reject_on_worker_lost=True,
     worker_prefetch_multiplier=1,
+    # With `task_acks_late`, the ack only comes when the task finishes, and Redis
+    # hides an in-flight message from every other worker for just
+    # `visibility_timeout` — its 3600 s default. Once that window lapses the
+    # broker re-queues the message of a task that is still alive, and the copy
+    # lands on a second worker mid-run. Harness agent runs (PI curation) may
+    # legally take HARNESS_TIME_LIMIT = 5700 s (`backend/tasks/agent_schedules.py`
+    # — kept as a literal here because importing that module into the Celery app
+    # would invert the import direction and cycle; the pin test
+    # `tests/test_celery_visibility_timeout.py` enforces the relationship), so the
+    # window has to outlive them. Accepted trade-off: a task whose worker died now
+    # requeues after 2 h instead of 1 h. That is deliberate — these are paid,
+    # non-idempotent harness turns, so a duplicate run is worse than a slow retry,
+    # and the contended-dispatch guard in `agent_schedules` is the safety net
+    # whichever way the broker delivers. Founder fingerprint: schedule 9f0cab42,
+    # 2026-10-01 — a requeue at the 60-minute mark landed inside a 5400 s run.
+    broker_transport_options={"visibility_timeout": 7200},
     # CPython never returns freed heap to the OS, so a child's RSS only
     # ratchets upward. Recycle any child above ~800MB after it finishes its
     # current task, keeping 2 children + parent under Render's 2GB limit

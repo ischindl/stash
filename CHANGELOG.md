@@ -92,6 +92,27 @@ everything before it is captured in git history (`git log`), not here.
 
 ### Fixed
 
+- A run that is still working no longer gets someone else's verdict written on it. On the
+  founder's account on 2026-10-01 a curator run started at 11:42, and one hour later a second
+  copy of that same scheduled dispatch reached a worker while the run was still curating. The
+  copy did what a copy should: it stood down and let the run in flight have the lane. On its
+  way out it also wrote "skipped: already running" into the agent's row — so for the next half
+  hour the console, the API and the scheduler's own history reported a run as skipped when
+  nothing of the kind had happened, and the alarm that pages when a run dies without reporting
+  was muted by a skip that never occurred. The copy came from the queue, not from a person:
+  a scheduled task is acknowledged only when it finishes, so the queue re-offers its message
+  after a fixed hour, and a curation that is allowed to run 95 minutes is still alive when
+  that happens. Two fixes, one in each place. A dispatch that cannot acquire an agent's run
+  lock now records nothing at all — its tick and credit are already spent, but the outcome on
+  the row belongs to the run holding the lock, and that run resolves it as done or failed when
+  it finishes. And the queue's re-delivery window is now set above the longest run a curator
+  may legally take, so a live task's message is no longer handed to a second worker while it
+  is working. The trade-off is deliberate: a task whose worker genuinely died now comes back
+  after two hours instead of one, because these are paid runs that cannot be safely repeated,
+  and a late retry costs less than a duplicate. Older rows keep the value they were written
+  with and mean what they said at the time — nothing is rewritten. Guarded by the
+  requeued-dispatch case in `backend/tests/test_curator.py` and by
+  `backend/tests/test_celery_visibility_timeout.py`.
 - A self-hosted stack with no model no longer lets its curators idle in silence. With
   neither `ANTHROPIC_API_KEY` on the backend nor a local model endpoint connected, every
   scheduled curator refused every tick forever — the Memory wiki was never written, while

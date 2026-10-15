@@ -492,15 +492,16 @@ def test_a_failing_resolution_still_propagates_the_original_escape(
 @pytest.mark.parametrize(
     "outcome",
     ["ran", "skipped_already_running", "failed", None],
-    ids=["ran", "contended-dispatch-skip", "failed-earlier", "never-started"],
+    ids=["ran", "historical-contended-skip", "failed-earlier", "never-started"],
 )
 async def test_the_resolver_leaves_a_lane_that_is_not_started_alone(pool, outcome):
     """Both rescuers write from outside the run, so the row they meet may already
-    have resolved: a finished curation, the designed `already_running` skip a
-    contended dispatch records in the lane of the run in flight, an earlier
-    failure, or a lane whose run died before `mark_run` ever stamped it. Rewriting
-    any of those as `failed` reports work that happened as an outage and moves an
-    allowance nobody spent, so the `started` test is in the statement itself."""
+    have resolved: a finished curation, a pre-STAS-317 row carrying the
+    `already_running` skip its contended dispatch used to record in the lane of the
+    run in flight, an earlier failure, or a lane whose run died before `mark_run`
+    ever stamped it. Rewriting any of those as `failed` reports work that happened
+    as an outage and moves an allowance nobody spent, so the `started` test is in
+    the statement itself."""
     lane = await _lane()
     if outcome is None:
         await get_pool().execute("UPDATE agents SET last_run_at = now() WHERE id = $1", lane["id"])
@@ -616,10 +617,10 @@ async def test_a_second_reaper_pass_resolves_nothing_and_skipped_lanes_are_not_i
 ):
     """Two properties the first pass cannot show. The sweep is periodic, so its
     own second pass must find nothing left to do — that is what makes the refund
-    in the resolver safe to run unattended. And `skipped_already_running` is an
-    outcome the CHECK constraint admits: a sweep that counted the lanes it had
-    already resolved as still stranded would report a healthy fleet as an outage
-    on every tick."""
+    in the resolver safe to run unattended. And `skipped_already_running` stays an
+    outcome the CHECK constraint admits for the rows written before STAS-317: a
+    sweep that counted the lanes it had already resolved as still stranded would
+    report a healthy fleet as an outage on every tick."""
     stranded = await _lane()
     contended = await _lane()
     old_age = agent_schedules.REAP_STRIKE_AGE_SECONDS + 60
