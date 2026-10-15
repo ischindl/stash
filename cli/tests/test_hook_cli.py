@@ -6,6 +6,7 @@ import json
 import sys
 from pathlib import Path
 
+import httpx
 import pytest
 from typer.testing import CliRunner
 
@@ -230,3 +231,96 @@ def test_hook_run_codex_on_stop_executes(monkeypatch, tmp_path: Path) -> None:
             sys.modules.pop(mod, None)
 
     assert result.exit_code == 0
+
+
+def _fresh_hook_modules():
+    # The hook scripts import flat sibling modules (`adapt`, `config`); drop
+    # cached copies so each run binds the claude ones under this test's env.
+    for mod in ("adapt", "config"):
+        sys.modules.pop(mod, None)
+
+
+def test_hook_run_claude_on_session_end_without_plugin_env_is_green(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """`stash hook run claude on_session_end` must exit 0 with NOTHING set up.
+
+    The hook scripts used to read CLAUDE_PLUGIN_DATA from the environment —
+    set only when Claude Code launches the marketplace plugin — so the exact
+    command ~/.claude/settings.json carries crashed with a KeyError (and Claude
+    shows no error) whenever anything else ran it, which is every run once
+    hooks merge into settings.json. An unconfigured machine short-circuits
+    green, it does not crash.
+    """
+    data_dirs = _remap_plugin_data_dirs(monkeypatch, tmp_path, existing=("claude",))
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    monkeypatch.setenv("STASH_CLAUDE_DATA", str(data_dirs["claude"]))
+    _fresh_hook_modules()
+    fixture = (FIXTURES / "claude" / "session_end.json").read_text()
+
+    try:
+        result = runner.invoke(app, ["hook", "run", "claude", "on_session_end"], input=fixture)
+    finally:
+        _fresh_hook_modules()
+
+    assert result.exit_code == 0
+    assert not (data_dirs["claude"] / "upload_status.json").exists()
+
+
+def test_hook_run_claude_on_session_end_pushes_the_session_end_event(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """A configured machine's Claude session end must reach the server.
+
+    This is the failure the task started from: on the marketplace path Claude
+    never emitted session_end at all, and every layer (install output, status
+    files) looked fine. The capture is on httpx.Client.request, so dispatch,
+    the rewritten config, adapt, and stream_session_end all run for real.
+    """
+    data_dirs = _remap_plugin_data_dirs(monkeypatch, tmp_path, existing=("claude",))
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    monkeypatch.setenv("STASH_CLAUDE_DATA", str(data_dirs["claude"]))
+    (tmp_path / ".stash").mkdir(parents=True, exist_ok=True)
+    config_file = tmp_path / ".stash" / "config.json"
+    config_file.write_text(
+        json.dumps(
+            {
+                "api_key": "test-key",
+                "username": "alice-laptop",
+                "base_url": "http://127.0.0.1:9",
+            }
+        )
+    )
+    # scope.py binds the config path at import; point the in-process gate at
+    # this test's config so the run can't read the real machine's recording
+    # scope.
+    import stashai.plugin.scope as plugin_scope
+
+    monkeypatch.setattr(plugin_scope, "_CONFIG_FILE", config_file)
+    posted: list[dict] = []
+
+    def fake_request(self, method, url, **kwargs):
+        body = kwargs.get("json")
+        if isinstance(body, dict):
+            posted.append(body)
+        return httpx.Response(
+            200, json={}, request=httpx.Request(method, "http://127.0.0.1:9" + str(url))
+        )
+
+    monkeypatch.setattr(httpx.Client, "request", fake_request)
+    _fresh_hook_modules()
+    fixture = (FIXTURES / "claude" / "session_end.json").read_text()
+
+    try:
+        result = runner.invoke(app, ["hook", "run", "claude", "on_session_end"], input=fixture)
+    finally:
+        _fresh_hook_modules()
+
+    assert result.exit_code == 0
+    session_ends = [b for b in posted if b.get("event_type") == "session_end"]
+    assert session_ends, f"no session_end POST among {posted}"
+    assert session_ends[0]["session_id"] == "abc-123"
+    assert session_ends[0]["agent_name"] == "alice-laptop"
+    assert session_ends[0]["metadata"]["client"] == "claude_code"

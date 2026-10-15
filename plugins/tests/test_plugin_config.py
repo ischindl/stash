@@ -33,14 +33,9 @@ def _load_config(path: Path):
 
 
 @pytest.fixture(autouse=True)
-def _clear_claude_env(monkeypatch, tmp_path):
-    for key in (
-        "CLAUDE_PLUGIN_USER_CONFIG_api_key",
-        "CLAUDE_PLUGIN_USER_CONFIG_agent_name",
-        "CLAUDE_PLUGIN_USER_CONFIG_api_endpoint",
-    ):
-        monkeypatch.delenv(key, raising=False)
-    monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path / "plugin-data"))
+def _clear_plugin_env(monkeypatch, tmp_path):
+    monkeypatch.setenv("STASH_CLAUDE_DATA", str(tmp_path / "plugin-data"))
+    monkeypatch.setenv("STASH_CODEX_DATA", str(tmp_path / "plugin-data"))
 
 
 @pytest.mark.parametrize("config_path", CONFIG_PATHS, ids=lambda p: str(p.relative_to(ROOT)))

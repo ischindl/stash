@@ -81,6 +81,18 @@ everything before it is captured in git history (`git log`), not here.
 
 ### Fixed
 
+- Claude sessions now close in Stash. `~/.claude/settings.json` carried no stash
+  hooks at all — the marketplace plugin was supposed to wire them and silently
+  never did — and the hook scripts died with a `KeyError` outside that plugin
+  because they demanded an env var only it sets, so Claude never emitted
+  `session_end` and every session stayed open. The installer now merges the five
+  Stash hooks straight into `~/.claude/settings.json` (your own keys and hooks
+  preserved, reruns add nothing), retires an old `stash@stash-plugins` install
+  with a single best-effort uninstall, and the hook scripts read
+  `~/.stash/config.json` like every other agent — so `stash hook run claude
+  on_session_end` works from Claude Code, the CLI, or a shell alike. Codex
+  benefits too: the stale `_comment` key that poisoned `~/.codex/hooks.json`
+  for its parser is swept on install.
 - A curator that dies partway through a run no longer cancels every later run. When a run
   was cut short — its own time limit firing, or a deploy killing the worker underneath it —
   nothing was left alive to record that it had failed. Its row stayed "started", which is

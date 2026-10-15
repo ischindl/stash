@@ -55,10 +55,10 @@ def _claude_hook_context() -> str:
     """The shipped hook's composed CONTEXT, imported the way the hook runtime loads it."""
     global _hook_context
     if _hook_context is None:
-        # config.py builds DATA_DIR from CLAUDE_PLUGIN_DATA at import; nothing
+        # config.py builds DATA_DIR from STASH_CLAUDE_DATA at import; nothing
         # touches the filesystem during import, so a placeholder path suffices.
-        saved_env = os.environ.get("CLAUDE_PLUGIN_DATA")
-        os.environ["CLAUDE_PLUGIN_DATA"] = str(REPO_ROOT / ".guidance-coverage-hook-data")
+        saved_env = os.environ.get("STASH_CLAUDE_DATA")
+        os.environ["STASH_CLAUDE_DATA"] = str(REPO_ROOT / ".guidance-coverage-hook-data")
         sys.path.insert(0, str(_plugin_scripts))
         before = set(sys.modules)
         try:
@@ -73,9 +73,9 @@ def _claude_hook_context() -> str:
                 del sys.modules[name]
             sys.path.remove(str(_plugin_scripts))
             if saved_env is None:
-                del os.environ["CLAUDE_PLUGIN_DATA"]
+                del os.environ["STASH_CLAUDE_DATA"]
             else:
-                os.environ["CLAUDE_PLUGIN_DATA"] = saved_env
+                os.environ["STASH_CLAUDE_DATA"] = saved_env
     return _hook_context
 
 

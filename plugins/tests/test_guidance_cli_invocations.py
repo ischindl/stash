@@ -102,7 +102,7 @@ def _claude_hook_context() -> str:
     """The claude session-start hook's composed CONTEXT, imported the way the
     hook runtime loads it (scripts dir importable, new module names evicted)."""
     scripts = REPO_ROOT / "plugins" / "claude-plugin" / "scripts"
-    os.environ.setdefault("CLAUDE_PLUGIN_DATA", str(REPO_ROOT / ".guidance-parse-hook-data"))
+    os.environ.setdefault("STASH_CLAUDE_DATA", str(REPO_ROOT / ".guidance-parse-hook-data"))
     sys.path.insert(0, str(scripts))
     before = set(sys.modules)
     try:

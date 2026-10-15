@@ -1,13 +1,13 @@
 """Shared config helpers for per-agent Stash plugins.
 
-Every CLI-style agent plugin (codex, cursor, gemini, opencode, openclaw)
-piggybacks on the user-scoped CLI config in `~/.stash/config.json`. The
-per-agent `config.py` modules used to be near-identical copies of this
-logic; they now delegate here and only supply the three things that
-actually differ between agents: the data-dir env var, the data-dir
-default path, and the `client` label sent with each event.
-
-Claude's plugin has its own env-var fast path, so it stays separate.
+Every CLI-style agent plugin (claude, codex, cursor, gemini, opencode,
+openclaw) piggybacks on the user-scoped CLI config in
+`~/.stash/config.json`. The per-agent `config.py` modules used to be
+near-identical copies of this logic; they now delegate here and only
+supply the things that actually differ between agents: the data-dir
+env var, the data-dir default path, the `client` label sent with
+each event, and (claude only) the `session_link` opt-in this reader
+does not carry.
 """
 
 from __future__ import annotations

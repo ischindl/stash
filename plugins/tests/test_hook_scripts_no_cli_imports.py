@@ -71,8 +71,8 @@ ASSET_TREE = "assets"
 IGNORE_NAMES = {"__pycache__", "node_modules"}
 IGNORE_SUFFIXES = {".pyc"}
 
-# Non-.py files (pi's extensionless bash wrappers, scripts/_run.sh,
-# scripts/ensure_cli.sh) are matched on import *syntax* with word boundaries,
+# Non-.py files (pi's extensionless bash wrappers, scripts/_run.sh) are
+# matched on import *syntax* with word boundaries,
 # never on a bare ``cli`` substring: `[ -d "$REPO_ROOT/cli" ]` is a directory
 # probe and ``import cli_config`` is a local module, not the CLI package.
 TEXT_IMPORT = re.compile(r"\b(?:import|from)[ \t]+cli\b")
@@ -279,7 +279,7 @@ CONTROL_LINES = [
     "from cli_config import read_profile",
     'mod = __import__("cli_config")',
     'mod = importlib.import_module("stashai.plugin.hooks")',
-    "# the CLI upgrade runs from scripts/ensure_cli.sh",
+    "# the CLI floor check belongs to `stash connect`, not this script",
 ]
 
 

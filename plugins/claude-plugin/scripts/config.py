@@ -1,80 +1,34 @@
-"""Claude-plugin-specific config: reads CLAUDE_PLUGIN_USER_CONFIG_* env vars.
+"""Claude Code plugin config. Reads from ~/.stash/config.json (CLI config).
 
-Everything agent-agnostic lives in `stashai.plugin`. This module only handles
-the Claude-specific env surface + paths, then hands off.
+Shared logic lives in `stashai.plugin.agent_config`; this module only
+supplies the per-agent constants plus the claude-only `session_link`
+opt-in (`stash settings` → Session link) that the shared reader does
+not carry. No plugin-env fast path: the hooks run via
+`stash hook run claude <event>` from the merged ~/.claude/settings.json,
+so they must work identically wherever Claude Code launches them.
 """
 
 from __future__ import annotations
 
-import json
-import os
-import sys
-from pathlib import Path
-
+from stashai.plugin import agent_config
+from stashai.plugin.agent_config import get_stdin_data
 from stashai.plugin.stash_client import StashClient
 
-# Claude Code sets this for every hook invocation. No fallback: a guessed
-# path splits plugin state across two dirs and `stash status` reads the
-# wrong one (which is how upload failures went invisible once already).
-DATA_DIR = Path(os.environ["CLAUDE_PLUGIN_DATA"])
+_CLIENT = "claude_code"
+DATA_DIR = agent_config.data_dir_from_env("STASH_CLAUDE_DATA", ".stash/plugins/claude")
 
-PRODUCTION_BASE_URL = "https://api.joinstash.ai"
-
-
-def get_stdin_data() -> dict:
-    try:
-        return json.loads(sys.stdin.read())
-    except (json.JSONDecodeError, OSError):
-        return {}
-
-
-def _read_json(path: Path) -> dict:
-    try:
-        return json.loads(path.read_text())
-    except (json.JSONDecodeError, OSError):
-        return {}
-
-
-def _load_cli_config() -> dict:
-    """User-scoped CLI config (`~/.stash/config.json`)."""
-    user_path = Path.home() / ".stash" / "config.json"
-    if user_path.exists():
-        return _read_json(user_path)
-    return {}
+__all__ = ["DATA_DIR", "get_client", "get_config", "get_stdin_data", "is_configured"]
 
 
 def get_config() -> dict:
-    api_key = os.environ.get("CLAUDE_PLUGIN_USER_CONFIG_api_key", "")
-    agent_name = os.environ.get("CLAUDE_PLUGIN_USER_CONFIG_agent_name", "")
-
-    if not api_key:
-        cli = _load_cli_config()
-        return {
-            "api_endpoint": cli.get("base_url", PRODUCTION_BASE_URL),
-            "api_key": cli.get("api_key", ""),
-            "agent_name": cli.get("username", ""),
-            "stopped_streaming": bool(cli.get("stopped_streaming")),
-            "session_link": bool(cli.get("session_link")),
-            "client": "claude_code",
-        }
-
-    return {
-        "api_endpoint": os.environ.get(
-            "CLAUDE_PLUGIN_USER_CONFIG_api_endpoint", PRODUCTION_BASE_URL
-        ),
-        "api_key": api_key,
-        "agent_name": agent_name,
-        "stopped_streaming": bool(os.environ.get("CLAUDE_PLUGIN_USER_CONFIG_stopped_streaming")),
-        "session_link": bool(os.environ.get("CLAUDE_PLUGIN_USER_CONFIG_session_link")),
-        "client": "claude_code",
-    }
+    cfg = agent_config.get_config(_CLIENT)
+    cfg["session_link"] = bool(agent_config.cli_config().get("session_link"))
+    return cfg
 
 
 def get_client() -> StashClient:
-    cfg = get_config()
-    return StashClient(base_url=cfg["api_endpoint"], api_key=cfg["api_key"], data_dir=DATA_DIR)
+    return agent_config.get_client(_CLIENT, DATA_DIR)
 
 
 def is_configured() -> bool:
-    cfg = get_config()
-    return bool(cfg["api_key"] and cfg["agent_name"])
+    return agent_config.is_configured(_CLIENT)

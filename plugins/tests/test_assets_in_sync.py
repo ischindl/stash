@@ -102,15 +102,13 @@ def test_assets_match_plugin_sources_byte_for_byte():
 
 
 def test_claude_scripts_match_shipped_assets():
-    """Claude ships hooks.json and docs through the Claude Code marketplace,
-    but `stash hook run claude` executes the scripts from the shipped assets —
-    only scripts/ is mirrored (the marketplace manifest's version field is
-    CI-bumped, so a whole-dir mirror would drift on every release).
+    """Claude's hook config merges into ~/.claude/settings.json from the
+    shipped `settings.snippet.json`, and `stash hook run claude` executes the
+    scripts from the shipped assets — so both are mirrored; the marketplace
+    manifest (whose version field is CI-bumped) and docs are not.
 
-    Only `.py` is mirrored: `hook_run` resolves `<event>.py` and nothing else,
-    so a shell helper here would be unreachable. ensure_cli.sh is invoked by
-    Claude Code from ${CLAUDE_PLUGIN_ROOT}, which is the marketplace copy, and
-    is deliberately not vendored.
+    Only `.py` is mirrored under scripts/: `hook_run` resolves `<event>.py`
+    and nothing else, so a shell helper there would be unreachable.
 
     This is the dedicated parity path for the sole member of
     `SCRIPTS_ONLY_PY_AGENTS`; the partition test below pins that set to claude
@@ -121,6 +119,12 @@ def test_claude_scripts_match_shipped_assets():
         SRC_DIR / "claude-plugin" / "scripts",
         DST_DIR / "claude" / "scripts",
         suffixes={".py"},
+    )
+    src_snippet = SRC_DIR / "claude-plugin" / "settings.snippet.json"
+    dst_snippet = DST_DIR / "claude" / "settings.snippet.json"
+    assert src_snippet.read_bytes() == dst_snippet.read_bytes(), (
+        "claude: settings.snippet.json differs between canonical and shipped — "
+        "`stash connect` would hand out stale hook commands"
     )
 
 

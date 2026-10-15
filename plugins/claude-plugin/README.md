@@ -10,18 +10,15 @@ stash signin
 ```
 
 `stash signin` opens your browser to sign in (or create an account), saves
-your credentials to `~/.stash/config.json`, detects Claude Code, and installs
-this plugin via the marketplace — no API key to copy anywhere.
+your credentials to `~/.stash/config.json`, detects Claude Code, and merges
+the Stash hooks into `~/.claude/settings.json` — no API key to copy anywhere.
 
-To install the plugin by hand instead:
+To wire the hooks by hand instead, add the five `stash hook run claude
+<event>` commands from `settings.snippet.json` under the `hooks` key of
+`~/.claude/settings.json`, keeping anything you already have there.
 
-```bash
-claude plugin marketplace add Fergana-Labs/stash
-claude plugin install stash@stash-plugins
-```
-
-The manual path still needs `stash signin` once for auth; the plugin reads
-`~/.stash/config.json` when its own config values are unset.
+The manual path still needs `stash signin` once for auth; the hooks read
+`~/.stash/config.json` at run time.
 
 ### You're done
 
@@ -34,13 +31,11 @@ Every Claude Code session now automatically:
 
 ---
 
-## Configuration Reference
+## Configuration
 
-| Key | Default | Description |
-|-----|---------|-------------|
-| `api_endpoint` | `https://joinstash.ai` | Stash backend URL |
-| `api_key` | *(required)* | Your API key |
-| `agent_name` | *(required)* | Agent name (any string) |
+All values live in `~/.stash/config.json` (written by `stash signin`, edited
+via `stash settings`): endpoint, key, and your agent name. Hooks read that
+file at run time — there is nothing to configure per-session.
 
 ---
 
@@ -55,6 +50,8 @@ PostToolUse ────→ (async) Push tool_use event to your Stash history
                   (Read, Glob, Grep excluded — too noisy)
 
 Stop ───────────→ Push session_end event (tool count, files changed)
+
+SessionEnd ────→ Upload the session transcript to your Stash
 ```
 
 ---

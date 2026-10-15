@@ -234,25 +234,6 @@ python -m pytest plugins/tests --no-cov
 `--no-cov` is required. The root `pytest.ini` sets `addopts = --cov=backend --cov-fail-under=30`,
 so a plugin run without it fails on a backend coverage floor it has nothing to do with.
 
-### Hermetic PATH in `test_ensure_cli.py`
-
-`ensure_cli.sh` finds `uv` through `PATH`, so the harness gives the child `PATH` set to its
-sandbox directory and **nothing else**. The sandbox is populated from an explicit allowlist —
-`bash`, `awk`, `sleep`, `touch` — symlinked in by `_hermetic_bin_dir`. Never widen it with a
-host directory "so the script can find tools": that is what made `uv` present-or-absent depend
-on the developer's machine, and the assertion meant to prove *no uv → fail loudly* silently
-checked the wrong branch while forking a real `uv tool install` on the host.
-
-- A utility the script needs belongs on the allowlist, not on `PATH`. `sleep` is listed even
-  though no test asserts on it: without it the uv stub's `sleep 5` becomes "command not found"
-  and both "must not block session start" timing tests pass vacuously.
-- `sh` and `env` are deliberately absent — stub shebangs name their interpreter by absolute
-  path, which the kernel resolves without `PATH`. Every extra allowlisted binary is a leak.
-- `find_uv()` also stats `uv` at a few **absolute** paths (`/opt/homebrew/bin/uv`,
-  `/usr/local/bin/uv`), which a `PATH` sandbox cannot neutralise. `_run` asserts those are
-  absent rather than relaxing the assertion; if that guard fires, the fix belongs in
-  `find_uv()`'s candidate list.
-
 ### Documented commands must parse — `test_guidance_cli_invocations.py`
 
 `test_assets_in_sync.py` proves `plugins/<agent>-plugin/` and `stashai/plugin/assets/<agent>/` are

@@ -76,8 +76,8 @@ web app's install tab shows:
   Config) under the existing `mcpServers` key, then restart the app.
 - **Claude Code:** add the block to the project's `.mcp.json` (this is also what
   `stash tools install` writes for registered servers, see below). `stash setup` can go
-  one step further and install the stash plugin through the official Claude plugin
-  marketplace, which wires hooks and agent context on top of the MCP server.
+  one step further and merge the Stash hooks into `~/.claude/settings.json`,
+  wiring streaming hooks and agent context on top of the MCP server.
 - **Everything else:** put the block wherever that client declares MCP servers.
 
 Two practical notes:

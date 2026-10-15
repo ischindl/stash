@@ -79,8 +79,9 @@ def main():
     with get_client() as client:
         session_url = create_session_record(client, cfg, state, event, DATA_DIR)
 
-    # The CLI upgrade runs from scripts/ensure_cli.sh before this script is
-    # reached: an upgrade invoked here cannot run on the stale CLIs that need it.
+    # The CLI floor check belongs to the install entry point (`stash connect`
+    # self-upgrades before it writes hooks): an upgrade invoked here cannot
+    # run on the stale CLIs that need it.
     spawn_skills_sync(cfg)
 
     if session_url:

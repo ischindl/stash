@@ -51,7 +51,7 @@ _AGENT_EVENTS = {
 
 # Each agent's DATA_DIR env var (see each plugin's scripts/config.py).
 _DATA_DIR_ENV = {
-    "claude": "CLAUDE_PLUGIN_DATA",
+    "claude": "STASH_CLAUDE_DATA",
     "codex": "STASH_CODEX_DATA",
     "cursor": "STASH_CURSOR_DATA",
     "gemini": "STASH_GEMINI_DATA",
@@ -163,25 +163,28 @@ def test_codex_hooks_json_template_shape() -> None:
                 assert hook["command"].startswith("stash hook run codex ")
 
 
-def test_claude_hooks_json_commands_are_machine_independent() -> None:
-    """No absolute paths: hooks.json ships to every machine as-is.
-
-    SessionStart additionally runs the plugin-owned CLI floor check first (see
-    test_ensure_cli.py) — the only upgrade path a too-old CLI can still reach —
-    so it is prefixed with a ${CLAUDE_PLUGIN_ROOT} invocation instead of
-    starting at `stash`. That variable is expanded by Claude Code, so the
-    command stays machine-independent.
+def test_claude_settings_snippet_shape() -> None:
+    """Claude's merge template for ~/.claude/settings.json: a `hooks`-only top
+    level (junk keys poison the shared file the way `_comment` poisoned
+    Codex's), the five events, machine-independent commands — and the exact
+    event shapes the retired marketplace hooks.json shipped (timeouts, the
+    async PostToolUse), so the merged file behaves like what Claude Code
+    already accepted from the plugin.
     """
-    data = json.loads((PLUGINS_DIR / "claude-plugin" / "hooks" / "hooks.json").read_text())
-    for entries in data["hooks"].values():
+    data = json.loads((PLUGINS_DIR / "claude-plugin" / "settings.snippet.json").read_text())
+    assert set(data.keys()) == {"hooks"}
+    hooks = data["hooks"]
+    assert set(hooks) == {"SessionStart", "UserPromptSubmit", "PostToolUse", "Stop", "SessionEnd"}
+    for entries in hooks.values():
         for entry in entries:
             for hook in entry["hooks"]:
-                command = hook["command"]
-                assert "stash hook run claude " in command
-                assert not command.startswith("/")
-                assert "/Users/" not in command and "/home/" not in command
-                if "ensure_cli.sh" in command:
-                    assert command.startswith("bash ${CLAUDE_PLUGIN_ROOT}/scripts/")
+                assert hook["command"].startswith("stash hook run claude ")
+    assert hooks["SessionStart"][0]["hooks"][0]["timeout"] == 10000
+    assert hooks["UserPromptSubmit"][0]["hooks"][0]["timeout"] == 3000
+    assert hooks["PostToolUse"][0]["hooks"][0]["async"] is True
+    assert "timeout" not in hooks["PostToolUse"][0]["hooks"][0]
+    assert hooks["Stop"][0]["hooks"][0]["timeout"] == 10000
+    assert hooks["SessionEnd"][0]["hooks"][0]["timeout"] == 5000
 
 
 def test_gemini_settings_snippet_commands_are_machine_independent() -> None:

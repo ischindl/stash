@@ -558,15 +558,46 @@ def _merge_json_hooks(
 
 
 def _install_claude(force: bool, use_json: bool = False) -> tuple[str, str]:
-    # Delegates to the canonical helper used by `stash connect`. Both
-    # `claude plugin marketplace add` and `claude plugin install` are idempotent
-    # so --force doesn't need to change behavior.
-    ok = _install_claude_plugin(use_json)
-    if ok:
-        return ("installed", "claude plugin installed via marketplace")
-    if _claude_binary() is None:
-        return ("failed", "no `claude` executable found — see above")
-    return ("failed", "claude plugin install; see inline output")
+    root = _assets_dir("claude")
+    dest = Path.home() / ".claude" / "settings.json"
+    template = (root / "settings.snippet.json").read_text()
+    # The second marker sweeps stale absolute-path entries written by
+    # pre-`stash hook run` installs.
+    status_ = _merge_json_hooks(
+        dest,
+        template,
+        root,
+        ("stash hook run claude", "stashai/plugin/assets/claude"),
+    )
+    detail = f"{dest}"
+    if status_ != "failed" and _plugin_installed("claude"):
+        # The marketplace plugin registers the same five events. With the
+        # merged file as the live source, a leftover plugin would fire every
+        # event twice, so retire it — best-effort, because the merged hooks
+        # stream either way and a broken `claude` CLI must not fail an install
+        # that just landed.
+        detail = f"{detail} — {_retire_claude_plugin()}"
+    return (status_, detail)
+
+
+def _retire_claude_plugin() -> str:
+    """Uninstall the marketplace plugin now that hooks merge into settings.json.
+
+    Returns the note appended to the install detail; never raises — a failed
+    teardown costs a duplicated event stream, failing the install would cost
+    the user their hooks entirely.
+    """
+    import subprocess as _sp
+
+    binary = _claude_binary()
+    if binary is None:
+        return "run `claude plugin uninstall stash@stash-plugins` to drop the old plugin"
+    cmd = [binary, "plugin", "uninstall", "stash@stash-plugins"]
+    try:
+        _sp.run(cmd, check=True, capture_output=True, text=True, timeout=60)
+    except (OSError, _sp.SubprocessError) as e:
+        return f"`claude plugin uninstall stash@stash-plugins` did not run ({e}) — uninstall it by hand"
+    return "marketplace plugin removed"
 
 
 def _install_cursor(force: bool, use_json: bool = False) -> tuple[str, str]:
@@ -1556,7 +1587,7 @@ def _current_session_id() -> str | None:
     """Read the active session ID from the Stash plugin state file,
     falling back to the most recently modified JSONL in the current
     project's Claude directory."""
-    state_file = Path.home() / ".claude" / "plugins" / "data" / "stash" / "state.json"
+    state_file = Path.home() / ".stash" / "plugins" / "claude" / "state.json"
     if state_file.exists():
         try:
             data = json.loads(state_file.read_text())
@@ -6081,141 +6112,6 @@ def _frontend_base_url() -> str:
     return base_url
 
 
-def _install_claude_plugin(use_json: bool = False) -> bool:
-    """Install the stash plugin for Claude Code via the official marketplace.
-
-    Both subcommands are idempotent — re-running prints a "already added /
-    installed" notice rather than failing — so we don't pre-check state.
-    Returns True on success, False if either subprocess call errors (errors
-    are surfaced to the user inline).
-    """
-    import subprocess as _sp
-
-    def status(markup: str, plain: str) -> None:
-        if use_json:
-            echo_stderr(plain)
-        else:
-            console.print(markup)
-
-    binary = _claude_binary()
-    if binary is None:
-        if use_json:
-            echo_stderr(
-                "  Found your Claude Code folder, but no `claude` executable to install "
-                "the live-recording plugin with. Past sessions still import; new ones "
-                "won't stream until you re-run `stash setup` from a shell where "
-                "`claude --version` works."
-            )
-        else:
-            console.print(
-                "  [yellow]Found your Claude Code folder, but no `claude` executable to "
-                "install the live-recording plugin with. Past sessions still import; new "
-                "ones won't stream until you re-run [bold]stash setup[/bold] from a shell "
-                "where `claude --version` works.[/yellow]"
-            )
-        return False
-
-    for cmd in (
-        [binary, "plugin", "marketplace", "add", "Fergana-Labs/stash"],
-        [binary, "plugin", "install", "stash@stash-plugins"],
-    ):
-        try:
-            result = _sp.run(cmd, check=True, capture_output=True, text=True, timeout=60)
-        except _sp.CalledProcessError as e:
-            status(
-                f"  [yellow]`{' '.join(cmd)}` exited {e.returncode}.[/yellow]",
-                f"  `{' '.join(cmd)}` exited {e.returncode}.",
-            )
-            if e.stderr:
-                status(
-                    f"  [dim]{e.stderr.strip().splitlines()[-1]}[/dim]",
-                    f"  {e.stderr.strip().splitlines()[-1]}",
-                )
-            return False
-        except (FileNotFoundError, _sp.TimeoutExpired) as e:
-            status(
-                f"  [yellow]Could not run `{' '.join(cmd)}`: {e}[/yellow]",
-                f"  Could not run `{' '.join(cmd)}`: {e}",
-            )
-            return False
-        # Surface the success line (last line of stdout, e.g. "Successfully
-        # installed plugin: stash@stash-plugins (scope: user)") so the user
-        # sees what happened.
-        last = (result.stdout or "").strip().splitlines()
-        if last:
-            status(f"  [green]✓[/green] {last[-1]}", f"  ✓ {last[-1]}")
-
-    if _enable_marketplace_autoupdate(Path.home() / ".claude" / "settings.json"):
-        status(
-            "  [green]✓[/green] auto-update enabled for the stash-plugins marketplace",
-            "  ✓ auto-update enabled for the stash-plugins marketplace",
-        )
-    else:
-        status(
-            "  [yellow]Could not update ~/.claude/settings.json — enable auto-update "
-            "manually: /plugin → Marketplaces → stash-plugins → Enable auto-update. "
-            "Without it the plugin never updates itself.[/yellow]",
-            "  Could not update ~/.claude/settings.json — enable auto-update manually: "
-            "/plugin → Marketplaces → stash-plugins → Enable auto-update. "
-            "Without it the plugin never updates itself.",
-        )
-
-    # Freshen right now regardless: until this run set autoUpdate (or on Claude
-    # Code versions that ignore the key at user scope), the marketplace clone
-    # and plugin may be weeks stale. Best-effort — a failure here still leaves
-    # a working install, and the plugin's session-start drift warning names any
-    # remaining staleness.
-    for cmd in (
-        [binary, "plugin", "marketplace", "update", "stash-plugins"],
-        [binary, "plugin", "update", "stash@stash-plugins"],
-    ):
-        try:
-            _sp.run(cmd, check=True, capture_output=True, text=True, timeout=120)
-        except (_sp.CalledProcessError, FileNotFoundError, _sp.TimeoutExpired) as e:
-            status(
-                f"  [yellow]`{' '.join(cmd)}` failed: {e}[/yellow]",
-                f"  `{' '.join(cmd)}` failed: {e}",
-            )
-            break
-    else:
-        status(
-            "  [green]✓[/green] marketplace and plugin updated to latest",
-            "  ✓ marketplace and plugin updated to latest",
-        )
-    return True
-
-
-def _enable_marketplace_autoupdate(settings_path: Path) -> bool:
-    """Set `autoUpdate: true` on the stash-plugins marketplace in Claude Code's
-    user settings.
-
-    Claude Code auto-updates plugins from the official marketplace only;
-    third-party marketplaces like ours default to auto-update OFF, which
-    fossilizes the installed plugin (a machine ran June's hook scripts for a
-    month this way). `extraKnownMarketplaces.<name>.autoUpdate` is the settings
-    key documented for enabling it without the /plugin menu.
-
-    Returns False without writing when the settings file is unparseable —
-    clobbering a user's hand-edited settings.json is worse than a manual toggle.
-    """
-    try:
-        data = json.loads(settings_path.read_text()) if settings_path.exists() else {}
-    except (json.JSONDecodeError, OSError):
-        return False
-    if not isinstance(data, dict):
-        return False
-    marketplaces = data.setdefault("extraKnownMarketplaces", {})
-    entry = marketplaces.setdefault(
-        "stash-plugins", {"source": {"source": "github", "repo": "Fergana-Labs/stash"}}
-    )
-    if entry.get("autoUpdate") is True:
-        return True
-    entry["autoUpdate"] = True
-    settings_path.parent.mkdir(parents=True, exist_ok=True)
-    settings_path.write_text(json.dumps(data, indent=2) + "\n")
-    return True
-
-
 IMPORT_STATUS_FILE = Path.home() / ".stash" / "import-history.json"
 IMPORT_LOG_FILE = Path.home() / ".stash" / "import-history.log"
 
@@ -6521,8 +6417,7 @@ def welcome_cmd():
 # ===========================================================================
 
 PLUGIN_DATA_DIRS = {
-    # Claude Code names the data dir <plugin>-<marketplace>.
-    "claude": Path.home() / ".claude/plugins/data/stash-stash-plugins",
+    "claude": Path.home() / ".stash/plugins/claude",
     "codex": Path.home() / ".stash/plugins/codex",
     "cursor": Path.home() / ".stash/plugins/cursor",
     "gemini": Path.home() / ".stash/plugins/gemini",

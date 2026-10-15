@@ -29,8 +29,7 @@ def plugin_home(tmp_path, monkeypatch):
     home = tmp_path / "home"
     (home / ".stash").mkdir(parents=True)
     monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(home / "plugin-data"))
-    monkeypatch.delenv("CLAUDE_PLUGIN_USER_CONFIG_api_key", raising=False)
+    monkeypatch.setenv("STASH_CLAUDE_DATA", str(home / "plugin-data"))
     monkeypatch.setattr(cli_config, "USER_CONFIG_FILE", home / ".stash" / "config.json")
     return home
 
