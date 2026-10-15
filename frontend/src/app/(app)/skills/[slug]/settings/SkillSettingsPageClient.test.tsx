@@ -92,6 +92,7 @@ function skillDetail(
       owner_user_id: "user-1",
       folder_id: "folder-1",
       slug: "shared-skill",
+      mcp_url: "http://localhost:3456/api/v1/mcp/skills/shared-skill",
       title: "Shared Skill",
       description: "",
       owner_id: "user-1",

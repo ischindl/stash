@@ -16,6 +16,7 @@ import logging
 from collections.abc import Awaitable, Callable
 from uuid import UUID
 
+import httpx
 from fastapi import HTTPException
 
 from ..celery_app import celery
@@ -30,8 +31,6 @@ from ..integrations.linear.indexer import index_linear
 from ..integrations.notion.indexer import index_notion
 from ..integrations.posthog.indexer import index_posthog
 from ..integrations.slack.indexer import index_slack, ingest_slack_message
-from ..integrations.social_saves.indexer import index_instagram_saves
-from ..integrations.x_saves.indexer import index_x_saves
 from ..services import alert_service, source_service, source_sync_service
 from ._celery_helpers import run_async
 
@@ -41,6 +40,48 @@ logger = logging.getLogger(__name__)
 # server logs; next_sync_at was already advanced at sync start, so a failed
 # source genuinely retries on its own.
 SYNC_FAILED_MESSAGE = "Sync hit an unexpected error — it will retry automatically."
+
+
+def _setup_error(exc: Exception) -> str | None:
+    """Only recognized access failures are owner-actionable, never provider outages.
+
+    Provider payloads and exception strings must not reach source status or alerts.
+    MCP transports wrap HTTP failures in ExceptionGroups; every leaf must agree.
+    """
+    if isinstance(exc, ExceptionGroup):
+        messages = [_setup_error(child) for child in exc.exceptions]
+        return messages[0] if messages and all(messages) else None
+    reconnect = "Reconnect this integration in Settings to restore access."
+    if isinstance(exc, HTTPException) and exc.status_code == 401:
+        return reconnect
+    if not isinstance(exc, httpx.HTTPStatusError):
+        return None
+    response = exc.response
+    try:
+        payload = response.json()
+    except (ValueError, httpx.StreamError):
+        payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+    error = payload.get("error")
+    if response.status_code in (400, 401) and error in ("invalid_grant", "invalid_token"):
+        return reconnect
+    # A token endpoint's invalid_client is our configuration problem, not the owner's.
+    if response.status_code == 401 and "token" not in exc.request.url.path:
+        return reconnect
+    if response.status_code == 403:
+        if exc.request.url.host == "mcp.posthog.com":
+            return "PostHog access was denied. Check project permissions and reconnect in Settings."
+        if exc.request.url.host in ("www.googleapis.com", "gmail.googleapis.com"):
+            errors = error.get("errors") if isinstance(error, dict) else None
+            if isinstance(errors, list) and any(
+                isinstance(item, dict)
+                and item.get("reason") in ("insufficientPermissions", "authError", "forbidden")
+                for item in errors
+            ):
+                return "Google access was denied. Check permissions and reconnect in Settings."
+    return None
+
 
 # source_type -> indexer. Each returns the new sync cursor (or None).
 INDEXERS: dict[str, Callable[[dict], Awaitable[str | None]]] = {
@@ -56,8 +97,6 @@ INDEXERS: dict[str, Callable[[dict], Awaitable[str | None]]] = {
     "asana_project": index_asana,
     "linear": index_linear,
     "gong_calls": index_gong,
-    "instagram_saves": index_instagram_saves,
-    "x_saves": index_x_saves,
 }
 
 
@@ -115,6 +154,10 @@ async def _sync_source(source_id: UUID) -> dict:
         await source_service.mark_sync_failed(source_id, str(exc)[:500])
         return {"status": "failed"}
     except Exception as exc:
+        setup_error = _setup_error(exc)
+        if setup_error is not None:
+            await source_service.mark_needs_setup(source_id, setup_error)
+            return {"status": "needs_setup"}
         logger.error(
             "source sync failed source=%s source_type=%s exception_type=%s",
             source_id,
@@ -222,15 +265,18 @@ async def _alert_stalled_syncs() -> int:
     from ..database import get_pool
 
     rows = await get_pool().fetch(
-        """
-        SELECT id, display_name, source_type, last_synced_at, sync_claimed_at
+        f"""
+        SELECT id, display_name, source_type, last_synced_at, sync_claimed_at,
+               sync_status, sync_error, sync_started_at
         FROM user_sources
         WHERE sync_enabled AND sync_status != 'needs_setup'
           AND source_type = ANY($1::text[])
           AND (sync_alerted_at IS NULL OR sync_alerted_at < now() - interval '1 hour')
           AND (
-            COALESCE(last_synced_at, created_at)
+            (COALESCE(last_synced_at, created_at)
               < now() - sync_interval_s * interval '1 second' - interval '30 minutes'
+              AND (sync_task_id IS NULL
+                   OR sync_claimed_at < now() - interval '{source_sync_service.SYNC_LEASE_MINUTES} minutes'))
             OR (sync_task_id IS NOT NULL AND sync_started_at IS NULL
                 AND sync_claimed_at < now() - interval '15 minutes')
           )
@@ -243,13 +289,15 @@ async def _alert_stalled_syncs() -> int:
     if alert_service.alerts_enabled():
         lines = [
             f"- {r['display_name']} ({r['id']}, {r['source_type']}): "
-            f"last successful sync {r['last_synced_at']}; claimed {r['sync_claimed_at']}"
+            f"status {r['sync_status']}; last successful sync {r['last_synced_at']}; "
+            f"claimed {r['sync_claimed_at']}; started {r['sync_started_at']}; "
+            f"error {r['sync_error'] or 'none'}"
             for r in rows[:25]
         ]
         if len(rows) > 25:
             lines.append(f"... and {len(rows) - 25} more sources.")
         await alert_service.send_alert(
-            f"Source syncing stalled for {len(rows)} source(s):\n" + "\n".join(lines)
+            f"Source sync health: {len(rows)} source(s) failed or overdue:\n" + "\n".join(lines)
         )
     await get_pool().execute(
         "UPDATE user_sources SET sync_alerted_at = now() WHERE id = ANY($1::uuid[])",

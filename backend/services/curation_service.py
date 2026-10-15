@@ -69,7 +69,7 @@ WIKI_VALUES = (WIKI_INTERNAL, WIKI_EXTERNAL)
 # `event_id=None` is a full position, not an unset half: it means the instant
 # alone carries the read — every event at that instant is behind it. That is
 # exactly what every pre-pair watermark already asserted, which is why
-# migration 0219 backfills nothing.
+# migration 0242 backfills nothing.
 #
 # One order governs the pair, rendered twice from the same rule: `ahead()` in
 # Python, `_position_sql` in SQL, which every reader reaches through

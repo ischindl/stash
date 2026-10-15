@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
+from .image_content import TraceImage, content_images
 from .spans import TraceSpan, validate_spans
 
 ROLES = {"system", "user", "assistant", "tool"}
@@ -28,6 +29,7 @@ class CanonicalStep:
     tool_input: dict | None = None
     tool_call_id: str | None = None
     metadata: dict = field(default_factory=dict)
+    images: list[TraceImage] = field(default_factory=list, compare=False, repr=False)
 
 
 @dataclass
@@ -53,7 +55,8 @@ def _load_json(data: str) -> Any:
 
 def _load_jsonl(data: str) -> list[Any]:
     records = []
-    for line_number, line in enumerate(data.splitlines(), start=1):
+    # JSONL uses LF records. Unicode separators are legal inside JSON strings.
+    for line_number, line in enumerate(data.split("\n"), start=1):
         if not line.strip():
             continue
         try:
@@ -169,6 +172,7 @@ def _block_steps(role: str, block: dict | str) -> list[CanonicalStep]:
             CanonicalStep(
                 role="tool",
                 content=_content_text(block.get("content")),
+                images=content_images(block.get("content"), _content_text(block.get("content"))),
                 tool_call_id=block["tool_use_id"],
                 metadata=metadata,
             )
@@ -179,7 +183,13 @@ def _block_steps(role: str, block: dict | str) -> list[CanonicalStep]:
         return _thinking_steps(block["text"])
     if kind == "redacted_thinking":
         return []
-    return [CanonicalStep(role=role, content=_block_text(block))]
+    return [
+        CanonicalStep(
+            role=role,
+            content=_block_text(block),
+            images=content_images([block], _block_text(block)),
+        )
+    ]
 
 
 def _fill_tool_names(steps: list[CanonicalStep]) -> list[CanonicalStep]:
@@ -970,11 +980,40 @@ def _parse_claude_code(data: str) -> list[CanonicalTrace]:
     records = _load_jsonl(data)
     steps: list[CanonicalStep] = []
     for record in records:
+        # Preserve our identifiable model-visible instruction context even
+        # when Claude marks the injected user message as isMeta. This is not
+        # a blanket change to historic trace filtering: other meta messages
+        # and hook bookkeeping stay excluded, keeping existing step indices.
+        if (
+            record.get("type") == "user"
+            and record.get("isMeta")
+            and not any(
+                record.get(k) for k in ("isSidechain", "isCompactSummary", "isApiErrorMessage")
+            )
+            and isinstance(record.get("message"), dict)
+            and record["message"].get("role") == "user"
+        ):
+            text = _content_text(record["message"].get("content", ""))
+            if '<stash-workbench-instruction delivery="' in text:
+                steps.extend(
+                    _with_timestamp(
+                        [
+                            CanonicalStep(
+                                role="system",
+                                content=text,
+                                metadata={"harness_instruction_context": True},
+                            )
+                        ],
+                        record.get("timestamp"),
+                    )
+                )
+                continue
         if not _is_claude_code_conversation_line(record):
             continue
-        steps.extend(
-            _with_timestamp(_anthropic_message_steps(record["message"]), record.get("timestamp"))
-        )
+        message_steps = _anthropic_message_steps(record["message"])
+        if record["message"].get("stop_reason") and message_steps:
+            message_steps[-1].metadata["stop_reason"] = record["message"]["stop_reason"]
+        steps.extend(_with_timestamp(message_steps, record.get("timestamp")))
 
     session_ids = [r["sessionId"] for r in records if "sessionId" in r]
     titles = [r["aiTitle"] for r in records if r.get("type") == "ai-title"]
@@ -1001,7 +1040,12 @@ def _codex_item_steps(item: dict) -> list[CanonicalStep]:
     kind = item["type"]
     if kind == "message":
         return [
-            CanonicalStep(role=_CODEX_ROLES[item["role"]], content=_content_text(item["content"]))
+            CanonicalStep(
+                role=_CODEX_ROLES[item["role"]],
+                content=_content_text(item["content"]),
+                images=content_images(item["content"], _content_text(item["content"])),
+                metadata={"phase": item["phase"]} if item.get("phase") else {},
+            )
         ]
     if kind == "function_call":
         return [
@@ -1029,6 +1073,7 @@ def _codex_item_steps(item: dict) -> list[CanonicalStep]:
             CanonicalStep(
                 role="tool",
                 content=_content_text(item["output"]),
+                images=content_images(item["output"], _content_text(item["output"])),
                 tool_call_id=item["call_id"],
             )
         ]
@@ -1054,6 +1099,12 @@ def _detect_codex(data: str) -> bool:
 
 def _parse_codex(data: str) -> list[CanonicalTrace]:
     records = _load_jsonl(data)
+    meta = next(r["payload"] for r in records if r["type"] == "session_meta")
+    if meta.get("history_base"):
+        raise TraceFormatError(
+            "Codex transcript references earlier history; upload with the latest Stash CLI "
+            "to include its base files"
+        )
     # Only `response_item` lines are the model-visible conversation; `event_msg`,
     # `turn_context`, token counts and `compacted` are Codex bookkeeping that
     # restate or annotate those items.
@@ -1063,7 +1114,6 @@ def _parse_codex(data: str) -> list[CanonicalTrace]:
             continue
         steps.extend(_with_timestamp(_codex_item_steps(record["payload"]), record.get("timestamp")))
 
-    meta = next(r["payload"] for r in records if r["type"] == "session_meta")
     return [
         CanonicalTrace(
             external_id=meta["id"],

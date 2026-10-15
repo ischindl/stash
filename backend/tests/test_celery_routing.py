@@ -17,7 +17,17 @@ from backend.tasks.agent_schedules import (
 from backend.tasks.clips import process_url_imports
 from backend.tasks.drive_extraction import extract_drive_document
 from backend.tasks.extraction import extract_file_text
-from backend.tasks.reward_models import run_gepa, train_reward_model
+from backend.tasks.optimization import score_run
+from backend.tasks.reward_models import (
+    collect_examples,
+    playground_score,
+    reconcile,
+    run_gepa,
+    score_batch,
+    score_trace,
+    train_evaluator,
+    train_reward_model,
+)
 from backend.tasks.sources import sync_source
 from backend.tasks.viz import precompute
 
@@ -34,7 +44,16 @@ HEAVY_TASKS = {
 }
 
 
-REWARD_TASKS = {train_reward_model.name, run_gepa.name}
+REWARD_TASKS = {
+    train_reward_model.name,
+    run_gepa.name,
+    score_trace.name,
+    score_batch.name,
+    playground_score.name,
+    collect_examples.name,
+    train_evaluator.name,
+    score_run.name,
+}
 
 
 def test_heavy_tasks_route_off_the_default_queue():
@@ -54,6 +73,12 @@ def test_only_expensive_viz_beat_task_is_heavy():
     # Viz is the one exception because the task itself fits UMAP inline.
     beat_tasks = {entry["task"] for entry in celery.conf.beat_schedule.values()}
     assert beat_tasks & HEAVY_TASKS == {precompute.name}
+    assert reconcile.name in beat_tasks and reconcile.name not in celery.conf.task_routes
+
+
+def test_shared_training_timeout_allows_three_remote_stages():
+    assert train_evaluator.time_limit == 3900
+    assert train_evaluator.soft_time_limit == 3800
 
 
 def test_curator_drain_beat_task_keeps_a_continuous_cadence():

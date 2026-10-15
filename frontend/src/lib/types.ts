@@ -1,4 +1,7 @@
+export type ProductCheckpoint = "latest" | "floodgate-2026-10-05";
+
 export interface User {
+  product_checkpoint?: ProductCheckpoint;
   id: string;
   developer_platform_only: boolean;
   reward_models_enabled: boolean;
@@ -402,6 +405,11 @@ export interface RmScore {
 }
 
 export interface RmTraceSummary {
+  can_score?: boolean;
+  agent?: string;
+  source_id?: string;
+  source_name?: string;
+  source_owner_id?: string;
   id: string;
   external_id: string | null;
   title: string;
@@ -412,7 +420,26 @@ export interface RmTraceSummary {
   comment_count: number;
   label_error_count: number;
   latest_score: Omit<RmScore, "created_at"> | null;
+  shared_training_allowed?: boolean;
+  evaluation?: { id: string; status: string; outcome: string | null; current: boolean; score?: number | null; action_credit?: { mean: number; min: number; max: number; count: number } | null; total_actions: number; credited_actions: number } | null;
+  action_credit?: { mean: number; min?: number; max?: number; count: number; revision: number | null } | null;
+  workbench?: {
+    assessed_actions: number;
+    total_actions: number;
+    violations: number;
+    pending: number;
+    failed: number;
+    queue_status: string | null;
+  };
   created_at: string;
+}
+
+export interface RmTraceImage {
+  id: string;
+  start: number;
+  end: number;
+  width: number;
+  height: number;
 }
 
 export interface RmStep {
@@ -424,6 +451,7 @@ export interface RmStep {
   tool_input: Record<string, unknown> | null;
   tool_call_id: string | null;
   metadata: Record<string, unknown> | null;
+  images?: RmTraceImage[];
 }
 
 /** The highlighted span inside a step's content, anchored by surrounding text. */
@@ -431,6 +459,8 @@ export interface RmQuote {
   text: string;
   prefix: string;
   suffix: string;
+  /** One anchor per message for a selection spanning multiple messages. */
+  segments?: (Omit<RmQuote, "segments"> & { step_id: string })[];
 }
 
 export interface RmAnnotation {
@@ -460,17 +490,64 @@ export interface RmTraceSpan {
 }
 
 export interface RmTraceDetail extends RmTraceSummary {
+  training_models?: Pick<RmRewardModel, "id" | "name" | "status" | "error" | "created_at" | "finished_at">[];
+  /** Task scores from the step-scoring rules; the per-step scores are on each step's `metadata.reward`. */
+  step_scores?: unknown;
+  automatic_evaluation?: import("./workbench-api").TraceEvaluationResponse;
   spans: RmTraceSpan[];
   metadata: Record<string, unknown> | null;
   steps: RmStep[];
   annotations: RmAnnotation[];
   scores: RmScore[];
+  action_scores?: RmActionScore[];
+  scoring_runs?: RmScoringRun[];
+  default_evaluator?: { id: string; name: string; revision: number; updated_at: string } | null;
+  automatic_scoring?: { attempts: number; error: string | null } | null;
+  training_collection?: { status: RmJobStatus; error: string | null } | null;
+}
+
+export interface RmActionScore {
+  /** Display-only automatic annotation from an earlier trace revision. */
+  stale?: boolean;
+  reward_model_id: string;
+  reward_model_name: string;
+  step_id: string;
+  score: number;
+  /** Training-reference relative reward in [-1, 1], not a probability. */
+  credit: number;
+  created_at: string;
+}
+
+export interface RmScoringRun {
+  id: string;
+  trace_id: string;
+  reward_model_id: string;
+  status: RmJobStatus;
+  error: string | null;
+  created_at?: string;
+  started_at?: string | null;
+  finished_at?: string | null;
+  progress?: {
+    stage: "preparing" | "starting" | "downloading" | "loading" | "scoring" | "saving";
+    completed: number;
+    total: number;
+    elapsed_seconds: number;
+    updated_at: string;
+  } | null;
 }
 
 export interface RmTrainMetrics {
   train_pairs: number;
   eval_pairs: number;
-  eval_accuracy: number;
+  eval_accuracy: number | null;
+  eval_split?: "trace" | "curated_task_groups";
+  action_scoring_version?: number | null;
+  trace_scoring_version?: number | null;
+  action_train_pairs?: number;
+  action_eval_pairs?: number;
+  action_eval_accuracy?: number | null;
+  tool_eval_pairs?: number;
+  tool_eval_accuracy?: number | null;
   final_loss: number;
   epochs: number;
   device: string;
@@ -492,6 +569,22 @@ export interface RmRewardModel {
   created_at: string;
   started_at: string | null;
   finished_at: string | null;
+  progress?: {
+    stage: "preparing" | "starting" | "loading" | "training" | "evaluating" | "scoring" | "uploading";
+    completed: number;
+    total: number;
+    elapsed_seconds: number;
+    updated_at: string;
+  } | null;
+  estimated_timing?: {
+    basis: "history" | "batches";
+    scope: "job" | "training";
+    sample_count: number;
+    lower_seconds: number;
+    upper_seconds: number;
+    overdue: boolean;
+    excludes_queue: boolean;
+  } | null;
 }
 
 /** GET /reward-models/{id} also returns which traces it trained on. */
@@ -504,6 +597,7 @@ export interface RmInferredFeedback {
   source: "user_feedback" | "ai_judgment";
   trace_id: string;
   step_index: number;
+  tool_name?: string | null;
   label: "positive" | "negative" | "unclear";
   confidence: "high" | "low";
   evidence_id: string;
@@ -511,6 +605,9 @@ export interface RmInferredFeedback {
   reason: string;
   classifier_model: string;
   included_in_training: boolean;
+  included_in_evaluation?: boolean;
+  original_action?: string;
+  alternative_action?: string | null;
 }
 
 export interface RmGepaCandidate {
@@ -539,4 +636,41 @@ export interface RmGepaRun {
   created_at: string;
   started_at: string | null;
   finished_at: string | null;
+}
+
+
+export interface RmPlaygroundInput {
+  prompt?: string;
+  instructions?: string;
+  responses?: string[];
+  example_index?: number;
+  texts?: string[];
+}
+
+export interface RmPlaygroundRun {
+  id: string;
+  reward_model_id: string;
+  status: RmJobStatus;
+  input: RmPlaygroundInput;
+  scores: number[] | null;
+  error: string | null;
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+}
+
+export interface RmPlaygroundHistory {
+  items: (Pick<RmPlaygroundRun, "id" | "status" | "scores" | "error" | "created_at"> & {
+    prompt: string | null; example_index: string | null;
+  })[];
+  total: number;
+}
+
+export interface RmTrainingExample {
+  index: number;
+  chosen: string;
+  rejected: string;
+  partition: string | null;
+  source: string | null;
+  trace_ids: string[];
 }

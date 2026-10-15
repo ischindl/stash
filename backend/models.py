@@ -4,6 +4,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, computed_field
 
+from .product_checkpoints import ProductCheckpoint
 from .services.share_mcp_urls import skill_mcp_url
 
 # --- Users ---
@@ -38,6 +39,7 @@ class UserProfile(BaseModel):
     id: UUID
     developer_platform_only: bool
     reward_models_enabled: bool
+    product_checkpoint: ProductCheckpoint = "latest"
     name: str
     display_name: str
     email: str | None = None
@@ -568,7 +570,7 @@ class HistoryEventCreateRequest(BaseModel):
     agent_name: str = Field(..., min_length=1, max_length=64)
     event_type: str = Field(..., min_length=1, max_length=64)
     content: str = Field(..., min_length=1)
-    # Equals the history_events.session_id column width (migration 0220);
+    # Equals the history_events.session_id column width (migration 0247);
     # test_curator_session_id_width enforces the parity against the real column.
     session_id: str = Field(..., min_length=1, max_length=128)
     user_id: str | None = Field(

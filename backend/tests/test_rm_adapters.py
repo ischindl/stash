@@ -3,6 +3,7 @@ that annotators comment on and the reward model trains on. A wrong role, a
 dropped tool result, or a duplicated turn here silently corrupts every label
 built on top, so each format is checked step by step."""
 
+import json
 from pathlib import Path
 
 import pytest
@@ -58,6 +59,17 @@ def test_list_formats_matches_design_doc():
 def test_auto_detects_each_format(fixture, expected):
     name, _ = parse_traces(_read(fixture), "auto")
     assert name == expected
+
+
+def test_codex_page_without_its_local_base_is_not_accepted_as_a_complete_trace():
+    records = [json.loads(line) for line in _read("codex.jsonl").split("\n") if line]
+    records[0]["payload"]["history_base"] = {
+        "thread_id": "parent",
+        "end_ordinal_exclusive": 10,
+        "end_byte_offset": 1000,
+    }
+    with pytest.raises(TraceFormatError, match="earlier history"):
+        parse_traces("\n".join(json.dumps(r) for r in records), "auto")
 
 
 @pytest.mark.parametrize("fixture,expected", FIXTURE_FORMATS)
@@ -302,6 +314,36 @@ def test_claude_code_keeps_only_the_conversation():
     assert read_call.tool_input == {"file_path": "/work/demo/calc.py"}
     assert (read_result.tool_name, read_result.tool_call_id) == ("Read", "toolu_r1")
     assert trace.steps[5].metadata == {"is_error": True, "timestamp": "2026-09-03T12:00:00+00:00"}
+
+
+@pytest.mark.parametrize(
+    "excluded_flag", [None, "isSidechain", "isCompactSummary", "isApiErrorMessage"]
+)
+def test_claude_workbench_context_preserves_only_main_conversation(excluded_flag):
+    context = '<stash-workbench-instruction delivery="example">\nCheck tests.\n</stash-workbench-instruction>'
+    injected = {
+        "type": "user",
+        "sessionId": "run",
+        "cwd": "/repo",
+        "isMeta": True,
+        "message": {"role": "user", "content": [{"type": "text", "text": context}]},
+    }
+    if excluded_flag:
+        injected[excluded_flag] = True
+    user = {
+        "type": "user",
+        "sessionId": "run",
+        "cwd": "/repo",
+        "message": {"role": "user", "content": "Fix it."},
+    }
+    _, traces = parse_traces("\n".join(json.dumps(r) for r in [injected, user]), "claude_code")
+    trace = traces[0]
+    if excluded_flag:
+        assert _roles(trace) == ["user"]
+    else:
+        assert _roles(trace) == ["system", "user"]
+        assert trace.steps[0].content == context
+        assert trace.steps[0].metadata == {"harness_instruction_context": True}
 
 
 def test_codex_response_items():

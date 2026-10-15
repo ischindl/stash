@@ -424,6 +424,10 @@ async def complete_json(
     return json.loads(payload)
 
 
+class StructuredCompletionError(ValueError):
+    """The provider returned no schema-conforming completion."""
+
+
 async def complete_structured[ResponseModel: BaseModel](
     *,
     prompt: str,
@@ -441,5 +445,7 @@ async def complete_structured[ResponseModel: BaseModel](
         output_format=output_model,
     )
     if response.parsed_output is None:
-        raise ValueError(f"Structured completion returned no result ({response.stop_reason})")
+        raise StructuredCompletionError(
+            f"Structured completion returned no result ({response.stop_reason})"
+        )
     return response.parsed_output

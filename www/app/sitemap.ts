@@ -26,6 +26,8 @@ const ROUTES = [
   "/blog/context-gold-rush",
   "/blog/containerizing-memory",
   "/blog/why-memory-is-unsolved",
+  "/blog/agent-traces-are-the-new-oil",
+  "/blog/state-of-the-art-beam-10m",
   "/contact-sales",
   "/privacy",
   "/terms",

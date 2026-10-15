@@ -49,7 +49,9 @@ async def test_unhandled_errors_are_redacted_and_keep_security_headers(
     assert "customer transcript" not in str(captured_logs)
 
 
-async def test_startup_restores_request_error_logging_after_migrations(monkeypatch, caplog):
+async def test_startup_restores_request_error_logging_after_migrations(monkeypatch):
+    import io
+    import sys
     from unittest.mock import AsyncMock
 
     from backend import main
@@ -62,7 +64,15 @@ async def test_startup_restores_request_error_logging_after_migrations(monkeypat
     monkeypatch.setattr(main, "close_db", AsyncMock())
     monkeypatch.setattr(main.demo_service, "seed_demo", AsyncMock())
 
+    # Startup owns the root handler (STAS-131: it removes every handler it did not
+    # install, pytest's capture handler included), so the sink that proves a record
+    # was emitted is the process's standard error — the same sink
+    # test_startup_logging.py measures.
+    captured = io.StringIO()
+    monkeypatch.setattr(sys, "stderr", captured)
+
     async with main.lifespan(main.app):
         main.logger.error("Request errors remain visible after startup")
 
-    assert "Request errors remain visible after startup" in caplog.text
+    assert not main.logger.disabled, "startup must re-enable the logger the migration run disabled"
+    assert "Request errors remain visible after startup" in captured.getvalue()

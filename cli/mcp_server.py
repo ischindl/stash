@@ -817,6 +817,398 @@ def stash_snapshot_source(skill_id: str, source_id: str, path: str) -> str:
     return _json(_client().snapshot_source_into_skill(skill_id, source_id, path))
 
 
+# ── Trace review and continuous prompt optimization ──────────────
+
+
+@mcp.tool()
+def stash_traces(limit: int = 50, offset: int = 0) -> str:
+    """List captured agent traces, including automatic success and action-credit summaries."""
+    with _client() as client:
+        return _json(client._get("/api/v1/rm/traces", limit=limit, offset=offset))
+
+
+@mcp.tool()
+def stash_trace(trace_id: str) -> str:
+    """Read a trace's actions, annotations and automatic credit evaluation."""
+    from uuid import UUID
+
+    trace_id = str(UUID(trace_id))
+    with _client() as client:
+        return _json(
+            {
+                "trace": client._get(f"/api/v1/rm/traces/{trace_id}"),
+                "evaluation": client._get(f"/api/v1/rm/workbench/traces/{trace_id}/evaluation"),
+            }
+        )
+
+
+@mcp.tool()
+def stash_import_traces(data: str, format: str = "auto") -> str:
+    """Import actual agent trace JSON/JSONL for viewing, automatic credit and learning.
+    Preserve recorded prompts, tool calls/results and optimization instruction wrappers.
+    """
+    with _client() as client:
+        return _json(
+            client._post("/api/v1/rm/traces/import", json={"data": data, "format": format})
+        )
+
+
+@mcp.tool()
+def stash_annotate_trace(trace_id: str, comment: str, step_id: str = "") -> str:
+    """Add the user's feedback to a trace or action for personal reward-model training."""
+    from uuid import UUID
+
+    with _client() as client:
+        return _json(
+            client._post(
+                f"/api/v1/rm/traces/{UUID(trace_id)}/annotations",
+                json={"comment": comment, "step_id": str(UUID(step_id)) if step_id else None},
+            )
+        )
+
+
+@mcp.tool()
+def stash_train_reward_model(name: str, trace_ids: list[str], criteria: list[str]) -> str:
+    """Queue training from selected traces and their annotations. Uses remote compute
+    on hosted Stash. Select at least two independent tasks; training is asynchronous.
+    The returned model ID can immediately be used with stash_optimization_begin.
+    """
+    with _client() as client:
+        return _json(
+            client._post(
+                "/api/v1/rm/reward-models",
+                json={
+                    "name": name,
+                    "trace_ids": trace_ids,
+                    "training_config": {"input_version": 3, "rubric": criteria},
+                },
+            )
+        )
+
+
+@mcp.tool()
+def stash_optimization_begin(
+    name: str,
+    reward_model_id: str,
+    agent: str,
+    scope: str,
+    metric_name: str = "",
+    metric_direction: str = "higher",
+    metric_unit: str = "",
+    metric_minimum: float = 0,
+    metric_maximum: float = 1,
+    regression_tolerance: float = 0,
+    initial_prompt: str = "",
+    runs_per_arm: int = 20,
+    max_rounds: int = 10,
+) -> str:
+    """Begin ongoing prompt optimization when the user asks to improve this agent.
+    Authorizes up to max_rounds candidate generations and remote scoring of submitted
+    runs. Future tasks receive randomized current/candidate instructions; winners
+    promote automatically when the selected reward model establishes an improvement.
+    agent/scope identify exactly which workload participates. Leave metric_name empty
+    to optimize reward alone. An explicit metric_name adds a business guardrail using
+    actual measurements, never invented outcomes. A training model is allowed:
+    optimization waits for it. Existing agent permissions remain in force.
+    """
+    with _client() as client:
+        return _json(
+            client._post(
+                "/api/v1/rm/optimizations",
+                json={
+                    "name": name,
+                    "reward_model_id": reward_model_id,
+                    "agent": agent,
+                    "scope": scope,
+                    "initial_prompt": initial_prompt,
+                    "runs_per_arm": runs_per_arm,
+                    "max_rounds": max_rounds,
+                    "metric": {
+                        "name": metric_name,
+                        "direction": metric_direction,
+                        "unit": metric_unit,
+                        "minimum": metric_minimum,
+                        "maximum": metric_maximum,
+                        "regression_tolerance": regression_tolerance,
+                    }
+                    if metric_name.strip()
+                    else None,
+                },
+            )
+        )
+
+
+@mcp.tool()
+def stash_optimization_status(optimization_id: str = "") -> str:
+    """Read optimization status, instructions, reward/business trends and version history.
+    Omit the ID to list this account's optimizations.
+    """
+    from uuid import UUID
+
+    suffix = f"/{UUID(optimization_id)}" if optimization_id else ""
+    with _client() as client:
+        return _json(client._get("/api/v1/rm/optimizations" + suffix))
+
+
+@mcp.tool()
+def stash_optimization_start_run(
+    optimization_id: str,
+    work_key: str,
+    agent: str,
+    scope: str,
+    agent_version: str,
+    session_id: str = "",
+) -> str:
+    """Before a NEW task, get its prompt instructions. Use a stable unique work_key
+    and retain the returned exact instruction wrapper in the recorded trace before
+    acting. Retries return the same assignment. Apply it subject to existing rules.
+    session_id connects native capture: the completed response is submitted automatically.
+    Otherwise import a trace with external id=work_key or call finish_run from the runner.
+    Do not reroll tasks or invent traces. An enabled=false result means continue normally.
+    """
+    from uuid import UUID
+
+    with _client() as client:
+        return _json(
+            client._post(
+                f"/api/v1/rm/optimizations/{UUID(optimization_id)}/runs",
+                json={
+                    "work_key": work_key,
+                    "agent": agent,
+                    "scope": scope,
+                    "agent_version": agent_version,
+                    "session_id": session_id or None,
+                },
+            )
+        )
+
+
+@mcp.tool()
+def stash_optimization_finish_run(run_id: str, trace_id: str = "", session_id: str = "") -> str:
+    """Submit a completed real task for remote reward scoring, using its imported
+    trace_id OR native captured session_id. Wait for the final response and upload;
+    the host/runner may call this after task completion. Evidence is frozen on receipt.
+    """
+    from uuid import UUID
+
+    with _client() as client:
+        return _json(
+            client._post(
+                f"/api/v1/rm/optimizations/runs/{UUID(run_id)}/trace",
+                json={"trace_id": str(UUID(trace_id))} if trace_id else {"session_id": session_id},
+            )
+        )
+
+
+@mcp.tool()
+def stash_optimization_record_outcome(run_id: str, value: float, source: str) -> str:
+    """Record the actual business metric from the business system or human measurement.
+    source identifies the record/measurement supporting it. May arrive after the trace.
+    Never substitute a model's guess for a measured business result. Outcomes are immutable.
+    """
+    from uuid import UUID
+
+    with _client() as client:
+        return _json(
+            client._post(
+                f"/api/v1/rm/optimizations/runs/{UUID(run_id)}/outcome",
+                json={"value": value, "source": source},
+            )
+        )
+
+
+@mcp.tool()
+def stash_optimization_control(optimization_id: str, action: str, revision_id: str = "") -> str:
+    """Pause/resume optimization or roll back to a previously promoted prompt.
+    Rollback also pauses experimentation; it affects future runs only.
+    """
+    from uuid import UUID
+
+    with _client() as client:
+        return _json(
+            client._post(
+                f"/api/v1/rm/optimizations/{UUID(optimization_id)}/control",
+                json={
+                    "action": action,
+                    "revision_id": str(UUID(revision_id)) if revision_id else None,
+                },
+            )
+        )
+
+
+@mcp.tool()
+def stash_optimization_abandon_run(run_id: str, reason: str) -> str:
+    """Record a task that could not complete. It remains in experiment history and
+    prevents promotion from a selectively completed cohort. Completed runs cannot be removed.
+    """
+    from uuid import UUID
+
+    with _client() as client:
+        return _json(
+            client._post(
+                f"/api/v1/rm/optimizations/runs/{UUID(run_id)}/abandon", json={"reason": reason}
+            )
+        )
+
+
+# ── Intuition models (personal judges) ───────────────────────────
+
+
+def _item(value: str):
+    """Items are text, or a JSON object when the string parses as one."""
+    try:
+        parsed = json.loads(value)
+    except ValueError:
+        return value
+    return parsed if isinstance(parsed, dict) else value
+
+
+@mcp.tool()
+def stash_intuition_list() -> str:
+    """List the user's intuition models: personal judges trained from their labels
+    and comparisons. Use one whenever a decision should follow the user's taste
+    (e.g. "would I send this reply?"); call stash_intuition_predict with its id."""
+    with _client() as client:
+        return _json(client._get("/api/v1/intuitions"))
+
+
+@mcp.tool()
+def stash_intuition_get(model_id: str) -> str:
+    """Full definition of one intuition model: description, output labels, rubric
+    questions, head weights, held-out metrics, versions and data counts."""
+    with _client() as client:
+        return _json(client._get(f"/api/v1/intuitions/{model_id}"))
+
+
+@mcp.tool()
+def stash_intuition_predict(model_id: str, item: str, caller: str = "agent") -> str:
+    """Judge one item with the user's active intuition model. `item` is text or a
+    JSON object string shaped like the model's examples. Returns the label,
+    per-label probabilities, confidence, the rubric answers and each answer's
+    contribution. Low-confidence results deserve a human check. The call is
+    logged; if the user corrects it, send the correction with
+    stash_intuition_review so the model learns."""
+    with _client() as client:
+        return _json(
+            client._post(
+                f"/api/v1/intuitions/{model_id}/predict",
+                json={"item": _item(item), "caller": caller},
+            )
+        )
+
+
+@mcp.tool()
+def stash_intuition_compare(model_id: str, item_a: str, item_b: str, caller: str = "agent") -> str:
+    """Ask a preference-type intuition model which of two items the user would
+    prefer. Returns p_a_wins, the winner, and the reasons (per-answer contributions)."""
+    with _client() as client:
+        return _json(
+            client._post(
+                f"/api/v1/intuitions/{model_id}/compare",
+                json={"item_a": _item(item_a), "item_b": _item(item_b), "caller": caller},
+            )
+        )
+
+
+@mcp.tool()
+def stash_intuition_review(
+    model_id: str, prediction_id: str, label: str = "", dismiss: bool = False
+) -> str:
+    """Record the user's verdict on a served prediction (from predict/compare): the
+    correct label ('a'/'b' for comparisons), or dismiss=True. Labeled reviews become
+    training examples for the next version."""
+    with _client() as client:
+        return _json(
+            client._post(
+                f"/api/v1/intuitions/{model_id}/predictions/{prediction_id}/review",
+                json={"label": label or None, "dismiss": dismiss, "source": "agent"},
+            )
+        )
+
+
+@mcp.tool()
+def stash_intuition_add_examples(model_id: str, examples: list[dict]) -> str:
+    """Add labeled examples the user gave you. Each: {"item": text|object, "label": ...}
+    for single items, or {"item": A, "item_b": B, "label": "a"|"b"} for comparisons
+    (preference models). Optional "split": "train"|"eval" and "note"."""
+    with _client() as client:
+        return _json(
+            client._post(
+                f"/api/v1/intuitions/{model_id}/examples",
+                json={"examples": examples, "source": "agent"},
+            )
+        )
+
+
+@mcp.tool()
+def stash_intuition_create(
+    name: str,
+    output_type: str,
+    description: str,
+    labels: list[dict] | None = None,
+    rubric: list[dict] | None = None,
+) -> str:
+    """Create an intuition model. output_type 'choice' needs labels
+    [{"id": "send", "description": ...}, ...]; 'preference' learns a score from
+    comparisons. Rubric questions (optional now; see stash_intuition_get for the
+    shape) are typed: noul (yes/no), choice, or score."""
+    with _client() as client:
+        return _json(
+            client._post(
+                "/api/v1/intuitions",
+                json={
+                    "name": name,
+                    "output_type": output_type,
+                    "description": description,
+                    "labels": labels or [],
+                    "rubric": rubric or [],
+                },
+            )
+        )
+
+
+@mcp.tool()
+def stash_intuition_edit_draft(
+    model_id: str,
+    description: str = "",
+    labels: list[dict] | None = None,
+    rubric: list[dict] | None = None,
+) -> str:
+    """Edit the draft version (created from the active one if needed). Only the
+    fields you pass change. Changed rubric questions are re-asked on the next train."""
+    body = {
+        k: v
+        for k, v in {"description": description or None, "labels": labels, "rubric": rubric}.items()
+        if v is not None
+    }
+    with _client() as client:
+        return _json(client._patch(f"/api/v1/intuitions/{model_id}/draft", json=body))
+
+
+@mcp.tool()
+def stash_intuition_train(model_id: str, l2: float = 0.005) -> str:
+    """Grade any ungraded examples under the draft, refit its head, and return
+    held-out metrics plus the promotion gate versus the active version."""
+    with _client() as client:
+        for _ in range(100):
+            graded = client._post(f"/api/v1/intuitions/{model_id}/draft/grade", json={"limit": 25})
+            if graded["remaining"] == 0:
+                break
+            if graded["graded"] == 0:
+                return _json({"error": "grading made no progress", **graded})
+        return _json(client._post(f"/api/v1/intuitions/{model_id}/draft/fit", json={"l2": l2}))
+
+
+@mcp.tool()
+def stash_intuition_promote(model_id: str, force: bool = False) -> str:
+    """Make the draft the active version. Refused when the gate fails unless
+    force=True; only force when the user explicitly asks."""
+    with _client() as client:
+        return _json(
+            client._post(f"/api/v1/intuitions/{model_id}/draft/promote", json={"force": force})
+        )
+
+
 # ── Entry point ───────────────────────────────────────────────────
 
 

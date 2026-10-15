@@ -1,8 +1,11 @@
 """Annotations on traces: a + or − rating, a comment, or both, on a trace or one step."""
 
+import logging
 from uuid import UUID
 
 from ...database import get_pool
+
+log = logging.getLogger(__name__)
 
 ANNOTATION_SELECT = """
     SELECT a.*, u.name AS author_name
@@ -75,7 +78,30 @@ async def create(
         return None
     _check_rating_or_comment(rating, comment)
 
-    if step_id is not None:
+    segments = quote.get("segments") if quote else None
+    if segments:
+        if step_id is not None or rating is not None:
+            raise AnnotationInvalid(
+                "a multi-step quote is a comment with per-step anchors, not a rating"
+            )
+        ids = [UUID(segment["step_id"]) for segment in segments]
+        steps = await pool.fetch(
+            "SELECT id, content FROM rm_trace_steps WHERE trace_id = $1 AND id = ANY($2::uuid[]) ORDER BY idx",
+            trace_id,
+            ids,
+        )
+        if [step["id"] for step in steps] != ids:
+            raise AnnotationInvalid(
+                "quote segments must be distinct steps of this trace in reading order"
+            )
+        for segment, step in zip(segments, steps, strict=True):
+            if segment["prefix"] + segment["text"] + segment["suffix"] not in step["content"]:
+                raise AnnotationInvalid(
+                    "quote text and context do not appear in the step's content"
+                )
+        if quote["text"] != "\n\n".join(segment["text"] for segment in segments):
+            raise AnnotationInvalid("quote text must match its segments")
+    elif step_id is not None:
         step = await pool.fetchrow(
             "SELECT role, content FROM rm_trace_steps WHERE trace_id = $1 AND id = $2",
             trace_id,
@@ -103,7 +129,33 @@ async def create(
         comment,
         quote,
     )
-    return await _get(owner_user_id, annotation_id)
+    annotation = await _get(owner_user_id, annotation_id)
+    if comment and comment.strip():
+        # Annotation persistence is the primary action. Optional workbench
+        # preparation must never turn a saved comment into a failed request.
+        try:
+            from . import workbench
+
+            enabled = await pool.fetchval(
+                "SELECT reward_models_enabled AND product_checkpoint='latest' FROM users WHERE id=$1",
+                owner_user_id,
+            )
+            if enabled:
+                await workbench.create_feedback(
+                    owner_user_id,
+                    {
+                        "trace_id": trace_id,
+                        "target_step_id": step_id,
+                        "comment": comment,
+                    },
+                    source="human_comment",
+                    source_event_id=annotation_id,
+                )
+        except Exception:
+            log.warning(
+                "Annotation saved; workbench feedback preparation unavailable", exc_info=True
+            )
+    return annotation
 
 
 async def update(owner_user_id: UUID, annotation_id: UUID, changes: dict) -> dict | None:
@@ -113,6 +165,8 @@ async def update(owner_user_id: UUID, annotation_id: UUID, changes: dict) -> dic
         return None
     merged = {**current, **changes}
     _check_rating_or_comment(merged["rating"], merged["comment"])
+    if merged["rating"] is not None and (merged["quote"] or {}).get("segments"):
+        raise AnnotationInvalid("a multi-step quote can be commented on but not rated")
     if merged["rating"] is not None and merged["step_id"] is not None:
         role = await get_pool().fetchval(
             "SELECT role FROM rm_trace_steps WHERE id = $1", merged["step_id"]

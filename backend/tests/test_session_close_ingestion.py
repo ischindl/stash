@@ -25,6 +25,11 @@ from .conftest import unique_name
 CLOSE = "session_end"
 
 BACKEND = Path(__file__).resolve().parents[1]
+
+# The invariant names one table. `finished_at` is a column name several tables
+# carry, so a write is judged by the table it updates: stamping
+# `rm_scoring_batches.finished_at` is not a session close.
+_SESSION_CLOSE_WRITE = re.compile(r"UPDATE\s+(?:\w+\.)?sessions\b[^;]*?\bSET\s+finished_at\b", re.S)
 _T0 = datetime(2026, 9, 1, 12, 0, tzinfo=UTC)
 
 
@@ -330,7 +335,7 @@ def test_the_close_column_has_exactly_one_sql_write_site():
     for sub in ("services", "routers"):
         for path in (BACKEND / sub).rglob("*.py"):
             text = path.read_text()
-            if re.search(r"\bSET finished_at\b", text):
+            if _SESSION_CLOSE_WRITE.search(text):
                 out_of_band.append(path.name)
             stamps = len(re.findall(r"finished_at = GREATEST", text))
             if stamps:

@@ -49,12 +49,18 @@ function renderRail() {
   return render(<RewardRail user={cohortUser()} onLogout={vi.fn()} />);
 }
 
+// The rail carries upstream's theme toggle, which queries a media feature at
+// mount; jsdom implements no matchMedia, so rendering the rail needs one stubbed.
 beforeEach(() => {
+  vi.stubGlobal("matchMedia", () => ({ matches: false, addEventListener() {}, removeEventListener() {} }));
   state.pathname = "/reward-models";
   state.search = "";
   state.push.mockClear();
 });
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+});
 
 describe("the reward rail gives the new-signup cohort a way into its files", () => {
   it("renders a clickable Files entry", () => {
@@ -78,7 +84,9 @@ describe("the reward rail gives the new-signup cohort a way into its files", () 
     renderRail();
     expect(screen.getAllByRole("link", { name: "Files" })).toHaveLength(1);
     const labels = screen.getAllByRole("link").map((link) => link.textContent?.trim());
-    expect(labels).toEqual(["Traces", "Reward models", "Files", "Skills", "Settings"]);
+    // Upstream folded the standalone Skills entry into Monitoring, which still
+    // matches /skills; the rail's shape is asserted exactly, so it tracks that.
+    expect(labels).toEqual(["Traces", "Reward models", "Files", "Monitoring", "Settings"]);
   });
 
   it.each(["/files", "/f/file-1", "/p/page-1", "/folders/folder-1", "/tables/table-1"])(

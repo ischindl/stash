@@ -28,8 +28,12 @@ import {
   RmQuote,
   RmRewardModel,
   RmRewardModelDetail,
+  RmPlaygroundRun,
+  RmPlaygroundHistory,
+  RmTrainingExample,
   RmTraceDetail,
   RmTraceSummary,
+  RmScoringRun,
 } from "./types";
 import { getScopeUserId, SCOPE_HEADER } from "./scope-store";
 
@@ -2961,34 +2965,75 @@ export async function rmListFormats(): Promise<RmFormat[]> {
   return apiFetch(`${RM}/formats`);
 }
 
-export async function rmImportTraces(format: string, data: string): Promise<RmImportResult> {
+export async function rmImportTraces(format: string, data: string, sourceId?: string): Promise<RmImportResult> {
   return apiFetch(`${RM}/traces/import`, {
     method: "POST",
-    body: JSON.stringify({ format, data }),
+    body: JSON.stringify({ format, data, ...(sourceId?.trim() ? { source_id: sourceId.trim() } : {}) }),
   });
+}
+
+export async function rmRenameTraceSource(sourceId: string, name: string): Promise<{ source_id: string; source_name: string }> {
+  return apiFetch(`${RM}/trace-sources`, { method: "PUT", body: JSON.stringify({ source_id: sourceId, name }) });
 }
 
 export async function rmListTraces(
   limit: number,
   offset: number,
+  query = "",
+  modelId?: string,
 ): Promise<{ traces: RmTraceSummary[]; total: number }> {
-  return apiFetch(`${RM}/traces?limit=${limit}&offset=${offset}`);
+  return apiFetch(`${RM}/traces?limit=${limit}&offset=${offset}&q=${encodeURIComponent(query)}${modelId ? `&reward_model_id=${encodeURIComponent(modelId)}` : ""}`);
 }
 
 const ALL_TRACES_PAGE = 200;
 
 /** Every trace the caller has, fetched page by page. Selection and filtering happen client-side over this list. */
-export async function rmListAllTraces(): Promise<RmTraceSummary[]> {
+export async function rmListAllTraces(query = "", modelId?: string): Promise<RmTraceSummary[]> {
   const traces: RmTraceSummary[] = [];
   for (let offset = 0; ; offset += ALL_TRACES_PAGE) {
-    const page = await rmListTraces(ALL_TRACES_PAGE, offset);
+    const page = await rmListTraces(ALL_TRACES_PAGE, offset, query, modelId);
     traces.push(...page.traces);
     if (offset + ALL_TRACES_PAGE >= page.total) return traces;
   }
 }
 
-export async function rmGetTrace(traceId: string): Promise<RmTraceDetail> {
-  return apiFetch(`${RM}/traces/${traceId}`);
+export async function rmGetTrace(traceId: string, includeEvaluation = false): Promise<RmTraceDetail> {
+  return apiFetch(`${RM}/traces/${traceId}${includeEvaluation ? "?include_evaluation=true" : ""}`);
+}
+
+export interface RmSectionRange { first_step_id: string; last_step_id: string }
+export interface RmTaskCompletion extends RmSectionRange {
+  objective: string;
+  checkpoints: { step_id: string; completion: number | null; reason: string }[];
+}
+export async function rmEstimateCompletion(traceId: string): Promise<{
+  tasks: RmTaskCompletion[]; pending: boolean; unavailable: boolean;
+}> {
+  return apiFetch(`${RM}/traces/${traceId}/completion`, { method: "POST" });
+}
+
+export interface RmSectionCopy extends RmSectionRange {
+  title: string; summary: string; objective: string; score: number | null; score_reason: string;
+}
+export async function rmSummarizeSections(traceId: string, sections: RmSectionRange[]): Promise<{
+  sections: RmSectionCopy[]; pending: boolean; unavailable: boolean;
+}> {
+  return apiFetch(`${RM}/traces/${traceId}/section-summaries`, {
+    method: "POST", body: JSON.stringify({ sections }),
+  });
+}
+
+export async function rmScoreTrace(traceId: string, modelId?: string): Promise<RmScoringRun> {
+  return apiFetch(`${RM}/traces/${traceId}/score`, {
+    method: "POST",
+    body: JSON.stringify({ reward_model_id: modelId }),
+  });
+}
+
+export async function rmSetTrainingContribution(traceId: string, allowed: boolean): Promise<void> {
+  await apiFetch(`${RM}/traces/${traceId}/training-contribution`, {
+    method: "PATCH", body: JSON.stringify({ allowed }),
+  });
 }
 
 export async function rmDeleteTrace(traceId: string): Promise<void> {
@@ -3026,8 +3071,9 @@ export async function rmListRewardModels(): Promise<RmRewardModel[]> {
 export async function rmCreateRewardModel(body: {
   trace_ids: string[];
   name: string;
-  base_model: string;
-  epochs: number;
+  base_model?: string;
+  epochs?: number;
+  training_config?: { input_version: 3; annotation_source?: "feedback" | "automatic"; rubric?: string[]; max_actions_per_trace?: number; task_groups?: Record<string, string>; evaluation_groups?: string[] };
 }): Promise<RmRewardModel> {
   return apiFetch(`${RM}/reward-models`, { method: "POST", body: JSON.stringify(body) });
 }
@@ -3061,4 +3107,23 @@ export async function rmDownloadSkill(runId: string): Promise<string> {
 /** Short-lived, owner-authorized URL for the browser's native download manager. */
 export function rmDownloadWeights(modelId: string): Promise<{ url: string }> {
   return apiFetch(`${RM}/reward-models/${modelId}/weights`);
+}
+
+
+export function rmRunPlayground(modelId: string, input: {
+  prompt?: string; instructions?: string; responses?: string[]; example_index?: number;
+}): Promise<RmPlaygroundRun> {
+  return apiFetch(`${RM}/reward-models/${modelId}/playground`, { method: "POST", body: JSON.stringify(input) });
+}
+
+export function rmGetPlaygroundRun(modelId: string, runId: string): Promise<RmPlaygroundRun> {
+  return apiFetch(`${RM}/reward-models/${modelId}/playground/${runId}`);
+}
+
+export function rmListPlaygroundRuns(modelId: string, offset = 0): Promise<RmPlaygroundHistory> {
+  return apiFetch(`${RM}/reward-models/${modelId}/playground?offset=${offset}`);
+}
+
+export function rmGetTrainingExamples(modelId: string, offset = 0): Promise<{ items: RmTrainingExample[]; total: number }> {
+  return apiFetch(`${RM}/reward-models/${modelId}/examples?offset=${offset}`);
 }

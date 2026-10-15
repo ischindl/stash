@@ -60,6 +60,7 @@ vi.mock("@/lib/pins", () => ({
 const USER: User = {
   id: "user-1",
   developer_platform_only: false,
+  reward_models_enabled: false,
   name: "founder",
   display_name: "Founder",
   email: "founder@example.test",

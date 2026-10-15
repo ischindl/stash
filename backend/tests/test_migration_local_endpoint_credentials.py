@@ -93,7 +93,7 @@ async def _drop_db() -> None:
 
 
 async def _seed_legacy_rows() -> uuid.UUID:
-    """The world exactly as 0215 left it: at most one row per provider, the
+    """The world exactly as 0242 left it: at most one row per provider, the
     local one an encrypted endpoint doc, no id and no name column."""
     conn = await asyncpg.connect(_MIG_URL)
     user = await conn.fetchval(

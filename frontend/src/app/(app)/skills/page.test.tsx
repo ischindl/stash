@@ -33,6 +33,7 @@ const router = vi.hoisted(() => ({
 
 vi.mock("next/navigation", () => ({
   useRouter: () => router,
+  usePathname: () => "/skills",
   useSearchParams: () => new URLSearchParams(),
 }));
 
@@ -146,6 +147,7 @@ describe("SkillsPage", () => {
         published: {
           id: "skill-2",
           slug: "research",
+          mcp_url: "http://localhost:3456/api/v1/mcp/skills/research",
           discoverable: true,
           cover_image_url: null,
           icon_url: null,

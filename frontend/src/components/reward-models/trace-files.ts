@@ -37,11 +37,15 @@ export async function importTraceFiles(
   files: TraceFile[],
   format: string,
   onProgress: (path: string) => void,
+  sourceId?: string,
 ): Promise<FileImportResult> {
   const result: FileImportResult = { imported: 0, failed: [], skipped: [] };
   for (const entry of files) {
     const { file, path } = entry;
-    const hidden = path.split("/").some((part) => part.startsWith("."));
+    const directories = path.split("/").slice(0, -1);
+    const hidden = file.name.startsWith(".") || directories.some(
+      (part) => part.startsWith(".") && part !== ".claude" && part !== ".codex",
+    );
     const supported = /\.(json|jsonl|ndjson|txt)$/i.test(file.name);
     const archive = file.name.toLowerCase().endsWith(".zip");
     if (hidden || file.name.toLowerCase() === "manifest.json" || (!supported && !archive)) {
@@ -53,7 +57,8 @@ export async function importTraceFiles(
       if (archive) {
         throw new Error("Unzip this archive, then import the folder inside.");
       }
-      const imported = await rmImportTraces(format, await file.text());
+      const data = await file.text();
+      const imported = await (sourceId?.trim() ? rmImportTraces(format, data, sourceId.trim()) : rmImportTraces(format, data));
       result.imported += imported.imported;
     } catch (error) {
       result.failed.push({ entry, message: `${path}: ${errorMessage(error)}` });

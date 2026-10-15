@@ -2,6 +2,7 @@
 
 import json
 import time
+from uuid import UUID
 
 import pytest
 from httpx import AsyncClient
@@ -202,6 +203,88 @@ async def test_annotations_trace_step_and_comment_only(client):
     assert summary["comment_count"] == 2
 
 
+def _multi_quote(steps):
+    segments = [
+        {"step_id": step["id"], "text": step["content"], "prefix": "", "suffix": ""}
+        for step in steps
+    ]
+    return {
+        "text": "\n\n".join(s["text"] for s in segments),
+        "prefix": "",
+        "suffix": "",
+        "segments": segments,
+    }
+
+
+async def test_multi_step_comment_round_trip_and_reimport(client):
+    auth = await _register(client)
+    [trace_id] = await _import(client, auth, REFUND_TRACE)
+    steps = (await _detail(client, auth, trace_id))["steps"]
+    quote = _multi_quote(steps[:2])  # System messages can be part of the selection.
+    saved = await _annotate(
+        client, auth, trace_id, comment="These messages belong together", quote=quote
+    )
+    assert saved["step_id"] is None
+    assert saved["quote"] == quote
+    detail = await _detail(client, auth, trace_id)
+    assert detail["comment_count"] == 1
+    assert detail["annotations"][0]["quote"] == quote
+    [exported] = _ndjson((await client.get("/api/v1/rm/export/annotations", headers=auth)).text)
+    assert exported["quote"] == quote
+
+    # A cross-message comment must not silently become a whole-trace rating.
+    response = await client.patch(
+        f"/api/v1/rm/annotations/{saved['id']}", json={"rating": 1}, headers=auth
+    )
+    assert response.status_code == 422
+    await _annotate(client, auth, trace_id, comment="Whole trace")
+    await _import(client, auth, REFUND_TRACE)
+    remaining = (await _detail(client, auth, trace_id))["annotations"]
+    assert [a["comment"] for a in remaining] == ["Whole trace"]
+
+
+@pytest.mark.parametrize(
+    "invalid",
+    [
+        "foreign_step",
+        "duplicate",
+        "reversed",
+        "missing_text",
+        "wrong_context",
+        "wrong_summary",
+        "rating",
+        "step_id",
+        "single_segment",
+    ],
+)
+async def test_invalid_multi_step_quotes_are_rejected(client, invalid):
+    auth = await _register(client)
+    [trace_id, other_id] = await _import(client, auth, REFUND_TRACE, GREETING_TRACE)
+    steps = (await _detail(client, auth, trace_id))["steps"]
+    quote = _multi_quote(steps[:2])
+    body = {"comment": "Review this", "quote": quote}
+    if invalid == "foreign_step":
+        quote["segments"][1]["step_id"] = (await _detail(client, auth, other_id))["steps"][0]["id"]
+    elif invalid == "duplicate":
+        quote["segments"][1] = quote["segments"][0]
+    elif invalid == "reversed":
+        quote["segments"].reverse()
+    elif invalid == "missing_text":
+        quote["segments"][0]["text"] = "Not in the message"
+    elif invalid == "wrong_context":
+        quote["segments"][0]["prefix"] = "Not the prefix"
+    elif invalid == "wrong_summary":
+        quote["text"] = "Not what was selected"
+    elif invalid == "single_segment":
+        quote["segments"].pop()
+    else:
+        body[invalid] = 1 if invalid == "rating" else steps[0]["id"]
+    response = await client.post(
+        f"/api/v1/rm/traces/{trace_id}/annotations", json=body, headers=auth
+    )
+    assert response.status_code == 422
+
+
 @pytest.mark.parametrize(
     "body",
     [
@@ -255,6 +338,9 @@ async def test_label_error_annotations_do_not_train_the_model(client):
     assert pairs == [
         {
             "chosen": "user: hi there\n\nassistant: Hello! How can I help?",
+            "trace_ids": sorted([refund_id, greeting_id]),
+            "granularity": "trace",
+            "action_type": "response",
             "rejected": (
                 "user: I want a refund for order 1182\n\n"
                 'assistant → lookup_order({"order_id": "1182"})\n\n'
@@ -304,6 +390,27 @@ async def test_exports_round_trip(client):
         headers=other,
     )
     assert resp.status_code == 200, resp.text
+
+
+async def test_export_preserves_empty_tool_arguments_on_reimport(client):
+    auth = await _register(client)
+    trace = {
+        "id": "no-argument-tool",
+        "title": "Check status",
+        "steps": [
+            {"role": "user", "content": "Check status"},
+            {"role": "assistant", "content": "", "tool_name": "get_status", "tool_input": {}},
+        ],
+    }
+    await _import(client, auth, trace)
+    [exported] = _ndjson((await client.get("/api/v1/rm/export/traces", headers=auth)).text)
+    assert exported["steps"][1]["tool_input"] == {}
+
+    other = await _register(client)
+    [trace_id] = await _import(client, other, exported)
+    detail = await _detail(client, other, trace_id)
+    assert detail["steps"][1]["tool_input"] == {}
+    assert detail["steps"][0]["tool_input"] is None
 
 
 async def test_query_sees_only_the_callers_rows(client):
@@ -432,6 +539,117 @@ async def test_create_reward_model_enqueues_training(client, monkeypatch):
     assert [m["id"] for m in listed] == [model["id"]]
 
 
+async def test_training_pair_limit_must_allow_training_and_evaluation(client, monkeypatch):
+    queued = []
+    monkeypatch.setattr(rm_tasks.train_reward_model, "delay", queued.append)
+    auth = await _register(client)
+    [trace_id] = await _import(client, auth, REFUND_TRACE)
+    payload = {"name": "small model", "trace_ids": [trace_id], "max_pairs": 1}
+
+    resp = await client.post("/api/v1/rm/reward-models", json=payload, headers=auth)
+    assert resp.status_code == 422
+    assert resp.json()["detail"][0]["loc"] == ["body", "max_pairs"]
+    assert queued == []
+    assert (await client.get("/api/v1/rm/reward-models", headers=auth)).json() == []
+
+    payload["max_pairs"] = 2
+    resp = await client.post("/api/v1/rm/reward-models", json=payload, headers=auth)
+    assert resp.status_code == 200, resp.text
+    assert queued == [resp.json()["id"]]
+
+
+async def test_automatic_training_uses_server_defaults_without_manual_settings(client, monkeypatch):
+    from backend.routers.reward_models import DEFAULT_BASE_MODEL, DEFAULT_EPOCHS
+    from backend.services.rm.feedback import RUBRIC
+
+    queued = []
+    monkeypatch.setattr(rm_tasks.train_reward_model, "delay", queued.append)
+    auth = await _register(client)
+    trace_ids = await _import(
+        client, auth, _short_trace("first", "Done"), _short_trace("second", "Confirmed")
+    )
+    response = await client.post(
+        "/api/v1/rm/reward-models",
+        headers=auth,
+        json={
+            "name": "Parts quality",
+            "trace_ids": trace_ids,
+            "training_config": {"input_version": 3, "annotation_source": "automatic"},
+        },
+    )
+    assert response.status_code == 200, response.text
+    model = response.json()
+    assert model["base_model"] == DEFAULT_BASE_MODEL
+    assert model["epochs"] == DEFAULT_EPOCHS
+    assert model["training_config"]["annotation_source"] == "automatic"
+    assert model["training_config"]["rubric"] == list(RUBRIC)
+    assert set(model["training_config"]["task_groups"]) == set(trace_ids)
+    assert len(model["training_config"]["evaluation_groups"]) == 1
+    assert queued == [model["id"]]
+
+
+@pytest.mark.parametrize("compute", [None, "", "invalid"])
+async def test_training_without_a_configured_runtime_returns_service_unavailable(
+    client, monkeypatch, compute
+):
+    queued = []
+    monkeypatch.setattr(rm_tasks.train_reward_model, "delay", queued.append)
+    if compute is None:
+        monkeypatch.delenv("RM_COMPUTE", raising=False)
+    else:
+        monkeypatch.setenv("RM_COMPUTE", compute)
+    auth = await _register(client)
+    [trace_id] = await _import(client, auth, GREETING_TRACE)
+    resp = await client.post(
+        "/api/v1/rm/reward-models", json={"name": "m", "trace_ids": [trace_id]}, headers=auth
+    )
+    assert resp.status_code == 503
+    assert "Model training is not configured" in resp.json()["detail"]
+    assert queued == []
+    assert (await client.get("/api/v1/rm/reward-models", headers=auth)).json() == []
+
+
+async def test_training_eta_uses_only_owners_comparable_runs(client, monkeypatch, pool):
+    monkeypatch.setattr(rm_tasks.train_reward_model, "delay", lambda *args: None)
+    auth = await _register(client)
+    [trace_id] = await _import(client, auth, GREETING_TRACE)
+
+    async def create(headers, trace):
+        response = await client.post(
+            "/api/v1/rm/reward-models",
+            json={"name": "timed", "trace_ids": [trace]},
+            headers=headers,
+        )
+        assert response.status_code == 200
+        return response.json()
+
+    history = await create(auth, trace_id)
+    await pool.execute(
+        "UPDATE rm_reward_models SET status='succeeded', started_at=now()-interval '20 minutes', "
+        "finished_at=now()-interval '10 minutes' WHERE id=$1",
+        UUID(history["id"]),
+    )
+    queued = await create(auth, trace_id)
+    timing = queued["estimated_timing"]
+    assert timing["sample_count"] == 1
+    assert timing["excludes_queue"] is True
+    assert timing["lower_seconds"] == 420
+    assert timing["upper_seconds"] == 780
+    listed = (await client.get("/api/v1/rm/reward-models", headers=auth)).json()
+    assert next(m for m in listed if m["id"] == queued["id"])["estimated_timing"] == timing
+    detail = (await client.get(f"/api/v1/rm/reward-models/{queued['id']}", headers=auth)).json()
+    assert detail["estimated_timing"] == timing
+
+    other = await _register(client)
+    [other_trace] = await _import(client, other, GREETING_TRACE)
+    assert (await create(other, other_trace))["estimated_timing"] is None
+    await pool.execute(
+        "UPDATE rm_reward_models SET status='failed' WHERE id=$1", UUID(queued["id"])
+    )
+    detail = (await client.get(f"/api/v1/rm/reward-models/{queued['id']}", headers=auth)).json()
+    assert detail["estimated_timing"] is None
+
+
 async def test_gepa_run_needs_a_trained_reward_model(client, monkeypatch):
     monkeypatch.setattr(rm_tasks.train_reward_model, "delay", lambda *a: None)
     gepa_queued = []
@@ -550,7 +768,7 @@ async def test_patch_cannot_rate_a_system_step(client):
     assert (await _detail(client, auth, trace_id))["annotations"][0]["rating"] is None
 
 
-async def test_reward_model_trains_on_the_selected_traces_only(client, monkeypatch):
+async def test_reward_model_trains_on_the_selected_traces_only(client, monkeypatch, pool):
     """Labels outside the selection must not count toward, or into, the training set."""
     monkeypatch.setattr(rm_tasks.train_reward_model, "delay", lambda *a: None)
     auth = await _register(client)
@@ -572,6 +790,19 @@ async def test_reward_model_trains_on_the_selected_traces_only(client, monkeypat
     [listed] = (await client.get("/api/v1/rm/reward-models", headers=auth)).json()
     assert listed["trace_count"] == 3
     assert "trace_ids" not in listed
+    selected_detail = await _detail(client, auth, selected[0])
+    assert [(m["id"], m["status"]) for m in selected_detail["training_models"]] == [
+        (model["id"], "queued")
+    ]
+    assert (await _detail(client, auth, others[0]))["training_models"] == []
+    reviewer = await _register(client)
+    reviewer_id = (await client.get("/api/v1/users/me", headers=reviewer)).json()["id"]
+    await pool.execute(
+        "INSERT INTO rm_wb_trace_reviewers(trace_id,user_id) VALUES($1,$2)",
+        UUID(selected[0]),
+        UUID(reviewer_id),
+    )
+    assert (await _detail(client, reviewer, selected[0]))["training_models"] == []
 
 
 async def test_reward_model_rejects_traces_the_caller_does_not_own(client, monkeypatch):
@@ -620,3 +851,45 @@ async def test_timed_operations_survive_storage_and_export(client):
     assert exported["spans"] == spans
     [reimported] = await _import(client, auth, exported)
     assert (await _detail(client, auth, reimported))["spans"] == spans
+
+
+async def test_reward_model_metadata_reads_never_fetch_training_payloads(client, monkeypatch, pool):
+    from backend.routers import reward_models as router
+
+    monkeypatch.setattr(rm_tasks.train_reward_model, "delay", lambda *args: None)
+    auth = await _register(client)
+    await _trainable_labels(client, auth)
+    model = (
+        await client.post(
+            "/api/v1/rm/reward-models",
+            json={"name": "Metadata only", "trace_ids": await _all_trace_ids(client, auth)},
+            headers=auth,
+        )
+    ).json()
+    calls = []
+
+    class MetadataPool:
+        async def fetch(self, query, *args):
+            rows = await pool.fetch(query, *args)
+            calls.append(rows)
+            assert all("training_pairs" not in row and "artifact_key" not in row for row in rows)
+            return rows
+
+        async def fetchrow(self, query, *args):
+            row = await pool.fetchrow(query, *args)
+            calls.append([row])
+            assert "training_pairs" not in row and "artifact_key" not in row
+            return row
+
+    monkeypatch.setattr(router, "get_pool", lambda: MetadataPool())
+    response = await client.get("/api/v1/rm/reward-models", headers=auth)
+    assert response.status_code == 200
+    assert len(calls) == 1  # One model-list DB round trip, including timing history.
+    [listed] = response.json()
+    assert listed["id"] == model["id"]
+    assert listed["trace_count"] == model["trace_count"]
+    assert "trace_ids" not in calls[0][0]
+    assert "feedback" not in calls[0][0]
+    detail = (await client.get(f"/api/v1/rm/reward-models/{model['id']}", headers=auth)).json()
+    assert len(detail["trace_ids"]) == listed["trace_count"]
+    assert detail["feedback"] is None

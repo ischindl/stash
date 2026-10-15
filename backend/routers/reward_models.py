@@ -5,21 +5,37 @@ its owner; another owner's id is a 404, never a 403, so ids don't leak.
 """
 
 import json
+import logging
+import os
 import re
-from typing import Literal
+from typing import Annotated, Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import Response
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 from starlette.concurrency import run_in_threadpool
 
 from rm_worker.artifacts import download_url
 
 from ..auth import get_current_user
 from ..database import get_pool
-from ..services.rm import annotations, datasets, jobs, otel_ingest, query, traces
+from ..services.rm import (
+    annotations,
+    datasets,
+    evaluator,
+    otel_ingest,
+    playground,
+    query,
+    trace_completion,
+    trace_images,
+    trace_sections,
+    trace_sources,
+    traces,
+    training_timing,
+)
 from ..services.rm.adapters import TraceFormatError, list_formats
+from ..services.rm.feedback import RUBRIC
 from ..tasks import reward_models as rm_tasks
 
 
@@ -41,15 +57,32 @@ DEFAULT_TASK_MODEL = "anthropic/claude-haiku-4-5"
 DEFAULT_REFLECTION_MODEL = "anthropic/claude-sonnet-5"
 
 
+SourceId = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
+
+
 class ImportRequest(BaseModel):
     format: str
     data: str
+    source_id: SourceId | None = None
+
+
+class TraceSourceRequest(BaseModel):
+    source_id: SourceId
+    name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=120)]
+
+
+class QuoteSegment(BaseModel):
+    step_id: UUID
+    text: str = Field(min_length=1)
+    prefix: str
+    suffix: str
 
 
 class Quote(BaseModel):
     text: str = Field(min_length=1)
     prefix: str
     suffix: str
+    segments: list[QuoteSegment] | None = Field(default=None, min_length=2)
 
 
 class CreateAnnotationRequest(BaseModel):
@@ -66,13 +99,28 @@ class UpdateAnnotationRequest(BaseModel):
     label_error_note: str | None = None
 
 
+class PersonalTrainingConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    input_version: Literal[3] = 3
+    annotation_source: Literal["feedback", "automatic"] = "feedback"
+    rubric: list[Annotated[str, Field(min_length=1, max_length=600)]] = Field(
+        default_factory=lambda: list(RUBRIC), min_length=1, max_length=8
+    )
+    max_actions_per_trace: int = Field(default=24, ge=2, le=64)
+    task_groups: dict[UUID, Annotated[str, Field(min_length=1, max_length=120)]] = Field(
+        default_factory=dict
+    )
+    evaluation_groups: list[str] = Field(default_factory=list)
+
+
 class CreateRewardModelRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     name: str = Field(min_length=1)
     base_model: str = DEFAULT_BASE_MODEL
     epochs: int = Field(default=DEFAULT_EPOCHS, ge=1)
-    max_pairs: int = Field(default=datasets.DEFAULT_MAX_PAIRS, ge=1)
+    max_pairs: int = Field(default=datasets.DEFAULT_MAX_PAIRS, ge=datasets.MIN_PAIRS)
     trace_ids: list[UUID] = Field(min_length=1)
+    training_config: PersonalTrainingConfig | None = None
 
 
 class CreateGepaRunRequest(BaseModel):
@@ -81,6 +129,38 @@ class CreateGepaRunRequest(BaseModel):
     task_api_base: str | None = None
     reflection_model: str = Field(default=DEFAULT_REFLECTION_MODEL, min_length=1)
     max_metric_calls: int = Field(default=DEFAULT_MAX_METRIC_CALLS, ge=1)
+
+
+class ScoreTraceRequest(BaseModel):
+    reward_model_id: UUID | None = None
+
+
+class PlaygroundRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    prompt: str | None = Field(default=None, max_length=12000)
+    instructions: str = Field(default="", max_length=12000)
+    responses: list[Annotated[str, Field(min_length=1, max_length=12000)]] | None = Field(
+        default=None, min_length=1, max_length=2
+    )
+    example_index: int | None = Field(default=None, ge=0)
+
+    @model_validator(mode="after")
+    def validate_input(self):
+        if self.example_index is not None:
+            if self.prompt is not None or self.responses is not None or self.instructions:
+                raise ValueError("Use a saved example or enter a new prompt and responses")
+        elif (
+            not self.prompt
+            or not self.prompt.strip()
+            or not self.responses
+            or not all(response.strip() for response in self.responses)
+        ):
+            raise ValueError("Enter a task and at least one response")
+        return self
+
+
+class ContributionRequest(BaseModel):
+    allowed: bool
 
 
 class QueryRequest(BaseModel):
@@ -103,26 +183,82 @@ async def get_formats(current_user: dict = Depends(get_current_user)) -> list[di
 @router.post("/traces/import")
 async def import_traces(req: ImportRequest, current_user: dict = Depends(get_current_user)) -> dict:
     try:
-        return await traces.import_traces(current_user["id"], req.format, req.data)
+        return await traces.import_traces(current_user["id"], req.format, req.data, req.source_id)
     except TraceFormatError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.put("/trace-sources")
+async def rename_trace_source(
+    req: TraceSourceRequest, current_user: dict = Depends(get_current_user)
+) -> dict:
+    return await trace_sources.rename(current_user["id"], req.source_id, req.name)
 
 
 @router.get("/traces")
 async def list_traces(
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
+    q: str = Query("", max_length=500),
+    reward_model_id: UUID | None = None,
     current_user: dict = Depends(get_current_user),
 ) -> dict:
-    return await traces.list_traces(current_user["id"], limit, offset)
+    try:
+        return await traces.list_traces(current_user["id"], limit, offset, q, reward_model_id)
+    except LookupError as exc:
+        raise HTTPException(404, str(exc)) from exc
 
 
 @router.get("/traces/{trace_id}")
-async def get_trace(trace_id: UUID, current_user: dict = Depends(get_current_user)) -> dict:
-    trace = await traces.get_trace(current_user["id"], trace_id)
+async def get_trace(
+    trace_id: UUID, include_evaluation: bool = False, current_user: dict = Depends(get_current_user)
+) -> dict:
+    trace = await traces.get_trace(
+        current_user["id"], trace_id, include_evaluation=include_evaluation
+    )
     if trace is None:
         raise HTTPException(status_code=404, detail="Trace not found")
     return trace
+
+
+@router.post("/traces/{trace_id}/section-summaries")
+async def summarize_trace_sections(
+    trace_id: UUID,
+    req: trace_sections.SectionRequest,
+    current_user: dict = Depends(get_current_user),
+) -> dict:
+    try:
+        return await trace_sections.summarize(current_user["id"], trace_id, req)
+    except LookupError as exc:
+        raise HTTPException(404, "Trace not found") from exc
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
+@router.post("/traces/{trace_id}/completion")
+async def estimate_trace_completion(
+    trace_id: UUID, current_user: dict = Depends(get_current_user)
+) -> dict:
+    try:
+        return await trace_completion.assess(current_user["id"], trace_id)
+    except LookupError as exc:
+        raise HTTPException(404, "Trace not found") from exc
+
+
+@router.get("/trace-images/{image_id}")
+async def get_trace_image(image_id: UUID, current_user: dict = Depends(get_current_user)):
+    try:
+        data, content_type = await trace_images.read_image(current_user["id"], image_id)
+    except LookupError as exc:
+        raise HTTPException(404, "Image not found") from exc
+    return Response(
+        data,
+        media_type=content_type,
+        headers={
+            "Cache-Control": "private, no-cache",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
 
 
 @router.delete("/traces/{trace_id}", status_code=204)
@@ -131,9 +267,74 @@ async def delete_trace(trace_id: UUID, current_user: dict = Depends(get_current_
         raise HTTPException(status_code=404, detail="Trace not found")
 
 
+@router.post("/traces/{trace_id}/score", status_code=202)
+async def score_trace(
+    trace_id: UUID, req: ScoreTraceRequest, current_user: dict = Depends(get_current_user)
+) -> dict:
+    pool = get_pool()
+    owner = current_user["id"]
+    if not await pool.fetchval(
+        "SELECT 1 FROM rm_traces WHERE id = $1 AND owner_user_id = $2", trace_id, owner
+    ):
+        raise HTTPException(status_code=404, detail="Trace not found")
+    model_id = req.reward_model_id
+    if model_id is None:
+        default = await evaluator.default_evaluator()
+        if default is None:
+            raise HTTPException(
+                status_code=422, detail="Stash's shared evaluator has not been released yet"
+            )
+        model_id = default["id"]
+    model = await evaluator.can_score(owner, model_id)
+    if model is None:
+        raise HTTPException(status_code=404, detail="Reward model not found")
+    if (
+        model["status"] != "succeeded"
+        or not model["artifact_key"]
+        or not any(
+            (model["metrics"] or {}).get(key) == 1
+            for key in ("action_scoring_version", "trace_scoring_version")
+        )
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="Train a reward model with action comparisons to enable action scoring",
+        )
+    if not await pool.fetchval(
+        "SELECT 1 FROM rm_trace_steps WHERE trace_id = $1 AND role = 'assistant' AND (tool_name IS NOT NULL OR btrim(content) <> '')",
+        trace_id,
+    ):
+        raise HTTPException(status_code=422, detail="Trace has no assistant actions to score")
+    run, created = await evaluator.enqueue_score(owner, trace_id, model_id)
+    if created:
+        try:
+            rm_tasks.score_trace.delay(str(run["id"]))
+        except Exception:
+            # The periodic dispatcher retries the durable queued row.
+            pass
+    return run
+
+
+@router.get("/evaluator")
+async def get_evaluator() -> dict:
+    return {"default": await evaluator.default_evaluator()}
+
+
+@router.patch("/traces/{trace_id}/training-contribution")
+async def set_training_contribution(
+    trace_id: UUID, req: ContributionRequest, current_user: dict = Depends(get_current_user)
+) -> dict:
+    result = await evaluator.set_contribution(current_user["id"], trace_id, req.allowed)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Trace not found")
+    return result
+
+
 @router.post("/otel/v1/traces")
 async def receive_otlp_traces(
-    request: Request, current_user: dict = Depends(get_current_user)
+    request: Request,
+    current_user: dict = Depends(get_current_user),
+    source_id: Annotated[SourceId | None, Header(alias="X-Stash-Trace-Source")] = None,
 ) -> Response:
     """OTLP/HTTP trace receiver: OTEL_EXPORTER_OTLP_ENDPOINT=<base>/api/v1/rm/otel."""
     content_type = request.headers.get("content-type", "")
@@ -141,7 +342,7 @@ async def receive_otlp_traces(
         payload = otel_ingest.decode_request(
             await request.body(), content_type, request.headers.get("content-encoding")
         )
-        await otel_ingest.ingest(current_user["id"], payload)
+        await otel_ingest.ingest(current_user["id"], payload, source_id=source_id)
     except otel_ingest.UnsupportedContentType as exc:
         raise HTTPException(status_code=415, detail=str(exc)) from exc
     except TraceFormatError as exc:
@@ -159,7 +360,7 @@ async def create_annotation(
     req: CreateAnnotationRequest,
     current_user: dict = Depends(get_current_user),
 ) -> dict:
-    quote = req.quote.model_dump() if req.quote else None
+    quote = req.quote.model_dump(mode="json", exclude_none=True) if req.quote else None
     try:
         annotation = await annotations.create(
             current_user["id"], trace_id, req.step_id, req.rating, req.comment, quote
@@ -235,14 +436,48 @@ async def create_reward_model(
         if trace_id not in owned_ids:
             raise HTTPException(status_code=404, detail=f"Trace {trace_id} not found")
 
-    compute = jobs.required_env("RM_COMPUTE")
+    config = req.training_config.model_dump(mode="json") if req.training_config else None
+    if config is not None:
+        configured = config["task_groups"]
+        if configured and set(configured) != {str(tid) for tid in trace_ids}:
+            raise HTTPException(
+                status_code=422, detail="Assign every selected trace to one task group"
+            )
+        config["task_groups"] = configured or {str(tid): str(tid) for tid in trace_ids}
+        groups = sorted(set(config["task_groups"].values()))
+        if len(groups) < 2:
+            raise HTTPException(
+                status_code=422,
+                detail="Select at least two independent tasks for held-out evaluation",
+            )
+        config["evaluation_groups"] = (
+            config["evaluation_groups"] or groups[: max(1, round(len(groups) * 0.2))]
+        )
+        if not set(config["evaluation_groups"]) < set(groups):
+            raise HTTPException(
+                status_code=422,
+                detail="Evaluation groups must be selected tasks and leave tasks for training",
+            )
+        if req.max_pairs < len(trace_ids) * 2:
+            raise HTTPException(
+                status_code=422,
+                detail="max_pairs must allow at least two targets per selected trace",
+            )
+
+    compute = os.environ.get("RM_COMPUTE")
     if compute not in ("local", "modal"):
-        raise ValueError("RM_COMPUTE must be local or modal")
+        logging.getLogger(__name__).error(
+            "Reward-model training unavailable: RM_COMPUTE must be local or modal"
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="Model training is not configured on this server.",
+        )
     row = await get_pool().fetchrow(
         """
         INSERT INTO rm_reward_models
-          (owner_user_id, name, base_model, compute, epochs, max_pairs, trace_ids)
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
+          (owner_user_id, name, base_model, compute, epochs, max_pairs, trace_ids, training_config)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
         RETURNING *
         """,
         current_user["id"],
@@ -252,30 +487,194 @@ async def create_reward_model(
         req.epochs,
         req.max_pairs,
         trace_ids,
+        config,
     )
     rm_tasks.train_reward_model.delay(str(row["id"]))
-    return _reward_model(row)
+    return _reward_model(row, await _timing_history(row))
 
 
 @router.get("/reward-models")
 async def list_reward_models(current_user: dict = Depends(get_current_user)) -> list[dict]:
     rows = await get_pool().fetch(
-        "SELECT * FROM rm_reward_models WHERE owner_user_id = $1 ORDER BY created_at DESC",
+        f"SELECT {REWARD_MODEL_SUMMARY_COLUMNS} FROM rm_reward_models "
+        "WHERE owner_user_id = $1 AND scope = 'personal' ORDER BY created_at DESC",
         current_user["id"],
     )
-    return [_reward_model(row) for row in rows]
+    return [_reward_model(row, rows) for row in rows]
 
 
 @router.get("/reward-models/{model_id}")
 async def get_reward_model(model_id: UUID, current_user: dict = Depends(get_current_user)) -> dict:
     row = await get_pool().fetchrow(
-        "SELECT * FROM rm_reward_models WHERE owner_user_id = $1 AND id = $2",
+        f"SELECT {REWARD_MODEL_SUMMARY_COLUMNS}, owner_user_id, trace_ids, feedback "
+        "FROM rm_reward_models WHERE owner_user_id = $1 AND id = $2",
         current_user["id"],
         model_id,
     )
     if row is None:
         raise HTTPException(status_code=404, detail="Reward model not found")
-    return {**_reward_model(row), "trace_ids": row["trace_ids"], "feedback": row["feedback"]}
+    return {
+        **_reward_model(row, await _timing_history(row)),
+        "trace_ids": row["trace_ids"],
+        "feedback": row["feedback"],
+    }
+
+
+@router.post("/reward-models/{model_id}/retry", status_code=202)
+async def retry_reward_model(
+    model_id: UUID, current_user: dict = Depends(get_current_user)
+) -> dict:
+    pool = get_pool()
+    row = await pool.fetchrow(
+        """UPDATE rm_reward_models SET status='queued', error=NULL, started_at=NULL,
+        finished_at=NULL, progress=NULL WHERE id=$1 AND owner_user_id=$2
+        AND scope='personal' AND status='failed' RETURNING *""",
+        model_id,
+        current_user["id"],
+    )
+    if row is None:
+        if not await pool.fetchval(
+            "SELECT 1 FROM rm_reward_models WHERE id=$1 AND owner_user_id=$2 AND scope='personal'",
+            model_id,
+            current_user["id"],
+        ):
+            raise HTTPException(404, "Reward model not found")
+        raise HTTPException(409, "Only failed training jobs can be retried")
+    try:
+        rm_tasks.train_reward_model.delay(str(model_id))
+    except Exception:
+        # The durable queued row is redispatched by the periodic sweep.
+        logging.getLogger(__name__).warning(
+            "Could not dispatch training retry %s", model_id, exc_info=True
+        )
+    return _reward_model(row, await _timing_history(row))
+
+
+@router.get("/reward-models/{model_id}/examples")
+async def reward_model_examples(
+    model_id: UUID,
+    offset: int = Query(0, ge=0),
+    limit: int = Query(10, ge=1, le=25),
+    current_user: dict = Depends(get_current_user),
+) -> dict:
+    model = await playground.model_for_owner(current_user["id"], model_id)
+    pairs = model["training_pairs"] or []
+    return {
+        "total": len(pairs),
+        "items": [
+            {
+                "index": i,
+                "chosen": pair["chosen"],
+                "rejected": pair["rejected"],
+                "partition": pair.get("partition"),
+                "source": pair.get("source"),
+                "trace_ids": pair.get("trace_ids")
+                or ([pair["trace_id"]] if pair.get("trace_id") else []),
+            }
+            for i, pair in enumerate(pairs[offset : offset + limit], start=offset)
+        ],
+    }
+
+
+@router.post("/reward-models/{model_id}/playground", status_code=202)
+async def create_playground_run(
+    model_id: UUID,
+    req: PlaygroundRequest,
+    current_user: dict = Depends(get_current_user),
+) -> dict:
+    owner = current_user["id"]
+    model = await playground.model_for_owner(owner, model_id)
+    if model["status"] != "succeeded" or not model["artifact_key"]:
+        raise HTTPException(409, "This model is not ready to score responses yet")
+    if not os.environ.get("RM_WORKER_PYTHON"):
+        raise HTTPException(503, "Model scoring is not configured on this server")
+    if req.example_index is not None:
+        pairs = model["training_pairs"] or []
+        if req.example_index >= len(pairs):
+            raise HTTPException(404, "Training example not found")
+        pair = pairs[req.example_index]
+        data = {"example_index": req.example_index, "texts": [pair["chosen"], pair["rejected"]]}
+    else:
+        data = req.model_dump(exclude={"example_index"})
+    pool = get_pool()
+    async with pool.acquire() as conn, conn.transaction():
+        # Serialize requests across this owner's models, bounding concurrent GPU use.
+        await conn.fetchval("SELECT id FROM users WHERE id = $1 FOR UPDATE", owner)
+        await conn.execute(
+            """UPDATE rm_playground_runs SET status = 'failed', finished_at = now(),
+            error = 'Scoring timed out. Please try again.' WHERE owner_user_id = $1
+            AND status IN ('queued', 'running') AND created_at < now() - interval '35 minutes'""",
+            owner,
+        )
+        active = await conn.fetchrow(
+            "SELECT * FROM rm_playground_runs WHERE owner_user_id = $1 AND status IN ('queued', 'running')",
+            owner,
+        )
+        if active:
+            if active["reward_model_id"] == model_id and active["input"] == data:
+                return dict(active)
+            raise HTTPException(
+                409, "A playground run is already in progress. Wait for it to finish."
+            )
+        run = await conn.fetchrow(
+            "INSERT INTO rm_playground_runs(owner_user_id, reward_model_id, input) VALUES ($1, $2, $3) RETURNING *",
+            owner,
+            model_id,
+            data,
+        )
+    try:
+        rm_tasks.playground_score.delay(str(run["id"]))
+    except Exception:
+        logging.getLogger(__name__).exception("Could not dispatch playground run %s", run["id"])
+        await pool.execute(
+            "UPDATE rm_playground_runs SET status = 'failed', error = 'Could not start scoring. Please try again.', finished_at = now() WHERE id = $1 AND status = 'queued'",
+            run["id"],
+        )
+        raise HTTPException(503, "Could not start scoring. Please try again.") from None
+    return dict(run)
+
+
+@router.get("/reward-models/{model_id}/playground")
+async def list_playground_runs(
+    model_id: UUID,
+    offset: int = Query(0, ge=0),
+    current_user: dict = Depends(get_current_user),
+) -> dict:
+    owner = current_user["id"]
+    await playground.model_for_owner(owner, model_id)
+    await playground.expire_runs(owner)
+    rows = await get_pool().fetch(
+        """SELECT id, status, scores, error, created_at, input->>'example_index' AS example_index,
+        left(input->>'prompt', 160) AS prompt FROM rm_playground_runs
+        WHERE owner_user_id = $1 AND reward_model_id = $2 ORDER BY created_at DESC, id DESC LIMIT 20 OFFSET $3""",
+        owner,
+        model_id,
+        offset,
+    )
+    total = await get_pool().fetchval(
+        "SELECT count(*) FROM rm_playground_runs WHERE owner_user_id = $1 AND reward_model_id = $2",
+        owner,
+        model_id,
+    )
+    return {"items": [dict(row) for row in rows], "total": total}
+
+
+@router.get("/reward-models/{model_id}/playground/{run_id}")
+async def get_playground_run(
+    model_id: UUID,
+    run_id: UUID,
+    current_user: dict = Depends(get_current_user),
+) -> dict:
+    await playground.expire_runs(current_user["id"])
+    row = await get_pool().fetchrow(
+        "SELECT * FROM rm_playground_runs WHERE owner_user_id = $1 AND reward_model_id = $2 AND id = $3",
+        current_user["id"],
+        model_id,
+        run_id,
+    )
+    if row is None:
+        raise HTTPException(404, "Playground run not found")
+    return dict(row)
 
 
 @router.get("/reward-models/{model_id}/weights")
@@ -312,12 +711,35 @@ REWARD_MODEL_FIELDS = (
     "created_at",
     "started_at",
     "finished_at",
+    "training_config",
+    "progress",
 )
 
 
-def _reward_model(row) -> dict:
+# Training pairs can contain hundreds of MB of recorded context. Never fetch
+# them for UI metadata; count the trace IDs in Postgres instead of transferring them.
+REWARD_MODEL_SUMMARY_COLUMNS = (
+    ", ".join(REWARD_MODEL_FIELDS) + ", cardinality(trace_ids) AS trace_count"
+)
+
+
+async def _timing_history(row):
+    if row["status"] not in ("queued", "running"):
+        return []
+    return await get_pool().fetch(
+        f"SELECT {REWARD_MODEL_SUMMARY_COLUMNS} FROM rm_reward_models "
+        "WHERE owner_user_id=$1 AND scope='personal' "
+        "AND status='succeeded' AND base_model=$2 AND compute=$3 ORDER BY created_at DESC LIMIT 20",
+        row["owner_user_id"],
+        row["base_model"],
+        row["compute"],
+    )
+
+
+def _reward_model(row, history=()) -> dict:
     model = {key: row[key] for key in REWARD_MODEL_FIELDS}
-    model["trace_count"] = len(row["trace_ids"])
+    model["trace_count"] = row["trace_count"] if "trace_count" in row else len(row["trace_ids"])
+    model["estimated_timing"] = training_timing.estimate(model, history)
     return model
 
 

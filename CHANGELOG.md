@@ -24,7 +24,7 @@ everything before it is captured in git history (`git log`), not here.
   person who just registered had no way in to the file browser from inside the product:
   the page existed only as an address someone had to know and type, which is exactly why
   a folder shared with them, or a skill their agent published, stayed invisible to them.
-  That navigation now carries **Files**, between Reward models and Skills, and it lights
+  That navigation now carries **Files**, between Reward models and Monitoring, and it lights
   up while you are anywhere in your files — the browser itself, a folder, a page, a table
   — so you always have a way back. One click opens it; the account's shared folders are
   right there. Nothing about who is shown which navigation changed, and the page you land
@@ -422,6 +422,246 @@ everything before it is captured in git history (`git log`), not here.
   transcripts GUI-side, and moves sessions between projects. A project's
   opt-in only widens an opted-in user's material — a user's own opt-out stays
   the hard floor. Newly created projects start dark.
+
+- Bring in intuition models with a playground, prediction inbox, editable
+  examples and rubrics, and evaluated model versions. Click a trained reward
+  model to score or compare responses using its saved checkpoint, revisit run
+  history, or replay its saved training pairs.
+
+- Continue into the next trace subsection with Down at the last row, or the
+  previous subsection with Up at the first row.
+
+- Preserve trace-table sorting when opening a trace and returning to the list.
+- Show the current section's range and offer “View all steps” so nested trace
+  overviews do not look like the end of the trace.
+
+- Select traces with checkboxes or Shift-click ranges in the current sort/filter
+  order, then delete the selection together. Failed deletions remain selected
+  for retry.
+
+- Remove the compute provider and epoch count from expanded reward-model rows.
+
+- Simplify reward-model creation to a name and selected traces. Use managed
+  training defaults, remove the reward-criteria, epoch, and base-model controls,
+  and remove the explanatory sentence beneath the dialog title.
+
+- Label traces by source, with stable source IDs and editable names. Filter the
+  trace list and training picker by source and import dates, and select only the
+  shown traces when creating a reward model.
+
+- Show reward-model training stages and time estimates from comparable completed
+  runs or live batch timing, with explicit queue waits and unknown estimates.
+
+- Replace reward-model cards and the dashed empty-state box with a compact,
+  searchable table, status filters, exact timestamps, and expandable model details.
+- Explain when model training is not configured instead of returning an internal
+  server error, and display creation errors above the training controls.
+
+- Keep the reward-model creation sheet open when clicking outside it, preserving
+  trace selections until it is closed with the close button or Escape.
+
+- Give user messages a quiet tint and accent, and start a new phase with the
+  user's reply or approval. Reduce the completion curve to 30% opacity.
+
+- Add a faint, smooth estimated task-completion curve to the trace minimap with its own 0–100%
+  scale, evidence-based checkpoints, and separate segments for independent requests.
+- Outline the selected section on the minimap, shorten visible step ranges, and
+  show every step in the side rail with stronger phase markers.
+
+- Keep focus on the selected minimap step after clicking or dragging, so Left and
+  Right continue scrubbing chronologically from that step.
+- Let trace messages scroll continuously between phases, with compact dividers
+  and a breadcrumb that follows the current phase. Remove redundant comment prompts.
+- Show the called tool above its inputs when expanded. Hide descriptive step
+  badges while retaining the underlying annotations and scores.
+- Tighten trace-list and collapsed message rows to 28px and show exact local import timestamps, with
+  the timezone available on hover.
+
+- Show readable action descriptions in tool rows, with raw inputs on hover and
+  tool-name explanations. Label expanded tool arguments as Inputs and use neutral
+  field labels. Keep section-title descenders visible within compact rows.
+
+- Keep trace sections scoped to their own steps, with Left/Right navigating up
+  and into sections. Remove the duplicate Back control. Add message comment
+  icons and a contextual menu for selected text, including multi-message quotes.
+- Use evenly spaced collapsed messages, quieter code typography, and scores
+  without grading breakdowns. Label context separately from numbered tasks.
+  Use dense, single-line section rows with setup grouped under Context. Remove
+  browse-table checkboxes and duplicate search, tighten trace-list rows, and
+  place ±1 first in the credit-scale toggle.
+
+- Start trace messages collapsed, including assistant messages, with previews and
+  consistent neutral row labels. Call assistant messages “Assistant” throughout.
+  Replace task score cards with compact, unboxed headers containing inline values
+  and the step range, without explanatory captions.
+  Use a compact outline icon to return to the sections overview.
+
+- Replace the separate Show less row with a subtle collapse icon in the message's
+  left gutter, with a tooltip explaining that it collapses the text to a preview.
+
+- Keep same-named files in connected Google Drive folders separately indexed,
+  preserving each file's contents through renames and repeat syncs. Report
+  duplicate skill names with the documents to choose from instead of silently
+  loading one of them.
+
+- Align the sticky Show less control with the left edge of message content.
+
+- Add trace comments through a context menu, including selections spanning multiple
+  messages. Left/Right now move between steps from the trace view; Enter opens
+  sections and Esc goes back. Messages and tool calls start fully expanded.
+  Show only the thin position line on the minimap, without a focus rectangle.
+
+- Default trace credit charts to ±1 and omit the inactive Sections heading at
+  the overview level. Fit scaling and navigation within sections remain available.
+
+- Add Fit / ±1 trace-credit scaling and use baseline ticks for unscored steps.
+  Separate task score summaries from message rows, with the task's step range,
+  final answer, total work, and capped score. Show every suggested training base
+  model in the picker and clarify that evaluation uses separate source traces.
+
+- Plot step credit around a centered zero line: positive bars rise, negative bars
+  fall, and zero has no filled height. Add an explanatory rescore tooltip.
+
+- Keep the trace minimap marker on the selected step after a jump by matching
+  scroll tracking to the space reserved for the sticky breadcrumb. Preserve
+  clicked selections when a jump reaches the bottom, until the viewer scrolls
+  or navigates elsewhere.
+
+- Align trace step numbers with their message headings and move the theme toggle
+  to the bottom-left sidebar.
+- Leave sections containing only supplied context ungraded instead of assigning
+  success scores to system instructions, requests, or tool observations.
+
+- Simplify trace navigation and remove the label summary, Labels/Scores toggles,
+  scoring explainer, and redundant navigation hints. Keep long-message collapse
+  controls visible while scrolling, use warm Stash colors in dark mode, and show
+  ungraded messages as minimap dots with single-line previews below the chart.
+
+- Recover locally rejected long-trace scoring jobs after upgrading the worker.
+  Hover statuses distinguish failed, queued, and running scoring jobs.
+
+- Keep all recorded messages chronological, with compact inline expansion,
+  left-gutter step numbers, syntax-highlighted code, and collapsible input and
+  output rows. Remove the separate message reader and add a persistent theme toggle.
+- Keep section cards one click away while the step view can scroll through the
+  entire trace. Preserve the global minimaps, including navigation before scores
+  arrive, and show action credit inline.
+- Replace noisy scoring errors with a compact rescore control. Process long
+  recordings in bounded, overlapping context windows instead of rejecting them;
+  automatically resume traces rejected by the previous size limits.
+- Show creation and training status for reward models trained on the current trace.
+- Open single-task traces directly on their subtasks or recorded steps. Show
+  readable section titles immediately while generated summaries load.
+- Add local trace snapshot imports that retain saved grades and a lightweight
+  worker for remote API scoring of new local imports.
+
+- Organize traces by requests, progress subtasks, and distinct activities without
+  capping section counts or splitting work into equal chunks. Generate concise
+  activity titles and summaries. Let longer lists scroll, and use up/down
+  arrows to select, right to open, and left to return to the parent section.
+- Keep the left trace minimap at the whole-trace scale inside subsections,
+  highlighting the containing task. Scrub between global tasks without changing
+  the map’s scale; arrow navigation resumes afterward.
+- Show cached section success scores with local objectives and an explanation.
+  Judge each partition against the requests active within it, including unrelated
+  tasks in the same conversation; insufficient evidence stays unscored.
+
+- Browse long traces from request summaries into smaller sections and individual
+  steps, with hover previews and direct minimap/comment navigation.
+- Count adjacent tool calls and outputs as one displayed step. Render question
+  replies and tool values readably while preserving source links and comment selections.
+- Align plain action-credit numbers, remove full-row score colors and duplicate
+  Details buttons, make user messages collapsible, and start comments closed.
+- Load compact saved action and outcome scores together with the trace, avoiding
+  a second download of evaluator prompts and responses before bars appear.
+
+- Display embedded screenshots inline in traces, with click-to-enlarge previews.
+  Re-uploading a native transcript restores its images without changing existing
+  steps, comments, or scores.
+- Give ungraded trace events no bar height, removing the alternating stripes
+  while preserving their hover, click, and scrub positions.
+
+- Replace blank trace scores with visible loading, queued, recalculating,
+  waiting, insufficient-evidence, or failure statuses.
+
+- Start the comments panel closed on traces with no comments, while preserving
+  manual open/close choices during updates.
+- Make the first trace navigation tick jump to the very top, including system messages.
+
+- Move trace sharing into the three-dot actions menu.
+
+- Remove the trace's Expand all control; individual tool details still open on demand.
+
+- Scrub through traces and conversations by dragging along the left navigation
+  rail, with immediate scrolling and a live preview of each destination.
+- Keep trace controls in two compact rows: back, title, score, and actions above
+  the step map. Remove the All / Conversation / Tools toggle and keep all steps
+  visible. Move execution timelines into the scrolling content.
+
+- Remove the action-credit legend and visible annotation-progress row to give
+  the trace more vertical space, and place the imported timestamp beside the
+  title. Scores and grading statuses remain available on hover and focus, with
+  a progress summary for screen readers.
+
+- Use continuous expected action credit from −1 to +1, calculated from saved
+  classifier probabilities, across trace bars, credit summaries, and new training
+  comparisons. Preserve insufficient-evidence abstentions and original verdicts.
+- Remove the trace-map instruction line and show action scores or grading status
+  immediately on hover or keyboard focus, replacing delayed native tooltips.
+
+- Explain trace-bar heights with a harmful/neutral/helpful legend and show
+  annotation counts, pending scores, insufficient evidence, and failed updates.
+  Retry invalid automatic-classifier responses up to three times per batch,
+  retaining completed batches and recovering previously stranded annotations.
+
+- Keep previous action-credit bars visible while a growing trace is evaluated
+  again. Earlier annotations are clearly labeled and replaced as current scores
+  arrive; unscored new steps no longer make the entire chart appear to collapse.
+
+- Simplify the latest reward-model workspace to Traces, Reward models, and
+  Monitoring, with current skills, changes, and feedback under Monitoring.
+  Search trace content, review numeric success and action-credit summaries,
+  and share traces with teammate name suggestions.
+- Keep the trace minimap visible, color bars by action type, size them by credit,
+  and jump to the exact selected step. Remove evaluation-history panels and
+  align conversation rows consistently.
+- Train personal reward models from saved automatic action and outcome
+  annotations. Keep training and evaluation tasks separate, exclude stale or
+  disputed labels, and monitor saved model scores on recorded runs.
+
+- Reward-model links on the marketing site open the app, and the trace-list
+  alias `/reward-models/traces` redirects to `/reward-models` instead of a 404.
+
+- Automatically extracted corrections retain the conversation and tool results
+  through the user's feedback when drafting agent instructions. Unreviewed target
+  guesses can be corrected or left unresolved. Older untouched drafts are archived
+  and regenerated once; human reviews and released instructions are preserved.
+
+- Automatic Jev evaluation recovers traces skipped during rolling deployments
+  and retries stale database query plans. Migration backfill preserves active
+  workers. Corrections without a recorded repository can still be interpreted
+  and reviewed; only instruction creation remains unavailable. Recovery respects
+  accounts using an older product checkpoint or with workbench access disabled.
+
+- Skill generation automatically retries invalid model-generated names and
+  descriptions, so an overlong description no longer immediately fails the job.
+
+- Open traces, session transcripts, and chats have a slim conversation rail:
+  hover a tick to preview a turn, click to jump, or navigate with the keyboard.
+  Reading an earlier chat turn now holds your place while a response streams.
+  Trace turn previews use assistant responses rather than thinking events, and
+  transcript navigation also works in the Developer Platform console.
+
+- Accounts can be assigned the October 5 Floodgate product checkpoint, retaining
+  its Traces, Reward models, and Skills experience in the main app.
+
+- Automatic Jev evaluations no longer stop at a daily call limit. Traces paused
+  by the previous cap resume automatically and reuse their saved results.
+
+- Agent Workbench automatically uses Jev to judge trace success and estimate each
+  action’s credit from recorded results. No grader setup is required. Inspect
+  saved evidence, confidence, previous trace versions, and evaluation errors
+  separately; corrections can propose repository-scoped agent instructions.
 
 - New signups see only the Developer Platform, with internal navigation,
   onboarding, and settings hidden by a per-user flag. Existing accounts retain

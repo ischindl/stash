@@ -91,6 +91,24 @@ async def _insert_representative_source_document(
         return
 
     source_id = UUID(source["id"])
+    if table == "drive_documents":
+        from backend.database import get_pool
+
+        row_id = await source_service.upsert_drive_document(
+            source_id=source_id,
+            owner_user_id=owner_user_id,
+            path="record-1",
+            name="Record 1",
+            external_ref="provider-record-1",
+            external_updated_at=None,
+        )
+        await get_pool().execute(
+            "UPDATE drive_documents SET content = $2, extraction_status = 'done' WHERE id = $1",
+            row_id,
+            "confidential customer content",
+        )
+        return
+
     if table not in source_service.CONTENT_TABLES:
         await source_service.upsert_index_row(
             table=table,
@@ -1099,6 +1117,7 @@ async def test_github_indexer_crawls_text_files_and_resyncs(client, monkeypatch)
             "README.md": b"# Widgets\nrun the migration",
             "src/app.py": b"print('hello')",
             "logo.png": b"\x89PNG\x00\x01\x02\x03\xff\xfe",  # binary → skipped
+            "binary.dat": b"header\x00body",  # decodable UTF-8 is not necessarily text
             ".git/config": b"[core]",  # dotdir → skipped
         }
     )
@@ -1326,59 +1345,6 @@ async def test_sync_source_disconnected_connection_asks_to_reconnect(client, _db
     row = await _sync_row(_db_pool, src["id"])
     assert row["sync_status"] == "needs_setup"
     assert "is disconnected — reconnect to read" in row["sync_error"]
-    assert row["sync_error"] != sources_task.SYNC_FAILED_MESSAGE
-
-
-@pytest.mark.asyncio
-async def test_sync_source_missing_provider_key_parks_naming_the_key(client, _db_pool, monkeypatch):
-    """A provider key the server was never configured with is a permanent state
-    no owner can fix by reconnecting, but the state is still 'waiting on setup',
-    not 'broken'. Park it, and name the setting (a name, never a value) so the
-    operator knows what to set."""
-    from backend.config import settings
-    from backend.tasks import sources as sources_task
-
-    _, owner_id = await _register(client, "park_xkey")
-    src = await source_service.create_source(
-        owner_user_id=owner_id,
-        source_type="x_saves",
-        external_ref="saves",
-        display_name="X saves",
-    )
-    monkeypatch.setattr(settings, "TWITTERAPI_IO_KEY", None)
-
-    result = await sources_task._sync_source(UUID(src["id"]))
-
-    assert result["status"] == "needs_setup"
-    row = await _sync_row(_db_pool, src["id"])
-    assert row["sync_status"] == "needs_setup"
-    assert "TWITTERAPI_IO_KEY" in row["sync_error"]
-    assert row["sync_error"] != sources_task.SYNC_FAILED_MESSAGE
-
-
-@pytest.mark.asyncio
-async def test_sync_source_missing_instagram_key_parks_naming_the_key(
-    client, _db_pool, monkeypatch
-):
-    """The Instagram saves indexer has the same missing-key family as X saves."""
-    from backend.config import settings
-    from backend.tasks import sources as sources_task
-
-    _, owner_id = await _register(client, "park_igkey")
-    src = await source_service.create_source(
-        owner_user_id=owner_id,
-        source_type="instagram_saves",
-        external_ref="saves",
-        display_name="Instagram saves",
-    )
-    monkeypatch.setattr(settings, "SCRAPECREATORS_API_KEY", None)
-
-    result = await sources_task._sync_source(UUID(src["id"]))
-
-    assert result["status"] == "needs_setup"
-    row = await _sync_row(_db_pool, src["id"])
-    assert row["sync_status"] == "needs_setup"
-    assert "SCRAPECREATORS_API_KEY" in row["sync_error"]
     assert row["sync_error"] != sources_task.SYNC_FAILED_MESSAGE
 
 

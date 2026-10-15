@@ -14,8 +14,8 @@ scheduled/curator family gets a server-side close because *nothing else* can emi
 one for it; this family must not get that treatment, because closing on
 `assistant_message` would end a session while the engine still streams into it —
 an approved-then-revised workflow keeps pushing, and a session still open is the
-truth. (`test_migration_close_curator_runs.py` holds the other half: 0226's scope
-clause leaves these ids alone.)
+truth. (`test_migration_close_curator_runs.py` holds the other half: `0249`'s scope
+clause (trunk reviewed it as `0226`) leaves these ids alone.)
 
 These tests are the forward half of AC2b: whichever of the two ingestion doors the
 pusher uses, its `session_end` lands the close, at the instant the pusher stamped.

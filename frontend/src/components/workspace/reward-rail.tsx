@@ -1,20 +1,23 @@
 "use client";
 
+import FloodgateComponent from "@/checkpoints/floodgate-2026-10-05/RewardRail";
+
 import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
 import { Settings } from "lucide-react";
 import AccountMenu from "@/components/workspace/account-menu";
+import TraceThemeToggle from "@/components/reward-models/TraceThemeToggle";
 import { cn } from "@/lib/utils";
 import type { User } from "@/lib/types";
 
 const PRIMARY = [
   { label: "Traces", href: "/reward-models", match: (path: string) => path === "/reward-models" || path.startsWith("/reward-models/traces/") },
-  { label: "Reward models", href: "/reward-models/models", match: (path: string) => path.startsWith("/reward-models/models") || path.startsWith("/reward-models/gepa/") },
+  { label: "Reward models", href: "/reward-models/models", match: (path: string) => path.startsWith("/reward-models/models") || path.startsWith("/reward-models/gepa/") || path.startsWith("/reward-models/intuitions") },
   { label: "Files", href: "/files", match: (path: string) => path === "/files" || path.startsWith("/f/") || path.startsWith("/p/") || path.startsWith("/folders/") || path.startsWith("/tables/") },
-  { label: "Skills", href: "/skills", match: (path: string) => path === "/skills" || path.startsWith("/skills/") },
+  { label: "Monitoring", href: "/reward-models/monitoring", match: (path: string) => /^\/reward-models\/(monitoring|changes|review|optimization)/.test(path) || path.startsWith("/skills") },
 ];
 
-export default function RewardRail({ user, onLogout }: { user: User; onLogout: () => void }) {
+function LatestRewardRail({ user, onLogout }: { user: User; onLogout: () => void }) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const inSkillFolder = searchParams.get("section") === "skills";
@@ -23,7 +26,7 @@ export default function RewardRail({ user, onLogout }: { user: User; onLogout: (
     <aside className="flex w-40 shrink-0 flex-col border-r border-sidebar-border bg-rail px-2 py-3">
       <nav aria-label="Main navigation" className="flex flex-col gap-1">
         {PRIMARY.map((item) => {
-          const active = item.match(pathname) || (item.href === "/skills" && inSkillFolder);
+          const active = item.match(pathname) || (item.href === "/reward-models/monitoring" && inSkillFolder);
           return (
             <Link
               key={item.href}
@@ -49,7 +52,14 @@ export default function RewardRail({ user, onLogout }: { user: User; onLogout: (
           Settings
         </Link>
         <AccountMenu user={user} onLogout={onLogout} />
+        <div className="px-1.5"><TraceThemeToggle /></div>
       </div>
     </aside>
   );
+}
+
+export default function RewardRail(props: React.ComponentProps<typeof LatestRewardRail>) {
+  return props.user.product_checkpoint === "floodgate-2026-10-05"
+    ? <FloodgateComponent {...props} />
+    : <LatestRewardRail {...props} />;
 }

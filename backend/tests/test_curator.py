@@ -51,7 +51,7 @@ async def test_curator_provisioned_reserved_and_due(client: AsyncClient, _db_poo
 
 @pytest.mark.asyncio
 async def test_watermark_pair_accepts_a_whole_instant(client: AsyncClient, _db_pool):
-    """Migration 0219: the event half is a nullable uuid column, and NULL there is
+    """Migration 0242: the event half is a nullable uuid column, and NULL there is
     a complete position — the instant alone, every event at it behind — which is
     what every watermark stored before the column existed. That reading is why the
     migration backfills nothing and why this legal write needs no event id."""

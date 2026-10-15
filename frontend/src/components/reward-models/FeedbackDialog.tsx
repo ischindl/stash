@@ -1,5 +1,8 @@
 "use client";
 
+import { useProductCheckpoint } from "@/components/ProductCheckpointContext";
+import FloodgateComponent from "@/checkpoints/floodgate-2026-10-05/FeedbackDialog";
+
 import Link from "next/link";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
@@ -8,7 +11,7 @@ import { rmGetRewardModel } from "@/lib/api";
 import type { RmRewardModelDetail } from "@/lib/types";
 import { errorMessage } from "./rm-text";
 
-export default function FeedbackDialog({ modelId }: { modelId: string }) {
+function LatestFeedbackDialog({ modelId }: { modelId: string }) {
   const [model, setModel] = useState<RmRewardModelDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -31,7 +34,7 @@ export default function FeedbackDialog({ modelId }: { modelId: string }) {
           <DialogTitle>Extracted learning</DialogTitle>
           <DialogDescription>
             User feedback and AI assessments are shown separately. AI judgments are not human ratings.
-            Training pairs compare the original response with a generated alternative in the same context.
+            Training pairs compare the original response or tool call with a generated alternative in the same context.
           </DialogDescription>
         </DialogHeader>
         {error ? <p role="alert">{error}</p> : model === null ? <p role="status">Loading learning report…</p> : model.feedback === null ? (
@@ -45,13 +48,22 @@ export default function FeedbackDialog({ modelId }: { modelId: string }) {
                 <div className="flex items-baseline justify-between gap-4 text-sm">
                   <span className="font-medium">{item.source === "ai_judgment" ? "AI judgment" : "User feedback"} · {item.label}</span>
                   <Link href={`/reward-models/traces/${item.trace_id}`} className="text-muted-foreground underline underline-offset-2">
-                    Response at step {item.step_index + 1}
+                    {item.tool_name ? "Tool call" : "Response"} at step {item.step_index + 1}
                   </Link>
                 </div>
                 <blockquote className="mx-0 my-3 border-l-2 border-border pl-3 text-sm">{item.evidence_quote}</blockquote>
                 <p className="m-0 text-sm">{item.reason}</p>
+                {item.original_action && item.alternative_action && (
+                  <details className="mt-3 text-sm">
+                    <summary className="cursor-pointer">Compare actions</summary>
+                    <p>Original{item.label === "positive" ? " (preferred)" : ""}</p>
+                    <pre className="whitespace-pre-wrap break-words rounded bg-muted p-3 text-xs">{item.original_action}</pre>
+                    <p>Alternative{item.label === "negative" ? " (preferred)" : ""}</p>
+                    <pre className="whitespace-pre-wrap break-words rounded bg-muted p-3 text-xs">{item.alternative_action}</pre>
+                  </details>
+                )}
                 <p className="mb-0 mt-2 text-xs text-muted-foreground">
-                  {item.included_in_training ? "Included in training data" : "Excluded from training"}
+                  {item.included_in_training ? "Included in training data" : item.included_in_evaluation ? "Held-out evaluation data" : "Excluded from training"}
                   {" · "}{item.confidence === "high" ? "High" : "Low"} assessment confidence
                   {" · "}{item.classifier_model}
                 </p>
@@ -62,4 +74,10 @@ export default function FeedbackDialog({ modelId }: { modelId: string }) {
       </DialogContent>
     </Dialog>
   );
+}
+
+export default function FeedbackDialog(props: React.ComponentProps<typeof LatestFeedbackDialog>) {
+  return useProductCheckpoint() === "floodgate-2026-10-05"
+    ? <FloodgateComponent {...props} />
+    : <LatestFeedbackDialog {...props} />;
 }

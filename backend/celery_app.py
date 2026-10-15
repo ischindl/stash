@@ -41,8 +41,9 @@ celery = Celery(
         "backend.tasks.sources",
         "backend.tasks.agent_schedules",
         "backend.tasks.reward_models",
+        "backend.tasks.workbench",
+        "backend.tasks.optimization",
         "backend.integrations.google.exporters.slides",
-        "backend.integrations.x_saves.tasks",
         "backend.exports.pdf",
         "backend.exports.pptx",
     ],
@@ -71,6 +72,12 @@ celery.conf.update(
         "backend.tasks.viz.precompute": {"queue": "heavy"},
         "backend.tasks.reward_models.train_reward_model": {"queue": "reward"},
         "backend.tasks.reward_models.run_gepa": {"queue": "reward"},
+        "backend.tasks.reward_models.playground_score": {"queue": "reward"},
+        "backend.tasks.reward_models.score_trace": {"queue": "reward"},
+        "backend.tasks.reward_models.score_batch": {"queue": "reward"},
+        "backend.tasks.reward_models.collect_examples": {"queue": "reward"},
+        "backend.tasks.reward_models.train_evaluator": {"queue": "reward"},
+        "backend.tasks.optimization.score_run": {"queue": "reward"},
     },
     task_acks_late=True,
     task_reject_on_worker_lost=True,
@@ -89,6 +96,18 @@ celery.conf.update(
     timezone="UTC",
     enable_utc=True,
     beat_schedule={
+        "prompt-optimization-reconcile": {
+            "task": "backend.tasks.optimization.reconcile",
+            "schedule": 30.0,
+        },
+        "workbench-reconcile": {
+            "task": "backend.tasks.workbench.reconcile",
+            "schedule": 15.0,
+        },
+        "shared-evaluator-reconcile": {
+            "task": "backend.tasks.reward_models.reconcile",
+            "schedule": 30.0,
+        },
         "embedding-reconcile": {
             "task": "backend.tasks.embeddings.reconcile",
             "schedule": 60.0,
@@ -183,13 +202,6 @@ celery.conf.update(
         "sources-reconcile-github-sync-all": {
             "task": "backend.tasks.sources.reconcile_github_sync_all",
             "schedule": 3600.0,
-        },
-        "x-keep-tokens-fresh": {
-            "task": "backend.integrations.x_saves.keep_tokens_fresh",
-            # X kills grants whose rotating refresh token idles for ~a day; a
-            # 30-min tick refreshes each access token as it expires (~2h),
-            # keeping the refresh token exercised (see x_saves/tasks.py).
-            "schedule": 1800.0,
         },
         "cli-auth-cleanup-expired": {
             "task": "backend.tasks.cli_auth.cleanup_expired_sessions",

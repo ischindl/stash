@@ -36,14 +36,17 @@ from .routers import (
     exports,
     files,
     files_tree,
+    intuitions,
     machine,
     marketing,
     mcp_servers,
     memory,
     mini_programs,
+    optimization,
     pins,
     publish,
     reward_models,
+    rm_evaluators,
     security_audit,
     session_folders,
     sessions,
@@ -61,6 +64,7 @@ from .routers import (
     users,
     vfs,
     webhooks,
+    workbench,
     workspace_agent_credentials,
 )
 from .services import demo_service, share_mcp_urls
@@ -83,6 +87,10 @@ def _configure_logging() -> None:
     handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
     logging.root.addHandler(handler)
     logging.root.setLevel(logging.INFO)
+    # The Alembic run inside init_db() can also switch off the loggers that
+    # already existed when it configured logging; a handler alone would leave
+    # the application silent, so re-enable this process's logger here.
+    logger.disabled = False
 
 
 SECURITY_HEADERS = {
@@ -176,13 +184,16 @@ app.include_router(sessions.router)
 app.include_router(trash.router)
 app.include_router(pins.router)
 app.include_router(reward_models.router)
+app.include_router(optimization.router)
+app.include_router(rm_evaluators.router)
+app.include_router(workbench.router)
+app.include_router(intuitions.router)
 app.include_router(mcp_servers.router)
 app.include_router(publish.router)
 app.include_router(security_audit.router)
 app.include_router(tasks.router)
 app.include_router(integrations_router)
 app.include_router(sources.router)
-app.include_router(sources.saved_items_router)
 app.include_router(vfs.router)
 app.include_router(developer.router)
 app.include_router(developer.users_router)
