@@ -10,6 +10,7 @@ import type { User } from "@/lib/types";
 const PRIMARY = [
   { label: "Traces", href: "/reward-models", match: (path: string) => path === "/reward-models" || path.startsWith("/reward-models/traces/") },
   { label: "Reward models", href: "/reward-models/models", match: (path: string) => path.startsWith("/reward-models/models") || path.startsWith("/reward-models/gepa/") },
+  { label: "Files", href: "/files", match: (path: string) => path === "/files" || path.startsWith("/f/") || path.startsWith("/p/") || path.startsWith("/folders/") || path.startsWith("/tables/") },
   { label: "Skills", href: "/skills", match: (path: string) => path === "/skills" || path.startsWith("/skills/") },
 ];
 
