@@ -1,0 +1,14 @@
+ .../stas-330-wake-comment-delta-consumption.md     |  13 ++
+ docs/agents.md                                     |  18 ++
+ .../src/__tests__/heartbeat-executor.test.ts       | 206 +++++++++++++++++
+ .../src/__tests__/step-session-executor.test.ts    |  54 +++++
+ .../wake-comment-delta-consumption.test.ts         | 245 +++++++++++++++++++++
+ .../__tests__/workflow-input-author-filter.test.ts | 149 +++++++++++++
+ packages/engine/src/agent-heartbeat.ts             | 120 ++++++----
+ .../engine/src/agents/heartbeat-prompt-trim.ts     |   3 +-
+ packages/engine/src/agents/wake-comment-delta.ts   | 217 ++++++++++++++++++
+ .../engine/src/execution/step-session-executor.ts  |  22 +-
+ packages/engine/src/executor/await-input-node.ts   |  31 +--
+ packages/engine/src/executor/execution-prompt.ts   |  53 +++--
+ .../engine/src/executor/workflow-input-markers.ts  |  16 +-
+ 13 files changed, 1060 insertions(+), 87 deletions(-)

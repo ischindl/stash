@@ -1,0 +1,67 @@
+STAS-330 measurement record
+===========================
+
+Everything below was measured, not estimated. Where a number is zero the zero is reported as a
+measurement, never read as confirmation that the code path is unreachable.
+
+1. Fold item 4 — runs whose advertised comment ids land in a graceful exit
+--------------------------------------------------------------------------
+
+Context (review finding F1): consumption is recorded when the wake opens the run
+(`contextSnapshot.triggeringCommentIds`, written at `agent-heartbeat.ts` startRun), which sits before
+the three graceful exits that never build a prompt. Those exits complete the run with
+`resultJson.reason` in {`invalid_state`, `task_not_found`, `terminal_task`, `no_assignment`,
+`checkout_conflict`}, so the ids are consumed without ever being presented.
+
+Query surface: the deployed board database (embedded PostgreSQL, 127.0.0.1:36577, read-only SELECTs),
+table `project.agent_runs`, column `data` (jsonb). Run-row keys observed: id, status, agentId,
+startedAt, endedAt, usageJson, processPid, resultJson, systemPrompt, stdoutExcerpt, triggerDetail,
+contextSnapshot, executionPrompt, invocationSource, heartbeatProcedureSource.
+
+Measured:
+
+  total runs on the board                                        52 202   (the Step-1 measurement at
+                                                                        2026-10-15T22:42 counted
+                                                                        52 331 — agent_runs rows past
+                                                                        the retention cutoff are
+                                                                        deleted (core task-store
+                                                                        async-maintenance.ts:111),
+                                                                        so the denominator moves
+                                                                        and is quoted per measurement.)
+  runs whose data text mentions "triggeringCommentIds"                2
+  ... of those, rows that actually carry the key in contextSnapshot   1   (the other is an unrelated
+                                                                        run whose resultJson reason
+                                                                        merely contains the literal)
+  runs with a NON-EMPTY contextSnapshot.triggeringCommentIds          1
+      run-4dd200a2 · agent-8154d25c · 2026-10-04T22:44:04.415Z · status completed
+      ids ["1791149409677-395qz5","1791149450339-qrdokk","1791149494779-158vg2"] · card BANKS-109
+  runs that ended in ANY graceful-exit reason (all runs)            156
+  INTERSECTION: non-empty triggeringCommentIds AND graceful exit      0
+
+Readout: the accepted boundary costs zero occurrences today. The single carrier run predates this
+branch (2026-10-04 vs a 2026-10-15 base), so run-open consumption has never executed on this board —
+the boundary is real in code, has no production instances, and is therefore NOT proven harmless by
+this number. It is the number the review asked for, stated as a measured zero with its denominators.
+
+2. Original-description claim verdicts (full detail lives in the task document mechanism-measurement)
+------------------------------------------------------------------------------------------------------
+
+  (1) fn_task_log accepts a commentId and leaves the unread flag set
+      REFUTED at this base. The tool's exposed params are message/outcome only and `logEntryImpl`
+      writes the task log, never a comment or steering comment. No code was written for it.
+  (2) the same comment id is re-advertised on every wake
+      CONFIRMED structurally (nothing anywhere subtracted an advertised id before this branch);
+      per-id occurrence counts EVIDENCE-BLOCKED — the stored task log for STAS-270 is truncated to
+      the last 1 000 entries starting 2026-10-03T01:30:02.824Z, i.e. after the storm window, and the
+      log tool exposes no full-text search.
+  (3) the agent's own outputs come back to it as new content
+      REFUTED literally (a log entry is not a comment), CONFIRMED as the real echo: the comment lane
+      carries 946 rows whose author is outside {user, agent}, including literal agent ids.
+  (4) chain-replay labels ([Turn 1..6]) arrive as fresh turn content
+      NOT FOUND — no producer exists in reachable engine code; shipped with no code.
+
+3. Evidence ids from the original description, preserved verbatim
+------------------------------------------------------------------
+
+commentId b3102332, 46128b1a, 69516485, 75217182; msg-a8ecc375, msg-ab73eb7a, msg-0dd3f566,
+msg-826d8f54; cards STAS-270, STAS-316, STAS-281.

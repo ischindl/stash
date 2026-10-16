@@ -1,0 +1,316 @@
+commit 0c2fe67fe401b135926ec8c4952dfcc6ddb44b3d
+Author:     Imrich Schindler <ischindl@progis.sk>
+AuthorDate: Fri Oct 16 02:33:54 2026 +0200
+Commit:     Imrich Schindler <ischindl@progis.sk>
+CommitDate: Fri Oct 16 02:33:54 2026 +0200
+
+    docs(STAS-330): state the run-open consumption seam and the dormant steering-lane guard
+    
+    Code review F1 (shows vs opens): consumption is recorded when the wake opens the run, not when the prompt renders, so the module header, the heartbeat FNXC block and docs/agents.md now say so and name the graceful-exit boundary (missing card / terminal card / checkout held elsewhere) as accepted, with the executor Steering Comments lane still delivering the row.
+    
+    Advisories A1/A2: the two reply-detector docstrings no longer claim steering rows carry agent identity (every writer passes the literal user|agent today), and the author-filter test header states that its cast fixtures pin the seam for a future writer-side identity stamp rather than shipped steering behaviour.
+    
+    Co-authored-by: Fusion <noreply@runfusion.ai>
+
+diff --git a/docs/agents.md b/docs/agents.md
+index 39d94585e7..7ffa8b166f 100644
+--- a/docs/agents.md
++++ b/docs/agents.md
+@@ -1124,38 +1124,42 @@ task-detail comment box and Activity composer, review-address, PR address-feedba
+   delivered but never force a run. An `on-heartbeat` agent receives the body and reads it on its next tick; an
+   `immediate` agent is also woken now, in-process, when a heartbeat monitor is reachable.
+ - **A comment that reaches nobody is a reported fact**, never a silent one: it is recorded in run-audit
+   (`task:comment-delivery-unowned`), mailed to the operator's inbox, and logged on the card.
+ - **Text answers state the outcome.** `fn task comment`, `fn task steer`, and Planner Chat steering print the
+   agent the body reached, or plainly say nobody was told. "Comment added" is not a delivery claim.
+ 
+ What the woken agent can read back:
+ 
+ - The Wake Delta header `- triggering comments: 2 of 3 readable on this card` separates the count the agent can
+   act on from the count that was advertised. Every advertised id then gets its own line — the body with its
+   author when the card holds it, or `- [unknown] (commentId: …): body is NOT on this card — do not guess its
+   content` — and the block ends with the exact `fn_task_show(id: "<taskId>", commentIds: […])` call to re-read them.
+ - `fn_task_show` takes `commentIds` (up to 20) and returns matching task comments **and** steering comments with
+   author and timestamp, labelling an advertised id it cannot find rather than silently omitting it.
+-- **Advertisement is consumption, not recomputation.** Each id is put in front of a given agent for a given card
+-  once: the record of an advertisement is that wake's own run row (`contextSnapshot.triggeringCommentIds`), read
+-  back and subtracted at the wake's fire time in `consumeWakeCommentDelta`
+-  (`packages/engine/src/agents/wake-comment-delta.ts`), so a replayed or deferred trigger cannot re-advertise an
+-  id the agent was already shown, a crashed run cannot un-consume it, and an id whose body is not on the card is
+-  said once rather than on every tick. A wake left with nothing new still runs — it simply carries no comment
+-  block. The remembered set is bounded (`WAKE_COMMENT_CONSUMPTION_SCAN_RUNS`, `MAX_CONSUMED_WAKE_COMMENT_IDS`).
+-  The read side is unaffected: `fn_task_show` still returns a consumed id's body on request.
++- **Advertisement is consumption, not recomputation.** Each id reaches a given agent for a given card
++  at most once: the record of an advertisement is that wake's own run row (`contextSnapshot.triggeringCommentIds`),
++  written when the wake **opens the run** — before any prompt is built — and read back and subtracted at the
++  next wake's fire time in `consumeWakeCommentDelta` (`packages/engine/src/agents/wake-comment-delta.ts`), so a
++  replayed or deferred trigger cannot re-advertise an id an earlier run already carried, a crashed run cannot
++  un-consume it, and an id whose body is not on the card is said once rather than on every tick. The boundary
++  that comes with recording at run-open: a wake that opens a run and then exits gracefully before prompting
++  (missing card, terminal card, checkout held by another agent) consumes its ids without presenting them; the
++  executor's `## Steering Comments` section still delivers that row. A wake left with nothing new still runs —
++  it simply carries no comment block. The remembered set is bounded (`WAKE_COMMENT_CONSUMPTION_SCAN_RUNS`,
++  `MAX_CONSUMED_WAKE_COMMENT_IDS`). The read side is unaffected: `fn_task_show` still returns a consumed id's
++  body on request.
+ - **An agent is never shown its own words as new input.** A comment whose author names the agent being woken is
+   withheld from its wake delta (named on one `[wake-comment-delta]` log line) and filtered out of the executor's
+   `## Steering Comments` section, the step-session prompt, and both workflow-input reply detectors — all four
+   through the one `isSelfAuthoredComment` predicate, and the withheld id is still consumed. Authorship must match
+   positively: `SteeringComment.author` is only `"user" | "agent"` for engine-written lifecycle guidance addressed
+   *to* the executing agent, so an author that cannot be matched is delivered, never guessed at.
+ - When prompt trimming elides comment blocks, the marker keeps the pointer alive: `… (older comments hidden;
+   read them with fn_task_show commentIds=["…"])`. Trimming never removes the only copy of an id.
+ 
+ Delivery is a body hand-off and a wake only. It grants no lifecycle authority: reading comments stays read-only,
+ the comment-to-replan release path is untouched, and await-input answers and `[planner-oversight]` nudges keep
+ their existing channels rather than becoming comments.
+ 
+ ### Default Procedure: Bound-Task Scope Discipline
+ 
+diff --git a/packages/engine/src/__tests__/workflow-input-author-filter.test.ts b/packages/engine/src/__tests__/workflow-input-author-filter.test.ts
+index 6ad6ee8b52..d8dae96890 100644
+--- a/packages/engine/src/__tests__/workflow-input-author-filter.test.ts
++++ b/packages/engine/src/__tests__/workflow-input-author-filter.test.ts
+@@ -4,30 +4,36 @@ FNXC:WakeCommentConsumption 2026-10-16 (STAS-330) — written against trunk and
+ Three agent-facing surfaces read a card's `steeringComments` and treat every row as somebody else's
+ input. On trunk none of them looks at the author:
+ 
+ - `workflowInputRepliesAfterWatermark` (`executor/workflow-input-markers.ts`) answers "has the user
+   replied?" for a paused workflow node.
+ - `runAwaitInputNode` (`executor/await-input-node.ts`) re-implements the same watermark filter inline
+   and resumes the graph on whatever it finds.
+ - `buildSteeringCommentsSection` (`executor/execution-prompt.ts`) renders the last ten rows under a
+   heading that claims they "were added by the user during execution".
+ 
+ A row the executing agent authored itself therefore reads as fresh user instruction on all three: the
+ reply detector satisfies itself, the graph resumes on the agent's own words, and the prompt re-presents
+ them as new guidance. `await-input-node.ts` also duplicated the watermark parser instead of calling the
+ marker helper, so a fix applied to one detector would not reach the other — the second reason this
+ harness exists.
++
++Fixture honesty: `SteeringComment.author` is the two-value literal `"user" | "agent"` and no writer puts an
++agent identity on a steering row today, so the `agent-ff03cfcc` casts below describe a state the declared
++type forbids. They pin the seam for the writer-side identity stamp, not shipped steering behaviour; the
++production shape where the predicate is load-bearing is a free-string `TaskComment.author`, which
++`wake-comment-delta-consumption.test.ts` covers without a cast.
+ */
+ import { describe, it, expect, vi } from "vitest";
+ import type { SteeringComment, TaskDetail, WorkflowIrNode } from "@fusion/core";
+ import { workflowInputRepliesAfterWatermark } from "../executor/workflow-input-markers.js";
+ import { runAwaitInputNode } from "../executor/await-input-node.js";
+ import { buildSteeringCommentsSection } from "../executor/execution-prompt.js";
+ 
+ const PAUSE_MS = Date.parse("2026-10-03T00:00:00.000Z");
+ 
+ function steering(id: string, author: SteeringComment["author"], minutesAfterPause: number): SteeringComment {
+   return {
+     id,
+     author,
+     text: `body of ${id}`,
+     createdAt: new Date(PAUSE_MS + minutesAfterPause * 60_000).toISOString(),
+diff --git a/packages/engine/src/agent-heartbeat.ts b/packages/engine/src/agent-heartbeat.ts
+index f4a93eff9c..d60f0ea201 100644
+--- a/packages/engine/src/agent-heartbeat.ts
++++ b/packages/engine/src/agent-heartbeat.ts
+@@ -2786,31 +2786,35 @@ export class HeartbeatMonitor {
+       const effectiveTriggeringCommentType = triggeringCommentType ?? contextTriggeringCommentType;
+ 
+       /*
+       FNXC:WakeCommentConsumption 2026-10-16 (STAS-330):
+       New content on a wake is a consumption, not a recomputation. Everything upstream of this line —
+       the assignment wake's `steeringComments.filter(createdAt > lastRun.startedAt)`, a message trigger,
+       and the deferred-assignment re-fire that replays the ids captured when it was scheduled — re-derives
+       candidate ids from the card, and nothing had ever recorded which ids an earlier wake of this agent
+       already put in front of it. STAS-270 therefore carried `b3102332`, `46128b1a`, `69516485` and
+       `75217182` through 15+ re-wakes in two hours, and the deferred arm re-fired the same ids into fresh
+       sessions verbatim.
+ 
+       The subtraction happens here, at the wake's fire time, against the run rows this agent already
+       opened: the ids a wake advertises are persisted on its own `contextSnapshot.triggeringCommentIds`
+       when the run starts, so the record exists before the session does anything and a crashed or
+-      terminated run cannot un-consume what it was already shown. Putting it on this single path also
++      terminated run cannot un-consume what it was already told. The seam is run-open, not render-time:
++      the graceful exits below (missing card, terminal card, checkout held elsewhere) therefore consume
++      their ids without ever rendering them — accepted, because rendering late would un-consume on every
++      session that dies mid-prompt and the executor's `## Steering Comments` lane still delivers the row.
++      Putting it on this single path also
+       covers the re-fire without a second delta function — a replay whose ids an earlier run already
+       advertised arrives as a wake with no comment attribution instead of a repeat of the same block.
+       */
+       let effectiveTriggeringCommentIds = candidateTriggeringCommentIds;
+       if (candidateTriggeringCommentIds?.length && resolvedTaskId) {
+         const priorRuns = await this.store.getRecentRuns(agentId, WAKE_COMMENT_CONSUMPTION_SCAN_RUNS);
+         const delta = consumeWakeCommentDelta({
+           advertisedIds: candidateTriggeringCommentIds,
+           priorRuns,
+           taskId: resolvedTaskId,
+         });
+         if (delta.suppressedIds.length > 0) {
+           heartbeatLog.log(
+             `[wake-comment-delta] agent=${agentId} task=${resolvedTaskId} suppressed=${delta.suppressedIds.length}`
+             + ` advertised=${delta.freshIds.length} suppressedIds=${delta.suppressedIds.slice(0, 10).join(",")}`
+diff --git a/packages/engine/src/agents/wake-comment-delta.ts b/packages/engine/src/agents/wake-comment-delta.ts
+index 88e99cb9bb..bf34c016e8 100644
+--- a/packages/engine/src/agents/wake-comment-delta.ts
++++ b/packages/engine/src/agents/wake-comment-delta.ts
+@@ -1,29 +1,36 @@
+ /*
+ FNXC:WakeCommentConsumption 2026-10-16 (STAS-330):
+ 
+ The comment half of a wake used to be a pure recomputation. Every wake re-derived "which steering
+ comments are newer than my last run" from the card, and nothing anywhere recorded which ids the
+ previous wake had already put in front of this agent. So an id could be advertised forever: STAS-270
+ carried `b3102332`, `46128b1a`, `69516485` and `75217182` through 15+ re-wakes in two hours, the agent
+ resolved none of them, and each wake re-raised the same unanswerable question.
+ 
+ New content on a wake has to be a *consumption*, not a *recomputation*. The record of an advertisement
+ already exists and is durable — the heartbeat run row's own `contextSnapshot.triggeringCommentIds`,
+ written by `agent-heartbeat.ts` when the run opens, before the session starts. This module reads that
+ record back and subtracts it, so:
+-- an id survives only until the first wake that shows it, whatever that wake then does or fails to do;
++- an id survives only until the first wake that opens a run for this agent and card, whatever that run
++  then does or fails to do — consumption is recorded at run open, not at render time;
++- the accepted cost of recording that early: a wake that opens a run and then exits gracefully before
++  building a prompt (missing card, terminal card, checkout held by another agent) consumes its ids
++  without ever presenting them, and because the candidate window is `createdAt > lastRun.startedAt`,
++  that aborted run also closes the window over those ids. The row is not lost from execution — the
++  executor's `## Steering Comments` section still delivers it. Recording at render time instead would
++  hand the storm back every time a session dies mid-prompt, which is the bug this module exists to close;
+ - a crashed or terminated run cannot un-consume what it was already told;
+ - a deferred wake that replays the ids captured at schedule time (the `drainPendingAssignment`
+   re-fire) loses them at the same seam, because the subtraction happens at the wake's fire time
+   against durable state rather than against the value the trigger carried.
+ 
+ Two deliberate limits, both stated as constants because an unbounded remembered set is the same
+ "grows forever" defect in a different place:
+ - `WAKE_COMMENT_CONSUMPTION_SCAN_RUNS` caps how far back the consumption window looks;
+ - `MAX_CONSUMED_WAKE_COMMENT_IDS` caps the remembered set itself, newest-first.
+ 
+ Self-echo is the second half of the file. A comment whose author string names the agent being woken
+ is that agent's own words coming back at it as "new content", and the three agent-facing surfaces that
+ read steering comments — the heartbeat delta, the executor's `## Steering Comments` section, and the
+ workflow-input / await-input reply detectors — all treated it as external input. The predicate below
+ is the one rule all three share.
+@@ -71,32 +78,32 @@ export function collectAlreadyAdvertisedCommentIds(
+       seen.add(id);
+       ordered.push(id);
+     }
+   }
+   return ordered.slice(0, MAX_CONSUMED_WAKE_COMMENT_IDS);
+ }
+ 
+ export interface WakeCommentDelta {
+   /** Ids to advertise on this wake. */
+   freshIds: string[];
+   /** Ids withheld because an earlier run of this agent already advertised them on this card. */
+   suppressedIds: string[];
+ }
+ 
+ /**
+- * Split a wake's candidate comment ids into what this agent has never been shown on this card and
+- * what an earlier run already advertised. An id that is not resolvable on the card is still consumed
++ * Split a wake's candidate comment ids into what no earlier run of this agent has carried on this card
++ * and what one already advertised. An id that is not resolvable on the card is still consumed
+  * here — see `renderWakeCommentDelta` for why the unresolvable id is worth advertising once.
+  */
+ export function consumeWakeCommentDelta(input: {
+   advertisedIds: readonly string[];
+   priorRuns: readonly AgentHeartbeatRun[];
+   taskId: string;
+ }): WakeCommentDelta {
+   const alreadyAdvertised = new Set(collectAlreadyAdvertisedCommentIds(input.priorRuns, input.taskId));
+ 
+   const freshIds: string[] = [];
+   const suppressedIds: string[] = [];
+   for (const id of input.advertisedIds) {
+     (alreadyAdvertised.has(id) ? suppressedIds : freshIds).push(id);
+   }
+   return { freshIds, suppressedIds };
+diff --git a/packages/engine/src/executor/await-input-node.ts b/packages/engine/src/executor/await-input-node.ts
+index ce10c84009..1ad8744d63 100644
+--- a/packages/engine/src/executor/await-input-node.ts
++++ b/packages/engine/src/executor/await-input-node.ts
+@@ -38,32 +38,34 @@ export async function runAwaitInputNode(
+       : "This workflow is waiting for your input.";
+   const marker = `workflow-input:${node.id}`;
+ 
+   // Resume only when THIS node previously paused the task (its marker is on
+   // pausedReason). A pre-existing steering comment (e.g. one added at task
+   // creation) must never short-circuit the pause on the node's first run —
+   // otherwise the node consumes a stale comment and never asks the user.
+   const pausedReason = live.pausedReason ?? "";
+   const pausedByThisNode = pausedReason.startsWith(marker);
+   if (!live.paused && pausedByThisNode) {
+     /*
+     FNXC:WakeCommentConsumption 2026-10-16 (STAS-330):
+     The watermark rule (only a comment created at/after the pause that carries `${marker}@${epochMs}`
+     counts as the answer) used to be re-implemented here while `workflowInputRepliesAfterWatermark`
+     held the same rule, so the two reply detectors could drift apart — and neither of them looked at
+-    who wrote the row. Both now share the one helper, which drops a row the card's own assignee
+-    authored so a node can no longer satisfy itself with the agent's earlier words.
++    who wrote the row. Both now share the one helper, which drops a row authored by the card's own
++    assignee. On steering rows that match is defensive for now: `SteeringComment.author` carries only
++    `"user" | "agent"` (no writer identity, so engine guidance addressed TO the agent stays external
++    input) — the filter is load-bearing where the author column is a free string, i.e. task comments.
+     */
+     const replies = workflowInputRepliesAfterWatermark(live, marker);
+     if (replies.length > 0) {
+       // Input has arrived (user replied and unpaused): consume the latest
+       // post-pause comment and clear this node's marker so a future fresh
+       // visit re-asks instead of silently consuming a stale comment.
+       const latest = replies[replies.length - 1] as { text?: string; comment?: string };
+       const answer = (latest?.text ?? latest?.comment ?? "").toString();
+       await deps.store.updateTask(live.id, { status: null, pausedReason: null }, deps.getRunContextFor(live.id));
+       await deps.store.logEntry(live.id, `Workflow input received for node '${node.id}'`, undefined, deps.getRunContextFor(live.id));
+       return { outcome: "success", value: "input-received", contextPatch: { [`input:${node.id}`]: answer } };
+     }
+     // Unpaused but no post-pause reply yet — re-park below and keep waiting.
+   }
+ 
+diff --git a/packages/engine/src/executor/workflow-input-markers.ts b/packages/engine/src/executor/workflow-input-markers.ts
+index 979dac6507..1f4844727d 100644
+--- a/packages/engine/src/executor/workflow-input-markers.ts
++++ b/packages/engine/src/executor/workflow-input-markers.ts
+@@ -15,35 +15,37 @@ export type WorkflowInputMarkerDeps = {
+ };
+ 
+ export function workflowInputRepliesAfterWatermark(
+   task: TaskDetail,
+   marker: string,
+ ): Array<{ createdAt?: string }> {
+   const pausedReason = task.pausedReason ?? "";
+   const watermark = (() => {
+     const match = pausedReason.slice(marker.length).match(/^@(\d+)/);
+     const parsed = match ? Number(match[1]) : NaN;
+     return Number.isFinite(parsed) ? parsed : undefined;
+   })();
+   const steering = Array.isArray(task.steeringComments) ? task.steeringComments : [];
+   /*
+   FNXC:WakeCommentConsumption 2026-10-16 (STAS-330):
+-  A reply detector that never looks at the author answers itself. The row this card's own assignee
+-  wrote reads here exactly like an operator answer, so a graph node parks, sees the agent's earlier
+-  words in the same array, and resumes on them. `assignedAgentId` is the only identity the executor
+-  lane holds for the card, and an author it cannot name stays external input — see the decision note
+-  in agents/wake-comment-delta.ts.
++  A reply detector that never looks at the author answers itself. A row whose author names this card's
++  own assignee reads here exactly like an operator answer, so a graph node parks, sees the agent's earlier
++  words in the same array, and resumes on them. `assignedAgentId` is the only identity the executor lane
++  holds for the card, and an author it cannot name stays external input — see the decision note in
++  agents/wake-comment-delta.ts. On steering rows the filter is therefore a guard that stays dormant until a
++  writer stamps identity (every writer today passes the literal `"user" | "agent"`); it is load-bearing on
++  the lanes whose author column is a free string, i.e. task comments.
+   */
+   const external = selectExternalSteeringComments(steering, selfAuthorKeysForTask(task));
+   return watermark === undefined
+     ? external
+     : external.filter((comment) => {
+         const created = Date.parse((comment as { createdAt?: string }).createdAt ?? "");
+         return Number.isFinite(created) ? created >= watermark : false;
+       });
+ }
+ 
+ export async function resolveWorkflowInputMarkerForGraphNode(
+   deps: WorkflowInputMarkerDeps,
+   live: TaskDetail,
+   nodeId: string,
+ ): Promise<"clear" | "waiting" | "none"> {

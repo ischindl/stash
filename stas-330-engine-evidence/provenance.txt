@@ -1,0 +1,22 @@
+engine gitdir        /home/schindler/git/Fusion/.git
+branch               fusion/stas-330-wake-comment-delta-consumption
+base (branch parent) bc2f242f6ba05c1d76b2e6548755be7c8b9e2278
+tip (reviewed head)  0c2fe67fe401b135926ec8c4952dfcc6ddb44b3d
+fold commit          0c2fe67fe401b135926ec8c4952dfcc6ddb44b3d
+commits on branch    5
+diff --shortstat      13 files changed, 1060 insertions(+), 87 deletions(-)
+fold --shortstat      6 files changed, 44 insertions(+), 19 deletions(-)
+changed files
+  .changeset/stas-330-wake-comment-delta-consumption.md
+  docs/agents.md
+  packages/engine/src/__tests__/heartbeat-executor.test.ts
+  packages/engine/src/__tests__/step-session-executor.test.ts
+  packages/engine/src/__tests__/wake-comment-delta-consumption.test.ts
+  packages/engine/src/__tests__/workflow-input-author-filter.test.ts
+  packages/engine/src/agent-heartbeat.ts
+  packages/engine/src/agents/heartbeat-prompt-trim.ts
+  packages/engine/src/agents/wake-comment-delta.ts
+  packages/engine/src/execution/step-session-executor.ts
+  packages/engine/src/executor/await-input-node.ts
+  packages/engine/src/executor/execution-prompt.ts
+  packages/engine/src/executor/workflow-input-markers.ts

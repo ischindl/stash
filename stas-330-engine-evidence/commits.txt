@@ -1,0 +1,164 @@
+commit 0c2fe67fe401b135926ec8c4952dfcc6ddb44b3d
+Author: Imrich Schindler <ischindl@progis.sk>
+Date:   2026-10-16T02:33:54+02:00
+
+    docs(STAS-330): state the run-open consumption seam and the dormant steering-lane guard
+
+Code review F1 (shows vs opens): consumption is recorded when the wake opens the run, not when the prompt renders, so the module header, the heartbeat FNXC block and docs/agents.md now say so and name the graceful-exit boundary (missing card / terminal card / checkout held elsewhere) as accepted, with the executor Steering Comments lane still delivering the row.
+
+Advisories A1/A2: the two reply-detector docstrings no longer claim steering rows carry agent identity (every writer passes the literal user|agent today), and the author-filter test header states that its cast fixtures pin the seam for a future writer-side identity stamp rather than shipped steering behaviour.
+
+Co-authored-by: Fusion <noreply@runfusion.ai>
+
+
+ docs/agents.md                                       | 20 ++++++++++++--------
+ .../__tests__/workflow-input-author-filter.test.ts   |  6 ++++++
+ packages/engine/src/agent-heartbeat.ts               |  6 +++++-
+ packages/engine/src/agents/wake-comment-delta.ts     | 13 ++++++++++---
+ packages/engine/src/executor/await-input-node.ts     |  6 ++++--
+ .../engine/src/executor/workflow-input-markers.ts    | 12 +++++++-----
+ 6 files changed, 44 insertions(+), 19 deletions(-)
+commit b8130dda56d87c2e77f6acb0031c216b3d2f72ee
+Author: Imrich Schindler <ischindl@progis.sk>
+Date:   2026-10-16T00:58:34+02:00
+
+    fix(STAS-330): complete Step 5 — count the wake delta header on what it actually showed
+
+The verification sweep caught a leftover shell from the change: the
+"- triggering comments: N of M readable on this card" line still measured both
+numbers against the ids the trigger carried, so after consumption and self-echo
+filtering a delta that rendered no body at all could still claim "2 of 2
+readable". Both numbers are now derived from the ids the block actually
+advertised (renderedWakeCommentIds), which is what the header's own documentation
+says it reports.
+
+Red-first: with the denominator forced back to the carried list the extended
+self-echo case fails ("2 of 2" where one of two ids was the agent's own); after
+the fix it reads "1 of 1" and the 6-file focused set is green (372 tests), engine
+typecheck and eslint clean.
+
+
+ .../engine/src/__tests__/heartbeat-executor.test.ts   |  2 ++
+ packages/engine/src/agent-heartbeat.ts                | 19 ++++++++++++++-----
+ 2 files changed, 16 insertions(+), 5 deletions(-)
+commit fd70820220eede5a67d47bc84f26e78030fd68e9
+Author: Imrich Schindler <ischindl@progis.sk>
+Date:   2026-10-16T00:56:10+02:00
+
+    docs(STAS-330): document advertise-once consumption and the self-echo rule
+
+docs/agents.md's "What the woken agent can read back" section described the wake
+delta as an announcement that recurs, which is no longer true: two bullets now
+state that advertisement is consumption (recorded on the wake's own run row,
+subtracted at fire time, bounded, and read-side unaffected) and that a body the
+woken agent authored is withheld from all four agent-facing surfaces while an
+unmatched author is still delivered — the latter because 7,857 of 7,907 steering
+rows are planner-oversight guidance addressed to the executing agent.
+
+Changeset records the measured base numbers, what shipped, what was
+deliberately left alone (message lane, STAS-300 cursor, mid-run injection,
+read-side resolver) and the two claims that measured negative and shipped no
+code, so the removal is explained rather than discovered.
+
+
+ .changeset/stas-330-wake-comment-delta-consumption.md | 13 +++++++++++++
+ docs/agents.md                                        | 14 ++++++++++++++
+ 2 files changed, 27 insertions(+)
+commit ee0bbe30f91a2c13b9fc7403f20fb3335559fca4
+Author: Imrich Schindler <ischindl@progis.sk>
+Date:   2026-10-16T00:51:40+02:00
+
+    feat(STAS-330): complete Step 4 — close the second steering renderer and the duplicated heading
+
+Step 1's measurement decided which extra surfaces had proof. Two did.
+
+- execution/step-session-executor.ts held a second, author-blind copy of the
+  steering rule (buildStepSteeringCommentsSection, three call sites), so a step
+  session still saw its own comments under "## Steering Comments" after the
+  heartbeat delta and the execution prompt were fixed. It now asks the shared
+  selectExternalSteeringComments + selfAuthorKeysForTask predicate.
+- agents/heartbeat-prompt-trim.ts kept its own copy of the heading literal that
+  the trimmer matches to find the block; TRIGGERING_COMMENT_HEADING is now
+  exported from agents/wake-comment-delta.ts and imported, so the renderer and
+  the trimmer cannot drift apart.
+
+Measured justification (board DB, port 36577): the comment lane that actually
+feeds the delta lookup (agent-heartbeat.ts:4730-4735 reads taskDetail.comments
+first) carries 946 rows whose author is outside the "user"|"agent" literal, 188+
+of them a literal agent id — the filter is load-bearing there. On the steering
+collection 0 rows name an agent, so there the filter is defensive only, because
+no agent-callable tool writes steering comments. Compound author strings such as
+"agent-5683bf15 (Engineer, heartbeat)" (6 rows) deliberately do not match: exact
+equality only, because card text mentions foreign agent ids routinely (17x
+agent-ff03cfcc on STAS-270/STAS-330 alone) and substring matching would silence
+real instruction. Recorded rather than overfit.
+
+Deliberately untouched, with evidence: wire-executor-lifecycle.ts:740 mid-run
+injection is exactly-once within a session and cannot carry a self-authored row;
+createSeenSteeringIds / markSteeringCommentsDelivered are per-session in-memory
+bookkeeping — a different population from durable wake consumption, the same
+separation heartbeat-wake-signals.ts warns against breaking.
+
+Verification: two new step-prompt tests are red with the filter neutralized and
+green after; 6-file focused set (step-session-executor, heartbeat-prompt-trim,
+wake-comment-delta-consumption, workflow-input-author-filter, heartbeat-executor,
+executor-prompt) green; engine typecheck and eslint clean.
+
+
+ .../src/__tests__/step-session-executor.test.ts    | 54 ++++++++++++++++++++++
+ .../engine/src/agents/heartbeat-prompt-trim.ts     |  3 +-
+ packages/engine/src/agents/wake-comment-delta.ts   | 10 +++-
+ .../engine/src/execution/step-session-executor.ts  | 22 ++++++---
+ 4 files changed, 78 insertions(+), 11 deletions(-)
+commit 74151ac0b0e81cfdbafc256b06845675eac62302
+Author: Imrich Schindler <ischindl@progis.sk>
+Date:   2026-10-16T00:40:32+02:00
+
+    feat(STAS-330): complete Steps 2+3 — consume the wake comment delta instead of recomputing it
+
+The comment half of a heartbeat wake was a pure recomputation: every wake
+re-derived 'which steering comments are newer than my last run' from the card
+and nothing recorded which ids an earlier wake had already put in front of this
+agent on this card. STAS-270 therefore carried b3102332 / 46128b1a / 69516485 /
+75217182 through 15+ re-wakes in two hours, resolving none of them.
+
+- agents/wake-comment-delta.ts: the shared rule. consumeWakeCommentDelta
+  subtracts the ids a prior run of this agent already advertised, read back from
+  that run's own contextSnapshot.triggeringCommentIds, bounded by
+  WAKE_COMMENT_CONSUMPTION_SCAN_RUNS and MAX_CONSUMED_WAKE_COMMENT_IDS;
+  renderWakeCommentDelta renders body / loud not-on-this-card line / nothing and
+  always reports the ids it advertised; isSelfAuthoredComment + selfAuthorKeys +
+  selfAuthorKeysForTask + selectExternalSteeringComments decide self-echo, with
+  an unknown author deliberately treated as external input.
+- agent-heartbeat.ts: consumption runs at the wake's fire time inside
+  executeHeartbeat, the one path every wake source (assignment, message,
+  deferred re-fire) flows through, so a replay whose ids an earlier run already
+  advertised arrives as a wake with no comment attribution; the run row keeps
+  recording what it advertised. The delta block now renders through the shared
+  renderer and withholds rows this agent authored.
+- executor/execution-prompt.ts: the '## Steering Comments' section is extracted
+  into buildSteeringCommentsSection and drops rows authored by the agent
+  assigned to the card.
+- executor/workflow-input-markers.ts + await-input-node.ts: both reply
+  detectors now share workflowInputRepliesAfterWatermark, which also applies the
+  author filter, so a workflow-input node can no longer satisfy itself with the
+  executing agent's own steering.
+
+Verification: 217 tests green across wake-comment-delta-consumption,
+workflow-input-author-filter and heartbeat-executor; engine typecheck and eslint
+clean. Red-first was reconstructed (a prior session wrote tests and
+implementation without committing): with the consumption seam and
+isSelfAuthoredComment neutralized, 9 of those tests fail, including all four
+heartbeat seam cases. ce-workflow-step-executor and executor-step-session show
+30 failures at base bc2f242f6b without this change — pre-existing, not caused here.
+
+
+ .../src/__tests__/heartbeat-executor.test.ts       | 204 +++++++++++++++++
+ .../wake-comment-delta-consumption.test.ts         | 245 +++++++++++++++++++++
+ .../__tests__/workflow-input-author-filter.test.ts | 143 ++++++++++++
+ packages/engine/src/agent-heartbeat.ts             |  97 +++++---
+ packages/engine/src/agents/wake-comment-delta.ts   | 204 +++++++++++++++++
+ packages/engine/src/executor/await-input-node.ts   |  29 +--
+ packages/engine/src/executor/execution-prompt.ts   |  53 +++--
+ .../engine/src/executor/workflow-input-markers.ts  |  14 +-
+ 8 files changed, 916 insertions(+), 73 deletions(-)

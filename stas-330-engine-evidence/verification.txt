@@ -1,0 +1,65 @@
+STAS-330 verification record — gates run at the reviewed tip 0c2fe67fe4
+========================================================================
+
+Where: a git worktree of the engine repo at `.engine/engine` inside this card's task worktree
+(branch `fusion/stas-330-wake-comment-delta-consumption`, `pnpm install --frozen-lockfile`, node v26.8.1,
+pnpm 10.33.0). The worktree is scratch and is removed again before the card closes — the branch and
+its commits in the engine repo are the carrier, and this directory is the readable copy.
+
+Test suites (vitest, `--project=engine-default`, real seams, no private-call shortcuts)
+----------------------------------------------------------------------------------------
+
+  src/__tests__/wake-comment-delta-consumption.test.ts
+  src/__tests__/workflow-input-author-filter.test.ts
+      ->  Test Files 2 passed (2) · Tests 23 passed (23) · rc=0
+
+  src/__tests__/heartbeat-executor.test.ts            src/__tests__/heartbeat-scheduler.test.ts
+  src/__tests__/wake-delta-user-paused-agreement.test.ts  src/__tests__/agent-heartbeat-stale-wake.test.ts
+  src/__tests__/step-session-executor.test.ts         src/__tests__/executor-prompt.test.ts
+  src/__tests__/heartbeat-prompt-trim.test.ts         src/__tests__/await-input-sentinel.test.ts
+  src/__tests__/heartbeat-wake-discipline.test.ts
+      ->  Test Files 8 passed (8) · Tests 540 passed (540) · rc=0
+      (one of the nine paths runs inside a different vitest project and is not collected by
+       engine-default; all nine files exist and none failed)
+
+Lint and types
+--------------
+
+  eslint on the 12 touched/added source+test files
+      -> 0 errors. 4 warnings are the repo's own "File ignored because of a matching ignore
+         pattern" notices for the four __tests__ paths (test files are eslint-ignored in this repo);
+         rc=0.
+  pnpm --filter @fusion/engine typecheck  (tsc --noEmit)
+      -> rc=0, no output.
+
+Repo guards relevant to what this branch changes (each run individually, at the tip)
+------------------------------------------------------------------------------------
+
+  check-changeset-format                rc=0
+  check-nonlatin-tracked-text           rc=0
+  check-no-comment-assertions-in-tests  rc=0
+  check-fnxc-future-dates               rc=0   ("0 known future-dated stamp(s), none added.")
+  check-prompt-volatility               rc=0
+  check-fusion-skill-sync               rc=0
+  check-changeset-migration-references  rc=0   (9 references resolve)
+
+Pre-existing red, reported and not chased
+-----------------------------------------
+
+  pnpm test:gate:static -> rc=1 at the FIRST check, before any of the above:
+
+      [check-no-nohup] found banned nohup usage under packages/** or scripts/**.
+      packages/cli/src/commands/startup-secret.ts:16: * (file, pipe, CI log, `systemd`, `nohup`, watchdog) gets a mask plus instructions, because the
+
+  That line is byte-identical on this branch's base (bc2f242f6b) and on engine trunk (14ba495cb4),
+  and this branch touches nothing under packages/cli. The gate is red on trunk for a word inside an
+  unrelated comment; the individual guards above are what this card's diff is subject to.
+
+Not re-run in this session (recorded where it was run)
+------------------------------------------------------
+
+  `pnpm --filter @fusion/engine build` and the full engine/core suites were run by the implementation
+  session at the previous head b8130dda56 (see the `handoff` task document). The fold commit
+  0c2fe67fe4 changes only comments, two docstrings, docs/agents.md and a test-file header block —
+  `tsc --noEmit` above is the type-level proof over it. No push, no PR, no engine restart: all of
+  those are operator-gated.

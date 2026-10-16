@@ -1,0 +1,1479 @@
+diff --git a/.changeset/stas-330-wake-comment-delta-consumption.md b/.changeset/stas-330-wake-comment-delta-consumption.md
+new file mode 100644
+index 0000000000..958bb99326
+--- /dev/null
++++ b/.changeset/stas-330-wake-comment-delta-consumption.md
+@@ -0,0 +1,13 @@
++---
++"@runfusion/fusion": patch
++---
++
++summary: A wake comment is announced to an agent once instead of on every wake.
++category: fix
++dev: STAS-330. The comment half of a heartbeat wake was a pure recomputation — every wake re-derived "which comments are newer than my last run" from the card, and nothing anywhere recorded which ids an earlier wake had already put in front of this agent for this card, so an id could be announced forever (measured on the deployed board: `project.agent_runs` carries 52,331 rows and exactly 1 of them ever recorded `contextSnapshot.triggeringCommentIds`, so there was no set to subtract). On the reported card four ids rode 15+ re-wakes in two hours and none of them could be resolved, because the advertised ids were hex-8 while every comment id on the board is `<epoch-ms>-<6 chars>` (12,022 ids measured, 0 of the advertised shape) — which is why the block read "0 of 0 readable".
++
++`agents/wake-comment-delta.ts` now owns the rule. `consumeWakeCommentDelta` reads the already-persisted advertisement off this agent's own prior run rows (`contextSnapshot.triggeringCommentIds`, falling back to `contextSnapshot.taskId` for the card link because top-level `data.taskId` exists on only 10 of 52,331 rows) and subtracts it at the wake's **fire time** inside `executeHeartbeat` — the single path every wake source flows through — so a deferred/re-fired `drainPendingAssignment` wake loses its stale id list at the same seam instead of replaying what it captured at schedule time, a crashed or terminated run cannot un-consume what it was told, and a wake left with nothing new still runs with no comment attribution. The remembered set is bounded by `WAKE_COMMENT_CONSUMPTION_SCAN_RUNS` (20) and `MAX_CONSUMED_WAKE_COMMENT_IDS` (200, newest-first); an id whose body is not on the card is still counted as advertised, so the loud "body is NOT on this card" line is said once rather than on every tick. Consumption is write-side only: `renderTaskCommentSection` / `fn_task_show(commentIds=…)` still return a consumed id's body, verified by test.
++
++Self-echo is the other half. A comment whose author string names the agent being woken is now withheld from its own wake delta (named on one `[wake-comment-delta]` log line, id still consumed), from the executor's `## Steering Comments` section (`buildSteeringCommentsSection`, extracted from `buildExecutionPrompt` so the rule is testable), from the step-session prompt (`buildStepSteeringCommentsSection`, which had become a second unfiltered copy of the rule at three call sites), and from both workflow-input reply detectors (`workflowInputRepliesAfterWatermark`, which `await-input-node` used to re-implement independently) — all of them through the one exported `isSelfAuthoredComment` predicate, so no second "is this new to me" exists. Suppression requires a positive author match and an unknown author is delivered as external input: on the deployed board 7,857 of 7,907 steering rows carry the two-value literal `author: "agent"` written by planner-oversight lifecycle guidance addressed *to* the executing agent, so filtering on `"agent"` would silence real instruction — a worse failure than one more echo. The filter is load-bearing where the delta actually reads from: the lookup is built from `taskDetail.comments` first, and 946 comment rows there carry an author outside the literal, 188+ of them a literal agent id. Compound author strings (`agent-5683bf15 (Engineer, heartbeat)`, 6 rows) deliberately do not match — exact equality only — because card text names foreign agent ids routinely and substring matching would suppress somebody else's instruction.
++
++Deliberately untouched: the message lane (STAS-307's `message-wake-idempotency` vocabulary — its markers are absent from this base, so the shared module keeps its own name and the merge order is recorded in the task handoff), STAS-300's wake cursor (a timer gate over a different population written by a different function; folding the two is the defect `heartbeat-wake-signals.ts` exists to prevent), the mid-run steering injection in `wire-executor-lifecycle.ts` (already exactly-once per session, and no agent-callable tool writes steering rows), and the read-side resolver (STAS-316). Two measurement verdicts are negative and shipped no code: `fn_task_log` has no `commentId` parameter and `logEntryImpl` writes no comment row, and no `[Turn N]` chain-replay label producer exists anywhere in the repo. `TRIGGERING_COMMENT_HEADING` is exported from the new module and imported by `heartbeat-prompt-trim.ts`, which locates the block by exact line match — the two copies of that literal were a drift risk.
+diff --git a/docs/agents.md b/docs/agents.md
+index 3c70fbb819..7ffa8b166f 100644
+--- a/docs/agents.md
++++ b/docs/agents.md
+@@ -1134,10 +1134,28 @@ What the woken agent can read back:
+   act on from the count that was advertised. Every advertised id then gets its own line — the body with its
+   author when the card holds it, or `- [unknown] (commentId: …): body is NOT on this card — do not guess its
+   content` — and the block ends with the exact `fn_task_show(id: "<taskId>", commentIds: […])` call to re-read them.
+ - `fn_task_show` takes `commentIds` (up to 20) and returns matching task comments **and** steering comments with
+   author and timestamp, labelling an advertised id it cannot find rather than silently omitting it.
++- **Advertisement is consumption, not recomputation.** Each id reaches a given agent for a given card
++  at most once: the record of an advertisement is that wake's own run row (`contextSnapshot.triggeringCommentIds`),
++  written when the wake **opens the run** — before any prompt is built — and read back and subtracted at the
++  next wake's fire time in `consumeWakeCommentDelta` (`packages/engine/src/agents/wake-comment-delta.ts`), so a
++  replayed or deferred trigger cannot re-advertise an id an earlier run already carried, a crashed run cannot
++  un-consume it, and an id whose body is not on the card is said once rather than on every tick. The boundary
++  that comes with recording at run-open: a wake that opens a run and then exits gracefully before prompting
++  (missing card, terminal card, checkout held by another agent) consumes its ids without presenting them; the
++  executor's `## Steering Comments` section still delivers that row. A wake left with nothing new still runs —
++  it simply carries no comment block. The remembered set is bounded (`WAKE_COMMENT_CONSUMPTION_SCAN_RUNS`,
++  `MAX_CONSUMED_WAKE_COMMENT_IDS`). The read side is unaffected: `fn_task_show` still returns a consumed id's
++  body on request.
++- **An agent is never shown its own words as new input.** A comment whose author names the agent being woken is
++  withheld from its wake delta (named on one `[wake-comment-delta]` log line) and filtered out of the executor's
++  `## Steering Comments` section, the step-session prompt, and both workflow-input reply detectors — all four
++  through the one `isSelfAuthoredComment` predicate, and the withheld id is still consumed. Authorship must match
++  positively: `SteeringComment.author` is only `"user" | "agent"` for engine-written lifecycle guidance addressed
++  *to* the executing agent, so an author that cannot be matched is delivered, never guessed at.
+ - When prompt trimming elides comment blocks, the marker keeps the pointer alive: `… (older comments hidden;
+   read them with fn_task_show commentIds=["…"])`. Trimming never removes the only copy of an id.
+ 
+ Delivery is a body hand-off and a wake only. It grants no lifecycle authority: reading comments stays read-only,
+ the comment-to-replan release path is untouched, and await-input answers and `[planner-oversight]` nudges keep
+diff --git a/packages/engine/src/__tests__/heartbeat-executor.test.ts b/packages/engine/src/__tests__/heartbeat-executor.test.ts
+index 95a2133469..c2c4ec7d19 100644
+--- a/packages/engine/src/__tests__/heartbeat-executor.test.ts
++++ b/packages/engine/src/__tests__/heartbeat-executor.test.ts
+@@ -13,10 +13,11 @@ import {
+ } from "../agent-heartbeat.js";
+ import { AgentLogger } from "../agents/agent-logger.js";
+ import { expectAppendAgentLog } from "./agent-log-assertions.js";
+ import {
+   TRIAGE_HEARTBEAT_PATROL_DISABLED_INSTRUCTION,
++  renderTaskCommentSection,
+   type AgentStore,
+   type AgentHeartbeatRun,
+   type TaskStore,
+   type TaskDetail,
+   type Agent,
+@@ -231,10 +232,17 @@ describe("executeHeartbeat", () => {
+       clearLastBlockedState: vi.fn().mockResolvedValue(undefined),
+       appendRunLog: vi.fn().mockResolvedValue(undefined),
+       getActiveHeartbeatRun: vi.fn().mockResolvedValue(null),
+       syncExecutionTaskLink: vi.fn().mockResolvedValue(undefined),
+       getAgentsByReportsTo: vi.fn().mockResolvedValue([]),
++      // STAS-330: the wake-comment consumption subtraction reads this agent's recent run rows to learn
++      // which comment ids an earlier wake already advertised. The harness already records every saved
++      // run, so serve them back the way the real store does — newest first.
++      getRecentRuns: vi.fn().mockImplementation(async (_agentId: string, limit?: number) => {
++        const runs = [...savedRuns.values()].sort((a, b) => Date.parse(b.startedAt) - Date.parse(a.startedAt));
++        return runs.slice(0, limit ?? runs.length);
++      }),
+     } as unknown as AgentStore;
+   }
+ 
+   beforeEach(() => {
+     mockTaskStore = createMockTaskStore();
+@@ -3991,10 +3999,208 @@ describe("executeHeartbeat", () => {
+ 
+       const promptArg = mockSession.prompt.mock.calls[0]![0] as string;
+       expect(promptArg).toContain('fn_task_show(id: "FN-001", commentIds:');
+     });
+ 
++    /*
++    FNXC:WakeCommentConsumption 2026-10-16 (STAS-330):
++    STAS-270 measured the same four comment ids advertised on 15+ consecutive re-wakes, because the
++    delta was recomputed from the card every time and nothing recorded that an earlier wake had already
++    shown them. The consumption record is the run row itself, so the contract is only visible across two
++    wakes: the first must deliver the bodies, the second must deliver nothing while the card still holds
++    the same comments.
++    */
++    it("does not re-advertise a comment an earlier wake of this agent already showed", async () => {
++      const store = createStoreWithAgentForExec();
++      const mockSession = createMockAgentSession();
++      mockedCreateFnAgent.mockResolvedValue({ session: mockSession as any });
++
++      mockTaskStore.getTask = vi.fn().mockResolvedValue({
++        id: "FN-001",
++        title: "Test Task",
++        description: "Test task description",
++        prompt: "# Prompt",
++        comments: [{ id: "c-1", author: "user", text: "Please cover edge cases", createdAt: "2026-01-01T00:00:00.000Z" }],
++        steeringComments: [],
++        steps: [],
++        column: "todo",
++        dependencies: [],
++        log: [],
++        attachments: [],
++      } as unknown as TaskDetail);
++
++      const monitor = new HeartbeatMonitor({ store, taskStore: mockTaskStore, rootDir: "/tmp" });
++      const wake = () => monitor.executeHeartbeat({
++        agentId: "agent-001",
++        source: "on_demand",
++        triggeringCommentIds: ["c-1"],
++        triggeringCommentType: "task",
++      });
++
++      await wake();
++      const firstPrompt = mockSession.prompt.mock.calls[0]![0] as string;
++      expect(firstPrompt).toContain("Please cover edge cases");
++
++      await wake();
++      const secondPrompt = mockSession.prompt.mock.calls[1]![0] as string;
++      expect(secondPrompt).not.toContain("New comments since last run:");
++      expect(secondPrompt).not.toContain("Please cover edge cases");
++      expect(secondPrompt).toContain("- triggering comments: 0 of 0 readable on this card");
++      // Consumption suppresses the attribution, never the wake itself.
++      expect(mockSession.prompt).toHaveBeenCalledTimes(2);
++      // Contract: every suppressed id is named on exactly one log line, so the suppression is
++      // auditable without replaying the wake history by hand.
++      const suppressionLines = heartbeatLog.log.mock.calls
++        .map((call) => String(call[0]))
++        .filter((line) => line.includes("suppressedIds=") && line.includes("c-1"));
++      expect(suppressionLines).toHaveLength(1);
++      expect(suppressionLines[0]).toContain("[wake-comment-delta]");
++
++      // Non-suppression: consumption removes an id from the wake delta only. The read side — what
++      // `fn_task_show(id, commentIds=[…])` renders — still resolves a consumed id's body.
++      const readBack = renderTaskCommentSection(await mockTaskStore.getTask("FN-001"), ["c-1"]);
++      expect(readBack).toContain("Please cover edge cases");
++    });
++
++    /*
++    FNXC:WakeCommentConsumption 2026-10-16 (STAS-330): the guard against over-consuming. Consumption
++    must never swallow a comment the agent has genuinely not seen: on a wake that attributes an old
++    id and a new one, only the new one may render, and it must render with its body.
++    */
++    it("advertises a comment the agent has not seen while consuming the one it has", async () => {
++      const store = createStoreWithAgentForExec();
++      const mockSession = createMockAgentSession();
++      mockedCreateFnAgent.mockResolvedValue({ session: mockSession as any });
++
++      const c1 = { id: "c-1", author: "user", text: "first external note", createdAt: "2026-01-01T00:00:00.000Z" };
++      const c2 = { id: "c-2", author: "user", text: "second external note", createdAt: "2026-01-01T00:01:00.000Z" };
++      const taskHolding = (comments: Array<{ id: string; author: string; text: string; createdAt: string }>) => ({
++        id: "FN-001",
++        title: "Test Task",
++        description: "Test task description",
++        prompt: "# Prompt",
++        comments,
++        steeringComments: [],
++        steps: [],
++        column: "todo",
++        dependencies: [],
++        log: [],
++        attachments: [],
++      } as unknown as TaskDetail);
++
++      const monitor = new HeartbeatMonitor({ store, taskStore: mockTaskStore, rootDir: "/tmp" });
++
++      mockTaskStore.getTask = vi.fn().mockResolvedValue(taskHolding([c1]));
++      await monitor.executeHeartbeat({
++        agentId: "agent-001",
++        source: "on_demand",
++        triggeringCommentIds: ["c-1"],
++        triggeringCommentType: "task",
++      });
++      expect(mockSession.prompt.mock.calls[0]![0]).toContain("first external note");
++
++      // The card now holds both rows and the wake attributes both: the seen one is consumed, the
++      // unseen one still arrives with its body.
++      mockTaskStore.getTask = vi.fn().mockResolvedValue(taskHolding([c1, c2]));
++      await monitor.executeHeartbeat({
++        agentId: "agent-001",
++        source: "on_demand",
++        triggeringCommentIds: ["c-1", "c-2"],
++        triggeringCommentType: "task",
++      });
++
++      const secondPrompt = mockSession.prompt.mock.calls[1]![0] as string;
++      expect(secondPrompt).toContain("New comments since last run:");
++      expect(secondPrompt).toContain("second external note");
++      expect(secondPrompt).not.toContain("first external note");
++      expect(secondPrompt).toContain("- triggering comments: 1 of 1 readable on this card");
++    });
++
++    /*
++    FNXC:WakeCommentConsumption 2026-10-16 (STAS-330):
++    STAS-270's `75217182` was advertised on ten consecutive wakes while never being readable, because an
++    id the card does not hold was counted but never consumed. The loud "not on this card" line stays (an
++    agent must not be silently handed an unresolvable id) but it is said once: the id is consumed like
++    any other, and the read side is untouched.
++    */
++    it("consumes an id the card does not hold — the loud line is said once, not on every wake", async () => {
++      const store = createStoreWithAgentForExec();
++      const mockSession = createMockAgentSession();
++      mockedCreateFnAgent.mockResolvedValue({ session: mockSession as any });
++
++      mockTaskStore.getTask = vi.fn().mockResolvedValue({
++        id: "FN-001",
++        title: "Test Task",
++        description: "Test task description",
++        prompt: "# Prompt",
++        comments: [],
++        steeringComments: [],
++        steps: [],
++        column: "todo",
++        dependencies: [],
++        log: [],
++        attachments: [],
++      } as unknown as TaskDetail);
++
++      const monitor = new HeartbeatMonitor({ store, taskStore: mockTaskStore, rootDir: "/tmp" });
++      const wake = () => monitor.executeHeartbeat({
++        agentId: "agent-001",
++        source: "on_demand",
++        triggeringCommentIds: ["zz-9"],
++        triggeringCommentType: "steering",
++      });
++
++      await wake();
++      const firstPrompt = mockSession.prompt.mock.calls[0]![0] as string;
++      expect(firstPrompt).toContain("body is NOT on this card");
++      expect(firstPrompt).toContain("0 of 1 readable on this card");
++
++      await wake();
++      const secondPrompt = mockSession.prompt.mock.calls[1]![0] as string;
++      expect(secondPrompt).not.toContain("zz-9");
++      expect(secondPrompt).not.toContain("New comments since last run:");
++      expect(secondPrompt).toContain("- triggering comments: 0 of 0 readable on this card");
++      expect(mockSession.prompt).toHaveBeenCalledTimes(2);
++    });
++
++    it("does not present the agent's own comment to it as new content", async () => {
++      const store = createStoreWithAgentForExec();
++      const mockSession = createMockAgentSession();
++      mockedCreateFnAgent.mockResolvedValue({ session: mockSession as any });
++
++      mockTaskStore.getTask = vi.fn().mockResolvedValue({
++        id: "FN-001",
++        title: "Test Task",
++        description: "Test task description",
++        prompt: "# Prompt",
++        comments: [],
++        steeringComments: [
++          { id: "s-self", author: "agent-001", text: "my own earlier status note", createdAt: "2026-01-01T00:00:00.000Z" },
++          { id: "s-user", author: "dustinbyrne", text: "switch to lane B", createdAt: "2026-01-01T00:01:00.000Z" },
++        ],
++        steps: [],
++        column: "todo",
++        dependencies: [],
++        log: [],
++        attachments: [],
++      } as unknown as TaskDetail);
++
++      const monitor = new HeartbeatMonitor({ store, taskStore: mockTaskStore, rootDir: "/tmp" });
++      await monitor.executeHeartbeat({
++        agentId: "agent-001",
++        source: "on_demand",
++        triggeringCommentIds: ["s-self", "s-user"],
++        triggeringCommentType: "steering",
++      });
++
++      const promptArg = mockSession.prompt.mock.calls[0]![0] as string;
++      expect(promptArg).toContain("switch to lane B");
++      expect(promptArg).not.toContain("my own earlier status note");
++      // The header must describe what the block delivered, not what the trigger carried.
++      expect(promptArg).toContain("- triggering comments: 1 of 1 readable on this card");
++    });
++
+     it("keeps standard prompt when no triggering comments are provided", async () => {
+       const store = createStoreWithAgentForExec();
+       const mockSession = createMockAgentSession();
+       mockedCreateFnAgent.mockResolvedValue({
+         session: mockSession as any,
+diff --git a/packages/engine/src/__tests__/step-session-executor.test.ts b/packages/engine/src/__tests__/step-session-executor.test.ts
+index cba724fd0d..2817109892 100644
+--- a/packages/engine/src/__tests__/step-session-executor.test.ts
++++ b/packages/engine/src/__tests__/step-session-executor.test.ts
+@@ -884,10 +884,64 @@ Some freeform text without checkboxes.`;
+ 
+     expect(result).toContain("## Steering Comments");
+     expect(result).toContain("Please prioritize the API invariant before refactoring.");
+   });
+ 
++  /*
++  FNXC:WakeCommentConsumption 2026-10-16 (STAS-330):
++  The step prompt used to run its own unfiltered copy of the steering rule, so the step session of an
++  agent whose own comments were on the card was handed its earlier words under a heading that promises
++  somebody else's feedback. The card's assignee is the reader here, so that row is withheld and the
++  operator's row is not — one shared predicate with the heartbeat delta and the execution prompt.
++  */
++  it("withholds a steering comment the card's own assignee wrote from its step prompt", () => {
++    const task = makeTaskDetail({
++      prompt: fullPrompt,
++      assignedAgentId: "agent-99",
++      steeringComments: [
++        {
++          id: "comment-1",
++          author: "agent-99",
++          text: "Echo of my own earlier conclusion.",
++          createdAt: "2026-06-17T13:44:00.000Z",
++        },
++        {
++          id: "comment-2",
++          author: "user",
++          text: "Operator note that must still arrive.",
++          createdAt: "2026-06-17T13:45:00.000Z",
++        },
++      ],
++    });
++
++    const result = buildStepPrompt(task, 1);
++
++    expect(result).toContain("## Steering Comments");
++    expect(result).toContain("Operator note that must still arrive.");
++    expect(result).not.toContain("Echo of my own earlier conclusion.");
++  });
++
++  it("omits the steering section entirely when every steering comment is the assignee's own", () => {
++    const task = makeTaskDetail({
++      prompt: fullPrompt,
++      assignedAgentId: "agent-99",
++      steeringComments: [
++        {
++          id: "comment-1",
++          author: "agent-99",
++          text: "Only my own words on this card.",
++          createdAt: "2026-06-17T13:44:00.000Z",
++        },
++      ],
++    });
++
++    const result = buildStepPrompt(task, 1);
++
++    expect(result).not.toContain("## Steering Comments");
++    expect(result).not.toContain("Only my own words on this card.");
++  });
++
+   it("does not ask graph-owned step sessions to call task lifecycle tools", () => {
+     const task = makeTaskDetail({ prompt: fullPrompt });
+     const result = buildStepPrompt(task, 1);
+     expect(result).toContain("The workflow graph records step status, ordering, review, and completion.");
+     expect(result).not.toContain("fn_task_done()");
+diff --git a/packages/engine/src/__tests__/wake-comment-delta-consumption.test.ts b/packages/engine/src/__tests__/wake-comment-delta-consumption.test.ts
+new file mode 100644
+index 0000000000..a18cba77f7
+--- /dev/null
++++ b/packages/engine/src/__tests__/wake-comment-delta-consumption.test.ts
+@@ -0,0 +1,245 @@
++/*
++FNXC:WakeCommentConsumption 2026-10-16 (STAS-330) — written against trunk and observed FAILING first.
++
++The comment half of the heartbeat wake delta is recomputed, never consumed. The ids it advertises come
++from `packages/engine/src/agent-heartbeat.ts` (`steeringComments.filter(createdAt > lastRun.startedAt)`
++at the assignment wake) and are re-derived on every later wake, so an id the agent was already shown
++comes back as "New comments since last run" forever. STAS-270 measured the consequence: ids
++`b3102332`, `46128b1a`, `69516485` and `75217182` were re-advertised across 15+ re-wakes in two hours,
++the agent could resolve none of them (`0 of 0 readable`), and every wake it spent on them re-raised
++the same unanswerable question.
++
++The three defects this harness pins:
++
++1. No consumption. An id that a previous run of this agent, on this task, already put in front of it
++   must never be advertised again — the record of the advertisement is the run row's own
++   `contextSnapshot.triggeringCommentIds`, written when the run opened, so a crashed run cannot
++   un-consume it.
++2. Self-echo. Content attributed to the waking agent itself is not external input, and must not be
++   presented as new content in the heartbeat delta, in the executor's `## Steering Comments` section,
++   or to the workflow-input / await-input reply detectors.
++3. Unresolvable ids. An id whose body is not on the card still counts as advertised — the loud
++   "body is NOT on this card" line is the point of advertising it — and it is consumed like any other.
++
++Every case below carries an id through a first wake and then a second wake, which is the only shape
++that distinguishes recomputation from consumption.
++*/
++import { describe, it, expect } from "vitest";
++import type { AgentHeartbeatRun } from "@fusion/core";
++import {
++  MAX_CONSUMED_WAKE_COMMENT_IDS,
++  WAKE_COMMENT_CONSUMPTION_SCAN_RUNS,
++  collectAlreadyAdvertisedCommentIds,
++  consumeWakeCommentDelta,
++  isSelfAuthoredComment,
++  renderWakeCommentDelta,
++  selectExternalSteeringComments,
++  selfAuthorKeys,
++} from "../agents/wake-comment-delta.js";
++
++function runAdvertising(taskId: string, ids: string[], startedAt = "2026-10-02T18:00:00.000Z"): AgentHeartbeatRun {
++  return {
++    id: `run-${ids.join("-") || "empty"}`,
++    agentId: "agent-ff03cfcc",
++    taskId,
++    startedAt,
++    endedAt: null,
++    status: "active",
++    contextSnapshot: { taskId, triggeringCommentIds: ids },
++  } as AgentHeartbeatRun;
++}
++
++describe("wake comment delta is consumed, not recomputed", () => {
++  it("advertises an id the agent has never been shown", () => {
++    const delta = consumeWakeCommentDelta({
++      advertisedIds: ["1759478901234-aaaaaa"],
++      priorRuns: [],
++      taskId: "STAS-270",
++    });
++
++    expect(delta.freshIds).toEqual(["1759478901234-aaaaaa"]);
++    expect(delta.suppressedIds).toEqual([]);
++  });
++
++  it("suppresses an id an earlier run already advertised on the same card (STAS-270 b3102332)", () => {
++    const prior = runAdvertising("STAS-270", ["b3102332", "46128b1a"]);
++
++    const delta = consumeWakeCommentDelta({
++      advertisedIds: ["b3102332", "46128b1a", "69516485"],
++      priorRuns: [prior],
++      taskId: "STAS-270",
++    });
++
++    expect(delta.freshIds).toEqual(["69516485"]);
++    expect(delta.suppressedIds).toEqual(["b3102332", "46128b1a"]);
++  });
++
++  it("re-advertises the same id for a different card — consumption is per (agent, task)", () => {
++    const delta = consumeWakeCommentDelta({
++      advertisedIds: ["b3102332"],
++      priorRuns: [runAdvertising("STAS-281", ["b3102332"])],
++      taskId: "STAS-270",
++    });
++
++    expect(delta.freshIds).toEqual(["b3102332"]);
++  });
++
++  it("treats a run row that carries no comment attribution as having advertised nothing", () => {
++    const bareRun = {
++      id: "run-bare",
++      agentId: "agent-ff03cfcc",
++      taskId: "STAS-270",
++      startedAt: "2026-10-02T18:00:00.000Z",
++      endedAt: null,
++      status: "completed",
++    } as AgentHeartbeatRun;
++
++    const delta = consumeWakeCommentDelta({
++      advertisedIds: ["69516485"],
++      priorRuns: [bareRun],
++      taskId: "STAS-270",
++    });
++
++    expect(delta.freshIds).toEqual(["69516485"]);
++  });
++
++  it("reads the ids out of persisted run rows without a caller-side shape check", () => {
++    expect(collectAlreadyAdvertisedCommentIds([runAdvertising("STAS-270", ["75217182"])], "STAS-270"))
++      .toEqual(["75217182"]);
++    expect(WAKE_COMMENT_CONSUMPTION_SCAN_RUNS).toBeGreaterThan(1);
++  });
++
++  it("keeps the consumed-id set bounded and drops the oldest ids first", () => {
++    const flooded = Array.from({ length: MAX_CONSUMED_WAKE_COMMENT_IDS + 40 }, (_unused, index) => `id-${index}`);
++
++    const delta = consumeWakeCommentDelta({
++      advertisedIds: flooded,
++      priorRuns: [runAdvertising("STAS-270", flooded)],
++      taskId: "STAS-270",
++    });
++
++    // The newest MAX_CONSUMED_WAKE_COMMENT_IDS ids stay remembered, so the oldest ones fall out of
++    // the window instead of the set growing without limit.
++    expect(delta.suppressedIds.length).toBeLessThanOrEqual(MAX_CONSUMED_WAKE_COMMENT_IDS);
++    expect(delta.freshIds).toContain("id-0");
++    expect(delta.freshIds).toContain("id-39");
++    expect(delta.freshIds).not.toContain(`id-${flooded.length - 1}`);
++  });
++});
++
++describe("wake comment delta never echoes the agent's own content", () => {
++  it("recognises the agent's id and name as self-authorship", () => {
++    const keys = selfAuthorKeys({ id: "agent-ff03cfcc", name: "Backend Engineer" });
++
++    expect(isSelfAuthoredComment("agent-ff03cfcc", keys)).toBe(true);
++    expect(isSelfAuthoredComment("Backend Engineer", keys)).toBe(true);
++    expect(isSelfAuthoredComment("backend engineer ", keys)).toBe(true);
++    expect(isSelfAuthoredComment("dustinbyrne", keys)).toBe(false);
++  });
++
++  it("treats an unknown or absent author as external input rather than guessing", () => {
++    const keys = selfAuthorKeys({ id: "agent-ff03cfcc", name: "Backend Engineer" });
++
++    expect(isSelfAuthoredComment(undefined, keys)).toBe(false);
++    expect(isSelfAuthoredComment("", keys)).toBe(false);
++    expect(isSelfAuthoredComment("unknown", keys)).toBe(false);
++  });
++
++  it("drops only the rows the agent itself authored, in order", () => {
++    const keys = selfAuthorKeys({ id: "agent-ff03cfcc", name: "Backend Engineer" });
++
++    const kept = selectExternalSteeringComments([
++      { id: "c1", author: "user" },
++      { id: "c2", author: "Backend Engineer" },
++      { id: "c3", author: "agent" },
++      { id: "c4", author: "agent-ff03cfcc" },
++    ], keys);
++
++    expect(kept.map((comment) => comment.id)).toEqual(["c1", "c3"]);
++  });
++
++  it("keeps engine-authored guidance aimed at the agent — it is not self-echo", () => {
++    // `author: "agent"` is the literal the lifecycle planner writes (project-engine.ts
++    // `injectGuidance`/`requestTargetedFix`), and it names no authoring agent. Silencing it would
++    // swallow genuine input, which is the failure mode this task must not introduce.
++    const keys = selfAuthorKeys({ id: "agent-ff03cfcc" });
++    expect(selectExternalSteeringComments([{ id: "c1", author: "agent" }], keys)).toHaveLength(1);
++  });
++});
++
++describe("wake comment delta renders and consumes unresolvable ids", () => {
++  it("keeps the loud not-on-this-card line and still records the id as advertised", () => {
++    const rendered = renderWakeCommentDelta({
++      taskId: "STAS-270",
++      commentType: "steering",
++      ids: ["75217182"],
++      lookup: new Map(),
++      selfAuthorKeys: [],
++    });
++
++    expect(rendered.lines.join("\n")).toContain("body is NOT on this card");
++    expect(rendered.lines.join("\n")).toContain("75217182");
++    expect(rendered.advertisedIds).toEqual(["75217182"]);
++    expect(rendered.missingIds).toEqual(["75217182"]);
++  });
++
++  it("renders the body when the card holds it", () => {
++    const rendered = renderWakeCommentDelta({
++      taskId: "STAS-270",
++      commentType: "steering",
++      ids: ["1759478901234-aaaaaa"],
++      lookup: new Map([["1759478901234-aaaaaa", { author: "user", text: "push  straight  to  main" }]]),
++      selfAuthorKeys: [],
++    });
++
++    const text = rendered.lines.join("\n");
++    expect(text).toContain("New comments since last run:");
++    expect(text).toContain('"push straight to main"');
++    expect(rendered.missingIds).toEqual([]);
++  });
++
++  it("withholds a body the woken agent wrote itself while still consuming its id", () => {
++    const rendered = renderWakeCommentDelta({
++      taskId: "STAS-270",
++      commentType: "steering",
++      ids: ["c-self", "c-user"],
++      lookup: new Map([
++        ["c-self", { author: "Backend Engineer", text: "my own earlier note" }],
++        ["c-user", { author: "dustinbyrne", text: "switch to lane B" }],
++      ]),
++      selfAuthorKeys: ["agent-ff03cfcc", "backend engineer"],
++    });
++
++    const text = rendered.lines.join("\n");
++    expect(text).not.toContain("my own earlier note");
++    expect(text).toContain("switch to lane B");
++    expect(rendered.selfSuppressedIds).toEqual(["c-self"]);
++    expect(rendered.advertisedIds).toEqual(["c-user"]);
++  });
++
++  it("renders nothing when every advertised body was the agent's own", () => {
++    const rendered = renderWakeCommentDelta({
++      taskId: "STAS-270",
++      commentType: "steering",
++      ids: ["c-self"],
++      lookup: new Map([["c-self", { author: "agent-ff03cfcc", text: "echo" }]]),
++      selfAuthorKeys: ["agent-ff03cfcc"],
++    });
++
++    expect(rendered.lines).toEqual([]);
++    expect(rendered.selfSuppressedIds).toEqual(["c-self"]);
++  });
++
++  it("renders nothing when every advertised id was already consumed — suppression, not a blank wake", () => {
++    const rendered = renderWakeCommentDelta({
++      taskId: "STAS-270",
++      commentType: "steering",
++      ids: [],
++      lookup: new Map(),
++      selfAuthorKeys: [],
++    });
++
++    expect(rendered.lines).toEqual([]);
++    expect(rendered.advertisedIds).toEqual([]);
++  });
++});
+diff --git a/packages/engine/src/__tests__/workflow-input-author-filter.test.ts b/packages/engine/src/__tests__/workflow-input-author-filter.test.ts
+new file mode 100644
+index 0000000000..d8dae96890
+--- /dev/null
++++ b/packages/engine/src/__tests__/workflow-input-author-filter.test.ts
+@@ -0,0 +1,149 @@
++/*
++FNXC:WakeCommentConsumption 2026-10-16 (STAS-330) — written against trunk and observed FAILING first.
++
++Three agent-facing surfaces read a card's `steeringComments` and treat every row as somebody else's
++input. On trunk none of them looks at the author:
++
++- `workflowInputRepliesAfterWatermark` (`executor/workflow-input-markers.ts`) answers "has the user
++  replied?" for a paused workflow node.
++- `runAwaitInputNode` (`executor/await-input-node.ts`) re-implements the same watermark filter inline
++  and resumes the graph on whatever it finds.
++- `buildSteeringCommentsSection` (`executor/execution-prompt.ts`) renders the last ten rows under a
++  heading that claims they "were added by the user during execution".
++
++A row the executing agent authored itself therefore reads as fresh user instruction on all three: the
++reply detector satisfies itself, the graph resumes on the agent's own words, and the prompt re-presents
++them as new guidance. `await-input-node.ts` also duplicated the watermark parser instead of calling the
++marker helper, so a fix applied to one detector would not reach the other — the second reason this
++harness exists.
++
++Fixture honesty: `SteeringComment.author` is the two-value literal `"user" | "agent"` and no writer puts an
++agent identity on a steering row today, so the `agent-ff03cfcc` casts below describe a state the declared
++type forbids. They pin the seam for the writer-side identity stamp, not shipped steering behaviour; the
++production shape where the predicate is load-bearing is a free-string `TaskComment.author`, which
++`wake-comment-delta-consumption.test.ts` covers without a cast.
++*/
++import { describe, it, expect, vi } from "vitest";
++import type { SteeringComment, TaskDetail, WorkflowIrNode } from "@fusion/core";
++import { workflowInputRepliesAfterWatermark } from "../executor/workflow-input-markers.js";
++import { runAwaitInputNode } from "../executor/await-input-node.js";
++import { buildSteeringCommentsSection } from "../executor/execution-prompt.js";
++
++const PAUSE_MS = Date.parse("2026-10-03T00:00:00.000Z");
++
++function steering(id: string, author: SteeringComment["author"], minutesAfterPause: number): SteeringComment {
++  return {
++    id,
++    author,
++    text: `body of ${id}`,
++    createdAt: new Date(PAUSE_MS + minutesAfterPause * 60_000).toISOString(),
++  };
++}
++
++function pausedCard(overrides: Partial<TaskDetail> = {}): TaskDetail {
++  return {
++    id: "STAS-330",
++    title: "Wake comment delta consumption",
++    description: "d",
++    status: null,
++    column: "building",
++    assignedAgentId: "agent-ff03cfcc",
++    paused: false,
++    pausedReason: `workflow-input:ask-user-1@${PAUSE_MS}: Which lane?`,
++    steeringComments: [],
++    ...overrides,
++  } as unknown as TaskDetail;
++}
++
++describe("workflow-input reply detector ignores the executing agent's own steering", () => {
++  it("still counts an operator reply after the watermark", () => {
++    const task = pausedCard({ steeringComments: [steering("c-user", "user", 5)] });
++
++    expect(workflowInputRepliesAfterWatermark(task, "workflow-input:ask-user-1")).toHaveLength(1);
++  });
++
++  it("does not count a row the card's own assignee authored", () => {
++    const task = pausedCard({ steeringComments: [steering("c-self", "agent", 5, )] });
++    // The authoring agent is the card's assignee, which is the only identity the executor lane holds.
++    (task as { assignedAgentId?: string }).assignedAgentId = "agent-ff03cfcc";
++    (task.steeringComments![0] as { author: string }).author = "agent-ff03cfcc";
++
++    expect(workflowInputRepliesAfterWatermark(task, "workflow-input:ask-user-1")).toEqual([]);
++  });
++
++  it("keeps pre-watermark rows out of the answer either way", () => {
++    const task = pausedCard({ steeringComments: [steering("c-old", "user", -10)] });
++
++    expect(workflowInputRepliesAfterWatermark(task, "workflow-input:ask-user-1")).toEqual([]);
++  });
++});
++
++describe("await-input node does not resume on its own agent's steering", () => {
++  const node = { id: "ask-user-1", kind: "ask-user", config: { question: "Which lane?" } } as WorkflowIrNode;
++
++  function deps() {
++    return {
++      store: {
++        updateTask: vi.fn().mockResolvedValue(undefined),
++        logEntry: vi.fn().mockResolvedValue(undefined),
++      },
++      getRunContextFor: () => undefined,
++    };
++  }
++
++  it("resumes when a real reply arrived", async () => {
++    const d = deps();
++    const task = pausedCard({ steeringComments: [steering("c-user", "user", 5)] });
++
++    const result = await runAwaitInputNode(d as never, node, task);
++
++    expect(result.outcome).toBe("success");
++    expect(result.value).toBe("input-received");
++  });
++
++  it("re-parks when the only post-watermark row was authored by the agent itself", async () => {
++    const d = deps();
++    const selfAuthored = steering("c-self", "user", 5);
++    (selfAuthored as unknown as { author: string }).author = "agent-ff03cfcc";
++    const task = pausedCard({ steeringComments: [selfAuthored] });
++
++    const result = await runAwaitInputNode(d as never, node, task);
++
++    expect(result).toEqual({ outcome: "failure", value: "awaiting-user-input" });
++    expect(d.store.updateTask).toHaveBeenCalledWith(
++      "STAS-330",
++      expect.objectContaining({ status: "awaiting-user-input", paused: true }),
++      undefined,
++    );
++  });
++});
++
++describe("executor steering section does not echo the executing agent's own rows", () => {
++  it("renders operator steering", () => {
++    const task = pausedCard({ steeringComments: [steering("c-user", "user", 5)] });
++
++    const section = buildSteeringCommentsSection(task);
++
++    expect(section).toContain("## Steering Comments");
++    expect(section).toContain("body of c-user");
++  });
++
++  it("omits rows the executing agent authored while keeping everyone else's", () => {
++    const selfRow = steering("c-self", "user", 6);
++    (selfRow as unknown as { author: string }).author = "agent-ff03cfcc";
++    const task = pausedCard({ steeringComments: [steering("c-user", "user", 5), selfRow] });
++
++    const section = buildSteeringCommentsSection(task);
++
++    expect(section).toContain("body of c-user");
++    expect(section).not.toContain("body of c-self");
++  });
++
++  it("emits no section when every steering row is the agent's own", () => {
++    const selfRow = steering("c-self", "user", 6);
++    (selfRow as unknown as { author: string }).author = "agent-ff03cfcc";
++    const task = pausedCard({ steeringComments: [selfRow] });
++
++    expect(buildSteeringCommentsSection(task)).toBe("");
++  });
++});
+diff --git a/packages/engine/src/agent-heartbeat.ts b/packages/engine/src/agent-heartbeat.ts
+index ee29ec65fe..d60f0ea201 100644
+--- a/packages/engine/src/agent-heartbeat.ts
++++ b/packages/engine/src/agent-heartbeat.ts
+@@ -70,10 +70,16 @@ import { createHash } from "node:crypto";
+ import { createTaskCreateTool, createTaskLogToolWithContext, createTaskLogsReadTool, createTaskDocumentWriteTool, createTaskDocumentReadTool, createTaskReadTools, createArtifactRegisterTool, createArtifactListTool, createArtifactViewTool, createListAgentsTool, createDelegateTaskTool, createTaskAssignTool, createGetAgentConfigTool, createUpdateAgentConfigTool, createAgentCreateTool, createAgentDeleteTool, createSendMessageTool, createReadMessagesTool, createPostRoomMessageTool, createMemoryTools, createGoalRetrievalTools, createMissionTools, createIdeationTools, createReadEvaluationsTool, createUpdateIdentityTool, createReflectOnPerformanceTool, createWebFetchTool, createWorkflowListTool, createWorkflowGetTool, createWorkflowValidateTool, createWorkflowSelectTool, createTaskPromoteTool, createWorkflowCreateTool, createWorkflowUpdateTool, createWorkflowDeleteTool, createWorkflowSettingsTool, createTraitListTool, createAskQuestionTool, createResearchTools, readAgentMemoryWorkspaceLongTerm, taskCreateParams } from "./agent-tools.js";
+ import { AgentLogger } from "./agents/agent-logger.js";
+ import { isTaskPlanningOrExecutionLive } from "./agents/planning-execution-liveness.js";
+ import { attachAgentUsageTelemetry, emitAgentSessionStart } from "./agents/agent-usage-telemetry.js";
+ import { emitApprovalMail } from "./agents/approval-mail.js";
++import {
++  consumeWakeCommentDelta,
++  renderWakeCommentDelta,
++  selfAuthorKeys,
++  WAKE_COMMENT_CONSUMPTION_SCAN_RUNS,
++} from "./agents/wake-comment-delta.js";
+ import {
+   resolveAgentInstructionPartsWithRatings,
+   buildPluginPromptSection,
+   resolveAgentHeartbeatProcedure,
+   ensureDefaultHeartbeatProcedureFile,
+@@ -2774,13 +2780,52 @@ export class HeartbeatMonitor {
+         contextSnapshot?.triggeringCommentType === "steering"
+         || contextSnapshot?.triggeringCommentType === "task"
+         || contextSnapshot?.triggeringCommentType === "pr"
+           ? contextSnapshot.triggeringCommentType
+           : undefined;
+-      const effectiveTriggeringCommentIds = triggeringCommentIds ?? contextTriggeringCommentIds;
++      const candidateTriggeringCommentIds = triggeringCommentIds ?? contextTriggeringCommentIds;
+       const effectiveTriggeringCommentType = triggeringCommentType ?? contextTriggeringCommentType;
+ 
++      /*
++      FNXC:WakeCommentConsumption 2026-10-16 (STAS-330):
++      New content on a wake is a consumption, not a recomputation. Everything upstream of this line —
++      the assignment wake's `steeringComments.filter(createdAt > lastRun.startedAt)`, a message trigger,
++      and the deferred-assignment re-fire that replays the ids captured when it was scheduled — re-derives
++      candidate ids from the card, and nothing had ever recorded which ids an earlier wake of this agent
++      already put in front of it. STAS-270 therefore carried `b3102332`, `46128b1a`, `69516485` and
++      `75217182` through 15+ re-wakes in two hours, and the deferred arm re-fired the same ids into fresh
++      sessions verbatim.
++
++      The subtraction happens here, at the wake's fire time, against the run rows this agent already
++      opened: the ids a wake advertises are persisted on its own `contextSnapshot.triggeringCommentIds`
++      when the run starts, so the record exists before the session does anything and a crashed or
++      terminated run cannot un-consume what it was already told. The seam is run-open, not render-time:
++      the graceful exits below (missing card, terminal card, checkout held elsewhere) therefore consume
++      their ids without ever rendering them — accepted, because rendering late would un-consume on every
++      session that dies mid-prompt and the executor's `## Steering Comments` lane still delivers the row.
++      Putting it on this single path also
++      covers the re-fire without a second delta function — a replay whose ids an earlier run already
++      advertised arrives as a wake with no comment attribution instead of a repeat of the same block.
++      */
++      let effectiveTriggeringCommentIds = candidateTriggeringCommentIds;
++      if (candidateTriggeringCommentIds?.length && resolvedTaskId) {
++        const priorRuns = await this.store.getRecentRuns(agentId, WAKE_COMMENT_CONSUMPTION_SCAN_RUNS);
++        const delta = consumeWakeCommentDelta({
++          advertisedIds: candidateTriggeringCommentIds,
++          priorRuns,
++          taskId: resolvedTaskId,
++        });
++        if (delta.suppressedIds.length > 0) {
++          heartbeatLog.log(
++            `[wake-comment-delta] agent=${agentId} task=${resolvedTaskId} suppressed=${delta.suppressedIds.length}`
++            + ` advertised=${delta.freshIds.length} suppressedIds=${delta.suppressedIds.slice(0, 10).join(",")}`
++            + ` — already advertised by an earlier run of this agent on this card`,
++          );
++        }
++        effectiveTriggeringCommentIds = delta.freshIds.length > 0 ? delta.freshIds : undefined;
++      }
++
+       const runContextSnapshot = {
+         ...(contextSnapshot ?? {}),
+         ...(resolvedTaskId ? { taskId: resolvedTaskId } : {}),
+         ...(effectiveTriggeringCommentIds?.length
+           ? { triggeringCommentIds: effectiveTriggeringCommentIds }
+@@ -4679,58 +4724,57 @@ export class HeartbeatMonitor {
+             "not on this card" when it does not, and the ids always travel with the line so
+             `fn_task_show(id, commentIds=[…])` is a call the agent can actually make.
+             */
+             const triggeringCommentLines: string[] = [];
+             let hiddenTriggeringCommentIds: string[] = [];
+-            const readableTriggeringCommentCount = resolveAdvertisedCommentIds(
+-              taskDetail,
+-              effectiveTriggeringCommentIds,
+-            ).length;
++            /*
++            FNXC:WakeCommentConsumption 2026-10-16 (STAS-330):
++            The header's two numbers used to be measured against the ids the trigger *carried*, which
++            stopped being the same thing once consumption and self-echo filtering could drop ids before
++            the block was rendered — a delta that showed nothing would still print "2 of 2 readable".
++            Both numbers now describe what the block actually put in front of this agent.
++            */
++            let renderedWakeCommentIds: string[] = effectiveTriggeringCommentIds ?? [];
+             if (effectiveTriggeringCommentIds && effectiveTriggeringCommentIds.length > 0) {
+               const commentLookup = new Map<string, { author: string; text: string }>();
+               for (const comment of taskDetail!.comments ?? []) {
+                 commentLookup.set(comment.id, { author: comment.author, text: comment.text });
+               }
+               for (const steeringComment of taskDetail!.steeringComments ?? []) {
+                 commentLookup.set(steeringComment.id, { author: steeringComment.author, text: steeringComment.text });
+               }
+ 
+-              const formatCommentText = (text: string): string => text.replace(/\s+/g, " ").trim();
+-              const readableIds: string[] = [];
+-              const missingIds: string[] = [];
+-              const bodyLines: string[] = [];
+-
+-              for (const commentId of effectiveTriggeringCommentIds) {
+-                const comment = commentLookup.get(commentId);
+-                if (comment) {
+-                  readableIds.push(commentId);
+-                  bodyLines.push(`- [${comment.author}] (commentId: ${commentId}): "${formatCommentText(comment.text)}"`);
+-                } else {
+-                  missingIds.push(commentId);
+-                }
+-              }
+-
+-              hiddenTriggeringCommentIds = [...readableIds, ...missingIds];
+-
+-              if (bodyLines.length > 0 || missingIds.length > 0) {
+-                triggeringCommentLines.push(
+-                  "",
+-                  "You were woken because of new comments on this task. Review them and take appropriate action.",
+-                  `Triggering comment type: ${effectiveTriggeringCommentType ?? "task"}`,
+-                  "New comments since last run:",
+-                  ...bodyLines,
+-                );
+-                for (const commentId of missingIds) {
+-                  triggeringCommentLines.push(
+-                    `- [unknown] (commentId: ${commentId}): body is NOT on this card — do not guess its content`,
+-                  );
+-                }
+-                triggeringCommentLines.push(
+-                  `Re-read any of these bodies with fn_task_show(id: "${taskId}", commentIds: [...]) — that tool returns comment bodies by id.`,
++              /*
++              FNXC:WakeCommentConsumption 2026-10-16 (STAS-330):
++              The rendering rule lives in agents/wake-comment-delta.ts so the same predicate covers the
++              executor steering section and both workflow reply detectors. An id whose body this agent
++              wrote itself is withheld here and named on one log line — an agent that has to work out
++              for itself which lines of the delta are its own echo is the same loop with extra steps.
++              */
++              const wakeCommentDelta = renderWakeCommentDelta({
++                taskId: taskId!,
++                commentType: effectiveTriggeringCommentType ?? "task",
++                ids: effectiveTriggeringCommentIds,
++                lookup: commentLookup,
++                selfAuthorKeys: selfAuthorKeys(agent),
++              });
++              if (wakeCommentDelta.selfSuppressedIds.length > 0) {
++                heartbeatLog.log(
++                  `[wake-comment-delta] agent=${agent.id} task=${taskId} selfSuppressed=`
++                  + `${wakeCommentDelta.selfSuppressedIds.length} ids=${wakeCommentDelta.selfSuppressedIds.slice(0, 10).join(",")}`
++                  + ` — authored by this agent, not presented as new content`,
+                 );
+               }
++
++              hiddenTriggeringCommentIds = wakeCommentDelta.advertisedIds;
++              renderedWakeCommentIds = wakeCommentDelta.advertisedIds;
++              triggeringCommentLines.push(...wakeCommentDelta.lines);
+             }
++            const readableTriggeringCommentCount = resolveAdvertisedCommentIds(
++              taskDetail,
++              renderedWakeCommentIds,
++            ).length;
+ 
+             // Build pending messages section
+             const pendingMessagesLines: string[] = [];
+             if (pendingMessages.length > 0) {
+               pendingMessagesLines.push(
+@@ -4757,11 +4801,11 @@ export class HeartbeatMonitor {
+               ...multiAssignWakeDeltaLines,
+               wakeInboxSnapshotLine,
+               ...(wakeTriggerSourceLine ? [wakeTriggerSourceLine] : []),
+               ...(pendingMessagesLine ? [pendingMessagesLine] : []),
+               `- pending room messages: ${pendingRoomMessages.total}`,
+-              `- triggering comments: ${readableTriggeringCommentCount} of ${(effectiveTriggeringCommentIds ?? []).length} readable on this card`,
++              `- triggering comments: ${readableTriggeringCommentCount} of ${renderedWakeCommentIds.length} readable on this card`,
+               "",
+               "Treat this wake delta as the highest-priority change for this heartbeat.",
+               "This is an autonomous heartbeat run (manual or automatic): re-anchor on",
+               "identity, process wake context, then complete ONE concrete action.",
+               "Before resuming prior task work, run the Heartbeat Procedure (below) and",
+diff --git a/packages/engine/src/agents/heartbeat-prompt-trim.ts b/packages/engine/src/agents/heartbeat-prompt-trim.ts
+index 28c13268d6..78004f25a1 100644
+--- a/packages/engine/src/agents/heartbeat-prompt-trim.ts
++++ b/packages/engine/src/agents/heartbeat-prompt-trim.ts
+@@ -1,6 +1,7 @@
+ import type { HeartbeatPromptTemplate } from "@fusion/core";
++import { TRIGGERING_COMMENT_HEADING } from "./wake-comment-delta.js";
+ 
+ const TASK_DESC_CAP: Record<HeartbeatPromptTemplate, number> = {
+   default: 800,
+   compact: 400,
+ };
+@@ -51,12 +52,10 @@ export function trimPromptMd(prompt: string | undefined, template: HeartbeatProm
+     return undefined;
+   }
+   return truncate(prompt, PROMPT_MD_CAP[template], TASK_TRUNCATION_MARKER);
+ }
+ 
+-const TRIGGERING_COMMENT_HEADING = "New comments since last run:";
+-
+ export function trimTriggeringComments(
+   lines: string[],
+   _template: HeartbeatPromptTemplate,
+   hiddenCommentIds?: readonly string[],
+ ): string[] {
+diff --git a/packages/engine/src/agents/wake-comment-delta.ts b/packages/engine/src/agents/wake-comment-delta.ts
+new file mode 100644
+index 0000000000..bf34c016e8
+--- /dev/null
++++ b/packages/engine/src/agents/wake-comment-delta.ts
+@@ -0,0 +1,217 @@
++/*
++FNXC:WakeCommentConsumption 2026-10-16 (STAS-330):
++
++The comment half of a wake used to be a pure recomputation. Every wake re-derived "which steering
++comments are newer than my last run" from the card, and nothing anywhere recorded which ids the
++previous wake had already put in front of this agent. So an id could be advertised forever: STAS-270
++carried `b3102332`, `46128b1a`, `69516485` and `75217182` through 15+ re-wakes in two hours, the agent
++resolved none of them, and each wake re-raised the same unanswerable question.
++
++New content on a wake has to be a *consumption*, not a *recomputation*. The record of an advertisement
++already exists and is durable — the heartbeat run row's own `contextSnapshot.triggeringCommentIds`,
++written by `agent-heartbeat.ts` when the run opens, before the session starts. This module reads that
++record back and subtracts it, so:
++- an id survives only until the first wake that opens a run for this agent and card, whatever that run
++  then does or fails to do — consumption is recorded at run open, not at render time;
++- the accepted cost of recording that early: a wake that opens a run and then exits gracefully before
++  building a prompt (missing card, terminal card, checkout held by another agent) consumes its ids
++  without ever presenting them, and because the candidate window is `createdAt > lastRun.startedAt`,
++  that aborted run also closes the window over those ids. The row is not lost from execution — the
++  executor's `## Steering Comments` section still delivers it. Recording at render time instead would
++  hand the storm back every time a session dies mid-prompt, which is the bug this module exists to close;
++- a crashed or terminated run cannot un-consume what it was already told;
++- a deferred wake that replays the ids captured at schedule time (the `drainPendingAssignment`
++  re-fire) loses them at the same seam, because the subtraction happens at the wake's fire time
++  against durable state rather than against the value the trigger carried.
++
++Two deliberate limits, both stated as constants because an unbounded remembered set is the same
++"grows forever" defect in a different place:
++- `WAKE_COMMENT_CONSUMPTION_SCAN_RUNS` caps how far back the consumption window looks;
++- `MAX_CONSUMED_WAKE_COMMENT_IDS` caps the remembered set itself, newest-first.
++
++Self-echo is the second half of the file. A comment whose author string names the agent being woken
++is that agent's own words coming back at it as "new content", and the three agent-facing surfaces that
++read steering comments — the heartbeat delta, the executor's `## Steering Comments` section, and the
++workflow-input / await-input reply detectors — all treated it as external input. The predicate below
++is the one rule all three share.
++
++Decision — an unknown author is EXTERNAL input, never suppressed. `SteeringComment.author` is the
++two-value literal `"user" | "agent"` and every engine-side writer (`project-engine.ts`
++planner-oversight `injectGuidance` / `requestTargetedFix` / `requestConfirmation`,
++`overseer/overseer-advisor-service.ts`) writes `"agent"` without naming an authoring agent, because
++`addSteeringCommentImpl` carries no agent identity onto the row. Roughly 98% of the steering volume on
++the deployed board is that lifecycle guidance, and it is addressed TO the executing agent — filtering
++on `author === "agent"` would silence real instruction, which is a worse failure than one more echo.
++So suppression requires a positive match against an identity we actually hold; absence of evidence
++leans toward delivering the input.
++*/
++import type { AgentHeartbeatRun } from "@fusion/core";
++
++/** How many recent runs of this agent are consulted for already-advertised comment ids. */
++export const WAKE_COMMENT_CONSUMPTION_SCAN_RUNS = 20;
++
++/** Upper bound on comment ids remembered as advertised. The newest ids win; the oldest fall out. */
++export const MAX_CONSUMED_WAKE_COMMENT_IDS = 200;
++
++/*
++The heading the delta block is introduced by. It is exported because `agents/heartbeat-prompt-trim.ts`
++finds the block to trim by matching this exact line, so the two files must not hold two copies of it.
++*/
++export const TRIGGERING_COMMENT_HEADING = "New comments since last run:";
++
++/** Ids this agent was already shown for one card, newest advertisement first, capped. */
++export function collectAlreadyAdvertisedCommentIds(
++  runs: readonly AgentHeartbeatRun[],
++  taskId: string,
++): string[] {
++  const seen = new Set<string>();
++  const ordered: string[] = [];
++  for (const run of runs.slice(0, WAKE_COMMENT_CONSUMPTION_SCAN_RUNS)) {
++    if (run.taskId !== taskId && readSnapshotTaskId(run) !== taskId) continue;
++    const snapshot = run.contextSnapshot;
++    if (!snapshot || !Array.isArray(snapshot.triggeringCommentIds)) continue;
++    // The persisted array is chronological (it is a map over the card's own ordered comment list), so
++    // walking it backwards yields this run's newest advertisements first — which is what survives the
++    // cap below. `runs` itself already arrives newest-first from `getRecentRuns`.
++    for (const id of [...snapshot.triggeringCommentIds].reverse()) {
++      if (typeof id !== "string" || id.length === 0 || seen.has(id)) continue;
++      seen.add(id);
++      ordered.push(id);
++    }
++  }
++  return ordered.slice(0, MAX_CONSUMED_WAKE_COMMENT_IDS);
++}
++
++export interface WakeCommentDelta {
++  /** Ids to advertise on this wake. */
++  freshIds: string[];
++  /** Ids withheld because an earlier run of this agent already advertised them on this card. */
++  suppressedIds: string[];
++}
++
++/**
++ * Split a wake's candidate comment ids into what no earlier run of this agent has carried on this card
++ * and what one already advertised. An id that is not resolvable on the card is still consumed
++ * here — see `renderWakeCommentDelta` for why the unresolvable id is worth advertising once.
++ */
++export function consumeWakeCommentDelta(input: {
++  advertisedIds: readonly string[];
++  priorRuns: readonly AgentHeartbeatRun[];
++  taskId: string;
++}): WakeCommentDelta {
++  const alreadyAdvertised = new Set(collectAlreadyAdvertisedCommentIds(input.priorRuns, input.taskId));
++
++  const freshIds: string[] = [];
++  const suppressedIds: string[] = [];
++  for (const id of input.advertisedIds) {
++    (alreadyAdvertised.has(id) ? suppressedIds : freshIds).push(id);
++  }
++  return { freshIds, suppressedIds };
++}
++
++export interface RenderedWakeCommentDelta {
++  /** Prompt lines to splice into the wake delta. Empty when nothing was advertised. */
++  lines: string[];
++  /** Every id that received a line — the ids this wake has now consumed. */
++  advertisedIds: string[];
++  /** Advertised ids whose body is not on the card. */
++  missingIds: string[];
++  /** Ids withheld because their author is the agent being woken. Still consumed, never rendered. */
++  selfSuppressedIds: string[];
++}
++
++/**
++ * Render the wake delta's comment block: the body when the card holds it, and a loud line naming the
++ * id when it does not. The unresolvable branch is not a drop — the id is still returned in
++ * `advertisedIds`, so a second wake cannot re-advertise a body this wake was already told is
++ * unreachable. Trunk (RUFU-259) added that line precisely so a missing body could not be silent; an
++ * agent that has to conclude for itself that a body will never arrive is the same defect wearing a
++ * different label.
++ */
++export function renderWakeCommentDelta(input: {
++  taskId: string;
++  commentType: string;
++  ids: readonly string[];
++  lookup: ReadonlyMap<string, { author: string; text: string }>;
++  selfAuthorKeys: readonly string[];
++}): RenderedWakeCommentDelta {
++  if (input.ids.length === 0) {
++    return { lines: [], advertisedIds: [], missingIds: [], selfSuppressedIds: [] };
++  }
++
++  const formatCommentText = (text: string): string => text.replace(/\s+/g, " ").trim();
++  const bodyLines: string[] = [];
++  const missingIds: string[] = [];
++  const selfSuppressedIds: string[] = [];
++  const advertisedIds: string[] = [];
++
++  for (const commentId of input.ids) {
++    const comment = input.lookup.get(commentId);
++    if (comment && isSelfAuthoredComment(comment.author, input.selfAuthorKeys)) {
++      selfSuppressedIds.push(commentId);
++      continue;
++    }
++    if (comment) {
++      advertisedIds.push(commentId);
++      bodyLines.push(`- [${comment.author}] (commentId: ${commentId}): "${formatCommentText(comment.text)}"`);
++    } else {
++      advertisedIds.push(commentId);
++      missingIds.push(commentId);
++    }
++  }
++
++  if (selfSuppressedIds.length === input.ids.length) {
++    return { lines: [], advertisedIds: [], missingIds: [], selfSuppressedIds };
++  }
++
++  const lines = [
++    "",
++    "You were woken because of new comments on this task. Review them and take appropriate action.",
++    `Triggering comment type: ${input.commentType}`,
++    TRIGGERING_COMMENT_HEADING,
++    ...bodyLines,
++    ...missingIds.map((commentId) => `- [unknown] (commentId: ${commentId}): body is NOT on this card — do not guess its content`),
++    `Re-read any of these bodies with fn_task_show(id: "${input.taskId}", commentIds: [...]) — that tool returns comment bodies by id.`,
++  ];
++
++  return { lines, advertisedIds, missingIds, selfSuppressedIds };
++}
++
++/** The identities that count as this agent speaking to itself. */
++export function selfAuthorKeys(agent: { id: string; name?: string | null }): string[] {
++  return [agent.id, agent.name ?? ""].map(normalizeAuthor).filter((key) => key.length > 0);
++}
++
++/**
++ * True only when the author string positively names one of `keys`. A missing or unrecognised author
++ * is external input: see the module header for why the engine declines to guess at self-echo.
++ */
++export function isSelfAuthoredComment(author: string | undefined, keys: readonly string[]): boolean {
++  const normalized = normalizeAuthor(author);
++  if (!normalized) return false;
++  return keys.includes(normalized);
++}
++
++/** Drops the rows the agent authored itself and keeps everything else, in arrival order. */
++export function selectExternalSteeringComments<T extends { author?: string }>(
++  comments: readonly T[],
++  keys: readonly string[],
++): T[] {
++  if (keys.length === 0) return [...comments];
++  return comments.filter((comment) => !isSelfAuthoredComment(comment.author, keys));
++}
++
++/** Self-echo keys for the executor lane, whose only handle on identity is the card's assignee. */
++export function selfAuthorKeysForTask(task: { assignedAgentId?: string | null }): string[] {
++  return task.assignedAgentId ? [normalizeAuthor(task.assignedAgentId)] : [];
++}
++
++function readSnapshotTaskId(run: AgentHeartbeatRun): string | undefined {
++  const snapshot = run.contextSnapshot;
++  if (!snapshot || typeof snapshot.taskId !== "string") return undefined;
++  return snapshot.taskId;
++}
++
++function normalizeAuthor(author: string | undefined): string {
++  return (author ?? "").trim().toLowerCase();
++}
+diff --git a/packages/engine/src/execution/step-session-executor.ts b/packages/engine/src/execution/step-session-executor.ts
+index 806accca14..ffaf80aa1c 100644
+--- a/packages/engine/src/execution/step-session-executor.ts
++++ b/packages/engine/src/execution/step-session-executor.ts
+@@ -17,10 +17,11 @@ import { promisify } from "node:util";
+ const execAsync = promisify(exec);
+ import { existsSync } from "node:fs";
+ import { rm } from "node:fs/promises";
+ import type { AgentSession } from "@earendil-works/pi-coding-agent";
+ import type { AgentHeartbeatRun, AgentStore, MessageStore, PermanentAgentGatingContext, ProviderInstanceRef, ResolvedMcpServerDefinition, TaskDetail, Settings, SteeringComment, TaskStore, TaskStep } from "@fusion/core";
++import { selectExternalSteeringComments, selfAuthorKeysForTask } from "../agents/wake-comment-delta.js";
+ /*
+ FNXC:StepSessionExecutor 2026-08-24-14:35 (merge origin/main 4475342145 → main):
+ Upstream removed the `isFusionDeletableBranch` call sites (FN-9161 branch-deletability
+ check) from the executor body; RUFU-132's per-turn memory recall cue (`buildPerTurnMemoryRecallCue`,
+ called below) is local work that must survive the merge. Import the union of what the
+@@ -519,12 +520,11 @@ export function buildStepPrompt(
+     if (settings.testCommand) lines.push(`- **Test:** \`${settings.testCommand}\``);
+     if (settings.buildCommand) lines.push(`- **Build:** \`${settings.buildCommand}\``);
+     commandsSection = lines.join("\n") + "\n\n";
+   }
+ 
+-  // Build steering comments section (last 10 comments only to avoid context bloat)
+-  const steeringSection = buildStepSteeringCommentsSection(taskDetail.steeringComments);
++  const steeringSection = buildStepSteeringCommentsSection(taskDetail);
+ 
+   // Build attachments section
+   let attachmentsSection = "";
+   if (attachments && attachments.length > 0 && rootDir) {
+     const IMAGE_MIMES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
+@@ -661,11 +661,11 @@ export function buildFastLanePrompt(
+     if (settings.testCommand) parts.push(`- **Test:** \`${settings.testCommand}\``);
+     if (settings.buildCommand) parts.push(`- **Build:** \`${settings.buildCommand}\``);
+   }
+ 
+   if (overlapResumeContext) parts.push("", "## Overlap wait synchronization", "", overlapResumeContext);
+-  const steering = buildStepSteeringCommentsSection(taskDetail.steeringComments);
++  const steering = buildStepSteeringCommentsSection(taskDetail);
+   if (steering) parts.push("", steering);
+   /* FNXC:HumanPlanApproval 2026-09-15-07:30: FN-408 — the Fast-lane prompt carries the approved operator note too. An armed card is never fast (arming neutralizes Fast), so this only ever fires for a legacy row, but the note formatter stays shared so no session shape can silently drop it. */
+   const fastLaneApprovalNote = formatApprovedHumanPlanNoteSection(taskDetail);
+   if (fastLaneApprovalNote) parts.push("", fastLaneApprovalNote);
+ 
+@@ -679,14 +679,22 @@ export function buildFastLanePrompt(
+   );
+ 
+   return parts.filter((part) => part !== "").join("\n");
+ }
+ 
+-function buildStepSteeringCommentsSection(comments: SteeringComment[] | undefined): string {
+-  if (!comments || comments.length === 0) return "";
++/*
++FNXC:WakeCommentConsumption 2026-10-16 (STAS-330):
++This step-session prompt builder used to run its own unfiltered copy of the steering rule, so a card
++whose executing agent had itself written steering saw its own words back under "## Steering Comments"
++in the step prompt even though the heartbeat delta and the execution prompt had been fixed. It now
++asks the same shared predicate the other agent-facing surfaces ask.
++*/
++function buildStepSteeringCommentsSection(taskDetail: Pick<TaskDetail, "steeringComments" | "assignedAgentId">): string {
++  const comments = selectExternalSteeringComments(taskDetail.steeringComments ?? [], selfAuthorKeysForTask(taskDetail));
++  if (comments.length === 0) return "";
+ 
+-  const recentComments = [...comments].slice(-10);
++  const recentComments = comments.slice(-10);
+   const lines = [
+     "## Steering Comments",
+     "",
+     "The following comments were added during execution. Consider adjusting your approach for this step based on this feedback.",
+     "",
+@@ -821,11 +829,11 @@ export function buildReducedStepPrompt(taskDetail: TaskDetail, stepIndex: number
+ 
+   // Extract the step-specific section
+   const stepSection = resolveStepSection(taskDetail, prompt, stepIndex, countSteps(prompt));
+   const hasAttachments = Boolean(attachments && attachments.length > 0);
+   const attachmentDir = rootDir ? `${rootDir}/.fusion/tasks/${id}/attachments/` : `.fusion/tasks/${id}/attachments/`;
+-  const steeringSection = buildStepSteeringCommentsSection(taskDetail.steeringComments);
++  const steeringSection = buildStepSteeringCommentsSection(taskDetail);
+   /*
+   FNXC:HumanPlanApproval 2026-09-15-06:24:
+   FN-408 — the reduced prompt exists because the previous attempt hit the context limit, but the
+   operator's approval note is a deliberate human instruction about this exact implementation, so it
+   is preserved here exactly like the overlap-resume context.
+diff --git a/packages/engine/src/executor/await-input-node.ts b/packages/engine/src/executor/await-input-node.ts
+index 76529cb40e..1ad8744d63 100644
+--- a/packages/engine/src/executor/await-input-node.ts
++++ b/packages/engine/src/executor/await-input-node.ts
+@@ -10,10 +10,11 @@
+  * original awaitInput alias), then the shared default string. Nothing below
+  * this line branches on node.kind — both node kinds share one pause/resume
+  * contract so behavior can never drift between them.
+  */
+ import type { TaskDetail, TaskStore, WorkflowIrNode } from "@fusion/core";
++import { workflowInputRepliesAfterWatermark } from "./workflow-input-markers.js";
+ import type { EngineRunContext } from "../util/run-audit.js";
+ 
+ export type AwaitInputNodeResult = {
+   outcome: "success" | "failure";
+   value: string;
+@@ -35,36 +36,28 @@ export async function runAwaitInputNode(
+     : typeof node.config?.prompt === "string" && node.config.prompt.trim()
+       ? node.config.prompt.trim()
+       : "This workflow is waiting for your input.";
+   const marker = `workflow-input:${node.id}`;
+ 
+-  const steering = Array.isArray(live.steeringComments) ? live.steeringComments : [];
+   // Resume only when THIS node previously paused the task (its marker is on
+   // pausedReason). A pre-existing steering comment (e.g. one added at task
+   // creation) must never short-circuit the pause on the node's first run —
+   // otherwise the node consumes a stale comment and never asks the user.
+   const pausedReason = live.pausedReason ?? "";
+   const pausedByThisNode = pausedReason.startsWith(marker);
+   if (!live.paused && pausedByThisNode) {
+-    // Correlate the reply to THIS pause: the marker embeds a watermark
+-    // (`${marker}@${pauseEpochMs}: …`) recorded when the node paused. Only
+-    // count steering comments created at/after that watermark as the answer,
+-    // so an unpause-without-reply can't consume a comment that predates the
+-    // pause. The watermark is epoch milliseconds (colon-free) so it never
+-    // collides with the `:` that separates the marker from the question, nor
+-    // with the dashboard's colon-delimited question parser.
+-    const watermark = (() => {
+-      const m = pausedReason.slice(marker.length).match(/^@(\d+)/);
+-      const t = m ? Number(m[1]) : NaN;
+-      return Number.isFinite(t) ? t : undefined;
+-    })();
+-    const replies = watermark === undefined
+-      ? steering
+-      : steering.filter((c) => {
+-          const created = Date.parse((c as { createdAt?: string }).createdAt ?? "");
+-          return Number.isFinite(created) ? created >= watermark : false;
+-        });
++    /*
++    FNXC:WakeCommentConsumption 2026-10-16 (STAS-330):
++    The watermark rule (only a comment created at/after the pause that carries `${marker}@${epochMs}`
++    counts as the answer) used to be re-implemented here while `workflowInputRepliesAfterWatermark`
++    held the same rule, so the two reply detectors could drift apart — and neither of them looked at
++    who wrote the row. Both now share the one helper, which drops a row authored by the card's own
++    assignee. On steering rows that match is defensive for now: `SteeringComment.author` carries only
++    `"user" | "agent"` (no writer identity, so engine guidance addressed TO the agent stays external
++    input) — the filter is load-bearing where the author column is a free string, i.e. task comments.
++    */
++    const replies = workflowInputRepliesAfterWatermark(live, marker);
+     if (replies.length > 0) {
+       // Input has arrived (user replied and unpaused): consume the latest
+       // post-pause comment and clear this node's marker so a future fresh
+       // visit re-asks instead of silently consuming a stale comment.
+       const latest = replies[replies.length - 1] as { text?: string; comment?: string };
+diff --git a/packages/engine/src/executor/execution-prompt.ts b/packages/engine/src/executor/execution-prompt.ts
+index 164b44c4bc..2d393f2e90 100644
+--- a/packages/engine/src/executor/execution-prompt.ts
++++ b/packages/engine/src/executor/execution-prompt.ts
+@@ -10,10 +10,11 @@ import type {
+   WorkflowFieldDefinition,
+ } from "@fusion/core";
+ /* FNXC:HumanPlanApproval 2026-09-15-06:24: FN-408 delivers the approved operator note as implementation context. */
+ import { buildExecutionMemoryInstructions, buildMemoryPreSteeringNudge, formatApprovedHumanPlanNoteSection, isFastExecutionMode, isFollowUpTask, resolveTaskOutputLanguage, type WorkspaceConfig } from "@fusion/core";
+ import { buildFastLanePrompt } from "../execution/step-session-executor.js";
++import { selectExternalSteeringComments, selfAuthorKeysForTask } from "../agents/wake-comment-delta.js";
+ import { executorLog } from "../logger.js";
+ import type { PluginRunner } from "../plugins/plugin-runner.js";
+ import { parseReviewLevelFromPrompt } from "./prompt-derived-eligibility.js";
+ 
+ /**
+@@ -75,10 +76,42 @@ export function buildSourceIssueRef(sourceIssue: TaskDetail["sourceIssue"]): str
+   }
+ 
+   return `${sourceIssue.repository}#${issueNumber}`;
+ }
+ 
++/*
++FNXC:WakeCommentConsumption 2026-10-16 (STAS-330):
++Extracted from `buildExecutionPrompt` so the rule it now carries is reachable from a test, and so the
++one place that decides which steering rows count as somebody else's input is shared with the workflow
++reply detectors (`executor/workflow-input-markers.ts`). A row whose author string names the agent
++assigned to this card is that agent's own words coming back at it under a heading that promises user
++feedback; it is dropped here rather than re-presented as new guidance. An author the engine cannot
++match to the assignee stays in — see the decision note in `agents/wake-comment-delta.ts`.
++*/
++export function buildSteeringCommentsSection(task: TaskDetail): string {
++  const steeringComments = Array.isArray(task.steeringComments) ? task.steeringComments : [];
++  const externalComments = selectExternalSteeringComments(steeringComments, selfAuthorKeysForTask(task));
++  if (externalComments.length === 0) return "";
++
++  // Build steering comments section (last 10 comments only to avoid context bloat)
++  const recentComments = externalComments.slice(-10);
++  const lines = [
++    "",
++    "## Steering Comments",
++    "",
++    "The following comments were added by the user during execution. Consider adjusting your approach or replanning remaining steps based on this feedback.",
++    "",
++  ];
++  for (const comment of recentComments) {
++    const timestamp = formatTimestamp(comment.createdAt);
++    lines.push(`**${comment.author}** — ${timestamp}`);
++    lines.push(`> ${comment.text}`);
++    lines.push("");
++  }
++  return lines.join("\n");
++}
++
+ export function buildExecutionPrompt(
+   task: TaskDetail,
+   rootDir?: string,
+   settings?: Settings,
+   worktreePath?: string,
+@@ -183,29 +216,11 @@ git log --oneline
+     memorySection = memoryMode === "index"
+       ? `\n## Project Memory (Index Only)\n\n${buildMemoryPreSteeringNudge("index")}\n`
+       : "\n" + buildExecutionMemoryInstructions(rootDir, settings, undefined, memoryMode);
+   }
+ 
+-  // Build steering comments section (last 10 comments only to avoid context bloat)
+-  let steeringSection = "";
+-  if (task.steeringComments && task.steeringComments.length > 0) {
+-    const recentComments = [...task.steeringComments].slice(-10);
+-    const lines = [
+-      "",
+-      "## Steering Comments",
+-      "",
+-      "The following comments were added by the user during execution. Consider adjusting your approach or replanning remaining steps based on this feedback.",
+-      "",
+-    ];
+-    for (const comment of recentComments) {
+-      const timestamp = formatTimestamp(comment.createdAt);
+-      lines.push(`**${comment.author}** — ${timestamp}`);
+-      lines.push(`> ${comment.text}`);
+-      lines.push("");
+-    }
+-    steeringSection = lines.join("\n");
+-  }
++  const steeringSection = buildSteeringCommentsSection(task);
+ 
+   // Build custom fields section (KTD-13): when the task's workflow declares
+   // custom fields, the executor agent can write them via fn_task_update
+   // (custom_fields) — but without the schema it is writing blind. List each
+   // field's id/name/type, enum options, required flag, and current value so
+diff --git a/packages/engine/src/executor/workflow-input-markers.ts b/packages/engine/src/executor/workflow-input-markers.ts
+index f103abbafe..1f4844727d 100644
+--- a/packages/engine/src/executor/workflow-input-markers.ts
++++ b/packages/engine/src/executor/workflow-input-markers.ts
+@@ -4,10 +4,11 @@
+  *
+  * FNXC:WorkflowInput 2026-06-29-10:00:
+  * A workflow graph can restart at an earlier node after pause/resume recovery while the durable pausedReason still points at the later skill node that asked the question. If the user already supplied a post-watermark reply, clear that stale marker before any node executes so Compound Engineering cannot loop at Plan while Commit & open PR's answered question remains attached.
+  */
+ import type { TaskDetail, TaskStore } from "@fusion/core";
++import { selectExternalSteeringComments, selfAuthorKeysForTask } from "../agents/wake-comment-delta.js";
+ import type { EngineRunContext } from "../util/run-audit.js";
+ 
+ export type WorkflowInputMarkerDeps = {
+   store: TaskStore;
+   getRunContextFor: (taskId: string) => EngineRunContext | undefined;
+@@ -22,13 +23,24 @@ export function workflowInputRepliesAfterWatermark(
+     const match = pausedReason.slice(marker.length).match(/^@(\d+)/);
+     const parsed = match ? Number(match[1]) : NaN;
+     return Number.isFinite(parsed) ? parsed : undefined;
+   })();
+   const steering = Array.isArray(task.steeringComments) ? task.steeringComments : [];
++  /*
++  FNXC:WakeCommentConsumption 2026-10-16 (STAS-330):
++  A reply detector that never looks at the author answers itself. A row whose author names this card's
++  own assignee reads here exactly like an operator answer, so a graph node parks, sees the agent's earlier
++  words in the same array, and resumes on them. `assignedAgentId` is the only identity the executor lane
++  holds for the card, and an author it cannot name stays external input — see the decision note in
++  agents/wake-comment-delta.ts. On steering rows the filter is therefore a guard that stays dormant until a
++  writer stamps identity (every writer today passes the literal `"user" | "agent"`); it is load-bearing on
++  the lanes whose author column is a free string, i.e. task comments.
++  */
++  const external = selectExternalSteeringComments(steering, selfAuthorKeysForTask(task));
+   return watermark === undefined
+-    ? steering
+-    : steering.filter((comment) => {
++    ? external
++    : external.filter((comment) => {
+         const created = Date.parse((comment as { createdAt?: string }).createdAt ?? "");
+         return Number.isFinite(created) ? created >= watermark : false;
+       });
+ }
+ 
