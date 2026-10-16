@@ -286,7 +286,7 @@ stash tools add fetch --command "uvx mcp-server-fetch"
 stash tools add issues --url https://mcp.example.com/mcp --header "Authorization=Bearer <token>"
 stash tools list
 stash tools install fetch --agent claude
-stash tools remove fetch
+stash tools remove fetch --json
 ```
 
 - `--command` (stdio launch command) and `--url` (http endpoint) are mutually exclusive;
@@ -297,8 +297,22 @@ stash tools remove fetch
 - The merge is **ownership-tracked**: entries Stash wrote are listed under a
   `stashManagedServers` key in the config file. Re-runs are idempotent, user-defined entries
   are never touched, and a name collision with a user entry fails loudly instead of clobbering.
+- `stash tools install` also records the files it wrote into (`~/.stash/mcp-installs.json`), so
+  removal reaches every agent it installed into — including a project's `.mcp.json` when you run
+  the command from some other directory.
+- `stash tools remove` is the inverse of that merge: it drops the entry and its
+  `stashManagedServers` listing from every config file Stash installed into — idempotently,
+  foreign entries left alone — and deletes the registry row last. It reports what it actually
+  cleaned, so `--json` answers `{"ok": true, "name": "fetch", "retracted": ["<path>", …]}`, with
+  one path per config file cleaned and `[]` when the server was never installed anywhere.
+- Removal **refuses** instead of half-succeeding. If a config file it would clean defines that
+  server name outside Stash's management, or cannot be parsed as JSON, the command names the
+  file, exits 1, and leaves your registry row untouched — it never claims success while an agent
+  would still be connected.
 - The web app's Tools page is the GUI for the same registry
-  (`backend/routers/mcp_servers.py`).
+  (`backend/routers/mcp_servers.py`). Deleting a server there clears the cloud agent's copy of it
+  — the sprite's `.mcp.json` is rewritten from the registry every turn — but it cannot reach a
+  config file on your machine, so retract local installs from the CLI.
 
 ## Scope, auth, and troubleshooting
 
@@ -327,4 +341,5 @@ stash workspace switch "Acme"
 | Every tool returns empty or unexpected results | Wrong sign-in or scope: check `stash_whoami` and `stash_list_workspaces`, switch scope if needed |
 | 401 / auth errors after a key rotation or `stash keys revoke` | The stored credential is gone — `stash signin` again |
 | A `stash tools install` target config is refused | The file is not valid JSON, or it already defines a server under that name outside Stash's management — fix the file or rename your server |
+| `stash tools remove` refuses and keeps the server registered | Same two causes, on the way out: the error names the config file that still holds that name outside Stash's management (or that it could not parse) — fix or rename the entry there, then remove again |
 | An old config points the client at a hosted Stash URL | That transport was removed; replace the old entry with the stdio block above |

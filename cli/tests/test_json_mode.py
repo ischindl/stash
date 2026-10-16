@@ -809,19 +809,28 @@ def test_prompts_agent_guidance_default_is_plain_text(monkeypatch):
 # --- tools ---
 
 
-def test_tools_remove_json(monkeypatch):
+def test_tools_remove_json(monkeypatch, tmp_path):
     calls = _setup_subapp(monkeypatch)
+    # `tools remove` now reads (and may write) the agent configs and the install
+    # record under HOME, so the command needs a scratch home + cwd to stay off
+    # the developer's machine.
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.chdir(tmp_path)
     result = runner.invoke(main.app, ["tools", "remove", "linear", "--json"])
     assert result.exit_code == 0
     assert ("delete_mcp_server", "srv-1") in calls
     payload = json.loads(result.stdout)
     assert payload["ok"] is True
     assert payload["name"] == "linear"
+    # A never-installed server retracts nothing.
+    assert payload["retracted"] == []
 
 
 def test_tools_install_json(monkeypatch, tmp_path):
     _setup_subapp(monkeypatch)
     monkeypatch.setattr(main, "_merge_mcp_server", lambda dest, name, entry: "installed")
+    # The merge is stubbed, but the install record still resolves from HOME.
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.chdir(tmp_path)
     result = runner.invoke(main.app, ["tools", "install", "linear", "--json"])
     assert result.exit_code == 0

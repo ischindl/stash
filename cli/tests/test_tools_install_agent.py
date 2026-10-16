@@ -183,6 +183,9 @@ def test_install_pi_refuses_to_clobber_foreign_server_with_same_name(home):
 
 
 def test_install_pi_respects_agent_dir_env_override(tmp_path, monkeypatch):
+    # Scratch HOME: a successful install records its destination under ~/.stash,
+    # and this test must not write into the developer's real home.
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("PI_CODING_AGENT_DIR", str(tmp_path / "agentdir"))
     (tmp_path / "agentdir").mkdir()
     (tmp_path / "agentdir" / "settings.json").write_text(

@@ -32,6 +32,19 @@ everything before it is captured in git history (`git log`), not here.
 
 ### Changed
 
+- Unregistering a server now unregisters it. `stash tools remove <name>` used to delete only the
+  account-side registry row, which left whatever `stash tools install` had written into an agent's
+  own MCP config sitting behind: the agent went on listing that server, went on connecting to it,
+  and its tools stayed callable — the only way back was hand-editing the agent's file, or
+  restoring a snapshot of it. Removal now retracts what installation wrote, in every agent config
+  the install touched — remembered from install time, so removing from an unrelated directory
+  still reaches a project's own config — and only then deletes the registry row. It stays
+  idempotent (a server that was never installed anywhere is simply unregistered, and says so), it
+  still never touches the entries you wrote by hand, and it refuses rather than half-succeeding:
+  when a config file defines that server name outside Stash's management, or cannot be read as
+  JSON, the command names the file and leaves the registry row intact instead of reporting a
+  cleanup it did not perform. `--json` now reports the config files it cleaned under `retracted`.
+
 - A local-model turn that answers nothing no longer passes for success. A reasoning/hybrid
   model can spend a turn's whole output budget on its reasoning channel and come back with a
   null message body (`finish_reason=length`) — and the harness still exits 0, so the run

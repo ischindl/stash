@@ -7084,7 +7084,6 @@ def _claude_mcp_dest() -> Path:
 
 
 def _pi_mcp_dest() -> Path:
-    _require_pi_mcp_extension()
     return _pi_agent_dir() / "mcp.json"
 
 
@@ -7095,6 +7094,15 @@ def _pi_mcp_dest() -> Path:
 _MCP_INSTALLERS = {
     "claude": _claude_mcp_dest,
     "pi": _pi_mcp_dest,
+}
+
+# Agents whose config file the runtime ignores until something else is set up on
+# the machine. Resolving a destination must never consult these — an entry has to
+# be retractable even if the gate stopped being satisfied after it was written —
+# so the gate lives here instead of inside the resolver, and only tools_install
+# runs it.
+_MCP_INSTALL_GATES = {
+    "pi": _require_pi_mcp_extension,
 }
 
 
@@ -7129,12 +7137,116 @@ def _merge_mcp_server(dest: Path, name: str, entry: dict) -> str:
     return "installed"
 
 
+def _retract_mcp_server(dest: Path, name: str) -> str:
+    """Undo _merge_mcp_server for one server: its exact mirror.
+
+    A name is Stash's to delete only while STASH_MANAGED_MCP_KEY claims it, so a
+    user entry under the same name is left byte-for-byte alone and reported as
+    'foreign' rather than clobbered. Re-runs are idempotent, a file that never
+    carried the server is 'absent', and unparseable JSON is 'failed' — the same
+    statuses install reports for its side of the merge. Once the last managed name
+    is gone the marker key itself is dropped; the config file and its (possibly
+    empty) mcpServers object stay exactly where they are.
+    """
+    if not dest.exists():
+        return "absent"
+    try:
+        config = json.loads(dest.read_text())
+    except json.JSONDecodeError:
+        return "failed"
+    if not isinstance(config, dict):
+        return "failed"
+
+    servers = config.get("mcpServers") or {}
+    managed = config.get(STASH_MANAGED_MCP_KEY) or []
+    if name in servers and name not in managed:
+        return "foreign"
+    if name not in servers and name not in managed:
+        return "absent"
+
+    servers.pop(name, None)
+    remaining = [managed_name for managed_name in managed if managed_name != name]
+    if remaining:
+        config[STASH_MANAGED_MCP_KEY] = remaining
+    else:
+        config.pop(STASH_MANAGED_MCP_KEY, None)
+    dest.write_text(json.dumps(config, indent=2) + "\n")
+    return "retracted"
+
+
 def _find_mcp_server(servers: list, name: str) -> dict:
     for server in servers:
         if server["name"] == name:
             return server
     console.print(f"[red]No MCP server named {name!r}. `stash tools list` shows yours.[/red]")
     raise typer.Exit(1)
+
+
+# Where each registered server was last installed on this machine, so
+# `stash tools remove` can retract every copy even when run from a directory
+# whose own .mcp.json no longer names it. Resolved at call time, like
+# _pi_agent_dir() and the rest of the config layer, so a scratch HOME isolates it.
+MCP_INSTALLS_FILENAME = "mcp-installs.json"
+
+
+def _mcp_installs_path() -> Path:
+    return Path.home() / ".stash" / MCP_INSTALLS_FILENAME
+
+
+def _load_mcp_installs() -> dict:
+    """The install record, or {} when there is none yet — never a silent ignore.
+
+    Installs made before this record existed legitimately have no entry, so a
+    missing file is empty rather than an error. A damaged file is an error: a
+    record we cannot read is a record we would forget to retract from.
+    """
+    path = _mcp_installs_path()
+    if not path.exists():
+        return {}
+    try:
+        record = json.loads(path.read_text())
+    except json.JSONDecodeError:
+        _exit_user_error(f"{path} is not valid JSON; fix or delete it, then retry.")
+    if not isinstance(record, dict):
+        _exit_user_error(f"{path} is not valid JSON; fix or delete it, then retry.")
+    return record
+
+
+def _write_mcp_installs(record: dict) -> None:
+    path = _mcp_installs_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(record, indent=2) + "\n")
+
+
+def _record_mcp_install(name: str, dest: Path) -> None:
+    """Remember that `name` now lives in `dest` (sorted, de-duplicated)."""
+    record = _load_mcp_installs()
+    dests = {str(dest.resolve()), *record.get(name, [])}
+    record[name] = sorted(dests)
+    _write_mcp_installs(record)
+
+
+def _forget_mcp_installs(name: str) -> None:
+    record = _load_mcp_installs()
+    if name not in record:
+        return
+    del record[name]
+    _write_mcp_installs(record)
+
+
+def _mcp_install_destinations(name: str) -> list[Path]:
+    """Every agent config `name` could be live in: the recorded installs plus
+    each agent's current destination. Installed before the record existed are
+    found this way, which is why removal resolves destinations ungated.
+    """
+    dests: dict[str, Path] = {}
+    for recorded in _load_mcp_installs().get(name, []):
+        path = Path(recorded).expanduser().resolve()
+        dests[str(path)] = path
+    for resolve in _MCP_INSTALLERS.values():
+        path = resolve().expanduser().resolve()
+        dests[str(path)] = path
+    return [dests[key] for key in sorted(dests)]
 
 
 @tools_app.command("add")
@@ -7191,16 +7303,32 @@ def tools_list(as_json: bool = typer.Option(False, "--json")):
 
 @tools_app.command("remove")
 def tools_remove(name: str = typer.Argument(...), as_json: bool = typer.Option(False, "--json")):
-    """Remove a registered MCP server."""
+    """Remove a registered MCP server, retracting it from every agent config it was installed into."""
+    retracted: list[Path] = []
+    for dest in _mcp_install_destinations(name):
+        status = _retract_mcp_server(dest, name)
+        if status == "foreign":
+            _exit_user_error(
+                f"{dest} defines {name!r} outside Stash's management; remove that entry there, then retry."
+            )
+        if status == "failed":
+            _exit_user_error(f"{dest} is not valid JSON; fix or delete it, then retry.")
+        if status == "retracted":
+            retracted.append(dest)
     with _client() as c:
         try:
             server = _find_mcp_server(c.list_mcp_servers(), name)
             c.delete_mcp_server(server["id"])
         except StashError as e:
             _err(e)
+    _forget_mcp_installs(name)
     if _use_json(as_json):
-        output_json({"ok": True, "name": name})
+        output_json({"ok": True, "name": name, "retracted": [str(dest) for dest in retracted]})
         return
+    for dest in retracted:
+        console.print(f"Retracted [bold]{name}[/bold] from {dest}")
+    if not retracted:
+        console.print(f"[bold]{name}[/bold] was not installed in any agent config")
     console.print(f"Removed [bold]{name}[/bold]")
 
 
@@ -7219,6 +7347,8 @@ def tools_install(
         _exit_user_error(
             f"No MCP install path for agent {agent!r} yet — supported: {', '.join(sorted(_MCP_INSTALLERS))}."
         )
+    if agent in _MCP_INSTALL_GATES:
+        _MCP_INSTALL_GATES[agent]()
     dest = _MCP_INSTALLERS[agent]()
     with _client() as c:
         try:
@@ -7232,6 +7362,7 @@ def tools_install(
         )
     if status == "failed":
         _exit_user_error(f"{dest} is not valid JSON; fix or delete it first.")
+    _record_mcp_install(name, dest)
     if _use_json(as_json):
         output_json({"ok": True, "name": name, "status": status})
         return
