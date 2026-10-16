@@ -1,0 +1,98 @@
+STAS-335 invariant checks — derived from git objects at base and tip
+base 080cfdc646fc1567febf8ac5a51c6d98e150a7a0
+tip  ca55f0b30b5348ed1368082a3ea47ea6fc263354
+
+== A. The budgets were not raised: the fix reports the stall, it does not outwait it ==
+-- base: git show 080cfdc646fc1567febf8ac5a51c6d98e150a7a0:packages/cli/src/extension.ts | grep -E '^const (BOOT_FAILURE_COOLDOWN_MS|EXTENSION_STORE_BOOT_TIMEOUT_MS|EXTENSION_TOOL_TIMEOUT_MS) ='
+const BOOT_FAILURE_COOLDOWN_MS = 5_000;
+const EXTENSION_STORE_BOOT_TIMEOUT_MS = 30_000;
+const EXTENSION_TOOL_TIMEOUT_MS = 60_000;
+-- tip: same command on ca55f0b30b5348ed1368082a3ea47ea6fc263354
+const BOOT_FAILURE_COOLDOWN_MS = 5_000;
+const EXTENSION_STORE_BOOT_TIMEOUT_MS = 30_000;
+const EXTENSION_TOOL_TIMEOUT_MS = 60_000;
+VERDICT A: every boot/tool/cooldown constant is byte-identical at base and tip.
+
+-- No new retry loop: added lines in source files that introduce looping or swallowing.
+   (the guidance text 'Retry this same call' is pre-existing and lives on context lines, not added ones)
+VERDICT A2: no loop, no empty catch, no retry call was added to any changed source file.
+
+== B. The stop-authority rules are untouched: only the process that started the embedded postmaster may stop it ==
+-- every hunk header of the two files that own the embedded-postmaster lifecycle.
+   git shows the enclosing declaration after '@@'; a hunk naming a stop-authority function would be the bug.
+--- packages/cli/src/extension.ts
+@@ -5,6 +5,7 @@ import { StringEnum } from "@earendil-works/pi-ai";
+@@ -335,12 +336,27 @@ interface StoreBootAttempt {
+@@ -349,7 +365,7 @@ const extensionStoreGlobal = globalThis as typeof globalThis & { [key: symbol]:
+@@ -403,13 +419,33 @@ const BOOT_DEADLINE_CLASS = /timed out after \d+ms/;
+@@ -437,11 +473,24 @@ export function buildStoreBootStallResult(toolName: string, error: unknown): {
+@@ -451,7 +500,8 @@ export function buildStoreBootStallResult(toolName: string, error: unknown): {
+@@ -460,6 +510,9 @@ export function buildStoreBootStallResult(toolName: string, error: unknown): {
+@@ -693,9 +746,16 @@ function reportStoreBoot(
+@@ -710,6 +770,8 @@ function startStoreBoot(projectRoot: string): StoreBootAttempt {
+@@ -727,26 +789,31 @@ function startStoreBoot(projectRoot: string): StoreBootAttempt {
+@@ -758,6 +825,7 @@ function startStoreBoot(projectRoot: string): StoreBootAttempt {
+@@ -766,8 +834,10 @@ function startStoreBoot(projectRoot: string): StoreBootAttempt {
+@@ -785,8 +855,16 @@ async function getStore(
+@@ -817,7 +895,12 @@ async function getStore(
+--- packages/core/src/postgres/startup-factory.ts
+@@ -387,7 +387,7 @@ async function isEmptyNonUtf8Cluster(db: PostgresJsDatabase<Record<string, never
+@@ -431,7 +431,7 @@ async function bootSchemaBackend(
+@@ -526,9 +526,11 @@ async function bootSchemaBackendOnce(
+@@ -545,6 +547,7 @@ async function bootSchemaBackendOnce(
+@@ -756,6 +759,23 @@ export async function createCentralBackendLayer(
+@@ -817,6 +837,8 @@ export interface CreateTaskStoreForBackendOptions {
+@@ -909,6 +931,7 @@ export async function createTaskStoreForBackend(
+@@ -1310,6 +1333,7 @@ export async function createTaskStoreForBackend(
+@@ -1336,7 +1360,9 @@ export async function createTaskStoreForBackend(
+-- stop-authority declarations that the series does NOT land a hunk in:
+  (none — VERDICT B: no hunk in the series is inside stopEmbeddedRuntime, releaseEmbeddedRuntimeLease,
+   closeCachedStores, setHostTaskStore, clearHostTaskStores, the session_shutdown handler, or a detach path.)
+
+-- every changed line that mentions a budget or stop-authority token, listed per file. There are only
+   these; README.md classifies each one (two are prose, one pair is a throw re-wrapped across lines).
+  docs/architecture.md
++  heap blocks, so this seam changed the *report* and no budget: `EXTENSION_STORE_BOOT_TIMEOUT_MS`,
+  packages/cli/src/__tests__/extension-boot-stage-attribution.test.ts
++  reach: a session that merely JOINED a store it did not create running `session_shutdown` ->
+  packages/cli/src/extension.ts
+-    if (cooldown.fromDeadline) throw new TaskStoreBootTransientError(cooldownMessage, EXTENSION_STORE_BOOT_TIMEOUT_MS);
++        EXTENSION_STORE_BOOT_TIMEOUT_MS,
+
+-- the only new try/catch pair in source, which is the read site that must answer WITH attribution
+   rather than rethrow the driver's echo. Listed so a reviewer can see no other swallow was added.
++      try {
++      } catch (error) {
+
+== C. The surfaced diagnostic is credential-safe ==
+-- added lines in source files carrying a credential, connection string, or bound-parameter read.
+   ('params' as a WORD appears only in comments explaining that it is never read; '.params' is the read)
+VERDICT C: no added source line reads a password, a connection string, bound parameters, or a driver detail.
+-- the pins that hold it, verbatim from tip:
+  12:The fixture below mirrors drizzle-orm 0.45.2 `errors.js` exactly — `constructor(query, params, cause)`,
+  13:fields `query`/`params`/`cause`, and the message text that interpolates the parameters. It is a fixture
+  20:  constructor(readonly query: string, readonly params: unknown[], override cause: unknown) {
+  21:    super(`Failed query: ${query}\nparams: ${JSON.stringify(params)}`);
+  27:function drizzleFailure(params: unknown[] = ["proj-1", 50]): QueryFailureFixture {
+  33:    params,
+  67:        'params: ["proj-1","leak-canary"]',
+  137:        "connection timed out after 20242ms at postgres://user:s3cret@db.internal:5432/fusion",
+  145:    expect(attribution).not.toMatch(/s3cret|postgres:\/\/|db\.internal/);
+
+== D. The new pins cannot pass pre-fix code (red-first) ==
+-- occurrences of each seam symbol introduced by this series, base vs tip
+   (git show <ref>:<file> is the file's whole content; base has no such symbol, so the import fails there)
+  onBootStage                base=0 tip=11
+  BootStage                  base=0 tip=25
+  formatBootStages           base=0 tip=3
+  describeStoreQueryFailure  base=0 tip=2
+  StoreQueryAttribution      base=0 tip=3
+-- the store-error composer's arity, which is what makes a read distinguishable from a write
+  base: export function storeErrorResult(what: string, error: unknown) {
+  tip:  export function storeErrorResult(what: string, error: unknown, operation: "read" | "write" = "read") {
+-- new test files, absent from base entirely:
+  packages/cli/src/__tests__/extension-boot-stage-attribution.test.ts absent at base (the pins are new files)
+  packages/engine/src/__tests__/tool-store-errors.test.ts absent at base (the pins are new files)
+  createListAgentsTool pins in packages/engine/src/__tests__/read-path-store-failure.test.ts: base=0
+ ; tip=4
+

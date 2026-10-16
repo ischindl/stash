@@ -1,0 +1,13 @@
+ .../stas-335-store-boot-and-query-attribution.md   |   7 +
+ docs/architecture.md                               |  24 ++-
+ docs/task-management.md                            |   2 +-
+ .../extension-boot-stage-attribution.test.ts       | 191 +++++++++++++++++++++
+ packages/cli/src/extension.ts                      | 107 ++++++++++--
+ packages/core/src/index.ts                         |   1 +
+ packages/core/src/postgres/index.ts                |   1 +
+ packages/core/src/postgres/startup-factory.ts      |  30 +++-
+ .../src/__tests__/read-path-store-failure.test.ts  |  56 +++++-
+ .../engine/src/__tests__/tool-store-errors.test.ts | 139 +++++++++++++++
+ packages/engine/src/agent-tools.ts                 |  14 +-
+ packages/engine/src/tool-store-errors.ts           |  76 +++++++-
+ 12 files changed, 624 insertions(+), 24 deletions(-)

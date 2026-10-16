@@ -1,0 +1,4 @@
+# verify.sh re-derives the generated files here for one comparison run and removes the directory
+# again (STAS-335's task work tree is inside a boundary that forbids writing outside it, so the
+# scratch cannot live under /tmp).
+.verify-scratch/

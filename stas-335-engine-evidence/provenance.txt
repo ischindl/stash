@@ -1,0 +1,20 @@
+engine gitdir        /home/schindler/git/Fusion/.git
+branch               fusion/stas-335-taskstore-boot
+base (branch parent) 080cfdc646fc1567febf8ac5a51c6d98e150a7a0  RUFU-436: pin and document why vanished-work detection never reported RUFU-282
+tip (reviewed head)  ca55f0b30b5348ed1368082a3ea47ea6fc263354  docs(STAS-335): record the boot-stage and query-attribution vocabulary and ship the changeset
+commits on branch    3
+diff --shortstat      12 files changed, 624 insertions(+), 24 deletions(-)
+contained in refs/heads/main: yes (git merge-base --is-ancestor ca55f0b30b5348ed1368082a3ea47ea6fc263354 refs/heads/main -> 0)
+changed files
+  A	.changeset/stas-335-store-boot-and-query-attribution.md
+  M	docs/architecture.md
+  M	docs/task-management.md
+  A	packages/cli/src/__tests__/extension-boot-stage-attribution.test.ts
+  M	packages/cli/src/extension.ts
+  M	packages/core/src/index.ts
+  M	packages/core/src/postgres/index.ts
+  M	packages/core/src/postgres/startup-factory.ts
+  M	packages/engine/src/__tests__/read-path-store-failure.test.ts
+  A	packages/engine/src/__tests__/tool-store-errors.test.ts
+  M	packages/engine/src/agent-tools.ts
+  M	packages/engine/src/tool-store-errors.ts

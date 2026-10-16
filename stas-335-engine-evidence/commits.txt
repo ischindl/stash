@@ -1,0 +1,73 @@
+commit ca55f0b30b5348ed1368082a3ea47ea6fc263354
+Author: Imrich Schindler <ischindl@progis.sk>
+Date:   2026-10-16T07:38:25+02:00
+
+    docs(STAS-335): record the boot-stage and query-attribution vocabulary and ship the changeset
+
+The surfaced text changed, so the contract docs that describe the extension boot budget now
+name the attribution the failure carries, and the stale claim that a historical stall cannot
+be attributed from a durable record is corrected: the console line is still process-local,
+but the stage record travels on the tool result the agent log stores.
+
+
+ .../stas-335-store-boot-and-query-attribution.md   |  7 +++++++
+ docs/architecture.md                               | 24 +++++++++++++++++++++-
+ docs/task-management.md                            |  2 +-
+ 3 files changed, 31 insertions(+), 2 deletions(-)
+commit 511d93644230aa0bcca64baef82c6e958a157f96
+Author: Imrich Schindler <ischindl@progis.sk>
+Date:   2026-10-16T07:30:37+02:00
+
+    STAS-335: make the agent-roster read fail as an attributed tool error
+
+The live board showed the defect at its real site: fn_list_agents had no catch, so a
+failing roster read escaped as Drizzle's wrapper - the whole SELECT re-printed and the
+SQLSTATE buried in the cause - and the agent log recorded a query, not a reason. The read
+now returns the shared store-failure shape with table, statement and SQLSTATE named and
+operation=read, and an empty roster stays an ordinary answer.
+
+
+ .../src/__tests__/read-path-store-failure.test.ts  | 56 +++++++++++++++++++++-
+ packages/engine/src/agent-tools.ts                 | 14 +++++-
+ 2 files changed, 66 insertions(+), 4 deletions(-)
+commit 3b8aa69a69fe7b788ca7bad49b3acbe1ae614864
+Author: Imrich Schindler <ischindl@progis.sk>
+Date:   2026-10-16T03:53:02+02:00
+
+    STAS-335: make store boot and query failures name their stage, table, and SQLSTATE
+
+A stalled TaskStore boot reported only the budget it burned, and a failed board
+read reported its entire SQL statement and no reason. Neither was diagnosable
+after the fact: the factory's per-stage timings went to console output, which
+the forked extension runtime discards (silent: true, IPC-only), and the engine's
+read-path error seam carried no table, no SQLSTATE, and no read/write class.
+
+Carry the attribution in the values that actually travel:
+
+- startup-factory: report each boot stage through an optional onBootStage
+  observer, matching the existing onMigrationProgress precedent.
+- extension: collect the stages per attempt, attach them to
+  TaskStoreBootTransientError and to the cooldown entry, and surface them in the
+  tool result. The tool result is the durable channel because it is recorded in
+  the agent log, unlike the console line.
+- tool-store-errors: recover table, statement kind, and SQLSTATE from a
+  DrizzleQueryError by reading `query` and `cause` structurally. `params` is
+  deliberately never read: bound values are user content and must not reach a
+  tool result or an agent log. Label read vs write explicitly.
+
+The transient class is unchanged — a genuine boot failure stays fail-closed
+(STAS-299 Invariant B) — and teardown ownership is untouched: factory-owned
+entries are shut down, host-injected entries are not.
+
+Tests: 9 CLI + 11 engine. The regex fix the tests forced (a two-optional-group
+form returned "s" for "tasks") is pinned by a case for each quoting shape.
+
+
+ .../extension-boot-stage-attribution.test.ts       | 191 +++++++++++++++++++++
+ packages/cli/src/extension.ts                      | 107 ++++++++++--
+ packages/core/src/index.ts                         |   1 +
+ packages/core/src/postgres/index.ts                |   1 +
+ packages/core/src/postgres/startup-factory.ts      |  30 +++-
+ .../engine/src/__tests__/tool-store-errors.test.ts | 139 +++++++++++++++
+ packages/engine/src/tool-store-errors.ts           |  76 +++++++-
+ 7 files changed, 527 insertions(+), 18 deletions(-)

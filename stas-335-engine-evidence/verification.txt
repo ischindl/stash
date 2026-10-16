@@ -1,0 +1,134 @@
+STAS-335 verification record — the gates, and what each part of this bundle proves
+==================================================================================
+
+Reviewed tip   ca55f0b30b5348ed1368082a3ea47ea6fc263354  (engine)
+Branch parent  080cfdc646fc1567febf8ac5a51c6d98e150a7a0
+Branch         fusion/stas-335-taskstore-boot
+
+This file separates three kinds of statement and says which is which:
+  PART 1  a gate executed in the engine work tree by the implementing session (a record, transcribed
+          from that session's task documents `live-proof` and `deploy-handoff`);
+  PART 2  something re-derived first-hand during the code-review remediation, from inside this card's
+          work tree, with the command printed next to the result;
+  PART 3  pre-existing red that this series neither caused nor chased.
+Nothing here is a claim that a test was run when it was not.
+
+
+PART 1 — gates executed at the published tree (implementing session, after the final rebase onto 080cfdc646)
+----------------------------------------------------------------------------------------------------------
+
+Executed in the engine work tree of this lane (`/home/schindler/git/Fusion`, branch
+`fusion/stas-335-taskstore-boot`, node v26.8.1 / pnpm 10.33.0 on this host). Every line below is a
+result that session recorded; the numbers are transcribed, the commands are the ones it named.
+
+| Gate / suite                                                          | Result            |
+|-----------------------------------------------------------------------|-------------------|
+| `pnpm lint`                                                            | exit 0            |
+| `pnpm typecheck`                                                       | exit 0            |
+| `pnpm build`                                                           | exit 0            |
+| `pnpm check:changesets`                                                | exit 0            |
+| `node scripts/boot-smoke.mjs`                                          | exit 0            |
+| `pnpm --filter @fusion/engine test:core`                               | 23 files, 532 passed |
+| `pnpm --filter @fusion/core test:pg-gate` (test cluster, port 5455)    | 3 files, 13 passed   |
+| `pnpm --filter @fusion/core test:unit-gate`                            | 5 files, 210 passed  |
+| `pnpm --filter @runfusion/fusion test:ci-shape`                        | 1 file, 76 passed    |
+| engine store-error + read-path + write-boundary consumers (10 files)   | 192 passed           |
+| CLI boot/store set (5 files, incl. the new boot-stage attribution)     | 60 passed            |
+| CLI store-failure consumers (3 files)                                  | 9 passed             |
+| engine boot lifecycle / consumers                                      | 13 + 17 passed       |
+| core startup-factory set                                               | 133 passed           |
+| dashboard chat consumer                                                | 16 passed            |
+| RUFU-436's test file, which arrived on `main` during the rebase        | passed               |
+
+Behavioural proof at the real seam (same session, `live-proof` document; the symptom does not
+reproduce on demand, so the harness drives the production factory instead of waiting for it):
+boot stages attributed stage-by-stage through the real `createTaskStoreForBackend` (the expensive
+stage named as `backend.applySchema` 2628 ms of a 2727 ms total); three sequential board writes
+(225 ms / 153 ms / 9 ms, rows re-read to confirm persistence) — all three inside the 30 s budget
+rather than at it; `fn_list_agents` green in 1 ms on a genuinely empty roster (deliberately
+unflagged); the same tool answering with `[statement=select table=agents sqlState=42P01]` and
+`details.operation="read"` once `project.agents` is renamed away, then green again after restore;
+a write failure composing `{table=distributed_task_id_state statement=insert sqlState=25P02}`
+with `operation=write`; and `boot.shutdown()` against a cluster the factory did not start leaving
+that postmaster answering, which is the stop-authority rule proven at the seam rather than asserted.
+
+Why the green run is not the whole argument (red-first). A pin that would also pass against the
+pre-fix code proves nothing, so each new pin names a symbol that does not exist pre-fix. That is
+checked mechanically, not asserted: `invariants.txt` section D prints the base-vs-tip occurrence
+count of `onBootStage`, `BootStage`, `formatBootStages`, `describeStoreQueryFailure` and
+`StoreQueryAttribution` (all 0 at base, non-zero at tip), shows that both new test files are absent
+from base entirely, and prints `storeErrorResult`'s signature at both refs — 2 parameters at base,
+3 at tip. Against base those imports cannot resolve, so those files are red there by construction.
+
+
+PART 2 — re-derived first-hand by the remediation session
+---------------------------------------------------------
+
+The remediation ran in this card's *stash* work tree, whose tool boundary permits exactly one kind
+of engine access: git plumbing addressed with `--git-dir=<engine>/.git`. It refuses any command
+whose working directory would be the engine repo — reproduced verbatim:
+
+    cd /home/schindler/git/Fusion && git log --oneline -3
+    -> Command targets a path outside the worktree boundary. Commands must run inside the worktree.
+
+So `pnpm` cannot be executed against the engine from here, and this session deliberately did not
+re-run PART 1 — it re-derived everything that is derivable from git objects (all of
+`invariants.txt`, `provenance.txt`, the patch, the file snapshots) and re-checked publication:
+
+    git --git-dir=<engine>/.git merge-base --is-ancestor ca55f0b30b... refs/heads/main   -> exit 0 (contained)
+    git --git-dir=<engine>/.git rev-parse refs/heads/fusion/stas-335-taskstore-boot       -> ca55f0b30b... (branch still at the tip)
+    git --git-dir=<engine>/.git rev-list --count 080cfdc646..ca55f0b30b                   -> 3
+    git --git-dir=<engine>/.git diff --shortstat 080cfdc646 ca55f0b30b                    -> 12 files changed, 624 insertions(+), 24 deletions(-)
+
+Publication mechanism, for the record: a compare-and-swap ref update, not a merge commit and not a
+push — `git update-ref refs/heads/main ca55f0b30b... 080cfdc646...`, whose 3-argument form fails if
+`main` moved between read and write, so no other lane's commit can be clobbered. No remote push and
+no GitHub PR: `AGENTS.md` makes both operator-ordered.
+
+Portable copy of exactly these commits, verified during the remediation rather than merely
+pointed at. The board rejects a `.bundle` extension, hence the base64 wrapper — attached to this
+card as `stas-335-engine-bundle-3b8aa69a..ca55f0b3.txt`:
+
+    sha256 of the attachment      f7a84b45d138bc985f5fbeba3beca112fa3f6fabcc2c3c977d572ab9a7d9082e
+    decoded size                  54808 bytes
+    sha256 of the decoded bundle  319650ea0e9db0beb3c129a8057cd83a00c0f4402e81eeb6d66475c1af2bad22
+    git bundle verify             "is okay"; contains ca55f0b30b... refs/heads/main;
+                                  requires 080cfdc646fc1567febf8ac5a51c6d98e150a7a0
+
+The raw bundle that `deploy-handoff` named under `.stas335-logs/` is gone: that directory was
+wiped when this work tree was re-checked out and the empty directory has now been deleted. The
+attachment above is the carrier, re-verified byte-for-byte as shown, and this directory is the
+readable artifact — generated from git objects by `generate.sh` and checked by `verify.sh`, so a
+reviewer with no engine access can read the code and the invariant checks instead of being told to
+trust a summary.
+
+Still open and NOT closed by this bundle (roll-out, from the review document): the engine daemon
+serving every session's fn calls (:4040, `packages/cli/dist/bin.js`) was started ~7.5 h before the
+CAS publish, so sessions cannot yet see the new attribution text until a rebuild plus a managed
+restart — both operator-ordered. Acceptance item (b) is therefore met in code and at the seam, and
+its arrival in live sessions is gated on that restart.
+
+
+PART 3 — pre-existing red, reported and not chased
+--------------------------------------------------
+
+`pnpm test:gate`'s *static* stage cannot be run green on this base. Its first check fails:
+
+    [check-no-nohup] found banned nohup usage under packages/** or scripts/**.
+    packages/cli/src/commands/startup-secret.ts:16
+
+That comment is RUFU-687's and is on trunk independently of this card, which touches nothing under
+`packages/cli/src/commands/`; the gate is red for every lane on this base. The four suite halves
+`test:gate` would have run were executed directly instead (PART 1).
+
+Three stale expectations elsewhere on the base were observed while running the suites and are each
+another lane's subject, evidenced in the `diagnosis` document §4: `tool-write-failure-boundary-drive.test.ts`
+(RUFU-651 wording), `boot-backlog-attribution.pg.test.ts` (RUFU-275 lineage), and the
+`mission-store-sync-deprecated.test.ts` ratchet (RUFU-615 added `mission-rollup-feature-counts.test.ts`).
+None was edited here, because editing another lane's expectation is how a fix hides a regression.
+
+Side effects of the proof, restated from `live-proof`: all product-like writes went to a scratch
+database that the harness dropped afterwards; the store's central registry layer resolved its own
+backend and so attached to the already-running shared embedded instance (port 36577), leaving the
+inert project-partition registration any fresh-directory boot leaves — nothing in it was modified
+or stopped; the scratch cluster on port 5455 belongs to this lane and was torn down.

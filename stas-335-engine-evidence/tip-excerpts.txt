@@ -1,0 +1,1090 @@
+STAS-335 tip excerpts
+Part 1 — the changed code in wide context (git diff -U60) for the files too large to ship whole.
+         Files: packages/cli/src/extension.ts, packages/engine/src/agent-tools.ts
+=========================================================================================
+diff --git a/packages/cli/src/extension.ts b/packages/cli/src/extension.ts
+index 405e61e9ac..0740903f33 100644
+--- a/packages/cli/src/extension.ts
++++ b/packages/cli/src/extension.ts
+@@ -1,67 +1,68 @@
+ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+ import { randomUUID } from "node:crypto";
+ import { Type, type TSchema } from "typebox";
+ import { StringEnum } from "@earendil-works/pi-ai";
+ import * as fusionCore from "@fusion/core";
+ import {
+   type TaskStore,
++  type BootStage,
+   createTaskStoreForBackend,
+   drizzleSql,
+   AgentStore,
+   ReflectionStore,
+   isEphemeralAgent,
+   evaluateImplementationTaskBind,
+   AGENT_VALID_TRANSITIONS,
+   ApprovalRequestStore,
+   COLUMNS,
+   COLUMN_LABELS,
+   buildAutoPauseClearPatch,
+   buildManualRetryResetPatch,
+   buildManualRetryResetPatchIfCurrent,
+   validateNodeOverrideChange,
+   type Task,
+   type ColumnId,
+   type InsightCategory,
+   type InsightStatus,
+   type InsightRunStatus,
+   type InsightRunTrigger,
+   type Agent,
+   type AgentCapability,
+   type AgentUpdateInput,
+   getTaskDuplicateLineage,
+   resolveAgentProvisioningPolicy,
+   MAX_TASK_LIST_TEXT_CHARS,
+   MAX_TASK_MESSAGE_LENGTH,
+   resolveSecretAccessPolicy,
+   getProjectRootFromWorktree,
+   resolveWorktreesDirLayout,
+   resolveTaskGithubTracking,
+   formatCurrentTaskLine,
+   resolveFusionSessionPrincipal,
+   isTaskExecutionSessionPrincipal,
+   taskExecutionTaskCreationRefusalText,
+   resolveEffectiveAgentPermissionPolicy,
+   type FusionSessionPrincipal,
+   type AgentPermissionPolicy,
+   type ApprovalRequestActorSnapshot,
+   type SecretScope,
+   declaresAnyLifecycleTrait,
+   resolveNodeOverrideLanes,
+   resolveLifecycleColumns,
+   resolveWorkflowIrForTaskWithProvenance,
+   resolveWorkflowIrForTask,
+   resolveReviewColumns,
+   describeHeartbeatThrottle,
+ } from "@fusion/core";
+ import {
+   getGhErrorMessage,
+   isGhAuthenticated,
+   isGhAvailable,
+   runGhJsonAsync,
+ } from "@fusion/core/gh-cli";
+ import {
+   defaultGitOps,
+   ExperimentFinalizeBranchExistsError,
+   ExperimentFinalizeCherryPickConflictError,
+   ExperimentFinalizeMergeBaseError,
+   ExperimentFinalizeNoKeptRunsError,
+@@ -278,245 +279,297 @@ function resolveProjectRoot(cwd: string): string {
+     return worktreeProjectRoot;
+   }
+ 
+   let current = resolve(cwd);
+   while (true) {
+     if (existsSync(join(current, ".fusion"))) {
+       return current;
+     }
+ 
+     const parent = resolve(current, "..");
+     if (parent === current) {
+       return resolve(cwd);
+     }
+     current = parent;
+   }
+ }
+ 
+ /*
+ FNXC:WorkspaceWorktree 2026-08-20-02:23:
+ Keep the production root-resolution route directly testable so a separately
+ loaded Pi extension proves it reads the host's shared known-project registry
+ for grouped workspace member checkouts instead of stopping at the member repo.
+ */
+ export function __resolveProjectRootForTesting(cwd: string): string {
+   return resolveProjectRoot(cwd);
+ }
+ 
+ /*
+ FNXC:PostgresCutover 2026-07-04-00:00:
+ The agent-tool store path must boot the PostgreSQL backend (embedded by default, or external via DATABASE_URL) instead of constructing a legacy SQLite TaskStore, whose runtime was removed under VAL-REMOVAL-005. Mirrors the fn serve boot path, which already routes through createTaskStoreForBackend. The boot result is cached per project root so the connection pool (and any embedded PostgreSQL process) is released deterministically in closeCachedStores.
+ */
+ interface CachedStoreEntry {
+   readonly store: TaskStore;
+   /** Releases the connection pool and stops an embedded PostgreSQL process when one was started. Absent for test-injected stores. */
+   readonly shutdown?: () => Promise<void>;
+   /**
+    * True when the entry was injected by tests (`__setCachedStoreForTesting`).
+    * closeCachedStores removes it from the cache but does NOT close the store —
+    * the owning test harness (shared PG fixture) controls that store's lifetime.
+    */
+   readonly external?: boolean;
+ }
+ 
+ /*
+ FNXC:ExtensionStoreRegistry 2026-07-16-15:20:
+ Agent-read tools loaded through Pi's additionalExtensionPaths can be evaluated as a different ESM module instance from the CLI host that called setHostTaskStore. Keep cache, inflight, and cooldown state in one process registry so fn_list_agents and fn_agent_show reuse the host pool instead of opening a second backend that can wedge on schema/pool contention for 30 seconds.
+ */
+ /*
+ FNXC:TaskStoreBootDeadline 2026-09-23-06:45:
+ STAS-251. One boot attempt per project root, carrying when it started and whether a waiter
+ already gave up on it, so the terminal outcome can be labelled and measured whichever order
+ the two finish in. Node cannot cancel a store boot, so the deadline's job is to be honest:
+ report the elapsed time, name the reason, and stop every later caller from re-paying the
+ same budget against the same stalled attempt.
+ */
+ interface StoreBootAttempt {
+   readonly promise: Promise<TaskStore>;
+   readonly startedAtMs: number;
+   /** Records the abandoned deadline, arms the shared backoff, and relabels the orphan's own outcome as late-*. */
+   reportDeadline(budgetMs: number): void;
++  /** The stages measured so far, so an abandoned waiter can report where the boot actually stood. */
++  stages(): readonly BootStage[];
+ }
+ 
++/**
++ * Why the last boot could not serve a caller, and how far it got. `stages`/`elapsedMs` exist so a
++ * later caller arriving inside the backoff window is told where the abandoned attempt stalled rather
++ * than only that it stalled (STAS-335).
++ */
++type StoreBootCooldownEntry = {
++  untilMs: number;
++  error: string;
++  fromDeadline?: boolean;
++  stages?: readonly BootStage[];
++  elapsedMs?: number;
++};
++
+ interface ExtensionStoreState {
+   readonly cache: Map<string, CachedStoreEntry>;
+   readonly bootInflight: Map<string, StoreBootAttempt>;
+-  readonly bootFailureCooldown: Map<string, { untilMs: number; error: string; fromDeadline?: boolean }>;
++  readonly bootFailureCooldown: Map<string, StoreBootCooldownEntry>;
+   readonly knownProjectRoots: Set<string>;
+ }
+ 
+ const extensionStoreStateKey = Symbol.for("@runfusion/fusion/extension-store-state");
+ const extensionStoreGlobal = globalThis as typeof globalThis & { [key: symbol]: ExtensionStoreState | undefined };
+ const extensionStoreState = extensionStoreGlobal[extensionStoreStateKey] ?? {
+   cache: new Map<string, CachedStoreEntry>(),
+   bootInflight: new Map<string, StoreBootAttempt>(),
+-  bootFailureCooldown: new Map<string, { untilMs: number; error: string; fromDeadline?: boolean }>(),
++  bootFailureCooldown: new Map<string, StoreBootCooldownEntry>(),
+   knownProjectRoots: new Set<string>(),
+ };
+ extensionStoreGlobal[extensionStoreStateKey] = extensionStoreState;
+ 
+ /** Cache stores per project root to avoid re-booting the backend on every tool call. */
+ const storeCache = extensionStoreState.cache;
+ /* FNXC:WorkspaceWorktree 2026-08-20-01:46: Keep grouped-layout candidates visible to Pi's separately evaluated extension module. */
+ const knownProjectRoots = extensionStoreState.knownProjectRoots;
+ /*
+ FNXC:MergeQueue 2026-07-15-11:08:
+ Concurrent first-call fn_* tools must share one boot promise. Without this, two parallel cache misses each call createTaskStoreForBackend and contend on fusion:schema-applier advisory locks / pool setup — the pattern behind wedged fn_task_show during AI merge.
+ */
+ const storeBootInflight = extensionStoreState.bootInflight;
+ /*
+ FNXC:MergeQueue 2026-07-15-11:20:
+ After a hard boot failure, brief cooldown prevents stampede re-boots against a broken backend.
+ 
+ FNXC:TaskStoreBootDeadline 2026-09-23-06:45:
+ STAS-251: a reported deadline now arms this same backoff, which is what turns the boot
+ ceiling into an actual deadline — later callers fail at once with the recorded reason instead
+ of each re-paying the full budget against the same stalled attempt. The orphan is still not
+ wasted: storeCache is read before the backoff, so a boot that lands late serves everyone.
+ */
+ const storeBootFailureCooldown = extensionStoreState.bootFailureCooldown;
+ const BOOT_FAILURE_COOLDOWN_MS = 5_000;
+ /*
+ FNXC:MergeQueue 2026-07-15-11:08:
+ Propagate the active tool AbortSignal into getStore without rewriting every execute body. registerTool installs the signal here before invoking the real execute.
+ */
+ const extensionToolSignal = new AsyncLocalStorage<AbortSignal | undefined>();
+ /** Hard ceiling for extension TaskStore boot (second backend open inside a live dashboard/engine process). */
+ const EXTENSION_STORE_BOOT_TIMEOUT_MS = 30_000;
+ /*
+ FNXC:BootTimeoutTransience 2026-10-13-03:05 (STAS-299, requirement 3):
+ A store boot that burns its budget is a STALL, not a verdict. Both operator-visible fingerprints of
+ that branch — the bare `… boot timed out after Nms` (wall-clock race) and the backoff-window sentence
+ `… recently failed (cooldown Nms): abandoned after …` (the orphan is still booting and will serve the
+ next caller) — were carried to the caller as an undifferentiated failure, so a policy-gated tool
+ answered `denied … Failing closed — ask the operator to run this tool` and a read tool answered a raw
+ `failed: …`. That is how STAS-281's agent lost its escape hatch twice: the denial named a permission
+ problem that did not exist, and nothing told the agent that simply calling again was the fix.
+ 
+ The two claims are now separate types: a transient boot stall carries `TaskStoreBootTransientError`,
+ which every surface must answer with "retry this call", and a real boot failure keeps the honest
+ fail-closed denial. The distinction is by branch, not by message-guessing: only the wall-clock
+ deadline and the cooldown entry it leaves behind are transient; anything the factory itself raised
+ stays a real failure.
+ */
+ const BOOT_DEADLINE_CLASS = /timed out after \d+ms/;
+ 
+ export class TaskStoreBootTransientError extends Error {
+   readonly transient = true as const;
+   readonly bootTimeoutMs: number;
+-  constructor(message: string, bootTimeoutMs: number) {
++  /** Per-stage attribution measured up to the moment the waiter gave up; empty when nothing finished. */
++  readonly stages: readonly BootStage[];
++  /** How long the attempt had actually been running when the deadline fired. */
++  readonly elapsedMs: number;
++  constructor(message: string, bootTimeoutMs: number, stages: readonly BootStage[] = [], elapsedMs = 0) {
+     super(message);
+     this.name = "TaskStoreBootTransientError";
+     this.bootTimeoutMs = bootTimeoutMs;
++    this.stages = stages;
++    this.elapsedMs = elapsedMs;
+   }
+ }
+ 
++/*
++FNXC:TaskStoreBootStageAttribution 2026-10-16-04:30:
++STAS-335. The stall answer used to name only the budget it burned, which told an agent to retry but
++not what was slow, and told an operator nothing at all once the process-local console line was
++discarded. Naming the stages here is credential-safe by construction: phase labels and durations
++only — never SQL text, parameters, connection URLs, or the `detail` strings a driver may fill with
++server-side paths.
++*/
++/** One-line per-stage attribution for a stalled or failed store boot. */
++export function formatBootStages(stages: readonly BootStage[]): string {
++  if (stages.length === 0) return "no boot stage completed before the deadline";
++  return stages.map((stage) => `${stage.phase}=${stage.durationMs}ms${stage.ok ? "" : " FAILED"}`).join(" ");
++}
++
+ /** @internal Whether a store-boot rejection is a momentary stall the caller should retry. */
+ export function isTransientStoreBootFailure(error: unknown): boolean {
+   if (error instanceof TaskStoreBootTransientError) return true;
+   if (error instanceof Error && error.name === "TaskStoreBootTransientError") return true;
+   /*
+   One fingerprint decides both this classification and the telemetry: the shipped deadline marker
+   `timed out after Nms`, which `getStore` already records as `"outcome":"deadline"` — emitted by the
+   wall-clock race and, indistinguishably, by the pool giving up on a lock (`connection timed out after
+   20242ms (canceling statement due to lock timeout)`, RUFU-377's real stall cause). Anything that ran
+   out of time is the stall class; a boot that failed for a reason other than waiting stays a real
+   failure. Classifying in one place rather than per surface is what keeps the answer an agent gets and
+   the record an operator hunts from disagreeing about whether the same event was slow or broken.
+   */
+   return error instanceof Error && BOOT_DEADLINE_CLASS.test(error.message);
+ }
+ 
+ /** @internal The actionable answer every extension surface gives for a stalled store boot. */
+ export function buildStoreBootStallResult(toolName: string, error: unknown): {
+   content: Array<{ type: "text"; text: string }>;
+   // `error` stays a required member: this result also leaves `wrapExtensionToolExecute`, whose
+   // declared error branch is `details: { error: string }`.
+   details: {
+     transient: "taskstore-boot-timeout";
+     retryable: true;
+     bootTimeoutMs: number;
+     tool: string;
+     error: string;
++    stages: readonly BootStage[];
++    elapsedMs: number;
++    /** Credential-safe per-stage attribution: phase labels and durations only. */
++    attribution: string;
+   };
+   isError: true;
+ } {
+   const message = error instanceof Error ? error.message : String(error);
+   const budgetMs = error instanceof TaskStoreBootTransientError ? error.bootTimeoutMs : EXTENSION_STORE_BOOT_TIMEOUT_MS;
++  /*
++  STAS-335: the stage record rides to the caller, not just to a console line the forked runtime drops.
++  A synthesized error with no measured attempt carries no attribution line rather than a fabricated one.
++  */
++  const stages = error instanceof TaskStoreBootTransientError ? error.stages : [];
++  const elapsedMs = error instanceof TaskStoreBootTransientError ? error.elapsedMs : 0;
++  const attribution = stages.length > 0 || elapsedMs > 0
++    ? `\nBoot attribution: ${formatBootStages(stages)} (elapsed ${elapsedMs}ms of the ${budgetMs}ms budget).`
++    : "";
+   return {
+     content: [
+       {
+         /* The shipped attribution contract stays intact: `X failed: ` plus the store-boot subject on
+            the first line — RUFU-377's KTD-2 keeps the wrapper prefix outside the store attribution —
+            and the retry instruction rides below it instead of replacing it. */
+         type: "text" as const,
+         text: `${toolName} failed: ${message}\n` +
+           `Retry this same call — the boot is still running in the background and the next call is served ` +
+-          `from it. Nothing was denied on policy grounds and nothing was lost; do not ask the operator.`,
++          `from it. Nothing was denied on policy grounds and nothing was lost; do not ask the operator.` +
++          attribution,
+       },
+     ],
+     details: {
+       transient: "taskstore-boot-timeout",
+       retryable: true,
+       bootTimeoutMs: budgetMs,
+       tool: toolName,
+       error: message,
++      stages,
++      elapsedMs,
++      attribution: formatBootStages(stages),
+     },
+     isError: true as const,
+   };
+ }
+ /*
+ FNXC:MergeQueue 2026-07-15-11:15:
+ Default wall-clock budget for store/CRUD host-extension tools. Long-running tools use resolveExtensionToolTimeoutMs instead of this flat default (research wait, skills install, imports).
+ */
+ const EXTENSION_TOOL_TIMEOUT_MS = 60_000;
+ const SKILLS_INSTALL_TIMEOUT_MS = 300_000;
+ const IMPORT_BROWSE_TIMEOUT_MS = 180_000;
+ const WEB_FETCH_TIMEOUT_MS = 90_000;
+ const TASK_PLAN_TIMEOUT_MS = 300_000;
+ const EXPERIMENT_FINALIZE_TIMEOUT_MS = 180_000;
+ const MISSION_BACKFILL_TIMEOUT_MS = 180_000;
+ /*
+ FNXC:MergeQueue 2026-07-15-11:40:
+ Hard ceiling for import/browse batch size so agents cannot request unbounded GitHub/GitLab fan-out under the host extension.
+ */
+ export const MAX_IMPORT_BROWSE_ITEMS = 50;
+ 
+ function isAbortError(error: unknown): boolean {
+   return (
+     (error instanceof Error && error.name === "AbortError") ||
+     (typeof DOMException !== "undefined" && error instanceof DOMException && error.name === "AbortError")
+   );
+ }
+ 
+ /**
+  * FNXC:MergeQueue 2026-07-15-11:20:
+  * Per-tool outer budgets. Store tools stay at 60s; intentional multi-minute tools get higher ceilings.
+  * FNXC:MergeQueue 2026-07-15-11:28:
+  * Host extension no longer registers fn_research_* (engine injects createResearchTools when experimental research is on), so research wait budgets are not needed here.
+  *
+  * @internal Exported for unit tests.
+  */
+ export function resolveExtensionToolTimeoutMs(toolName: string, _params?: unknown): number {
+   const name = toolName.trim();
+   if (name === "fn_skills_install") return SKILLS_INSTALL_TIMEOUT_MS;
+   if (name === "fn_task_plan") return TASK_PLAN_TIMEOUT_MS;
+   if (name === "fn_experiment_finalize") return EXPERIMENT_FINALIZE_TIMEOUT_MS;
+   if (name === "fn_mission_backfill_assertions") return MISSION_BACKFILL_TIMEOUT_MS;
+   if (name.startsWith("fn_task_import_") || name.startsWith("fn_task_browse_")) return IMPORT_BROWSE_TIMEOUT_MS;
+   if (name === "fn_web_fetch") return WEB_FETCH_TIMEOUT_MS;
+   return EXTENSION_TOOL_TIMEOUT_MS;
+ }
+ 
+ /** Clamp import/browse limits so host tools cannot request unbounded remote fan-out. */
+ export function clampImportBrowseLimit(limit: number | undefined, defaultLimit = 30): number {
+   const raw = typeof limit === "number" && Number.isFinite(limit) ? Math.floor(limit) : defaultLimit;
+   return Math.min(MAX_IMPORT_BROWSE_ITEMS, Math.max(1, raw));
+ }
+ 
+ /**
+  * Race a promise against a wall-clock timeout and optional AbortSignal.
+  * Does not cancel the underlying work (Node has no structured cancel for store boot),
+  * but unblocks the tool caller so the agent session can fail closed instead of wedging forever.
+  *
+  * @internal Exported for unit tests of the hang-prevention budget.
+  */
+@@ -636,245 +689,275 @@ export function wrapExtensionToolExecute<TArgs extends unknown[], TResult>(
+       const message = error instanceof Error ? error.message : String(error);
+       /*
+       FNXC:BootTimeoutTransience 2026-10-13-03:05 (STAS-299, requirement 3): read-only tools were the
+       other half of the measured failure — `fn_task_logs_read` died twice on the raw boot sentence and
+       the agent had nothing to act on. A stalled boot answers with the retry instruction on every
+       surface, gated or not.
+       */
+       if (isTransientStoreBootFailure(error)) {
+         console.warn(`[fusion-extension] ${toolName}: ${message}`);
+         return buildStoreBootStallResult(toolName, error);
+       }
+       if (BOOT_DEADLINE_CLASS.test(message)) {
+         console.warn(`[fusion-extension] ${toolName}: ${message}`);
+       } else {
+         console.error(`[fusion-extension] ${toolName} failed: ${message}`);
+       }
+       return {
+         content: [{ type: "text" as const, text: `${toolName} failed: ${message}` }],
+         details: { error: message },
+         isError: true as const,
+       };
+     } finally {
+       parentSignal?.removeEventListener("abort", onParentAbort);
+     }
+   };
+ }
+ 
+ /*
+ FNXC:MergeQueue 2026-07-15-11:40:
+ When dashboard/serve/daemon injects the live engine TaskStore via setHostTaskStore, getStore must never call createTaskStoreForBackend for that project root — dual-boot was the FN-7956 hang class (second pool + schema advisory lock). CLI one-shot sessions without a host store still boot a short-lived cache entry.
+ */
+ let extensionStoreBootFactory: typeof createTaskStoreForBackend = createTaskStoreForBackend;
+ 
+ /*
+ FNXC:TaskStoreBootAttribution 2026-09-28-08:55:
+ RUFU-388 rewrote this comment's closing sentence. It promised a durable record: that the lines were
+ written to a log the engine keeps and that a later stall gets diagnosed from them. RUFU-377 measured that
+ promise and found no such rows anywhere in the sighting window, because nothing in the machine persists
+ them. The function writes with `console.warn`, so the line reaches only the console of the process that
+ loaded the extension, and what becomes of that console is the loader's choice: the runtime that hosts the
+ extension forks it with `silent: true` and forwards IPC alone
+ (`packages/engine/src/runtimes/child-process-runtime.ts`), so a forked worker's stdout/stderr are piped
+ and stored nowhere, while a dashboard/serve/daemon host surfaces its own process console instead. Neither
+ shape produces a run-audit row. So the line attributes a boot stall only for whoever is watching that
+ process while it is live, and a stall that already happened is not recoverable from it. The durable form
+ of this invariant is the "`[taskstore-boot]` is process-local console output, not telemetry" bullet of
+ "Extension TaskStore boot budget" in docs/architecture.md.
+ */
+ /**
+  * Emit one machine-readable line per boot outcome. Every boot used to end as either silence
+  * or a bare "timed out after 30000ms" with no elapsed time, no phase, and no reason, so a
+  * repeated stall left nothing to attribute. Live observation is the whole reach: the line is
+  * console output of the loading process and nothing downstream retains it — see the FNXC block
+  * above for what each loader keeps and what it discards.
+  */
+ function reportStoreBoot(
+   projectRoot: string,
+   outcome: "ok" | "failed" | "deadline" | "late-success" | "late-failure" | "aborted",
+   durationMs: number,
+   detail?: string,
++  stages?: readonly BootStage[],
+ ): void {
+   console.warn(
+-    `[taskstore-boot] ${JSON.stringify({ projectRoot, outcome, durationMs, ...(detail ? { detail } : {}) })}`,
++    `[taskstore-boot] ${JSON.stringify({
++      projectRoot,
++      outcome,
++      durationMs,
++      ...(stages && stages.length > 0 ? { stages } : {}),
++      ...(detail ? { detail } : {}),
++    })}`,
+   );
+ }
+ 
+ /**
+  * Start the single boot attempt for a project root and keep it observable.
+  *
+  * Node has no structured cancel for a store boot, so the attempt outlives a reported deadline
+  * by design. What it must never do is end unrecorded: whichever of the two finishes first,
+  * the outcome and its duration are written down.
+  */
+ function startStoreBoot(projectRoot: string): StoreBootAttempt {
+   const startedAtMs = Date.now();
+   /* Set when a waiter reports the deadline; the orphan then labels itself late-* instead of ok. */
+   let deadlineReported = false;
++  /* STAS-335: the factory reports each stage as it lands, so an abandoned waiter can say how far it got. */
++  const stages: BootStage[] = [];
+ 
+   const promise = (async () => {
+     try {
+       /*
+       FNXC:TaskStoreLightBoot 2026-09-26-19:30 (RUFU-275):
+       The transient agent-tool boot runs LIGHT: no archive reintegration, no forced patchnode
+       reconcile. Measured at saneca calibre those two passes are the store-open bytes (full-row
+       archived-lane reads + whole task_json parses) that pushed the open past the 30 s budget
+       below. Nothing is lost: host stores are served from setHostTaskStore before any factory
+       boot (FN-7956 path, unchanged), the same passes run as engine maintenance and on every
+       host-path boot, and completion-time writers capture ledger entries in their own
+       transactions. Host-path boots keep the full backlog — the flags default false.
+       */
+       const boot = await extensionStoreBootFactory({
+         rootDir: projectRoot,
+         skipArchiveReintegrationOnInit: true,
+         skipPatchnodeReconcileOnInit: true,
++        onBootStage: (stage) => {
++          stages.push(stage);
++        },
+       });
+       storeBootFailureCooldown.delete(projectRoot);
+       // Do not overwrite a host-injected external store that landed while we were booting.
+       const raced = storeCache.get(projectRoot);
+       if (raced?.external) {
+         await boot.shutdown().catch(() => undefined);
+-        reportStoreBoot(projectRoot, deadlineReported ? "late-success" : "ok", Date.now() - startedAtMs, "host-injected store served instead");
++        reportStoreBoot(projectRoot, deadlineReported ? "late-success" : "ok", Date.now() - startedAtMs, "host-injected store served instead", stages);
+         return raced.store;
+       }
+       /* FNXC:TaskLifecycleTools 2026-08-15-06:35: Agent tools intentionally install the protective baseline with no force path; only a human CLI invocation can override live removal. */
+       storeCache.set(projectRoot, { store: boot.taskStore, shutdown: boot.shutdown });
+-      reportStoreBoot(projectRoot, deadlineReported ? "late-success" : "ok", Date.now() - startedAtMs);
++      reportStoreBoot(projectRoot, deadlineReported ? "late-success" : "ok", Date.now() - startedAtMs, undefined, stages);
+       return boot.taskStore;
+     } catch (error) {
+       const message = error instanceof Error ? error.message : String(error);
+       storeBootFailureCooldown.set(projectRoot, {
+         untilMs: Date.now() + BOOT_FAILURE_COOLDOWN_MS,
+         error: message,
++        stages,
++        elapsedMs: Date.now() - startedAtMs,
+       });
+-      reportStoreBoot(projectRoot, deadlineReported ? "late-failure" : "failed", Date.now() - startedAtMs, message);
++      reportStoreBoot(projectRoot, deadlineReported ? "late-failure" : "failed", Date.now() - startedAtMs, message, stages);
+       throw error;
+     } finally {
+       storeBootInflight.delete(projectRoot);
+     }
+   })();
+   // Keep a handler attached so timed-out waiters cannot leave an unhandledRejection when boot fails late.
+   void promise.catch(() => undefined);
+ 
+   return {
+     promise,
+     startedAtMs,
++    stages: () => stages,
+     reportDeadline(budgetMs: number): void {
+       deadlineReported = true;
+       const elapsedMs = Date.now() - startedAtMs;
+       const detail = `abandoned after ${elapsedMs}ms (budget ${budgetMs}ms); orphan boot continues and may still populate the cache`;
+       storeBootFailureCooldown.set(projectRoot, {
+         untilMs: Date.now() + BOOT_FAILURE_COOLDOWN_MS,
+         error: detail,
+         fromDeadline: true,
++        stages,
++        elapsedMs,
+       });
+-      reportStoreBoot(projectRoot, "deadline", elapsedMs, detail);
++      reportStoreBoot(projectRoot, "deadline", elapsedMs, detail, stages);
+     },
+   };
+ }
+ 
+ async function getStore(
+   cwd: string,
+   signal?: AbortSignal,
+   bootTimeoutMs = EXTENSION_STORE_BOOT_TIMEOUT_MS,
+ ): Promise<TaskStore> {
+   const projectRoot = resolveProjectRoot(cwd);
+   const existing = storeCache.get(projectRoot);
+   if (existing) return existing.store;
+ 
+   const cooldown = storeBootFailureCooldown.get(projectRoot);
+   if (cooldown && Date.now() < cooldown.untilMs) {
+     const cooldownMessage = `fn extension TaskStore boot recently failed (cooldown ${BOOT_FAILURE_COOLDOWN_MS}ms): ${cooldown.error}`;
+     /* The deadline's own backoff entry means the orphan boot is still in flight and will serve the
+-       next caller, so this is the same stall, not a new failure. */
+-    if (cooldown.fromDeadline) throw new TaskStoreBootTransientError(cooldownMessage, EXTENSION_STORE_BOOT_TIMEOUT_MS);
++       next caller, so this is the same stall, not a new failure. The abandoned attempt's stage record
++       rides along, so the caller sees where that attempt stalled rather than only that it stalled. */
++    if (cooldown.fromDeadline) {
++      throw new TaskStoreBootTransientError(
++        cooldownMessage,
++        EXTENSION_STORE_BOOT_TIMEOUT_MS,
++        cooldown.stages ?? [],
++        cooldown.elapsedMs ?? 0,
++      );
++    }
+     throw new Error(cooldownMessage);
+   }
+ 
+   const effectiveSignal = signal ?? extensionToolSignal.getStore();
+ 
+   /*
+   FNXC:PostgresFinalCutover 2026-07-14-17:20: Agent tools cache only the
+   PostgreSQL factory result; the removed SQLite opt-out is an explicit error.
+ 
+   FNXC:MergeQueue 2026-07-15-11:08:
+   First extension tool call without a host-injected store boots a TaskStore (CLI path).
+   Coalesce concurrent callers so a wedged boot cannot park every fn_* tool forever.
+   */
+   const attempt = storeBootInflight.get(projectRoot) ?? startStoreBoot(projectRoot);
+   storeBootInflight.set(projectRoot, attempt);
+ 
+   try {
+     return await raceWithTimeoutAndAbort(
+       attempt.promise,
+       bootTimeoutMs,
+       effectiveSignal,
+       "fn extension TaskStore boot",
+     );
+   } catch (error) {
+     /* Only an expired budget abandons the attempt; a rejected boot already recorded itself. */
+     const message = error instanceof Error ? error.message : String(error);
+     if (isAbortError(error)) {
+       reportStoreBoot(projectRoot, "aborted", Date.now() - attempt.startedAtMs);
+     } else if (BOOT_DEADLINE_CLASS.test(message)) {
+       attempt.reportDeadline(bootTimeoutMs);
+-      throw new TaskStoreBootTransientError(message, bootTimeoutMs);
++      throw new TaskStoreBootTransientError(
++        message,
++        bootTimeoutMs,
++        attempt.stages(),
++        Date.now() - attempt.startedAtMs,
++      );
+     }
+     throw error;
+   }
+ }
+ 
+ /**
+  * FNXC:MergeQueue 2026-07-15-11:40:
+  * Publish the live engine/dashboard TaskStore into the host extension cache so in-process agent tools share one pool and never dual-boot embedded PostgreSQL.
+  * The entry is external: closeCachedStores / clearHostTaskStores will not shut it down — the host owns lifecycle.
+  */
+ export function setHostTaskStore(projectRoot: string, store: TaskStore): void {
+   knownProjectRoots.add(resolve(projectRoot));
+   // FNXC:TaskArchiveRemoval 2026-09-04-18:25: Host-injected stores are canonicalized before caching so every tool shares the already-initialized store and its one-time historical reintegration pass.
+   const canonical = resolveProjectRoot(projectRoot);
+   storeCache.set(canonical, { store, external: true });
+   storeBootInflight.delete(canonical);
+   storeBootFailureCooldown.delete(canonical);
+ }
+ 
+ /**
+  * Remove host-injected store entries without closing them (host owns lifecycle).
+  * Pass projectRoot to clear one project; omit to clear all external entries.
+  * FNXC:MergeQueue 2026-07-15-11:50: Full clear only drops external entries and their boot metadata — never wipe inflight/cooldown for non-host CLI boots that may still be active in the same process.
+  */
+ export function clearHostTaskStores(projectRoot?: string): void {
+   if (projectRoot) {
+     const canonical = resolveProjectRoot(projectRoot);
+     const entry = storeCache.get(canonical);
+     if (entry?.external) storeCache.delete(canonical);
+     storeBootInflight.delete(canonical);
+     storeBootFailureCooldown.delete(canonical);
+     return;
+   }
+   for (const [key, entry] of [...storeCache.entries()]) {
+     if (!entry.external) continue;
+     storeCache.delete(key);
+     storeBootInflight.delete(key);
+     storeBootFailureCooldown.delete(key);
+   }
+ }
+ 
+ /** @internal Test seam: read cached store for a project root after host injection / boot. */
+ export function __peekCachedStoreForTesting(projectRoot: string): TaskStore | undefined {
+   return storeCache.get(resolveProjectRoot(projectRoot))?.store;
+ }
+ 
+ /**
+  * @internal Test-only: clear inflight boot map and failure cooldown without closing cached stores.
+  */
+ export function __clearExtensionStoreBootStateForTesting(): void {
+   storeBootInflight.clear();
+   storeBootFailureCooldown.clear();
+   extensionStoreBootFactory = createTaskStoreForBackend;
+ }
+ 
+ /** @internal Test-only: control cold-cache boot without starting embedded PostgreSQL. */
+ export function __setExtensionStoreBootFactoryForTesting(factory?: typeof createTaskStoreForBackend): void {
+   extensionStoreBootFactory = factory ?? createTaskStoreForBackend;
+ }
+ 
+diff --git a/packages/engine/src/agent-tools.ts b/packages/engine/src/agent-tools.ts
+index cab504cc1e..3e482091f5 100644
+--- a/packages/engine/src/agent-tools.ts
++++ b/packages/engine/src/agent-tools.ts
+@@ -1,76 +1,76 @@
+ /**
+  * Shared agent tool factory functions.
+  *
+  * Extracted from TaskExecutor so they can be reused by other subsystems
+  * (e.g., HeartbeatMonitor execution) without pulling in the full executor.
+  *
+  * The parameter schemas are canonical here — executor.ts imports and reuses them.
+  */
+ 
+ import { appendFile, mkdir, readFile, readdir, realpath, stat, writeFile } from "node:fs/promises";
+ import { existsSync } from "node:fs";
+ import { createHash, randomUUID } from "node:crypto";
+ import { tmpdir } from "node:os";
+ import { extname, isAbsolute, join, relative, resolve, sep } from "node:path";
+ import * as fusionCore from "@fusion/core";
+-import type { AgentState, AgentCapability, AgentUpdateInput, AgentLogEntry, Artifact, ArtifactCreateInput, ArtifactWithTask, Task, TaskDocument, TaskDocumentCreateInput, TaskStore, RunMutationContext, MessageStore, Message, SourceType, Settings, ResearchRun, ResearchRunStatus, TaskCreateInput, ReflectionStore, ApprovalRequestStore, ProjectSettings, ChatStore, WorkflowSettingDefinition, GoalStatus, WorkflowIrNode, IdeationCandidate, MissionWithHierarchy, DbTransaction } from "@fusion/core";
++import type { Agent, AgentState, AgentCapability, AgentUpdateInput, AgentLogEntry, Artifact, ArtifactCreateInput, ArtifactWithTask, Task, TaskDocument, TaskDocumentCreateInput, TaskStore, RunMutationContext, MessageStore, Message, SourceType, Settings, ResearchRun, ResearchRunStatus, TaskCreateInput, ReflectionStore, ApprovalRequestStore, ProjectSettings, ChatStore, WorkflowSettingDefinition, GoalStatus, WorkflowIrNode, IdeationCandidate, MissionWithHierarchy, DbTransaction } from "@fusion/core";
+ import { listTraits, isBuiltinWorkflowId, isTaskNotFoundError, renderTaskCommentSection, AgentStore, validateColumnAgentBindings, ColumnAgentBindingError, stripApprovalBypassFlags, WorkflowSettingRejectionError, resolveEffectiveSettingsById, resolveWorkflowIrById, findOrphanedSettingValues, BUILTIN_WORKFLOW_SETTINGS, MAX_TASK_LIST_TEXT_CHARS, TASK_BOARD_READ_CAVEAT, formatCurrentTaskLine, normalizeWorkflowIcon, parseWorkflowIr, WorkflowIrError, assertColumnTraitsValid, ColumnTraitValidationError } from "@fusion/core";
+ import { promoteHeldTask } from "./execution/hold-release.js";
+ import { stepLifecycleNoopResult, storeErrorResult, storeWriteFailure } from "./tool-store-errors.js";
+ import { computeCrossParentDiagnosticClaim, computeCrossParentDiagnosticClaimId, computeParentIntentClaimId, DASHBOARD_USER_ID, dailyMemoryPath, ensureOpenClawMemoryFiles, evaluateImplementationTaskBind, extractAgentProvisioningRequest, findSameAgentDuplicates, getMemoryBackendCapabilities, getProjectMemory, isEphemeralAgent, memoryLongTermPath, normalizeMessageParticipant, reconcileDeterministicDuplicate, resolveAgentProvisioningPolicy, resolveMemoryBackend, resolveMemorySearchTopic, resolveResearchSettings, resolveTaskGithubTracking, runDeterministicDuplicateGuard, scheduleQmdProjectMemoryRefresh, searchProjectMemory, shouldSkipBackgroundQmdRefresh } from "@fusion/core";
+ import { formatLongTermMemoryAppendReport, formatMemorySize, measureLongTermMemory, type LongTermMemoryScope } from "./memory/memory-budget.js";
+ import { ResearchOrchestrator } from "./research/research-orchestrator.js";
+ import { ResearchProviderRegistry } from "./research/provider-registry.js";
+ import { ResearchStepRunner } from "./research/research-step-runner.js";
+ import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
+ import { Type, type Static } from "@earendil-works/pi-ai";
+ import type { AgentReflectionService } from "./agents/agent-reflection.js";
+ import { createLogger } from "./logger.js";
+ // FNXC:PlanArtifactPersistence 2026-07-26-03:55: PROMPT.md is filesystem-only; mirror plan writes into the DB.
+ import { mirrorPlanToProjectDb } from "./plan-artifact-writeback.js";
+ import { fetchWebContent, WebFetchError } from "./util/web-fetch.js";
+ import type { RunAuditor } from "./util/run-audit.js";
+ import { computeApprovalDedupeKey } from "./agents/agent-action-gate.js";
+ import { MessageDeliveryAutoRecoveryHandler } from "./auto-recovery-handlers/message-delivery.js";
+ import { emitGoalRetrievalAudit } from "./goals/goal-anchoring-audit.js";
+ import { recordRetry } from "./errors/retry-burned-logger.js";
+ import {
+   DEPENDENCY_INSTALL_COMMAND_TIMEOUT_MS,
+   recordPlannerDependencyResolution,
+   type DependencyCommandResult,
+   type DependencyCommandRunner,
+ } from "./worktree/worktree-dependency-install.js";
+ import { validateCodeNodeSources } from "./execution/code-node-runner.js";
+ import { resolveFeatureRepairTargets } from "./missions/mission-feature-sync.js";
+ import { reconcileMissionState } from "./missions/mission-state-reconcile.js";
+ 
+ // ── Tool parameter schemas (canonical definitions) ────────────────────────
+ 
+ 
+ /*
+ FNXC:MissionAdmission 2026-09-20-05:15:
+ Task creation and delegation may omit mission_lineage on every surface, including autonomous no-task heartbeats. This keeps ordinary intake independent of mission planning while still validating and persisting any lineage the caller explicitly supplies.
+ */
+ const missionLineageParams = Type.Object(
+   {
+     mission_id: Type.String({ description: "Approved mission ID for this implementation task" }),
+     slice_id: Type.String({ description: "Approved slice ID under the mission" }),
+     feature_id: Type.String({ description: "Approved feature ID under the slice" }),
+   },
+   {
+     description:
+       "Optional approved Feature → Slice → Mission linkage. Omit for ordinary intake on any surface. " +
+       "When omitted on a follow-up, it may inherit from a mission-linked parent task. When supplied, " +
+       "the full active chain is validated.",
+   },
+ );
+ 
+ /*
+ FNXC:TaskTitleHygiene 2026-09-26-02:28 (RUFU-295):
+ Every task-creation surface takes an optional explicit `title`. Before it, an agent that knew exactly what
+ a card should be called had no way to say so: the label came from the first prose line of `description`, so
+ a description opening on a markdown heading titled the card with the heading text. Omitted, the shared
+ sentence-first derivation still fills the label, so the parameter is additive on every surface.
+ */
+ export const taskCreateParams = Type.Object({
+   title: Type.Optional(Type.String({
+@@ -5602,121 +5602,131 @@ export function createUpdateIdentityTool(agentStore: AgentStore, agentId: string
+       }
+ 
+       if (params.instructionsText !== undefined) {
+         const instructionsText = params.instructionsText.trim();
+         if (instructionsText.length > MAX_INSTRUCTIONS_TEXT_LENGTH) {
+           return {
+             content: [{ type: "text" as const, text: `ERROR: instructionsText exceeds ${MAX_INSTRUCTIONS_TEXT_LENGTH} character limit` }],
+             details: {},
+           };
+         }
+         updates.instructionsText = instructionsText;
+       }
+ 
+       if (params.memory !== undefined) {
+         const memory = params.memory.trim();
+         if (memory.length > MAX_MEMORY_LENGTH) {
+           return {
+             content: [{ type: "text" as const, text: `ERROR: memory exceeds ${MAX_MEMORY_LENGTH} character limit` }],
+             details: {},
+           };
+         }
+         updates.memory = memory;
+       }
+ 
+       if (Object.keys(updates).length === 0) {
+         return {
+           content: [{ type: "text" as const, text: "ERROR: Provide at least one field to update" }],
+           details: {},
+         };
+       }
+ 
+       await agentStore.updateAgent(agentId, updates);
+ 
+       const confirmations = Object.entries(updates).map(([key, value]) => `- ${key}: ${buildPreview(String(value))}`);
+       return {
+         content: [{
+           type: "text" as const,
+           text: `Updated identity fields:\n${confirmations.join("\n")}`,
+         }],
+         details: { updatedFields: Object.keys(updates) },
+       };
+     },
+   };
+ }
+ 
+ export function createListAgentsTool(agentStore: AgentStore): ToolDefinition {
+   return {
+     name: "fn_list_agents",
+     label: "List Agents",
+     description:
+       "List all available agents in the system. Shows each agent's name, role, state, " +
+       "personality (soul), and current assignment. Use this to discover which agents exist " +
+       "and what they specialize in before delegating work.",
+     parameters: listAgentsParams,
+     execute: async (_id: string, params: Static<typeof listAgentsParams>) => {
+       const filter: { role?: AgentCapability; state?: AgentState; includeEphemeral?: boolean } = {};
+       if (params.role) filter.role = params.role as AgentCapability;
+       if (params.state) filter.state = params.state as AgentState;
+       if (params.includeEphemeral !== undefined) filter.includeEphemeral = params.includeEphemeral;
+ 
+-      const agents = await agentStore.listAgents(filter);
++      let agents: Agent[];
++      try {
++        agents = await agentStore.listAgents(filter);
++      } catch (error) {
++        /*
++        A roster the store refused to answer is not an empty roster: an uncaught throw here reached the
++        agent as the whole SELECT statement plus a bare SQLSTATE and no reason (STAS-335, live 42P01).
++        The result says which read failed and names table + SQLSTATE, so the card log alone is diagnosable.
++        */
++        return storeErrorResult("the agent list", error);
++      }
+ 
+       if (agents.length === 0) {
+         return {
+           content: [{ type: "text" as const, text: "No agents found matching the specified filters." }],
+           details: {},
+         };
+       }
+ 
+       const lines = await Promise.all(agents.map(async (agent) => {
+         const parts: string[] = [
+           `ID: ${agent.id}`,
+           `Name: ${agent.name}`,
+           `Role: ${agent.role}`,
+           `State: ${agent.state}`,
+         ];
+ 
+         if (agent.title) parts.push(`Title: ${agent.title}`);
+         if (agent.soul) parts.push(`Soul: ${agent.soul.slice(0, 200)}`);
+         if (agent.instructionsText) {
+           const snippet = agent.instructionsText.slice(0, 100);
+           parts.push(`Custom Instructions: ${snippet}${agent.instructionsText.length > 100 ? "…" : ""}`);
+         }
+         if (agent.taskId) {
+           /*
+           FNXC:AgentTaskStateDrift 2026-06-27-16:05:
+           Show the linked task column in fn_list_agents so parked triage/todo ownership is not mistaken for an in-progress execution mismatch.
+           */
+           const linkedTask = await agentStore.resolveCurrentTaskLink(agent.taskId);
+           parts.push(formatCurrentTaskLine(agent.taskId, linkedTask));
+         }
+ 
+         return parts.join("\n");
+       }));
+ 
+       return {
+         content: [{ type: "text" as const, text: `Available agents:\n\n${lines.join("\n\n")}` }],
+         details: { agents },
+       };
+     },
+   };
+ }
+ 
+ /**
+  * Create a `fn_delegate_task` tool that creates and assigns a task to a specific agent.
+  *
+  * @param agentStore - AgentStore for agent lookup
+  * @param taskStore - TaskStore for task creation
+  * @returns ToolDefinition for the `fn_delegate_task` tool
+  */
+ export function createGetAgentConfigTool(agentStore: AgentStore, callingAgentId: string): ToolDefinition {
+   return {
+     name: "fn_get_agent_config",
+     label: "Get Agent Config",
+     description: "Read full configuration for one of your direct-report agents.",
+     parameters: getAgentConfigParams,
+     execute: async (_id: string, params: Static<typeof getAgentConfigParams>) => {
+       const target = await agentStore.getAgent(params.agent_id);
+       if (!target) {
+         return {
+           content: [{ type: "text" as const, text: `ERROR: Agent ${params.agent_id} not found` }],
+
+Part 2 — the stop-authority rules at the tip, printed from the tip blob (unchanged by this series).
+         Each window is located by the literal quoted in its header.
+=========================================================================================
+
+--- packages/core/src/postgres/startup-factory.ts  (anchor "defers that owner stop until joined leases release" at line 239)
+}
+
+interface SchemaBackendBootResult {
+  readonly backend: ResolvedBackend;
+  readonly connections: PostgresConnections;
+  readonly embeddedLifecycle: EmbeddedLifecycleLike | null;
+  readonly embeddedRuntimeLease: EmbeddedRuntimeLease | null;
+  readonly embeddedRuntimeUrl: string | null;
+  readonly embeddedOwnsProcess: boolean;
+}
+
+/**
+ * FNXC:PostgresBackup 2026-07-16-12:40:
+ * stop() only stops a postmaster owned by this lifecycle. The runtime registry
+ * defers that owner stop until joined leases release, while joiner teardown
+ * releases only its opaque lease. This keeps synchronous backup resolution
+ * aligned with physical cluster liveness without logging the credential URL.
+ */
+async function stopEmbeddedRuntime(
+  lifecycle: EmbeddedLifecycleLike | null,
+  lease: EmbeddedRuntimeLease | null,
+  runtimeUrl: string | null,
+  ownsProcess: boolean,
+): Promise<void> {
+  if (!lease || !runtimeUrl) {
+    await lifecycle?.stop();
+    return;
+  }
+  if (ownsProcess) {
+    await releaseEmbeddedRuntimeLease(lease, {
+      stopOwner: async () => { await lifecycle?.stop(); },
+    });
+    return;
+  }
+  try {
+    await lifecycle?.stop();
+  } finally {
+    await releaseEmbeddedRuntimeLease(lease);
+  }
+}
+
+/**
+ * FNXC:PostgresStartupLifecycle 2026-07-14-19:18:
+
+--- packages/core/src/postgres/startup-factory.ts  (anchor "Close the TaskStore/pools and release the runtime lease but LEAVE an" at line 211)
+
+/**
+ * The result of a successful PostgreSQL backend boot. The caller uses
+ * `.taskStore` as the runtime store and must call `.shutdown()` during
+ * process teardown to release the connection pool and (if started) stop the
+ * embedded PostgreSQL process.
+ */
+export interface BackendBootResult {
+  /** The PostgreSQL-backed TaskStore (constructed with an AsyncDataLayer). */
+  readonly taskStore: TaskStore;
+  /** The resolved backend descriptor (embedded or external). */
+  readonly backend: ResolvedBackend;
+  /** The constructed AsyncDataLayer (also reachable via taskStore.getAsyncLayer()). */
+  readonly asyncLayer: AsyncDataLayer;
+  /**
+   * Release all backend resources: close the TaskStore (which closes the
+   * AsyncDataLayer / connection pool) and stop the embedded PostgreSQL
+   * process if one was started. Best-effort; errors are logged, not thrown.
+   */
+  shutdown(): Promise<void>;
+  /**
+   * FNXC:DesktopClosePolicy 2026-07-18-06:00:
+   * Close the TaskStore/pools and release the runtime lease but LEAVE an
+   * embedded postmaster running (disarming its process shutdown hook), for the
+   * desktop "leave PostgreSQL running" quit choice. No-op difference from
+   * shutdown() on external backends.
+   */
+  detachKeepingEmbedded(): Promise<void>;
+}
+
+/** PostgreSQL resources used by CentralCore before a project TaskStore exists. */
+export interface CentralBackendLayerResult {
+  readonly backend: ResolvedBackend;
+  readonly asyncLayer: AsyncDataLayer;
+  releaseConnections(): Promise<void>;
+  shutdown(): Promise<void>;
+}
+
+--- packages/core/src/postgres/startup-factory.ts  (anchor "// Close the TaskStore first (releases the AsyncDataLayer / pool), then" at line 1424)
+    asyncLayer,
+    async shutdown() {
+      // Close the TaskStore first (releases the AsyncDataLayer / pool), then
+      // stop the embedded cluster if one was started. Best-effort: log errors.
+      try {
+        await taskStore.close();
+      } catch (err) {
+        log.warn(`startup-factory: TaskStore.close() failed during shutdown: ${
+          err instanceof Error ? err.message : String(err)
+        }`);
+      }
+      if (shutdownEmbedded) {
+        try {
+          await stopEmbeddedRuntime(
+            shutdownEmbedded,
+            embeddedRuntimeLease,
+            embeddedRuntimeUrl,
+            embeddedOwnsProcess,
+          );
+        } catch (err) {
+          log.warn(`startup-factory: embedded PostgreSQL stop failed during shutdown: ${
+            err instanceof Error ? err.message : String(err)
+          }`);
+        }
+      }
+    },
+  
+    async detachKeepingEmbedded() {
+      try {
+        await taskStore.close();
+      } catch (err) {
+        log.warn(`startup-factory: TaskStore.close() failed during detach: ${
+          err instanceof Error ? err.message : String(err)
+        }`);
+      }
+      if (shutdownEmbedded) {
+        try {
+          (shutdownEmbedded as unknown as { detachWithoutStop?: () => void }).detachWithoutStop?.();
+          if (embeddedRuntimeLease) await releaseEmbeddedRuntimeLease(embeddedRuntimeLease);
+        } catch (err) {
+          log.warn(`startup-factory: embedded PostgreSQL detach failed: ${
+            err instanceof Error ? err.message : String(err)
+          }`);
+
+--- packages/cli/src/extension.ts  (anchor "readonly external?: boolean;" at line 319)
+
+/*
+FNXC:PostgresCutover 2026-07-04-00:00:
+The agent-tool store path must boot the PostgreSQL backend (embedded by default, or external via DATABASE_URL) instead of constructing a legacy SQLite TaskStore, whose runtime was removed under VAL-REMOVAL-005. Mirrors the fn serve boot path, which already routes through createTaskStoreForBackend. The boot result is cached per project root so the connection pool (and any embedded PostgreSQL process) is released deterministically in closeCachedStores.
+*/
+interface CachedStoreEntry {
+  readonly store: TaskStore;
+  /** Releases the connection pool and stops an embedded PostgreSQL process when one was started. Absent for test-injected stores. */
+  readonly shutdown?: () => Promise<void>;
+  /**
+   * True when the entry was injected by tests (`__setCachedStoreForTesting`).
+   * closeCachedStores removes it from the cache but does NOT close the store —
+   * the owning test harness (shared PG fixture) controls that store's lifetime.
+   */
+  readonly external?: boolean;
+}
+
+/*
+FNXC:ExtensionStoreRegistry 2026-07-16-15:20:
+Agent-read tools loaded through Pi's additionalExtensionPaths can be evaluated as a different ESM module instance from the CLI host that called setHostTaskStore. Keep cache, inflight, and cooldown state in one process registry so fn_list_agents and fn_agent_show reuse the host pool instead of opening a second backend that can wedge on schema/pool contention for 30 seconds.
+*/
+
+--- packages/cli/src/extension.ts  (anchor "The entry is external: closeCachedStores / clearHostTaskStores will not shut it down" at line 912)
+
+/**
+ * FNXC:MergeQueue 2026-07-15-11:40:
+ * Publish the live engine/dashboard TaskStore into the host extension cache so in-process agent tools share one pool and never dual-boot embedded PostgreSQL.
+ * The entry is external: closeCachedStores / clearHostTaskStores will not shut it down — the host owns lifecycle.
+ */
+export function setHostTaskStore(projectRoot: string, store: TaskStore): void {
+  knownProjectRoots.add(resolve(projectRoot));
+  // FNXC:TaskArchiveRemoval 2026-09-04-18:25: Host-injected stores are canonicalized before caching so every tool shares the already-initialized store and its one-time historical reintegration pass.
+  const canonical = resolveProjectRoot(projectRoot);
+  storeCache.set(canonical, { store, external: true });
+  storeBootInflight.delete(canonical);
+  storeBootFailureCooldown.delete(canonical);
+}
+
+/**
+ * Remove host-injected store entries without closing them (host owns lifecycle).
+ * Pass projectRoot to clear one project; omit to clear all external entries.
+ * FNXC:MergeQueue 2026-07-15-11:50: Full clear only drops external entries and their boot metadata — never wipe inflight/cooldown for non-host CLI boots that may still be active in the same process.
+ */
+export function clearHostTaskStores(projectRoot?: string): void {
+  if (projectRoot) {
+    const canonical = resolveProjectRoot(projectRoot);
+    const entry = storeCache.get(canonical);
+    if (entry?.external) storeCache.delete(canonical);
+    storeBootInflight.delete(canonical);
+    storeBootFailureCooldown.delete(canonical);
+    return;
+  }
+  for (const [key, entry] of [...storeCache.entries()]) {
+    if (!entry.external) continue;
+    storeCache.delete(key);
+    storeBootInflight.delete(key);
+    storeBootFailureCooldown.delete(key);
+  }
+
+--- packages/cli/src/extension.ts  (anchor "pi.on("session_shutdown"" at line 7802)
+  });
+
+  // ── Cleanup on session end ───────────────────────────────────────
+
+  pi.on("session_shutdown", async () => {
+    if (dashboardProcess) {
+      dashboardProcess.kill("SIGINT");
+      dashboardProcess = null;
+      dashboardPort = null;
+    }
+    /*
+    FNXC:PostgresCliLifecycle 2026-07-14-22:38:
+    The session shutdown handler's returned promise is the host's teardown barrier. Await cache cleanup so every factory-owned PostgreSQL pool or embedded process is stopped before the host considers the extension session closed.
+    */
+    await closeCachedStores();
+  });
+}

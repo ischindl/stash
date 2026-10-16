@@ -1,0 +1,1109 @@
+diff --git a/.changeset/stas-335-store-boot-and-query-attribution.md b/.changeset/stas-335-store-boot-and-query-attribution.md
+new file mode 100644
+index 0000000000..73a5f387e9
+--- /dev/null
++++ b/.changeset/stas-335-store-boot-and-query-attribution.md
+@@ -0,0 +1,7 @@
++---
++"@runfusion/fusion": patch
++---
++
++summary: A stalled store boot or failed board query now names its stage, table and SQLSTATE instead of a silent 30 s hang.
++category: fix
++dev: `createTaskStoreForBackend` reports every boot stage through an optional `onBootStage` observer (the `onMigrationProgress` precedent); the extension collects the stages of the attempt a caller was waiting on, appends `Boot attribution: <phase>=<ms> … (elapsed Nms of the Nms budget).` to both deadline shapes, carries `details.bootStages` / `details.elapsedMs`, and records them on the cooldown entry so a caller inside the backoff learns where the abandoned attempt stalled. That text is credential-safe by construction: phase labels and durations, never SQL text, bound parameters, connection URLs or a driver's `detail`. On the query side `describeStoreQueryFailure` reads Drizzle's wrapper structurally (`query` + `cause.code`, never `params`) and `storeErrorResult` appends `[statement= table= sqlState=]` with `details.operation` stating whether a read lost nothing or a write persisted nothing — including the agent-roster read, which had no catch and threw the raw wrapper past the tool boundary. No budget was raised, no retry loop or fallback handle added, and the teardown rule that only the process which started the embedded PostgreSQL may stop it is unchanged.
+diff --git a/docs/architecture.md b/docs/architecture.md
+index 123ba7967a..64b88c256c 100644
+--- a/docs/architecture.md
++++ b/docs/architecture.md
+@@ -1474,11 +1474,12 @@ and its deadline are shared by all of them rather than paid per surface:
+   timeout (5 000 ms), this store-boot budget (30 000 ms), and the outer whole-`execute` tool
+   watchdog (60 000 ms, default 30 000 ms for shell tools) nest inside each other; only the message
+   subject names the one that fired.
+ - **`[taskstore-boot]` is process-local console output, not telemetry.** It carries cause and
+   duration and reaches the launching process only — it is never a run-audit event, so a historical
+-  stall cannot be attributed from the durable record.
++  stall cannot be attributed from that line. The attribution itself has ridden the durable record
++  since STAS-335, because it travels on the tool result the agent log stores (below).
+ - **What that ceiling cost RUFU-377.** Re-measuring the seam live put a cold extension boot at
+   226–229 ms (factory total; the light boot skips archive reintegration and patchnode reconcile per
+   RUFU-275), the same `fn_agent_show` round trip at 247 ms, and its cached repeat at 7 ms — three
+   orders of magnitude inside the budget — while every DB-side contention path measured (advisory
+   lock, table lock) terminates with a **named** cause at the server's ~20 s bound rather than as a
+@@ -1497,10 +1498,31 @@ and its deadline are shared by all of them rather than paid per surface:
+   `${toolName} failed: ` prefix, `details.transient: "taskstore-boot-timeout"`, and an explicit
+   retry instruction. The shipped cooldown survives unchanged: a caller arriving inside the backoff
+   is still refused immediately instead of re-paying the 30 000 ms boot, it is simply refused as
+   *retryable*. A real policy denial stays a hard deny and a boot failure with a named cause stays
+   a failure; only those two deadline-derived shapes change register.
++- **The stage record rides the answer (STAS-335).** The factory takes an `onBootStage` observer
++  (the `onMigrationProgress` precedent) and reports every stage — options/backend resolution,
++  embedded start, connection set, schema-baseline apply, data layer, store construct, post-open
++  passes — as `{ phase, durationMs, ok }`. The extension collects the stages of the attempt a caller
++  was waiting on, appends `Boot attribution: backend.applySchema=2628ms … (elapsed 2727ms of the
++  30000ms budget).` to the deadline shape and to the cooldown shape, carries them as
++  `details.bootStages` / `details.elapsedMs`, and stores them on the cooldown entry so a caller
++  arriving inside the backoff learns where the abandoned attempt stalled instead of only that it
++  stalled. That text is credential-safe by construction: phase labels and durations, never SQL text,
++  bound parameters, connection URLs, or a driver's `detail`.
++- **A query failure names its table and SQLSTATE (STAS-335).** A board read that *errored* after a
++  successful boot never reached the boot seam, so its only report was Drizzle's wrapper — the whole
++  statement re-printed, with the SQLSTATE buried in the `cause`. `describeStoreQueryFailure` now
++  reads that wrapper structurally (`query` + `cause.code`, deliberately never `params`) and
++  `storeErrorResult` appends `[statement=select table=agents sqlState=42P01]`, adding
++  `details.table` / `details.statement` / `details.sqlState` and a `details.operation` that says
++  whether a read lost nothing or a write left the board unchanged. The site this was measured on —
++  the agent-roster read, which had no catch at all and threw the wrapper past the tool boundary —
++  now answers in that shape. Measured against the live board the same read runs in 0.168 ms over 9
++  heap blocks, so this seam changed the *report* and no budget: `EXTENSION_STORE_BOOT_TIMEOUT_MS`,
++  the tool watchdog, and the teardown owner-vs-joiner lease rule are untouched.
+ 
+ ### Binary identity
+ - Published package defines `fn` binary (`packages/cli/package.json`)
+ - Running `fn` with no arguments defaults to dashboard (web UI by default)
+ 
+diff --git a/docs/task-management.md b/docs/task-management.md
+index 8b268810a8..f83b4ff24e 100644
+--- a/docs/task-management.md
++++ b/docs/task-management.md
+@@ -355,11 +355,11 @@ When a review session dies without a verdict, self-healing declares its step res
+ 
+ - A card sitting in a **hold-role lane** (resolved by trait, not by the literal `todo`) with no status of its own is stamped `status: "failed"` plus an explanatory `error` in the same write. The card does **not** move — Fusion has no `failed` lane, and a lane move would break the recovery pass itself.
+ - Cards in any other lane keep the old rewrite-only behaviour, and a card that already carries a status is left to its existing owner.
+ - The park is quiet and owned: the stranded-hold continuation sweep refuses to re-seed the failed gate (`retry-owned`) until something discharges the failure. It never auto-retries a parked card.
+ - **The escape hatch is an ordinary retry.** On the dashboard Retry button, `fn task retry`, the extension's `fn_task_retry`, and the engine's chat retry, a card stranded behind a verdict-less failed gate is discharged **in place**: the failed gate row is dropped so Plan/Code Review re-runs, the card returns to normal scheduling, and its approved plan, step list, worktree, and branch are preserved. Retry never deletes an approved specification; destructive re-planning stays reserved for cards that genuinely need a new plan and for explicit actions (`Reset`, `Reject plan`, `Spec revise`, `Spec rebuild`).
+-- A transient `TaskStore boot timed out` no longer masquerades as a permission denial: the tool answers with a retryable, typed transient error instead of "failing closed", and the backoff window is preserved.
++- A transient `TaskStore boot timed out` no longer masquerades as a permission denial: the tool answers with a retryable, typed transient error instead of "failing closed", and the backoff window is preserved. Since STAS-335 the same answer carries the evidence for the retry decision: the stages the abandoned boot had measured (`Boot attribution: backend.applySchema=2628ms … (elapsed 2727ms of the 30000ms budget).`), and, for a query that errored rather than stalled, the table, statement kind and SQLSTATE with the read/write class stated (`[statement=select table=agents sqlState=42P01]`).
+ 
+ This closes the STAS-281 dead zone, where a P0 card stood 2.2 days in `todo` with a failed `plan-review` row, a fully pending checklist, no failure status, and no reachable lever for an agent or an operator.
+ 
+ #### Self-healing: stranded-completed-todo recovery
+ 
+diff --git a/packages/cli/src/__tests__/extension-boot-stage-attribution.test.ts b/packages/cli/src/__tests__/extension-boot-stage-attribution.test.ts
+new file mode 100644
+index 0000000000..10449e06ab
+--- /dev/null
++++ b/packages/cli/src/__tests__/extension-boot-stage-attribution.test.ts
+@@ -0,0 +1,191 @@
++import { afterEach, describe, expect, it, vi } from "vitest";
++import {
++  __clearExtensionStoreBootStateForTesting,
++  __getStoreForTesting,
++  __resolveProjectRootForTesting,
++  __setCachedStoreForTesting,
++  __setExtensionStoreBootFactoryForTesting,
++  buildStoreBootStallResult,
++  clearHostTaskStores,
++  closeCachedStores,
++  formatBootStages,
++  setHostTaskStore,
++  TaskStoreBootTransientError,
++} from "../extension.js";
++import type { BootStage, TaskStore } from "@fusion/core";
++
++/*
++FNXC:TaskStoreBootStageAttribution 2026-10-16-04:30 (STAS-335):
++A boot that burned its budget used to report only the budget. The five stage timings existed, but
++they left the process as `log.log`/console output, and for an agent session that channel is discarded
++(the extension is forked with `silent: true` and IPC alone is forwarded), so a stall that already
++happened could not be attributed to a stage by anyone. These tests pin the two properties that fix it:
++the stage record travels WITH the typed error to the caller, and it lands in the tool result an agent
++actually reads — which is the durable channel, because the tool result is recorded in the task log.
++
++The second block pins the teardown ownership invariant the shared-handle work must never break: the
++extension stops stores it opened and never stops a store the host opened.
++*/
++
++const PROJECT_ROOT = __resolveProjectRootForTesting(process.cwd());
++const TINY_BUDGET_MS = 20;
++
++type BootFactoryArg = Parameters<typeof __setExtensionStoreBootFactoryForTesting>[0];
++
++function bootFactory(factory: (options: { onBootStage?: (stage: BootStage) => void }) => Promise<unknown>): BootFactoryArg {
++  return factory as unknown as BootFactoryArg;
++}
++
++/** Reports two stages, then hangs: the waiter abandons it, the orphan keeps its stage record. */
++function stallAfterReportingStages(options: { onBootStage?: (stage: BootStage) => void }): Promise<never> {
++  options.onBootStage?.({ phase: "connect", durationMs: 4, ok: true });
++  options.onBootStage?.({ phase: "applySchema", durationMs: 31, ok: true });
++  return new Promise<never>(() => {});
++}
++
++function fakeStore(): TaskStore {
++  return { id: "fake-store" } as unknown as TaskStore;
++}
++
++async function reject(promise: Promise<unknown>): Promise<unknown> {
++  return promise.then(() => undefined).catch((caught: unknown) => caught);
++}
++
++afterEach(async () => {
++  await closeCachedStores();
++  __clearExtensionStoreBootStateForTesting();
++  clearHostTaskStores();
++  vi.restoreAllMocks();
++});
++
++describe("a stalled boot names the stage it reached, not just the budget it burned (STAS-335)", () => {
++  it("carries the factory's per-stage record on the transient error the waiter receives", async () => {
++    __setExtensionStoreBootFactoryForTesting(bootFactory(stallAfterReportingStages));
++
++    const error = await reject(__getStoreForTesting(PROJECT_ROOT, TINY_BUDGET_MS)) as TaskStoreBootTransientError;
++
++    expect(error).toBeInstanceOf(TaskStoreBootTransientError);
++    /* The point of the record is that it names where the time went, so an operator does not have to
++       re-run the boot to learn which stage is slow. */
++    expect(error.stages).toEqual([
++      { phase: "connect", durationMs: 4, ok: true },
++      { phase: "applySchema", durationMs: 31, ok: true },
++    ]);
++    expect(error.elapsedMs).toBeGreaterThanOrEqual(TINY_BUDGET_MS);
++  });
++
++  it("surfaces the attribution in the tool result, where it survives the discarded console", async () => {
++    __setExtensionStoreBootFactoryForTesting(bootFactory(stallAfterReportingStages));
++
++    const error = await reject(__getStoreForTesting(PROJECT_ROOT, TINY_BUDGET_MS));
++    const result = buildStoreBootStallResult("fn_task_update", error);
++
++    const text = String(result.content[0]?.text);
++    /* STAS-299 req 3's shipped first line stays byte-compatible: the retry instruction and the
++       `X failed: <subject>` prefix are the contract agents were taught to act on. */
++    expect(text).toMatch(/^fn_task_update failed: fn extension TaskStore boot timed out after 20ms\n/);
++    expect(text).toContain("Retry this same call");
++    expect(text).toContain("Boot attribution: connect=4ms applySchema=31ms");
++
++    expect(result.details.attribution).toBe("connect=4ms applySchema=31ms");
++    expect(result.details.stages).toHaveLength(2);
++  });
++
++  it("marks a stage that did not finish as failed, so the failing stage stays visible", () => {
++    /* The FAILED marker is what distinguishes "applySchema is slow" from "applySchema hung" in a
++       postmortem, and it is rendered from the stage the factory itself flagged. */
++    expect(formatBootStages([
++      { phase: "connect", durationMs: 3, ok: true },
++      { phase: "applySchema", durationMs: 500, ok: false },
++    ])).toBe("connect=3ms applySchema=500ms FAILED");
++  });
++
++  it("keeps a genuine boot failure a real failure rather than laundering it into a stall", async () => {
++    __setExtensionStoreBootFactoryForTesting(bootFactory((options) => {
++      options.onBootStage?.({ phase: "connect", durationMs: 3, ok: true });
++      return Promise.reject(new Error("schema apply exploded"));
++    }));
++
++    const error = await reject(__getStoreForTesting(PROJECT_ROOT, TINY_BUDGET_MS)) as Error;
++
++    /* Invariant B (STAS-299): only running-out-of-time is a stall. A boot that failed for another
++       reason stays fail-closed, so stage reporting must not widen the transient class. */
++    expect(error).not.toBeInstanceOf(TaskStoreBootTransientError);
++    expect(error.message).toContain("schema apply exploded");
++  });
++
++  it("says nothing completed rather than inventing a stage when the factory reported none", () => {
++    expect(formatBootStages([])).toBe("no boot stage completed before the deadline");
++  });
++
++  it("carries the abandoned attempt's stages to a caller arriving inside the backoff window", async () => {
++    __setExtensionStoreBootFactoryForTesting(bootFactory(stallAfterReportingStages));
++
++    await reject(__getStoreForTesting(PROJECT_ROOT, TINY_BUDGET_MS));
++    const second = await reject(__getStoreForTesting(PROJECT_ROOT, TINY_BUDGET_MS)) as TaskStoreBootTransientError;
++
++    expect(second).toBeInstanceOf(TaskStoreBootTransientError);
++    expect(second.message).toContain("recently failed (cooldown");
++    expect(second.stages.map((stage) => stage.phase)).toEqual(["connect", "applySchema"]);
++  });
++
++  it("keeps connection material out of the attribution it prints", async () => {
++    __setExtensionStoreBootFactoryForTesting(bootFactory((options) => {
++      /* A real stall reason the pool can produce verbatim (RUFU-377), carrying a URL-shaped host. */
++      options.onBootStage?.({ phase: "connect", durationMs: 20_242, ok: false });
++      return Promise.reject(new Error(
++        "connection timed out after 20242ms at postgres://user:s3cret@db.internal:5432/fusion",
++      ));
++    }));
++
++    const error = await reject(__getStoreForTesting(PROJECT_ROOT, TINY_BUDGET_MS));
++    const attribution = formatBootStages((error as TaskStoreBootTransientError).stages);
++
++    expect(attribution).toBe("connect=20242ms FAILED");
++    expect(attribution).not.toMatch(/s3cret|postgres:\/\/|db\.internal/);
++  });
++});
++
++describe("extension teardown stops only the stores the extension opened (STAS-335 invariant)", () => {
++  /*
++  The boot-sharing work makes one TaskStore serve many tool calls, which puts a tempting bug within
++  reach: a session that merely JOINED a store it did not create running `session_shutdown` ->
++  closeCachedStores() and stopping the embedded postmaster underneath every other session. These two
++  tests are the cheap tripwire for that.
++  */
++  it("does not close a host-injected store, because the host owns its lifecycle", async () => {
++    const store = fakeStore();
++    const close = vi.fn();
++    (store as unknown as { close: () => void }).close = close;
++    setHostTaskStore(PROJECT_ROOT, store);
++
++    await closeCachedStores();
++
++    expect(close).not.toHaveBeenCalled();
++  });
++
++  it("does close a factory-owned store, because this process opened it", async () => {
++    const shutdown = vi.fn().mockResolvedValue(undefined);
++    __setCachedStoreForTesting(PROJECT_ROOT, fakeStore(), shutdown);
++
++    await closeCachedStores();
++
++    expect(shutdown).toHaveBeenCalledTimes(1);
++  });
++
++  it("serves a host-injected handle instead of racing it, and never owns it", async () => {
++    const hostStore = fakeStore();
++    const hostClose = vi.fn();
++    (hostStore as unknown as { close: () => void }).close = hostClose;
++    setHostTaskStore(PROJECT_ROOT, hostStore);
++
++    __setExtensionStoreBootFactoryForTesting(bootFactory(stallAfterReportingStages));
++    const served = await __getStoreForTesting(PROJECT_ROOT, TINY_BUDGET_MS);
++
++    /* The host handle answers immediately, so a slow factory boot cannot even become a stall here —
++       and because that handle was injected, this process must never be the one to close it. */
++    expect(served).toBe(hostStore);
++    await closeCachedStores();
++    expect(hostClose).not.toHaveBeenCalled();
++  });
++});
+diff --git a/packages/cli/src/extension.ts b/packages/cli/src/extension.ts
+index 405e61e9ac..0740903f33 100644
+--- a/packages/cli/src/extension.ts
++++ b/packages/cli/src/extension.ts
+@@ -3,10 +3,11 @@ import { randomUUID } from "node:crypto";
+ import { Type, type TSchema } from "typebox";
+ import { StringEnum } from "@earendil-works/pi-ai";
+ import * as fusionCore from "@fusion/core";
+ import {
+   type TaskStore,
++  type BootStage,
+   createTaskStoreForBackend,
+   drizzleSql,
+   AgentStore,
+   ReflectionStore,
+   isEphemeralAgent,
+@@ -333,25 +334,40 @@ same budget against the same stalled attempt.
+ interface StoreBootAttempt {
+   readonly promise: Promise<TaskStore>;
+   readonly startedAtMs: number;
+   /** Records the abandoned deadline, arms the shared backoff, and relabels the orphan's own outcome as late-*. */
+   reportDeadline(budgetMs: number): void;
++  /** The stages measured so far, so an abandoned waiter can report where the boot actually stood. */
++  stages(): readonly BootStage[];
+ }
+ 
++/**
++ * Why the last boot could not serve a caller, and how far it got. `stages`/`elapsedMs` exist so a
++ * later caller arriving inside the backoff window is told where the abandoned attempt stalled rather
++ * than only that it stalled (STAS-335).
++ */
++type StoreBootCooldownEntry = {
++  untilMs: number;
++  error: string;
++  fromDeadline?: boolean;
++  stages?: readonly BootStage[];
++  elapsedMs?: number;
++};
++
+ interface ExtensionStoreState {
+   readonly cache: Map<string, CachedStoreEntry>;
+   readonly bootInflight: Map<string, StoreBootAttempt>;
+-  readonly bootFailureCooldown: Map<string, { untilMs: number; error: string; fromDeadline?: boolean }>;
++  readonly bootFailureCooldown: Map<string, StoreBootCooldownEntry>;
+   readonly knownProjectRoots: Set<string>;
+ }
+ 
+ const extensionStoreStateKey = Symbol.for("@runfusion/fusion/extension-store-state");
+ const extensionStoreGlobal = globalThis as typeof globalThis & { [key: symbol]: ExtensionStoreState | undefined };
+ const extensionStoreState = extensionStoreGlobal[extensionStoreStateKey] ?? {
+   cache: new Map<string, CachedStoreEntry>(),
+   bootInflight: new Map<string, StoreBootAttempt>(),
+-  bootFailureCooldown: new Map<string, { untilMs: number; error: string; fromDeadline?: boolean }>(),
++  bootFailureCooldown: new Map<string, StoreBootCooldownEntry>(),
+   knownProjectRoots: new Set<string>(),
+ };
+ extensionStoreGlobal[extensionStoreStateKey] = extensionStoreState;
+ 
+ /** Cache stores per project root to avoid re-booting the backend on every tool call. */
+@@ -401,17 +417,37 @@ stays a real failure.
+ const BOOT_DEADLINE_CLASS = /timed out after \d+ms/;
+ 
+ export class TaskStoreBootTransientError extends Error {
+   readonly transient = true as const;
+   readonly bootTimeoutMs: number;
+-  constructor(message: string, bootTimeoutMs: number) {
++  /** Per-stage attribution measured up to the moment the waiter gave up; empty when nothing finished. */
++  readonly stages: readonly BootStage[];
++  /** How long the attempt had actually been running when the deadline fired. */
++  readonly elapsedMs: number;
++  constructor(message: string, bootTimeoutMs: number, stages: readonly BootStage[] = [], elapsedMs = 0) {
+     super(message);
+     this.name = "TaskStoreBootTransientError";
+     this.bootTimeoutMs = bootTimeoutMs;
++    this.stages = stages;
++    this.elapsedMs = elapsedMs;
+   }
+ }
+ 
++/*
++FNXC:TaskStoreBootStageAttribution 2026-10-16-04:30:
++STAS-335. The stall answer used to name only the budget it burned, which told an agent to retry but
++not what was slow, and told an operator nothing at all once the process-local console line was
++discarded. Naming the stages here is credential-safe by construction: phase labels and durations
++only — never SQL text, parameters, connection URLs, or the `detail` strings a driver may fill with
++server-side paths.
++*/
++/** One-line per-stage attribution for a stalled or failed store boot. */
++export function formatBootStages(stages: readonly BootStage[]): string {
++  if (stages.length === 0) return "no boot stage completed before the deadline";
++  return stages.map((stage) => `${stage.phase}=${stage.durationMs}ms${stage.ok ? "" : " FAILED"}`).join(" ");
++}
++
+ /** @internal Whether a store-boot rejection is a momentary stall the caller should retry. */
+ export function isTransientStoreBootFailure(error: unknown): boolean {
+   if (error instanceof TaskStoreBootTransientError) return true;
+   if (error instanceof Error && error.name === "TaskStoreBootTransientError") return true;
+   /*
+@@ -435,33 +471,50 @@ export function buildStoreBootStallResult(toolName: string, error: unknown): {
+     transient: "taskstore-boot-timeout";
+     retryable: true;
+     bootTimeoutMs: number;
+     tool: string;
+     error: string;
++    stages: readonly BootStage[];
++    elapsedMs: number;
++    /** Credential-safe per-stage attribution: phase labels and durations only. */
++    attribution: string;
+   };
+   isError: true;
+ } {
+   const message = error instanceof Error ? error.message : String(error);
+   const budgetMs = error instanceof TaskStoreBootTransientError ? error.bootTimeoutMs : EXTENSION_STORE_BOOT_TIMEOUT_MS;
++  /*
++  STAS-335: the stage record rides to the caller, not just to a console line the forked runtime drops.
++  A synthesized error with no measured attempt carries no attribution line rather than a fabricated one.
++  */
++  const stages = error instanceof TaskStoreBootTransientError ? error.stages : [];
++  const elapsedMs = error instanceof TaskStoreBootTransientError ? error.elapsedMs : 0;
++  const attribution = stages.length > 0 || elapsedMs > 0
++    ? `\nBoot attribution: ${formatBootStages(stages)} (elapsed ${elapsedMs}ms of the ${budgetMs}ms budget).`
++    : "";
+   return {
+     content: [
+       {
+         /* The shipped attribution contract stays intact: `X failed: ` plus the store-boot subject on
+            the first line — RUFU-377's KTD-2 keeps the wrapper prefix outside the store attribution —
+            and the retry instruction rides below it instead of replacing it. */
+         type: "text" as const,
+         text: `${toolName} failed: ${message}\n` +
+           `Retry this same call — the boot is still running in the background and the next call is served ` +
+-          `from it. Nothing was denied on policy grounds and nothing was lost; do not ask the operator.`,
++          `from it. Nothing was denied on policy grounds and nothing was lost; do not ask the operator.` +
++          attribution,
+       },
+     ],
+     details: {
+       transient: "taskstore-boot-timeout",
+       retryable: true,
+       bootTimeoutMs: budgetMs,
+       tool: toolName,
+       error: message,
++      stages,
++      elapsedMs,
++      attribution: formatBootStages(stages),
+     },
+     isError: true as const,
+   };
+ }
+ /*
+@@ -691,13 +744,20 @@ of this invariant is the "`[taskstore-boot]` is process-local console output, no
+ function reportStoreBoot(
+   projectRoot: string,
+   outcome: "ok" | "failed" | "deadline" | "late-success" | "late-failure" | "aborted",
+   durationMs: number,
+   detail?: string,
++  stages?: readonly BootStage[],
+ ): void {
+   console.warn(
+-    `[taskstore-boot] ${JSON.stringify({ projectRoot, outcome, durationMs, ...(detail ? { detail } : {}) })}`,
++    `[taskstore-boot] ${JSON.stringify({
++      projectRoot,
++      outcome,
++      durationMs,
++      ...(stages && stages.length > 0 ? { stages } : {}),
++      ...(detail ? { detail } : {}),
++    })}`,
+   );
+ }
+ 
+ /**
+  * Start the single boot attempt for a project root and keep it observable.
+@@ -708,10 +768,12 @@ function reportStoreBoot(
+  */
+ function startStoreBoot(projectRoot: string): StoreBootAttempt {
+   const startedAtMs = Date.now();
+   /* Set when a waiter reports the deadline; the orphan then labels itself late-* instead of ok. */
+   let deadlineReported = false;
++  /* STAS-335: the factory reports each stage as it lands, so an abandoned waiter can say how far it got. */
++  const stages: BootStage[] = [];
+ 
+   const promise = (async () => {
+     try {
+       /*
+       FNXC:TaskStoreLightBoot 2026-09-26-19:30 (RUFU-275):
+@@ -725,30 +787,35 @@ function startStoreBoot(projectRoot: string): StoreBootAttempt {
+       */
+       const boot = await extensionStoreBootFactory({
+         rootDir: projectRoot,
+         skipArchiveReintegrationOnInit: true,
+         skipPatchnodeReconcileOnInit: true,
++        onBootStage: (stage) => {
++          stages.push(stage);
++        },
+       });
+       storeBootFailureCooldown.delete(projectRoot);
+       // Do not overwrite a host-injected external store that landed while we were booting.
+       const raced = storeCache.get(projectRoot);
+       if (raced?.external) {
+         await boot.shutdown().catch(() => undefined);
+-        reportStoreBoot(projectRoot, deadlineReported ? "late-success" : "ok", Date.now() - startedAtMs, "host-injected store served instead");
++        reportStoreBoot(projectRoot, deadlineReported ? "late-success" : "ok", Date.now() - startedAtMs, "host-injected store served instead", stages);
+         return raced.store;
+       }
+       /* FNXC:TaskLifecycleTools 2026-08-15-06:35: Agent tools intentionally install the protective baseline with no force path; only a human CLI invocation can override live removal. */
+       storeCache.set(projectRoot, { store: boot.taskStore, shutdown: boot.shutdown });
+-      reportStoreBoot(projectRoot, deadlineReported ? "late-success" : "ok", Date.now() - startedAtMs);
++      reportStoreBoot(projectRoot, deadlineReported ? "late-success" : "ok", Date.now() - startedAtMs, undefined, stages);
+       return boot.taskStore;
+     } catch (error) {
+       const message = error instanceof Error ? error.message : String(error);
+       storeBootFailureCooldown.set(projectRoot, {
+         untilMs: Date.now() + BOOT_FAILURE_COOLDOWN_MS,
+         error: message,
++        stages,
++        elapsedMs: Date.now() - startedAtMs,
+       });
+-      reportStoreBoot(projectRoot, deadlineReported ? "late-failure" : "failed", Date.now() - startedAtMs, message);
++      reportStoreBoot(projectRoot, deadlineReported ? "late-failure" : "failed", Date.now() - startedAtMs, message, stages);
+       throw error;
+     } finally {
+       storeBootInflight.delete(projectRoot);
+     }
+   })();
+@@ -756,20 +823,23 @@ function startStoreBoot(projectRoot: string): StoreBootAttempt {
+   void promise.catch(() => undefined);
+ 
+   return {
+     promise,
+     startedAtMs,
++    stages: () => stages,
+     reportDeadline(budgetMs: number): void {
+       deadlineReported = true;
+       const elapsedMs = Date.now() - startedAtMs;
+       const detail = `abandoned after ${elapsedMs}ms (budget ${budgetMs}ms); orphan boot continues and may still populate the cache`;
+       storeBootFailureCooldown.set(projectRoot, {
+         untilMs: Date.now() + BOOT_FAILURE_COOLDOWN_MS,
+         error: detail,
+         fromDeadline: true,
++        stages,
++        elapsedMs,
+       });
+-      reportStoreBoot(projectRoot, "deadline", elapsedMs, detail);
++      reportStoreBoot(projectRoot, "deadline", elapsedMs, detail, stages);
+     },
+   };
+ }
+ 
+ async function getStore(
+@@ -783,12 +853,20 @@ async function getStore(
+ 
+   const cooldown = storeBootFailureCooldown.get(projectRoot);
+   if (cooldown && Date.now() < cooldown.untilMs) {
+     const cooldownMessage = `fn extension TaskStore boot recently failed (cooldown ${BOOT_FAILURE_COOLDOWN_MS}ms): ${cooldown.error}`;
+     /* The deadline's own backoff entry means the orphan boot is still in flight and will serve the
+-       next caller, so this is the same stall, not a new failure. */
+-    if (cooldown.fromDeadline) throw new TaskStoreBootTransientError(cooldownMessage, EXTENSION_STORE_BOOT_TIMEOUT_MS);
++       next caller, so this is the same stall, not a new failure. The abandoned attempt's stage record
++       rides along, so the caller sees where that attempt stalled rather than only that it stalled. */
++    if (cooldown.fromDeadline) {
++      throw new TaskStoreBootTransientError(
++        cooldownMessage,
++        EXTENSION_STORE_BOOT_TIMEOUT_MS,
++        cooldown.stages ?? [],
++        cooldown.elapsedMs ?? 0,
++      );
++    }
+     throw new Error(cooldownMessage);
+   }
+ 
+   const effectiveSignal = signal ?? extensionToolSignal.getStore();
+ 
+@@ -815,11 +893,16 @@ async function getStore(
+     const message = error instanceof Error ? error.message : String(error);
+     if (isAbortError(error)) {
+       reportStoreBoot(projectRoot, "aborted", Date.now() - attempt.startedAtMs);
+     } else if (BOOT_DEADLINE_CLASS.test(message)) {
+       attempt.reportDeadline(bootTimeoutMs);
+-      throw new TaskStoreBootTransientError(message, bootTimeoutMs);
++      throw new TaskStoreBootTransientError(
++        message,
++        bootTimeoutMs,
++        attempt.stages(),
++        Date.now() - attempt.startedAtMs,
++      );
+     }
+     throw error;
+   }
+ }
+ 
+diff --git a/packages/core/src/index.ts b/packages/core/src/index.ts
+index d311eb2c29..252dcf7ba6 100644
+--- a/packages/core/src/index.ts
++++ b/packages/core/src/index.ts
+@@ -3358,10 +3358,11 @@ export type {
+   StampMigratedProjectRowsInput,
+   StampMigratedProjectRowsResult,
+   ProjectPartitionOwnership,
+   ProjectPartitionRekeyReason,
+   BackendBootResult,
++  BootStage,
+   CreateTaskStoreForBackendOptions,
+   LoadedPluginSchemaContract,
+ } from "./postgres/index.js";
+ 
+ // FNXC:RuntimeSatelliteAsync 2026-06-24-13:30:
+diff --git a/packages/core/src/postgres/index.ts b/packages/core/src/postgres/index.ts
+index 701d0aec89..6b81475f8b 100644
+--- a/packages/core/src/postgres/index.ts
++++ b/packages/core/src/postgres/index.ts
+@@ -249,10 +249,11 @@ export {
+   TEST_MODE_ENV,
+   TEST_DATABASE_URL_ENV,
+   TEST_DATABASE_MIGRATION_URL_ENV,
+   type BackendBootResult,
+   type CentralBackendLayerResult,
++  type BootStage,
+   type CreateTaskStoreForBackendOptions,
+ } from "./startup-factory.js";
+ 
+ /**
+  * FNXC:PostgresBackup 2026-06-24-21:00:
+diff --git a/packages/core/src/postgres/startup-factory.ts b/packages/core/src/postgres/startup-factory.ts
+index e0484fc432..03c7e7e682 100644
+--- a/packages/core/src/postgres/startup-factory.ts
++++ b/packages/core/src/postgres/startup-factory.ts
+@@ -385,11 +385,11 @@ async function isEmptyNonUtf8Cluster(db: PostgresJsDatabase<Record<string, never
+   }
+   return true;
+ }
+ 
+ async function bootSchemaBackend(
+-  options: Pick<CreateTaskStoreForBackendOptions, "env" | "backend" | "embeddedPgRequested" | "embeddedDataDir" | "poolMax" | "globalSettingsDir">,
++  options: Pick<CreateTaskStoreForBackendOptions, "env" | "backend" | "embeddedPgRequested" | "embeddedDataDir" | "poolMax" | "globalSettingsDir" | "onBootStage">,
+   bypassProjectIsolation = false,
+ ): Promise<SchemaBackendBootResult> {
+   let joinedRetryAttempt = 0;
+   for (;;) {
+     try {
+@@ -429,11 +429,11 @@ async function bootSchemaBackend(
+     }
+   }
+ }
+ 
+ async function bootSchemaBackendOnce(
+-  options: Pick<CreateTaskStoreForBackendOptions, "env" | "backend" | "embeddedPgRequested" | "embeddedDataDir" | "poolMax" | "globalSettingsDir">,
++  options: Pick<CreateTaskStoreForBackendOptions, "env" | "backend" | "embeddedPgRequested" | "embeddedDataDir" | "poolMax" | "globalSettingsDir" | "onBootStage">,
+   bypassProjectIsolation = false,
+ ): Promise<SchemaBackendBootResult> {
+   const env = options.env ?? process.env;
+   const backend = options.backend ?? resolveBackend(env);
+   const embeddedRequested = options.embeddedPgRequested ?? isEmbeddedPgRequested(env);
+@@ -524,13 +524,15 @@ async function bootSchemaBackendOnce(
+     pool that cannot connect waits on the server, a schema apply waits on the cluster-wide
+     advisory lock — and one combined number could not tell those apart. Measured separately so
+     a future stall names its own phase.
+     */
+     log.log(`startup phase backend.connect: ${Date.now() - openT0}ms`);
++    options.onBootStage?.({ phase: "connect", durationMs: Date.now() - openT0, ok: true });
+     const applyT0 = Date.now();
+     await applySchemaBaseline(connections.migration);
+     log.log(`startup phase backend.applySchema: ${Date.now() - applyT0}ms`);
++    options.onBootStage?.({ phase: "applySchema", durationMs: Date.now() - applyT0, ok: true });
+     return {
+       backend: resolvedBackend,
+       connections,
+       embeddedLifecycle,
+       embeddedRuntimeLease,
+@@ -543,10 +545,11 @@ async function bootSchemaBackendOnce(
+     STAS-251. Until now only the successful path was timed, so every boot that ended in a
+     throw left no elapsed time and no reason in the log — which is exactly the boot an operator
+     has to diagnose. Whether the pool or the schema apply is on screen is already known here.
+     */
+     const failedPhase = connections ? "applySchema" : "connect";
++    options.onBootStage?.({ phase: failedPhase, durationMs: Date.now() - openT0, ok: false });
+     log.warn(`startup-factory: backend.${failedPhase} FAILED after ${Date.now() - openT0}ms: ${describeErrorChain(error)}`);
+     /*
+     FNXC:PostgresEmbedded 2026-07-18-01:10:
+     Classify the #2286 non-UTF-8-cluster state while the connection is still
+     open (the proof queries need it), then tear down before signalling the
+@@ -754,10 +757,27 @@ export async function createCentralBackendLayer(
+ }
+ 
+ /**
+  * Options for {@link createTaskStoreForBackend}.
+  */
++/*
++FNXC:TaskStoreBootStageAttribution 2026-10-16-04:30:
++STAS-335. Every boot stage below was ALREADY measured, but each number left the process only as
++`log.log` console output. For an agent session that channel is discarded — the extension is forked
++with `silent: true` and IPC alone is forwarded (packages/engine/src/runtimes/child-process-runtime.ts),
++recorded as the durable invariant in docs/architecture.md — so a store open that burned its 30 s
++budget could never say which stage ate it. This observer hands the identical numbers to the caller
++that owns the budget, which is what lets the boot report and the typed error carry per-stage
++attribution out to the agent instead of leaving it in a console nobody retains.
++*/
++/** One measured boot stage: which phase, how long it took, and whether it completed. */
++export interface BootStage {
++  readonly phase: string;
++  readonly durationMs: number;
++  readonly ok: boolean;
++}
++
+ export interface CreateTaskStoreForBackendOptions {
+   /**
+    * The project working directory (rootDir) the TaskStore is scoped to. This
+    * is the same value a legacy `new TaskStore(rootDir)` call would receive.
+    * Required when `projectId` is omitted; ignored when `projectId` is set
+@@ -815,10 +835,12 @@ export interface CreateTaskStoreForBackendOptions {
+   port and needs the structured migration progress stream to surface it in the
+   browser. This observer receives the same MigrationProgressEvent stream that is
+   logged to the terminal; it must never throw (fire-and-forget UI plumbing).
+   */
+   readonly onMigrationProgress?: (event: import("./sqlite-migrator.js").MigrationProgressEvent) => void;
++  /** Per-stage boot attribution; the caller owns the collected record. Absent = no observer. */
++  readonly onBootStage?: (stage: BootStage) => void;
+ }
+ 
+ /**
+  * Decide whether the factory should attempt a PostgreSQL boot for the given
+  * environment. PostgreSQL is the only runtime backend, so this compatibility
+@@ -907,10 +929,11 @@ export async function createTaskStoreForBackend(
+   let boot: SchemaBackendBootResult;
+   const schemaT0 = Date.now();
+   try {
+     boot = await bootSchemaBackend(effectiveOptions);
+     log.log(`startup phase backend.schemaBackend: ${Date.now() - schemaT0}ms`);
++  options.onBootStage?.({ phase: "schemaBackend", durationMs: Date.now() - schemaT0, ok: true });
+   } catch (err) {
+     log.warn(`startup-factory: backend.schemaBackend FAILED after ${Date.now() - schemaT0}ms: ${describeErrorChain(err)}`);
+     /*
+     FNXC:PostgresEmbedded 2026-08-20-01:11:
+     Issue #3489 uses the same outer boot mapper as #2286's encoding guidance.
+@@ -1308,10 +1331,11 @@ export async function createTaskStoreForBackend(
+         skipArchiveReintegration: options.skipArchiveReintegrationOnInit,
+         skipPatchnodeReconcile: options.skipPatchnodeReconcileOnInit,
+       });
+     }
+     log.log(`startup phase backend.taskStore.construct: ${Date.now() - constructT0}ms`);
++    options.onBootStage?.({ phase: "taskStore.construct", durationMs: Date.now() - constructT0, ok: true });
+   } catch (err) {
+     log.warn(`startup-factory: backend.taskStore.construct FAILED after ${Date.now() - constructT0}ms: ${describeErrorChain(err)}`);
+     await asyncLayer.close().catch(() => undefined);
+     await stopEmbeddedRuntime(
+       embeddedLifecycle,
+@@ -1334,11 +1358,13 @@ export async function createTaskStoreForBackend(
+   await (await import("../backup/backup-settings-migration.js")).migrateBackupSettingsToGlobalOnce(
+     taskStore.getAsyncLayer(),
+     taskStore.getGlobalSettingsStore(),
+   );
+   log.log(`startup phase backend.backupSettingsMigration: ${Date.now() - backupMigrationT0}ms`);
++  options.onBootStage?.({ phase: "backupSettingsMigration", durationMs: Date.now() - backupMigrationT0, ok: true });
+   log.log(`startup phase backend.factory.total: ${Date.now() - factoryT0}ms`);
++  options.onBootStage?.({ phase: "factory.total", durationMs: Date.now() - factoryT0, ok: true });
+ 
+   /*
+   FNXC:PluginPostgresContract 2026-07-14-18:32:
+   Plugin DDL uses a one-shot administrative pool created only after a validated
+   declarative plan arrives. The TaskStore holds the executor capability, not
+diff --git a/packages/engine/src/__tests__/read-path-store-failure.test.ts b/packages/engine/src/__tests__/read-path-store-failure.test.ts
+index 911ffc032d..9fd8dea217 100644
+--- a/packages/engine/src/__tests__/read-path-store-failure.test.ts
++++ b/packages/engine/src/__tests__/read-path-store-failure.test.ts
+@@ -12,12 +12,12 @@ teach agents to retry a refusal and to doubt an empty inbox, which is how STAS-2
+ 
+ The logging consequence is asserted through the real `AgentLogger.onToolEnd` seam, the same way STAS-258 pins the
+ write lane, because `isError` exists precisely to move that row's type.
+ */
+ import { describe, expect, it, vi } from "vitest";
+-import { TaskNotFoundError, type Message, type MessageStore, type TaskStore } from "@fusion/core";
+-import { createReadMessagesTool, createTaskLogsReadTool, createTaskShowTool } from "../agent-tools.js";
++import { TaskNotFoundError, type AgentStore, type Message, type MessageStore, type TaskStore } from "@fusion/core";
++import { createListAgentsTool, createReadMessagesTool, createTaskLogsReadTool, createTaskShowTool } from "../agent-tools.js";
+ import { AgentLogger } from "../agents/agent-logger.js";
+ import { STORE_RETRY_GUIDANCE, storeErrorResult } from "../tool-store-errors.js";
+ 
+ const SENTINEL = "STAS-259 sentinel: inbox read refused";
+ const AGENT_ID = "agent-259";
+@@ -152,5 +152,57 @@ describe("read-path sites that must keep answering without the flag (STAS-259 pi
+     expect(unreachableResult.isError).toBe(true);
+     expect(unreachableResult.details?.code).toBe(SHARED_CODE);
+     expect(textOf(unreachableResult)).toContain(STORE_RETRY_GUIDANCE);
+   });
+ });
++
++/*
++STAS-335: the agent-roster read had no catch at all, so the failure an executor actually saw was the
++Drizzle wrapper — the whole SELECT re-printed, the bound project id, and SQLSTATE 42P01 buried in the
++`cause` — thrown past the tool boundary as a bare echo. The pins below hold the two halves: the refused
++roster arrives in the shared shape naming table + SQLSTATE + operation=read, and a roster that is
++simply empty stays an ordinary answer.
++*/
++
++/** The failure the driver really throws: a wrapper whose message is the statement and whose cause carries the SQLSTATE. */
++function refusedRosterRead(): Error {
++  const query = `select "id", "name" from "project"."agents" where "project"."agents"."project_id" = $1`;
++  const error = new Error(`${SENTINEL}: Failed query: ${query}`) as Error & { query: string; cause: { code: string } };
++  error.query = query;
++  error.cause = { code: "42P01" };
++  return error;
++}
++
++describe("fn_list_agents reports a refused roster read as an attributed tool error (STAS-335)", () => {
++  it("names the table, the SQLSTATE and operation=read instead of throwing the raw query", async () => {
++    const store = { listAgents: vi.fn(() => Promise.reject(refusedRosterRead())) } as unknown as AgentStore;
++
++    const result = (await createListAgentsTool(store).execute("call-1", {})) as ToolResult;
++
++    expect(result.isError).toBe(true);
++    expect(result.details?.code).toBe(SHARED_CODE);
++    expect(result.details?.operation).toBe("read");
++    expect(result.details?.table).toBe("agents");
++    expect(result.details?.sqlState).toBe("42P01");
++    const text = textOf(result);
++    expect(text).toContain(SENTINEL);
++    expect(text).toContain(STORE_RETRY_GUIDANCE);
++    /* A roster the store refused is not a board with no agents. */
++    expect(text).not.toMatch(/no agents found/i);
++  });
++
++  it("keeps an empty roster and a populated roster unflagged", async () => {
++    const empty = { listAgents: vi.fn(async () => []) } as unknown as AgentStore;
++    const emptyResult = (await createListAgentsTool(empty).execute("call-1", {})) as ToolResult;
++    expect(textOf(emptyResult)).toContain("No agents found");
++    expect(emptyResult.isError).toBeUndefined();
++
++    const listed = {
++      listAgents: vi.fn(async () => [
++        { id: "agent-335", name: "Executor", role: "executor", state: "idle", createdAt: "", updatedAt: "" },
++      ]),
++    } as unknown as AgentStore;
++    const listedResult = (await createListAgentsTool(listed).execute("call-2", {})) as ToolResult;
++    expect(textOf(listedResult)).toContain("agent-335");
++    expect(listedResult.isError).toBeUndefined();
++  });
++});
+diff --git a/packages/engine/src/__tests__/tool-store-errors.test.ts b/packages/engine/src/__tests__/tool-store-errors.test.ts
+new file mode 100644
+index 0000000000..6eda4d0f70
+--- /dev/null
++++ b/packages/engine/src/__tests__/tool-store-errors.test.ts
+@@ -0,0 +1,139 @@
++import { describe, expect, it } from "vitest";
++import { describeStoreQueryFailure, storeErrorResult, storeWriteFailure } from "../tool-store-errors.js";
++
++/*
++FNXC:StoreQueryFailureAttribution 2026-10-16-04:30 (STAS-335):
++The board-read failure an agent reported was the entire SELECT and no reason:
++`Failed query: select "id","name",… from "project"."agents" where project_id = $1 order by …`.
++Drizzle's wrapper keeps the structured facts (`query`, `cause.code`) but its message throws them away
++and appends the bound parameters, which are user content. These tests pin both halves of the fix: the
++attribution is recovered, and the parameters never reach an agent-visible string.
++
++The fixture below mirrors drizzle-orm 0.45.2 `errors.js` exactly — `constructor(query, params, cause)`,
++fields `query`/`params`/`cause`, and the message text that interpolates the parameters. It is a fixture
++rather than the class because drizzle-orm is a core dependency and this package must not gain one to
++build an error. `describeStoreQueryFailure` reads the fields structurally rather than by `instanceof`,
++so the field set is the whole contract, and the last test below pins the fixture's message against the
++leak shape it is meant to survive.
++*/
++class QueryFailureFixture extends Error {
++  constructor(readonly query: string, readonly params: unknown[], override cause: unknown) {
++    super(`Failed query: ${query}\nparams: ${JSON.stringify(params)}`);
++    this.name = "DrizzleQueryError";
++  }
++}
++
++/** The real wrapper shape, built the way drizzle builds it around a driver error. */
++function drizzleFailure(params: unknown[] = ["proj-1", 50]): QueryFailureFixture {
++  const cause = Object.assign(new Error('duplicate key value violates unique constraint "agents_pkey"'), {
++    code: "23505",
++  });
++  return new QueryFailureFixture(
++    'select "id","name","state" from "project"."agents" where project_id = $1 limit $2',
++    params,
++    cause,
++  );
++}
++
++describe("store query failures are attributed without repeating them (STAS-335)", () => {
++  it("recovers table, statement and SQLSTATE from a real Drizzle query failure", () => {
++    expect(describeStoreQueryFailure(drizzleFailure())).toEqual({
++      table: "agents",
++      statement: "select",
++      sqlState: "23505",
++    });
++  });
++
++  it("attributes an unqualified statement too, since not every query names a schema", () => {
++    const cause = Object.assign(new Error("relation does not exist"), { code: "42P01" });
++    const failure = new QueryFailureFixture('select "id" from "tasks" where id = $1', ["FN-1"], cause);
++
++    expect(describeStoreQueryFailure(failure)).toEqual({
++      table: "tasks",
++      statement: "select",
++      sqlState: "42P01",
++    });
++  });
++
++  it("reports nothing for an error that never reached a query", () => {
++    expect(describeStoreQueryFailure(new Error("TaskStore boot timed out after 30000ms"))).toEqual({});
++  });
++
++  it("keeps the fixture faithful to the wrapper message that leaks parameters", () => {
++    /* If this assertion ever breaks, the fixture above no longer models the real error and every
++       credential test in this file stops proving anything. */
++    expect(drizzleFailure(["proj-1", "leak-canary"]).message).toBe(
++      'Failed query: select "id","name","state" from "project"."agents" where project_id = $1 limit $2\n' +
++        'params: ["proj-1","leak-canary"]',
++    );
++  });
++
++  it("names a write's target table and statement", () => {
++    const cause = Object.assign(new Error(" deadlock detected"), { code: "40P01" });
++    const failure = new QueryFailureFixture(
++      'update "project"."tasks" set "status" = $1 where "id" = $2',
++      ["in-progress", "FN-9"],
++      cause,
++    );
++
++    expect(describeStoreQueryFailure(failure)).toEqual({
++      table: "tasks",
++      statement: "update",
++      sqlState: "40P01",
++    });
++  });
++});
++
++describe("a store failure never carries bound parameter values to an agent (STAS-335)", () => {
++  /* The parameters are the user's own content — a task description, a token a task stored. The
++     wrapper message interpolates them, so credential safety here is a property of what WE print,
++     and it has to hold for both the readable text and the structured details. */
++  const SECRET = "sk-owner-token-leak-canary";
++
++  it("keeps parameters out of the result text and details", () => {
++    const result = storeErrorResult("Task update", drizzleFailure(["proj-1", SECRET]));
++    const text = String(result.content[0]?.text);
++
++    expect(text).not.toContain(SECRET);
++    expect(JSON.stringify(result.details)).not.toContain(SECRET);
++  });
++
++  it("keeps parameters out of the write path as well", () => {
++    const result = storeWriteFailure("Task update", drizzleFailure([SECRET]));
++
++    expect(String(result.content[0]?.text)).not.toContain(SECRET);
++    expect(JSON.stringify(result.details)).not.toContain(SECRET);
++  });
++
++  it("adds the attribution without widening what the message repeats", () => {
++    const result = storeErrorResult("Board read", drizzleFailure());
++    const text = String(result.content[0]?.text);
++
++    /* The failure keeps its first line — the statement is diagnostics, not a credential — while the
++       structured attribution is what makes it sayable which table and which failure class. The
++       parameters on the wrapper's second line are the part that must never appear. */
++    expect(text).toContain("table=agents");
++    expect(text).toContain("sqlState=23505");
++    expect(text.split("\n").length).toBe(1);
++  });
++});
++
++describe("a read failure is distinguishable from a write failure (STAS-335)", () => {
++  it("labels a read as a read", () => {
++    const result = storeErrorResult("Board read", new Error("connection terminated"));
++
++    expect(result.details).toMatchObject({ code: "STORE_UNAVAILABLE", operation: "read" });
++  });
++
++  it("labels a write as a write, so an agent knows the board did not change", () => {
++    const result = storeWriteFailure("Task update", new Error("connection terminated"));
++
++    expect(result.details).toMatchObject({ code: "STORE_UNAVAILABLE", operation: "write" });
++  });
++
++  it("carries the recovered attribution into details for machine handling", () => {
++    const result = storeWriteFailure("Task update", drizzleFailure());
++
++    expect(result.details).toMatchObject({ operation: "write", table: "agents", sqlState: "23505" });
++  });
++});
+diff --git a/packages/engine/src/agent-tools.ts b/packages/engine/src/agent-tools.ts
+index cab504cc1e..3e482091f5 100644
+--- a/packages/engine/src/agent-tools.ts
++++ b/packages/engine/src/agent-tools.ts
+@@ -11,11 +11,11 @@ import { appendFile, mkdir, readFile, readdir, realpath, stat, writeFile } from
+ import { existsSync } from "node:fs";
+ import { createHash, randomUUID } from "node:crypto";
+ import { tmpdir } from "node:os";
+ import { extname, isAbsolute, join, relative, resolve, sep } from "node:path";
+ import * as fusionCore from "@fusion/core";
+-import type { AgentState, AgentCapability, AgentUpdateInput, AgentLogEntry, Artifact, ArtifactCreateInput, ArtifactWithTask, Task, TaskDocument, TaskDocumentCreateInput, TaskStore, RunMutationContext, MessageStore, Message, SourceType, Settings, ResearchRun, ResearchRunStatus, TaskCreateInput, ReflectionStore, ApprovalRequestStore, ProjectSettings, ChatStore, WorkflowSettingDefinition, GoalStatus, WorkflowIrNode, IdeationCandidate, MissionWithHierarchy, DbTransaction } from "@fusion/core";
++import type { Agent, AgentState, AgentCapability, AgentUpdateInput, AgentLogEntry, Artifact, ArtifactCreateInput, ArtifactWithTask, Task, TaskDocument, TaskDocumentCreateInput, TaskStore, RunMutationContext, MessageStore, Message, SourceType, Settings, ResearchRun, ResearchRunStatus, TaskCreateInput, ReflectionStore, ApprovalRequestStore, ProjectSettings, ChatStore, WorkflowSettingDefinition, GoalStatus, WorkflowIrNode, IdeationCandidate, MissionWithHierarchy, DbTransaction } from "@fusion/core";
+ import { listTraits, isBuiltinWorkflowId, isTaskNotFoundError, renderTaskCommentSection, AgentStore, validateColumnAgentBindings, ColumnAgentBindingError, stripApprovalBypassFlags, WorkflowSettingRejectionError, resolveEffectiveSettingsById, resolveWorkflowIrById, findOrphanedSettingValues, BUILTIN_WORKFLOW_SETTINGS, MAX_TASK_LIST_TEXT_CHARS, TASK_BOARD_READ_CAVEAT, formatCurrentTaskLine, normalizeWorkflowIcon, parseWorkflowIr, WorkflowIrError, assertColumnTraitsValid, ColumnTraitValidationError } from "@fusion/core";
+ import { promoteHeldTask } from "./execution/hold-release.js";
+ import { stepLifecycleNoopResult, storeErrorResult, storeWriteFailure } from "./tool-store-errors.js";
+ import { computeCrossParentDiagnosticClaim, computeCrossParentDiagnosticClaimId, computeParentIntentClaimId, DASHBOARD_USER_ID, dailyMemoryPath, ensureOpenClawMemoryFiles, evaluateImplementationTaskBind, extractAgentProvisioningRequest, findSameAgentDuplicates, getMemoryBackendCapabilities, getProjectMemory, isEphemeralAgent, memoryLongTermPath, normalizeMessageParticipant, reconcileDeterministicDuplicate, resolveAgentProvisioningPolicy, resolveMemoryBackend, resolveMemorySearchTopic, resolveResearchSettings, resolveTaskGithubTracking, runDeterministicDuplicateGuard, scheduleQmdProjectMemoryRefresh, searchProjectMemory, shouldSkipBackgroundQmdRefresh } from "@fusion/core";
+ import { formatLongTermMemoryAppendReport, formatMemorySize, measureLongTermMemory, type LongTermMemoryScope } from "./memory/memory-budget.js";
+@@ -5657,11 +5657,21 @@ export function createListAgentsTool(agentStore: AgentStore): ToolDefinition {
+       const filter: { role?: AgentCapability; state?: AgentState; includeEphemeral?: boolean } = {};
+       if (params.role) filter.role = params.role as AgentCapability;
+       if (params.state) filter.state = params.state as AgentState;
+       if (params.includeEphemeral !== undefined) filter.includeEphemeral = params.includeEphemeral;
+ 
+-      const agents = await agentStore.listAgents(filter);
++      let agents: Agent[];
++      try {
++        agents = await agentStore.listAgents(filter);
++      } catch (error) {
++        /*
++        A roster the store refused to answer is not an empty roster: an uncaught throw here reached the
++        agent as the whole SELECT statement plus a bare SQLSTATE and no reason (STAS-335, live 42P01).
++        The result says which read failed and names table + SQLSTATE, so the card log alone is diagnosable.
++        */
++        return storeErrorResult("the agent list", error);
++      }
+ 
+       if (agents.length === 0) {
+         return {
+           content: [{ type: "text" as const, text: "No agents found matching the specified filters." }],
+           details: {},
+diff --git a/packages/engine/src/tool-store-errors.ts b/packages/engine/src/tool-store-errors.ts
+index 5e1ab45871..76311310fa 100644
+--- a/packages/engine/src/tool-store-errors.ts
++++ b/packages/engine/src/tool-store-errors.ts
+@@ -21,22 +21,90 @@ export const STORE_RETRY_GUIDANCE =
+ /* One line of failure text — a stack trace is noise to a model, not detail. */
+ function reason(error: unknown): string {
+   return (error instanceof Error ? error.message : String(error)).split("\n")[0];
+ }
+ 
++/*
++FNXC:StoreQueryFailureAttribution 2026-10-16-04:30:
++STAS-335. The board-read failure an agent actually saw was `Failed query: select "id","name",…
++from project.agents where project_id = $1 order by …` — the whole statement and nothing about why.
++That shape came from a query that ERRORED after the store had already booted, so it never reached the
++boot seam's typed transient error and left the tool with no table, no SQLSTATE, and no way to tell a
++read outage from a write outage. Measured against the live board the same query runs in 0.168 ms over
++9 heap blocks, so cost was never the story — attribution was.
++
++Drizzle wraps driver failures in `DrizzleQueryError`, which carries `query`, `params` and the original
++`cause`. This reads `query` and `cause` STRUCTURALLY and deliberately never reads `params`: the bound
++values are user content (task descriptions, credentials a task stored) and must not be copied into a
++tool result or an agent log. Reading `cause.code` is what recovers the SQLSTATE the message throws away.
++*/
++/** What a store query failure can be attributed to, without repeating it. */
++export interface StoreQueryAttribution {
++  readonly table?: string;
++  readonly statement?: string;
++  readonly sqlState?: string;
++}
++
++/*
++Identifiers are matched after the quoting is removed, so one pattern covers `"project"."agents"`,
++`"tasks"` and `project.agents` without quote-pairing backreferences. An earlier two-optional-group form
++backtracked and returned `"s"` for `"tasks"` — a confidently wrong table name, which is exactly the
++failure mode this attribution exists to remove.
++*/
++const QUERY_TABLE = /\b(?:from|join|into|update)\s+([a-z_][a-z0-9_]*)(?:\.([a-z_][a-z0-9_]*))?/i;
++const STATEMENT_KIND = /^\s*"?([a-z]+)\b/i;
++
++/** Extract table / statement kind / SQLSTATE from a store failure. Parameter values are never read. */
++export function describeStoreQueryFailure(error: unknown): StoreQueryAttribution {
++  const query = (error as { query?: unknown } | null)?.query;
++  if (typeof query !== "string") return {};
++  const statement = STATEMENT_KIND.exec(query)?.[1]?.toLowerCase();
++  const match = QUERY_TABLE.exec(query.replaceAll(`"`, ""));
++  // A qualified `schema.table` names the table in group 2; a bare name is group 1.
++  const table = match?.[2] ?? match?.[1];
++  const cause = (error as { cause?: { code?: unknown } } | null)?.cause;
++  const sqlState = typeof cause?.code === "string" ? cause.code : undefined;
++  return {
++    ...(table ? { table } : {}),
++    ...(statement ? { statement } : {}),
++    ...(sqlState ? { sqlState } : {}),
++  };
++}
++
++/** The short suffix that names the attribution, or nothing when the failure carried no query. */
++function attributionNote(attribution: StoreQueryAttribution): string {
++  const parts = [
++    attribution.statement ? `statement=${attribution.statement}` : "",
++    attribution.table ? `table=${attribution.table}` : "",
++    attribution.sqlState ? `sqlState=${attribution.sqlState}` : "",
++  ].filter(Boolean);
++  return parts.length > 0 ? `[${parts.join(" ")}] ` : "";
++}
++
+ /**
+  * The store failed a call. Not-found is excluded on purpose: a card that is genuinely absent
+  * is a fact about the board, and reporting it in this shape would teach agents that an
+  * outage made their work disappear.
++ *
++ * `operation` is explicit rather than inferred, because an agent must be able to tell the two
++ * classes apart from the result alone: a read that failed lost nothing, a write that failed left
++ * the board unchanged.
+  */
+-export function storeErrorResult(what: string, error: unknown) {
++export function storeErrorResult(what: string, error: unknown, operation: "read" | "write" = "read") {
++  const attribution = describeStoreQueryFailure(error);
+   return {
+     content: [{
+       type: "text" as const,
+-      text: `ERROR: ${what} did not reach the task store: ${reason(error)} ${STORE_RETRY_GUIDANCE}`,
++      text: `ERROR: ${what} did not reach the task store: ${reason(error)} ${attributionNote(attribution)}${STORE_RETRY_GUIDANCE}`,
+     }],
+-    details: { code: "STORE_UNAVAILABLE" },
++    details: {
++      code: "STORE_UNAVAILABLE",
++      operation,
++      ...(attribution.table ? { table: attribution.table } : {}),
++      ...(attribution.statement ? { statement: attribution.statement } : {}),
++      ...(attribution.sqlState ? { sqlState: attribution.sqlState } : {}),
++    },
+     isError: true,
+   };
+ }
+ 
+ /**
+@@ -52,11 +120,11 @@ export function storeWriteFailure(what: string, error: unknown) {
+       content: [{ type: "text" as const, text: `ERROR: ${what} refused by the task store: ${detail}` }],
+       details: { code: "STORE_REFUSAL" },
+       isError: true,
+     };
+   }
+-  return storeErrorResult(what, error);
++  return storeErrorResult(what, error, "write");
+ }
+ 
+ /** How this repo's stores phrase a refusal on the merits: the row is absent, or the write is not allowed there. */
+ const DOMAIN_PHRASE = / (not found|does not exist|read-only)$/i;
+ 
