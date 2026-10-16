@@ -814,6 +814,16 @@ everything before it is captured in git history (`git log`), not here.
   Two CI guards hold the line: one fails if any supported agent's channel loses
   the block, the other parses every documented command — shipped files and
   composed runtime strings alike — against the real CLI.
+- A request that crashes the server is named in the log again. The web middleware catches
+  every unhandled request exception and logs the method, path, exception type and traceback
+  frames before answering 500 — but startup migrates the database in-process first, and that
+  Alembic run's logging config switched off the application logger it found already loaded.
+  The process kept serving and kept swallowing its own failures: a broken route produced a
+  500 for the caller and not one line about why for whoever runs the server, which is how a
+  lane can be failing for hours with a healthy-looking console. Startup now re-enables it
+  once migrations finish, so the failure and its frames reach the one INFO handler on
+  stderr. Guarded by the startup case in `backend/tests/test_security_headers.py` and by
+  `backend/tests/test_startup_logging.py`.
 
 ## v0
 
