@@ -30,6 +30,18 @@ everything before it is captured in git history (`git log`), not here.
   right there. Nothing about who is shown which navigation changed, and the page you land
   on after signing up is the same one as before.
 
+- `stash shares link folder <id>` tells you what "anyone with the link" currently allows,
+  and the MCP address that access mints, so switching a link open or shut is a command
+  rather than a request typed against your own account. Add `--permission read`, `comment`
+  or `write` to set the level, `--permission none` to revoke the link, and omit it to ask
+  and change nothing. What comes back is always what the server now holds — it writes,
+  then asks again — so after a revocation you see `none` and no address at all rather than
+  the word you just typed, and an address you are handed is one that still works. The level
+  is chosen from the ones the server accepts; asking about a type it has no link for, such as a
+  session, answers `none`, and setting one there fails with the server's own reason. Who a
+  folder is shared with by name is untouched: that stays with `stash shares add` and
+  `stash shares rm`.
+
 ### Changed
 
 - `stash shares ls` now hands over a folder's MCP handle, so reading a share no longer

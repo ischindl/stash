@@ -363,10 +363,12 @@ describe("a group registered without a literal name stops the guard", () => {
   });
 
   it("still reads cli/main.py into the same registry it derived before the rule existed", () => {
-    // 14 registrations, one of them hidden, is what the real CLI declares today. The counts
-    // are the no-regression proof: only error behavior moved, not one derived command.
+    // 14 registrations, one of them hidden, is what the real CLI declares today. The group
+    // count is the no-regression proof: only error behavior moved, not one derived group.
+    // The command count is the live total — it moves the day a command lands, which is how
+    // this file would have caught `stash shares link` (STAS-347) going undocumented.
     const derived = deriveRegistry();
     expect(derived.groups.size).toBe(13);
-    expect(derived.commands.size).toBe(90);
+    expect(derived.commands.size).toBe(91);
   });
 });

@@ -4525,6 +4525,10 @@ shares_app = typer.Typer(help="Shares — grant people access to an object by em
 app.add_typer(shares_app, name="shares")
 
 _SHARE_OBJECT_TYPES = "folder | page | file | session | table | source"
+# A link exists for four of those six: the server's general-access table covers
+# page, file, folder and table, and it refuses anything else. `shares add` can reach a
+# session or a source, so the two lists are genuinely different and must not be shared.
+_LINK_OBJECT_TYPES = "folder | page | file | table"
 
 
 @shares_app.command("ls")
@@ -4609,6 +4613,51 @@ def shares_rm(
         output_json({"ok": True, "object_id": object_id})
         return
     console.print("[green]Access revoked.[/green]")
+
+
+@shares_app.command("link")
+def shares_link(
+    object_type: str = typer.Argument(..., help=_LINK_OBJECT_TYPES),
+    object_id: str = typer.Argument(...),
+    permission: str = typer.Option(
+        None,
+        "--permission",
+        help="read | comment | write | none ('none' revokes the link). Omit to read only.",
+    ),
+    as_json: bool = typer.Option(False, "--json"),
+):
+    """Read or change "anyone with the link" access, and the MCP handle it mints."""
+    # One endpoint answers both halves of this question, so the CLI writes the level
+    # it was handed and then asks what is true. It accepts no level of its own invention
+    # and enforces no list of linkable types — the help names the four the server's
+    # general-access table covers, and the server's 400 is what refuses anything else —
+    # and it never assembles a handle from BASE_URL or a share id: the server mints the
+    # URL from PUBLIC_URL, retires it when the level drops to 'none', and is the only
+    # party that can say whether a link is live. A type with no link reads back as
+    # 'none' and a write to it is refused — the same fail-loud shape `shares add` has.
+    with _client() as c:
+        try:
+            if permission is not None:
+                c.set_general_access(object_type, object_id, permission)
+            state = c.get_share_state(object_type, object_id)
+        except StashError as e:
+            _err(e)
+    if _use_json(as_json):
+        output_json(
+            {
+                "object_type": object_type,
+                "object_id": object_id,
+                "general_access": state["general_access"],
+                "mcp_url": state["mcp_url"],
+            }
+        )
+        return
+    console.print(f"anyone with the link: [bold]{state['general_access']}[/bold]")
+    handle = state["mcp_url"]
+    if handle:
+        # The same fold rule as `shares ls`: a handle broken across two terminal
+        # lines is no longer something to paste into `stash tools add --url`.
+        console.print(f"  {handle}", soft_wrap=True, markup=False)
 
 
 # ===========================================================================
