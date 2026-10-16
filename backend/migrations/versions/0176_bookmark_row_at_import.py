@@ -14,8 +14,8 @@ Imports already queued when this ships have no row to point at (NULL). They
 take the same path an interactive single-page clip does — insert on landing —
 which is a branch clip_service needs permanently anyway.
 
-Revision ID: 0175
-Revises: 0174
+Revision ID: 0176
+Revises: 0175
 """
 
 from alembic import op

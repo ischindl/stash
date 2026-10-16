@@ -9,8 +9,8 @@ per-folder special case.
 is_memory stays: it answers "which folder is Memory" (identity), which is a
 different question from "may this be renamed" (policy).
 
-Revision ID: 0174
-Revises: 0173
+Revision ID: 0175
+Revises: 0174
 """
 
 from alembic import op

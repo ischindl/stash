@@ -6,8 +6,8 @@ sync (instead of the free extension capture) brings their own X app: we
 run OAuth against their client id/secret, so their app bears the cost.
 The secret is encrypted with the integration Fernet key.
 
-Revision ID: 0148
-Revises: 0147
+Revision ID: 0152
+Revises: 0151
 """
 
 from alembic import op
