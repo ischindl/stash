@@ -32,6 +32,22 @@ everything before it is captured in git history (`git log`), not here.
 
 ### Changed
 
+- `stash shares ls` now hands over a folder's MCP handle, so reading a share no longer
+  needs a raw REST call. A folder whose link is granted has *no* named people on it — its
+  answer sits in the same endpoint response as a `mcp_url` the CLI was throwing away,
+  because it kept only the `shares` list out of that response. Which meant the one state
+  where the handle is the only useful answer printed "No shares found." and `[]`, and the
+  hand-off ended with "read the handle with a raw REST call, because the CLI will not tell
+  you". Text mode now adds an `anyone with the link — <url>` line, printed unwrapped so it
+  is still something you can paste into `stash tools add --url`, and `--json` prints the
+  endpoint's whole response — `shares`, `general_access` and `mcp_url` — so
+  `stash shares ls folder <id> --json | jq -r .mcp_url` answers. The URL is whatever the
+  server sent, character for character: the CLI never assembles, normalises, or defaults
+  one, and a private folder — like a server too old to send the key — still says nothing
+  at all. **This command's `--json` payload is an object where it used to be a bare
+  array**; a script that read it takes `.shares`. The agent-facing `stash_list_shares`
+  tool carries the same envelope, under the same name.
+
 - Unregistering a server now unregisters it. `stash tools remove <name>` used to delete only the
   account-side registry row, which left whatever `stash tools install` had written into an agent's
   own MCP config sitting behind: the agent went on listing that server, went on connecting to it,

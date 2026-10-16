@@ -4533,20 +4533,30 @@ def shares_ls(
     object_id: str = typer.Argument(...),
     as_json: bool = typer.Option(False, "--json"),
 ):
-    """List who an object is shared with."""
+    """List who an object is shared with, and its MCP handle when it has one."""
     with _client() as c:
         try:
-            data = c.list_object_shares(object_type, object_id)
+            state = c.get_share_state(object_type, object_id)
         except StashError as e:
             _err(e)
-    if not data:
+    people = state["shares"]
+    # Read tolerantly: a released CLI can talk to a server that predates the
+    # share-MCP surface and never sends the key. Absence is the same truth as
+    # null, so it renders silence - never a URL the CLI assembled itself.
+    handle = state.get("mcp_url")
+    if not people and not handle:
         print_empty_state("shares")
     if _use_json(as_json):
-        output_json(data)
+        output_json(state)
         return
-    for s in data:
+    for s in people:
         who = s.get("display_name") or s.get("name") or s.get("email") or s.get("principal_id")
         console.print(f"  [bold]{who}[/bold]  [dim]{s.get('permission')}[/dim]")
+    if handle:
+        # soft_wrap because rich folds at 80 columns, and a handle split across
+        # two lines is no longer something a person can paste into
+        # `stash tools add --url`.
+        console.print(f"  anyone with the link — {handle}", soft_wrap=True, markup=False)
 
 
 @shares_app.command("add")

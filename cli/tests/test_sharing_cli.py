@@ -30,9 +30,13 @@ class _FakeClient:
     def unshare_object(self, object_type, object_id, principal_type, principal_id):
         self._calls.append(("unshare", object_type, object_id, principal_type, principal_id))
 
-    def list_object_shares(self, object_type, object_id):
-        self._calls.append(("list_shares", object_type, object_id))
-        return [{"display_name": "Sam", "permission": "read", "principal_id": "u1"}]
+    def get_share_state(self, object_type, object_id):
+        self._calls.append(("share_state", object_type, object_id))
+        return {
+            "shares": [{"display_name": "Sam", "permission": "read", "principal_id": "u1"}],
+            "general_access": "none",
+            "mcp_url": None,
+        }
 
     # skill members + invites + snapshot
     def add_skill_member(self, skill_id, user_id, permission="read"):

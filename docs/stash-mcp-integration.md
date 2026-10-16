@@ -211,7 +211,7 @@ server, and the guard test compares this table against `cli/mcp_server.py` in bo
 | `stash_purge` | Permanently delete a trashed item (not reversible) |
 | `stash_share_object` | Share a folder/page/file/session/table with a person by email |
 | `stash_unshare_object` | Revoke a share |
-| `stash_list_shares` | Who an object is shared with |
+| `stash_list_shares` | Who an object is shared with, its link level, and the MCP handle to dial |
 
 ### Traces and reward models
 

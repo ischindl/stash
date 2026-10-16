@@ -805,8 +805,12 @@ def stash_unshare_object(
 
 @mcp.tool()
 def stash_list_shares(object_type: str, object_id: str) -> str:
-    """List who an object is shared with."""
-    return _json(_client().list_object_shares(object_type, object_id))
+    """List who an object is shared with, plus its share state: the
+    ``general_access`` link level and, for a folder whose link is granted, the
+    ``mcp_url`` handle an agent can dial (register it with
+    ``stash tools add <name> --url <mcp_url>``). Null/absent ``mcp_url`` means
+    there is no public handle for this object."""
+    return _json(_client().get_share_state(object_type, object_id))
 
 
 @mcp.tool()

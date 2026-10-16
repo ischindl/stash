@@ -301,8 +301,18 @@ class StashClient:
             },
         )
 
-    def list_object_shares(self, object_type: str, object_id: str) -> list:
-        return self._list("/api/v1/share", "shares", object_type=object_type, object_id=object_id)
+    def get_share_state(self, object_type: str, object_id: str) -> dict:
+        """Everything the server knows about one object's sharing: the per-person
+        `shares` list, the `general_access` ("anyone with the link") level, and
+        the `mcp_url` handle.
+
+        The envelope is returned untouched because this endpoint is the only
+        place a folder's MCP handle lives: the URL is minted server-side from
+        PUBLIC_URL and no CLI surface assembles one. A server that predates the
+        share-MCP surface omits the key entirely and a share without a live
+        handle sends null — both reach the caller as they arrived.
+        """
+        return self._get("/api/v1/share", object_type=object_type, object_id=object_id)
 
     def set_general_access(self, object_type: str, object_id: str, public_permission: str) -> dict:
         """The "anyone with the link" level for a page/file/folder/table.

@@ -250,8 +250,8 @@ class _EmptyListClient:
     def get_trash(self):
         return {"pages": [], "files": [], "sessions": []}
 
-    def list_object_shares(self, object_type, object_id):
-        return []
+    def get_share_state(self, object_type, object_id):
+        return {"shares": [], "general_access": "none", "mcp_url": None}
 
 
 def _wire_empty_list(monkeypatch) -> None:

@@ -51,8 +51,8 @@ class EmptyClient:
     def sources_tree(self, depth=3):
         return []
 
-    def list_object_shares(self, object_type, object_id):
-        return []
+    def get_share_state(self, object_type, object_id):
+        return {"shares": [], "general_access": "none", "mcp_url": None}
 
     def get_trash(self):
         return {"pages": [], "files": [], "sessions": []}
@@ -376,7 +376,10 @@ def test_shares_ls_empty_json(monkeypatch, capsys) -> None:
     _wire(monkeypatch)
     main.shares_ls(object_type="page", object_id="p1", as_json=True)
     captured = capsys.readouterr()
-    assert json.loads(captured.out) == []
+    # The whole share-state envelope, not a bare list: a folder can have no
+    # named people and still carry a live MCP handle (STAS-346), so the list
+    # alone cannot tell a machine whether to use this share.
+    assert json.loads(captured.out) == {"shares": [], "general_access": "none", "mcp_url": None}
     assert "No shares found." in captured.err
 
 
@@ -524,8 +527,12 @@ class PopulatedClient(EmptyClient):
     def list_mcp_servers(self):
         return [{"name": "tavily", "transport": "stdio", "command": "tavily-mcp"}]
 
-    def list_object_shares(self, object_type, object_id):
-        return [{"display_name": "Sam", "permission": "read"}]
+    def get_share_state(self, object_type, object_id):
+        return {
+            "shares": [{"display_name": "Sam", "permission": "read"}],
+            "general_access": "none",
+            "mcp_url": None,
+        }
 
     def get_trash(self):
         return {
