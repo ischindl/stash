@@ -105,6 +105,23 @@ everything before it is captured in git history (`git log`), not here.
 
 ### Fixed
 
+- A skill's agent URL survives republishing it. The address under `/api/v1/mcp/skills/…` is
+  what a person pastes into their coding agent so that agent can read a shared skill, and it
+  used to be written down against a handle that lasted exactly one publication: unpublish the
+  skill, publish the folder again — the ordinary way to ship an updated version — and a fresh
+  slug was minted, so every URL already pasted into an agent config began answering "This
+  Stash share URL is no longer shared." forever, with nothing to restore it and no way to
+  learn the new address except to re-paste it into every client it had ever been handed to.
+  The handle is now minted once per skill folder and kept there, the way a shared folder's
+  agent handle already is: the first publish prints it, every republish prints the identical
+  URL, and the URL somebody configured reads the new version. Unpublishing still means off —
+  while the skill is unpublished that URL answers nothing — and deleting the folder is the
+  only thing that retires the handle, so a folder created later under the same title gets its
+  own. Renaming a published skill never rotates it, and no link already in circulation moves:
+  the migration copies every currently-live slug across, so nothing someone has already
+  pasted changes when this ships. Guarded by `backend/tests/test_share_mcp.py` and
+  `backend/tests/test_skill_slug_durability.py`.
+
 - A run that is still working no longer gets someone else's verdict written on it. On the
   founder's account on 2026-10-01 a curator run started at 11:42, and one hour later a second
   copy of that same scheduled dispatch reached a worker while the run was still curating. The

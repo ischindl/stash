@@ -2,9 +2,11 @@
 
 A skill is a folder containing SKILL.md (skill_service). Person-to-person
 sharing rides the generic folder shares; this module owns only *publishing*:
-the ``skills`` row (slug, Discover flag, cover art, view count) whose
-existence makes the folder publicly readable at /skills/<slug>. Writes always
-go through the normal Files APIs and are never granted by the record.
+the ``skills`` row (Discover flag, cover art, view count) whose existence makes
+the folder publicly readable at /skills/<slug>, and the folder's reservation of
+that slug in ``skill_slugs`` — minted at the folder's first publish and kept
+across unpublish, because clients have already written the URL down. Writes
+always go through the normal Files APIs and are never granted by the record.
 """
 
 import hashlib
@@ -45,6 +47,57 @@ _SESSION_EVENT_CONTENT_CAP = 20_000
 def _slugify(title: str) -> str:
     base = _SLUG_RE.sub("-", title.lower()).strip("-")[:64] or "skill"
     return f"{base}-{secrets.token_urlsafe(4)[:6].lower()}"
+
+
+# The minted suffix has roughly two billion shapes, so a handle another folder
+# already holds is retried rather than designed around — but it is retried a
+# bounded number of times.
+_MAX_SLUG_ATTEMPTS = 8
+
+
+async def _reserve_slug(folder_id: UUID, title: str) -> str:
+    """The folder's one public handle: its existing reservation, or a mint it keeps.
+
+    `skill_slugs` is the reservation and the `skills` row is the publication (see
+    `share_mcp_service` for what makes a handle answer, and the
+    `skill_slug_is_durable` migration for why the two are separate tables). A
+    folder that has ever published keeps answering
+    on the URL it minted the first time, however often its owner closes and
+    reopens the share; minting a handle per publish record is what turned every
+    already-distributed URL into a permanent 404 after a republish.
+
+    Two clashes mean two different things. A `folder_id` primary-key clash is the
+    same folder publishing beside us, and its winner is the handle we want too. A
+    `slug` clash is a different folder holding that handle, so a different
+    candidate is minted. Anything else is not a race and is not swallowed.
+    """
+    pool = get_pool()
+    reserved = await pool.fetchval("SELECT slug FROM skill_slugs WHERE folder_id = $1", folder_id)
+    if reserved:
+        return reserved
+
+    for _ in range(_MAX_SLUG_ATTEMPTS):
+        candidate = _slugify(title)
+        try:
+            await pool.execute(
+                "INSERT INTO skill_slugs (folder_id, slug) VALUES ($1, $2)", folder_id, candidate
+            )
+            return candidate
+        except asyncpg.UniqueViolationError as clash:
+            if clash.constraint_name == "skill_slugs_slug_key":
+                continue
+            if clash.constraint_name != "skill_slugs_pkey":
+                raise
+            won = await pool.fetchval(
+                "SELECT slug FROM skill_slugs WHERE folder_id = $1", folder_id
+            )
+            if won:
+                return won
+            raise RuntimeError(
+                f"The handle reserved for skill folder {folder_id} vanished mid-publish"
+            ) from clash
+
+    raise RuntimeError(f"No free handle for skill folder {folder_id} in {_MAX_SLUG_ATTEMPTS} mints")
 
 
 def _strip_html(html: str) -> str:
@@ -202,6 +255,9 @@ async def publish_folder(
         description = description or meta.get("description", "")
 
     await ensure_skill_md(owner_user_id, folder_id, owner_id, title, description)
+    # The handle belongs to the folder, not to this record: a republish reuses the
+    # one the folder already handed out, which is the whole point of `skill_slugs`.
+    slug = await _reserve_slug(folder_id, title)
     try:
         inserted = await pool.fetchrow(
             "INSERT INTO skills (owner_user_id, folder_id, slug, title, description, owner_id, "
@@ -209,7 +265,7 @@ async def publish_folder(
             "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id",
             owner_user_id,
             folder_id,
-            _slugify(title),
+            slug,
             title,
             description,
             owner_id,

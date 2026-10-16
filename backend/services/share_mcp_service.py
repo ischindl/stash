@@ -1,12 +1,15 @@
 """Share handles an MCP client dials, and what each one is allowed to read.
 
-Two families of handle, one server. A Skill's handle is its slug: a name,
-public by design, alive exactly as long as the publish record that names it. A
-folder's handle is a secret: 256 bits minted once per folder and stored in
-`folder_mcp_tokens`, because a folder is private by default and a URL that
-names one cannot be guessable. Both families are read-only, and both die the
-moment the share behind them dies — the slug when the skill is unpublished,
-the token when the folder stops being publicly shared.
+Two families of handle, one server. A Skill's handle is its slug: a name, public
+by design, minted at the folder's first publish and kept in `skill_slugs` so it
+outlives closing and reopening the share. A folder's handle is a secret: 256 bits
+minted once per folder and stored in `folder_mcp_tokens`, because a folder is
+private by default and a URL that names one cannot be guessable. Both families are
+read-only, and neither handle is ever rotated — a client has already written the URL
+down. What comes and goes is the share behind it: a handle stops answering the
+moment that share stops — the slug while the skill is unpublished, the token while
+the folder stops being publicly shared — and a republish answers on the same URL
+again.
 
 An MCP client authenticates nothing, so a handle grants exactly what a public
 link grants and never more: a folder shared with named people only has no

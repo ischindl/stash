@@ -117,8 +117,9 @@ async def test_a_published_skill_is_not_in_your_scope_until_you_add_it(client: A
 
 
 async def test_curated_skills_resolve_by_name(client: AsyncClient, pool):
-    """The Bookmarks strip names the skills it wants; slugs carry a random
-    suffix and would go stale on the first republish."""
+    """The Bookmarks strip names the skills it wants; a slug is minted when the
+    curator publishes, with a random suffix nobody can write in advance, so the
+    strip carries names and looks the handle up."""
     _author, author_headers = await _register(client)
     await _publish_skill(client, author_headers, LIBRARY_SKILL_MD)
     author_id = await pool.fetchval("SELECT owner_user_id FROM skills WHERE title = 'resurface'")

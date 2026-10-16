@@ -384,6 +384,39 @@ async def test_unpublishing_kills_the_skill_endpoint(
             pass
 
 
+@pytest.mark.asyncio
+async def test_republishing_a_skill_answers_the_url_it_minted(
+    client: AsyncClient, mcp_session, stub_storage
+):
+    """An agent was configured with this URL; rotating it orphans that config.
+
+    The skill leg of `test_folder_url_survives_a_reopen_and_never_rotates`: the
+    handle is minted once and the share switch alone decides whether it is
+    honoured, so closing and reopening the share revives the URL the owner
+    already handed out instead of printing a new one they never got.
+    """
+    api_key = await _register(client, "mcp_republish")
+    folder_id = await _folder(client, api_key, "Release notes")
+    await _page(client, api_key, folder_id, "Draft", "Roll back the migration.")
+    original = await _publish(client, api_key, folder_id, "Release notes")
+
+    async with mcp_session(original["mcp_url"]) as session:
+        assert await _tools(session) == ["list", "read"]
+        assert "Roll back the migration." in await _call(session, "read", path="Draft")
+
+    deleted = await client.delete(f"/api/v1/skills/{original['id']}", headers=_auth(api_key))
+    assert deleted.status_code == 204
+    assert (await _raw_post(client, original["mcp_url"])).status_code == 404
+
+    republished = await _publish(client, api_key, folder_id, "Release notes")
+    assert republished["slug"] == original["slug"]
+    assert republished["mcp_url"] == original["mcp_url"]
+
+    async with mcp_session(original["mcp_url"]) as session:
+        assert await _tools(session) == ["list", "read"]
+        assert "Roll back the migration." in await _call(session, "read", path="Draft")
+
+
 # --- Folder leg: an unguessable handle, revoked by the switches that exist ---
 
 
