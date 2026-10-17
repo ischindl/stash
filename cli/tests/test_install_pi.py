@@ -17,14 +17,17 @@ import stat
 from pathlib import Path
 
 import pytest
+from typer.testing import CliRunner
 
 from cli.main import (
     _HOOK_EVENTS,
     _INSTALLERS,
+    PLUGIN_DATA_DIRS,
     __version__,
     _install_all_hooks,
     _install_pi,
     _plugin_installed,
+    app,
 )
 
 # event name in the hook wrapper -> handler script it execs via _run.sh
@@ -55,6 +58,9 @@ RUNTIME_FILES = {
     "on_session_end.py",
     "on_stop.py",
 }
+
+
+runner = CliRunner()
 
 
 def _hook_wrapper(event: str) -> str:
@@ -257,11 +263,23 @@ def test_shipped_wrappers_exec_handlers_that_resolve(scripts_dir: Path) -> None:
     a permanently dead install that the fixture-driven tests above cannot see.
     This guard reads both payload trees independently so a wrapper edit to the
     event name turns CI red instead of shipping it.
+
+    The same test pins the exec bits, because pi runs the files it finds under
+    ``~/.pi/hooks/`` and ``_install_pi`` preserves whatever mode the installed
+    package carries: a mode lost while packaging is a hook pi silently drops,
+    so not even the failure guard would run.
     """
     assert 'TARGET="$SCRIPT_DIR/$SCRIPT.py"' in (scripts_dir / "_run.sh").read_text()
 
     hooks_dir = scripts_dir / "hooks"
     assert sorted(p.name for p in hooks_dir.iterdir()) == sorted(HOOK_EVENTS)
+
+    for path in [scripts_dir / "_run.sh", *[hooks_dir / event for event in HOOK_EVENTS]]:
+        mode = path.stat().st_mode
+        assert mode & 0o111 == 0o111, (
+            f"{path.relative_to(REPO_ROOT)} ships mode {mode & 0o777:o}; pi only "
+            "executes its hook files, so _run.sh and every wrapper must be executable"
+        )
 
     for event, handler in HOOK_EVENTS.items():
         body = (hooks_dir / event).read_text()
@@ -271,6 +289,56 @@ def test_shipped_wrappers_exec_handlers_that_resolve(scripts_dir: Path) -> None:
         )
         assert (scripts_dir / f"{handler}.py").is_file(), (
             f"{handler}.py must ship next to _run.sh for {event}'s wrapper to resolve"
+        )
+
+
+def test_shipped_pi_runtime_carries_no_self_upgrade() -> None:
+    """`spawn_self_upgrade()` in the session_start handler is the one background
+    upgrade path, and pi reaches it like every other agent does. A second
+    `uv tool install` from the shell runner would race it against the venv it is
+    about to exec, so the runner and handlers must stay free of it.
+    """
+    for scripts_dir in SHIPPED_SCRIPT_TREES:
+        for path in sorted(scripts_dir.rglob("*")):
+            if path.is_file():
+                assert "uv tool install" not in path.read_text(errors="replace"), (
+                    f"{path.relative_to(REPO_ROOT)} runs its own upgrade; "
+                    "stashai.plugin.session_upload.spawn_self_upgrade is the only one"
+                )
+
+
+def test_installed_tree_matches_shipped_assets_bytes(monkeypatch, tmp_path: Path) -> None:
+    """Run the install path against the REAL shipped assets, not a fixture tree:
+    every installed file must equal its shipped bytes and keep its shipped mode,
+    because pi only executes files it finds on disk under ``~/.pi/`` and a lost
+    exec bit there is a hook that never runs."""
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+
+    assert _install_pi(False)[0] == "installed"
+
+    root = REPO_ROOT / "stashai" / "plugin" / "assets" / "pi" / "scripts"
+    shipped = {p.relative_to(root): p for p in root.rglob("*") if p.is_file()}
+    assert shipped, "the shipped pi scripts tree must not be empty"
+
+    installed_dir = home / ".pi"
+    installed = {
+        rel: path
+        for rel, path in (
+            (p.relative_to(installed_dir), p) for p in installed_dir.rglob("*") if p.is_file()
+        )
+        if rel.as_posix() != "AGENTS.md"
+    }
+    assert set(installed) == set(shipped)
+
+    for rel, source in shipped.items():
+        target = installed[rel]
+        assert target.read_bytes() == source.read_bytes(), f"{rel} differs from shipped bytes"
+        target_mode = os.stat(target).st_mode & 0o777
+        source_mode = os.stat(source).st_mode & 0o777
+        assert target_mode == source_mode, (
+            f"{rel}: installed {target_mode:o} != shipped {source_mode:o}"
         )
 
 
@@ -348,7 +416,7 @@ def test_a_dead_deployed_generation_upgrades_without_force(pi_home: Path, monkey
     assert guidance.count("stash-plugin:begin") == 1
 
 
-def test_pi_keeps_its_own_generation_and_is_never_dispatched() -> None:
+def test_pi_keeps_its_own_generation_and_is_never_dispatched(monkeypatch, tmp_path: Path) -> None:
     """Canonical-shape decision (STAS-267), locked so the rejected alternative
     cannot be reintroduced by accident.
 
@@ -385,6 +453,14 @@ def test_pi_keeps_its_own_generation_and_is_never_dispatched() -> None:
         "test_pi_keeps_its_own_generation_and_is_never_dispatched for the rejected "
         "alternative and the two measured costs)"
     )
+
+    # pi's data dir is redirected to the scratch home: the guard in `hook run`
+    # records the failure into `~/.stash/plugins/pi/upload_status.json`, and a
+    # test must not write a bogus failure into a real `stash status`.
+    monkeypatch.setitem(PLUGIN_DATA_DIRS, "pi", tmp_path / "pi")
+    result = runner.invoke(app, ["hook", "run", "pi", "on_stop"])
+    assert result.exit_code == 1
+    assert "Unknown hook agent: pi" in result.stderr
 
     installer_source = inspect.getsource(_install_pi)
     assert "_HOOK_EVENTS" not in installer_source, (
