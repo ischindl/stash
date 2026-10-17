@@ -196,6 +196,41 @@ npm test
    costs is that an id booked by a branch that never deploys stays booked. The guard
    enforces the rule: a manifest whose `captured_at.head` is behind the tree is red.
 
+### Re-measuring which databases carry a stamped id
+
+The `note` in `shipped_revisions.json` records what a measurement found, so it ages and
+its claims have to be re-measured before anyone acts on them. Measure every surface and
+record which ones you could not reach — an unprobed surface is unknown, never clean:
+
+1. **Containers.** For every running Postgres container (`docker ps`, matched on image
+   *or* name — some carry a bare sha and a name that does not say "postgres"), read
+   `SELECT version_num FROM alembic_version` in **every** database, not just the
+   default one, and note whether `alembic_version_managed` exists: its presence means a
+   different tool owns that schema.
+2. **Servers outside Docker.** `ss -ltn` for listening ports, `pg_isready` to filter the
+   live ones, then the same read per database. A container sweep cannot see these at all.
+3. **Archives.** Read them without restoring: `pg_restore -l` gives the object list and
+   `pg_restore --data-only --table=alembic_version -f -` gives the stamp inside the
+   dump. A stamp only claims schema if the tables that revision creates are actually
+   present; when stamp and content disagree, restoring that dump and running
+   `alembic upgrade head` skips real schema and is not safe without resolving the
+   difference first.
+4. **Hosted prod.** Read the same two tables in the production database through the Neon
+   MCP or the prod connection string. A local machine's Docker and host passes say
+   nothing about it.
+
+Report the instrument used, the counts *with their units* (rows, databases, instances,
+archives), the date, and the surfaces that stayed unreachable. Classify each stamp
+against `revisions` here and against the revision list of the build that wrote it — an
+id whose meaning differs between the two is ambiguous, and "unresolvable" is a reported
+result, not a clean one.
+
+The test suite reads the same tables: `backend/tests/conftest.py` defaults
+`TEST_DATABASE_URL` to `postgresql://stash:stash@localhost:5432/stash_test`, so if
+nothing on `5432` owns a `stash_test` database, `pytest backend/tests/test_migrations.py`
+errors on connection before running anything. Create a database for the run and export
+`TEST_DATABASE_URL` at it.
+
 ---
 
 ## Submitting a pull request
