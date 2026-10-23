@@ -43,7 +43,7 @@ TEST_DATABASE_URL=postgresql://stash:stash@localhost:5432/stash_test \
 | `test_plugin_close_path.py` | The deploy measurement this card could not run from a worktree, automated: the emitter every shipped `on_session_end` hook calls, the product's own `StashClient`, and the real ingestion app, with only the socket replaced — so the close a real client pushes is what lands in `sessions.finished_at`, and a session the hook never ended stays open |
 | `test_curator_session_close.py` | The server closes the sessions its own scheduled runs create. `run_scheduled` is where the server observes its own run die — no plugin, no sprite-side lifecycle hook, and the dispatcher itself writes no history events — so it is the only place a run's session can be closed, and it closes them through ordinary ingestion (`memory_service.push_event` with the shared `CLOSE_EVENT_TYPE`), never by writing `sessions.finished_at`. Pinned per run shape (plain sprite, the two-phase digest+writer pair with both ids named by `scheduled_session_ids`, the scoped developer-platform lane minting the identical id under the workspace owner) and per outcome (returned, raised after its final message, and a turn refused before it wrote anything — which mints no session row just to close it). One close per session, stamped at the instant its own close event was stored, agreeing with what the run list displays as the run's end; a close that fails is logged and never replaces the run's own result |
 | `test_fusion_session_close.py` | The `fusion-task-*` family, whose transcript arrives from a pusher the server cannot see: ordinary turns and a replayed transcript-import batch leave it open (the import batch is not close evidence, per `_close_instant`), the pusher's named `session_end` closes it at its stored instant, and a replayed older close cannot rewind it. This is the whole server-side obligation for the family — closing the rows the pusher never named would be guessing at another system's task lifecycle, so the test pins that the server does exactly nothing else |
-| `test_scoped_curation.py` | The shared-workspace (developer-platform) curator lane: which material each scope may read, that a scoped run never reaches a credential-bearing sprite, and that its watermark commit obeys the same fence as every other forward writer (an overlapping advance or a concurrent reset to never is refused loud; a backfill advances the position it read from) |
+| `test_scoped_curation.py` | The shared-workspace (developer-platform) curator lane: which material each scope may read, that a scoped run never reaches a credential-bearing sprite, that its watermark commit obeys the same fence as every other forward writer (an overlapping advance or a concurrent reset to never is refused loud; a backfill advances the position it read from), and that it walks its backlog in slices under a budget of its own, each slice committing the pair the next one reads from |
 | `test_folder_curators.py` | One curator lane per project folder — its watermark seeded at the folder's first event, its model/endpoint pin digest-round-tripped, an inherited pin resolving byte-equal to the default curator's — and the lane that decides which curation it gets, asked once in `scoped_curation_service.workspace_for_agent`: a folder-bound curator reads one project's feed and writes one wiki folder, so it keeps the credential its own row names even under an owner with an activated developer workspace (gate passes with no backend `ANTHROPIC_API_KEY`, the resolved endpoint is the box it pins, the prompt is the folder prompt), while the External-wiki curator and that workspace's own Memory curator stay on the scoped dispatch, whose provider is now answered by the backend's own configuration rather than by one key (`test_llm_provider.py`) |
 | `test_curator_session_id_width.py` | The digest phase of a two-phase run must carry a session id that fits the column it is written into: the production `build_digest_turn` builder under both stamp shapes (the minute beat, and the manual dispatch's second precision, which exists so a manual run never shares a session with the minute's scheduled run) is pinned by exact shape and length against the real `history_events.session_id` limit read from `information_schema`; the real writer `memory_service.push_event` stores the 71-character manual-shape id byte-for-byte (the pre-`0247` founder-stack crash was asyncpg's `StringDataRightTruncationError`), and the ingest model's `max_length` must equal the column width, so `POST /events` can never accept what the column would reject |
 | `test_first_day_curator.py` | First-day curator tick, and the ingest rewind re-opening the cursor that imported history predates |
@@ -134,6 +134,29 @@ that starts its fenced commit while the first transaction is open provably block
 then refused) and `test_a_failure_after_the_fence_publishes_neither_the_watermark_nor_the_window`
 (the crash boundary: a raise after the matched fence rolls the stamp back and leaves the window
 still offered).
+
+**A scoped run walks its backlog in slices, and every slice commits as if it were the last.** A
+run that bounds every event still owed into one window and stamps its watermark once, at the end,
+cannot advance at all when the backlog is larger than its budget: it dies at the ceiling having
+committed nothing, and the next run reads the same backlog from the same position (measured on the
+founder stack 2026-09-23 — `curated_through` unmoved since 2026-08-22 across 42 runs, each one
+failing at the 600 s chat-turn wall). `scoped_curation_service.run` therefore loops:
+`complete_through` picks the slice's boundary from the position the previous slice committed,
+every scope loads that window, and the commit is the same `agent_service.advance_watermark` whose
+returned pair becomes the next slice's fence — one CAS per slice rather than one per run. The
+window's lower bound is `curation_service.position_bound` and not the cursor's instant, because a
+slice that stops inside a tie has to resume *at* that event; resuming at the instant would leave
+the rest of it to be curated by nobody while the marker walked past. The budget is
+`settings.CURATOR_RUN_TIMEOUT_SECONDS` — its own setting, because a curation run and a chat turn
+are different facts — checked between slices, so what a run committed stays while the run still
+raises, and `run_scheduled` keeps its `wait_for` wall around the call for the case a single slice
+never returns at all. Pinned by `test_scoped_curation.py`'s
+`test_a_run_slices_a_backlog_larger_than_one_feed_window`,
+`test_a_run_that_runs_out_of_time_keeps_the_slices_it_committed`,
+`test_the_next_run_resumes_at_the_watermark_the_last_run_committed` and
+`test_a_slice_cut_in_the_middle_of_a_tie_resumes_at_that_event`, with the budget's place under the
+worker's own ceiling pinned by
+`test_celery_time_limits.py::test_curator_run_budget_stays_under_the_worker_ceiling`.
 
 **The stored pair has to survive the trip through the run's own feed command.** A sprite curator
 reads its changes through a command the server renders into its prompt —

@@ -456,13 +456,18 @@ class _TurnLock:
         await self.release()
 
 
-def _turn_lock(session_id: str) -> _TurnLock:
+def _turn_lock(session_id: str, ttl_seconds: int) -> _TurnLock:
     """One turn per chat session.
 
     Keyed by session id, so it serializes turns of the *same session*. It is
     not an agent-level lock: a scheduled run's session id carries a per-run
-    stamp, so two runs of the same agent never contend on it."""
-    return _TurnLock(f"agent-turn:{session_id}", settings.AGENT_TURN_TIMEOUT_SECONDS)
+    stamp, so two runs of the same agent never contend on it.
+
+    `ttl_seconds` is stated by the caller rather than defaulted, because the two
+    lanes this guards are bounded by different budgets: a chat turn by the turn
+    timeout, a scoped curation run by its own. A lock that outlived neither would
+    either free a session mid-run or wedged it after the run is gone."""
+    return _TurnLock(f"agent-turn:{session_id}", ttl_seconds)
 
 
 def agent_run_lock(agent_id: UUID | str, ttl_seconds: int) -> _TurnLock:
@@ -711,11 +716,17 @@ async def _run_scheduled_turn(agent: dict, run_stamp: str, read_position: Positi
         # One run per agent is the dispatcher's `agent_run_lock`, taken before
         # this call; the sprite path gets this session lock from `run_chat`,
         # which a scoped run does not go through.
-        async with _turn_lock(f"{scheduled_session_prefix(agent)}{run_stamp}"):
+        async with _turn_lock(
+            f"{scheduled_session_prefix(agent)}{run_stamp}", settings.CURATOR_RUN_TIMEOUT_SECONDS
+        ):
             try:
+                # The backstop, not the plan: `scoped_curation_service.run` stops
+                # itself between slices on this same budget and keeps what it
+                # committed. This wall is what bounds a slice that never returns — a
+                # model that stops answering — which no between-slice check can see.
                 return await asyncio.wait_for(
                     scoped_curation_service.run(agent, workspace, run_stamp, read_position),
-                    timeout=settings.AGENT_TURN_TIMEOUT_SECONDS,
+                    timeout=settings.CURATOR_RUN_TIMEOUT_SECONDS,
                 )
             except TimeoutError as exc:
                 raise RuntimeError("Scoped curation exceeded its run time limit") from exc
@@ -790,7 +801,7 @@ async def _pump_turn(
         queue.put_nowait(event)
 
     try:
-        async with _turn_lock(session_id):
+        async with _turn_lock(session_id, settings.AGENT_TURN_TIMEOUT_SECONDS):
             history = await _load_history(owner_user_id, session_id, user_id)
             await memory_service.push_event(
                 owner_user_id, agent_name, "user_message", message, user_id, session_id=session_id
@@ -958,7 +969,7 @@ async def run_chat(
     # its own Stash credentials: without them the `stash` CLI inside it falls
     # back to the developer's ~/.stash, which points at production.
     auth.env.update(await sprite_service.local_agent_env(user_id))
-    async with _turn_lock(session_id):
+    async with _turn_lock(session_id, settings.AGENT_TURN_TIMEOUT_SECONDS):
         history = await _load_history(owner_user_id, session_id, user_id)
         await memory_service.push_event(
             owner_user_id, agent_name, "user_message", message, user_id, session_id=session_id

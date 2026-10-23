@@ -11,6 +11,7 @@ minutes.
 """
 
 from backend.celery_app import celery
+from backend.config import settings
 from backend.tasks.agent_schedules import (
     alert_stale_curators,
     drain_curator_backlog,
@@ -38,6 +39,15 @@ def test_harness_limits_stay_ordered():
     # wrong boundary.
     for task in HARNESS_TASKS:
         assert 0 < task.soft_time_limit < task.time_limit, task.name
+
+
+def test_curator_run_budget_stays_under_the_worker_ceiling():
+    # The scoped curator stops itself at `CURATOR_RUN_TIMEOUT_SECONDS` and keeps the
+    # slices it committed (STAS-266). That only helps while the task is still alive to
+    # record its own failure: a budget at or above this task's soft limit would have
+    # Celery kill the run mid-slice instead, which records no cause and no failure —
+    # the outcome the budget exists to avoid.
+    assert 0 < settings.CURATOR_RUN_TIMEOUT_SECONDS < run_curator_now.soft_time_limit
 
 
 def test_dispatcher_tasks_keep_global_fallback():

@@ -10,8 +10,14 @@ import pytest
 import pytest_asyncio
 from pydantic import ValidationError
 
-from backend.services import end_user_service, session_folder_service, source_service
+from backend.services import (
+    curation_service,
+    end_user_service,
+    session_folder_service,
+    source_service,
+)
 from backend.services import scoped_curation_service as curation
+from backend.services.curation_service import Position
 
 from .conftest import unique_name
 from .test_developer_platform import _developer, _event, _mint_workspace_key, _push
@@ -103,7 +109,7 @@ async def scope(data, purpose, user="public"):
         destination,
         users,
         "agent-curate-security-test",
-        None,
+        curation_service.NEVER,
         datetime.now(UTC),
     )
 
@@ -587,7 +593,7 @@ async def test_scoped_run_timeout_preserves_progress_and_releases_lock(
         await asyncio.Event().wait()
 
     monkeypatch.setattr(curation, "run_scope", stuck)
-    monkeypatch.setattr(sprite_agent_service.settings, "AGENT_TURN_TIMEOUT_SECONDS", 0.05)
+    monkeypatch.setattr(sprite_agent_service.settings, "CURATOR_RUN_TIMEOUT_SECONDS", 0.05)
     agent = await agent_service.get_or_create_curator(dataset.owner, wiki="external")
     before = await pool.fetchval(
         "SELECT curated_through FROM agents WHERE id=$1", UUID(agent["id"])
@@ -601,6 +607,304 @@ async def test_scoped_run_timeout_preserves_progress_and_releases_lock(
     assert row["curated_through"] == before
     assert row["last_run_outcome"] == "failed" and "run time limit" in row["last_run_error"]
     assert sprite_exec.redis.data == {}
+
+
+# --- One run walks its backlog in slices under a budget of its own (STAS-266, measured
+# on the founder stack 2026-09-23). A run used to bound every event still owed into one
+# window and commit once, at the end, so a backlog larger than one budget died at the
+# ceiling with the watermark exactly where it started: 600 s on a local model, 1.27M
+# events ahead, `curated_through` unmoved since 2026-08-22, retried once a day forever.
+# Each slice now commits through the same fenced compare-and-set every other forward
+# writer obeys, the next slice reads from the pair that commit left behind, and a run
+# that runs out of time stays a loud failure that keeps the slices it finished.
+
+_SEEDED = 5  # events _seed_backlog pushes, one per session
+_BUDGET = 2.0  # a slice's work is DB-only here, so one slice always lands inside this
+
+
+async def _seed_backlog(
+    client, dataset, monkeypatch, count: int = _SEEDED, at: datetime | None = None
+):
+    """Push `count` events into the feed of the customer who shares their transcript.
+
+    One event per session, so each is a distinct event the feed has to show. `at` pins
+    them all to one instant, which is what forces a slice boundary to fall inside a
+    tie rather than between two instants.
+
+    Ingest of a title-bearing event queues a title job, and these tests run with the
+    fake provider key `sprite_exec` installs and with no Celery broker to take it.
+    """
+    from backend.tasks.session_titles import generate_session_title
+
+    monkeypatch.setattr(generate_session_title, "delay", lambda *a, **k: None)
+    events = []
+    for i in range(count):
+        event = _event(f"sess-slice-{i}", "public", "Participating customer")
+        instant = at if at is not None else datetime.now(UTC) + timedelta(milliseconds=i)
+        event["created_at"] = instant.isoformat()
+        events.append(event)
+    await _push(client, dataset.key, events)
+
+
+def _curates_without_a_model():
+    async def fake(scope, instructions, route=None):
+        return "Curated this slice."
+
+    return fake
+
+
+def _stall_once_a_slice_is_committed(curator: UUID, read: Position, budget: float):
+    """A `run_scope` that curates instantly until one slice is committed behind it, then
+    outlives the run's whole budget.
+
+    A slice only starts once the slice before it committed, so a stored watermark ahead
+    of where the run began is proof the first slice landed. Stalling on that fact rather
+    than on the clock makes the timeout deterministic, and it cannot fire before the run
+    has something durable to keep — which is the property these tests then assert.
+    """
+
+    async def fake(scope, instructions, route=None):
+        from backend.services import agent_service
+
+        stored = curation_service.position_of(await agent_service.get_agent_by_id(curator))
+        if stored.ahead(read):
+            await asyncio.sleep(budget * 2)
+        return "Curated this slice."
+
+    return fake
+
+
+def _record_windows(monkeypatch) -> list[tuple]:
+    """Capture every scope load a run performs, as (purpose, since, until, corpus).
+
+    A slice loads one scope per wiki it walks, so one window is recorded per scope, and
+    the shared scope belongs to every slice: the `shared` series is therefore one entry
+    per slice. `since` and `until` are the bounds the load was really given, so a slice
+    that resumed at an instant instead of at the stored pair — or that read from past a
+    position its previous slice never committed — is visible here rather than inferred.
+    """
+    windows: list[tuple] = []
+    real = curation.load_scope
+
+    async def spy(workspace, purpose, destination, user_ids, session_id, since, until):
+        scope = await real(workspace, purpose, destination, user_ids, session_id, since, until)
+        windows.append((purpose, since, until, json.dumps(scope.documents)))
+        return scope
+
+    monkeypatch.setattr(curation, "load_scope", spy)
+    return windows
+
+
+def _slices(windows: list[tuple]) -> list[tuple]:
+    """The recorded slices — one per slice — as (since, until, corpus)."""
+    return [w[1:] for w in windows if w[0] == "shared"]
+
+
+def _record_commits(monkeypatch) -> list[Position]:
+    """Every position a slice actually committed, in the order it committed them.
+
+    The window a slice loads is not the position it earns: a slice that ran out of time
+    loaded a window and never committed it. What a run may claim is what the
+    compare-and-set accepted, so this spies on that one statement and records what it
+    stored — which is also the fence the next slice has to honour.
+    """
+    from backend.services import agent_service
+
+    committed: list[Position] = []
+    real = agent_service.advance_watermark
+
+    async def spy(conn, agent_id, read, through):
+        stored = await real(conn, agent_id, read, through)
+        committed.append(stored)
+        return stored
+
+    monkeypatch.setattr(agent_service, "advance_watermark", spy)
+    return committed
+
+
+def _seeded(corpus: str) -> set[int]:
+    """Which seeded sessions a recorded window actually put in front of the model."""
+    return {i for i in range(_SEEDED) if f"hello from sess-slice-{i}" in corpus}
+
+
+@pytest.mark.asyncio
+async def test_a_run_slices_a_backlog_larger_than_one_feed_window(
+    dataset, client, pool, monkeypatch, sprite_exec
+):
+    """The founder's case in miniature: the backlog holds more than one feed window."""
+    from backend.services import agent_service
+    from backend.tasks.agent_schedules import _run_curator_now
+
+    monkeypatch.setattr(curation_service, "_MAX_EVENTS", 2)
+    monkeypatch.setattr(curation, "run_scope", _curates_without_a_model())
+    await _seed_backlog(client, dataset, monkeypatch)
+    agent = await agent_service.get_or_create_curator(dataset.owner, wiki="external")
+    curator = UUID(agent["id"])
+    read = curation_service.position_of(agent)
+    assert read == curation_service.NEVER  # the lane never ran, so everything is owed
+    windows = _record_windows(monkeypatch)
+    commits = _record_commits(monkeypatch)
+
+    await _run_curator_now(curator, metered=False)
+
+    slices = _slices(windows)
+    # Six events owed, two to a feed window: three slices. One run that reads all six
+    # in one window is the shape that used to commit nothing until all six were curated.
+    assert len(slices) == 3
+    assert len(commits) == 3  # every slice committed, none of them waited on the others
+    assert slices[0][0] == read  # the first slice reads where the dispatcher loaded
+    for committed, next_slice in zip(commits, slices[1:]):
+        # The next slice reads the exact pair this one committed, event id included.
+        assert next_slice[0] == committed
+    stored = curation_service.position_of(await agent_service.get_agent_by_id(curator))
+    assert commits[-1].event_id is None  # the run stopped on a whole instant, then stopped
+    assert stored == commits[-1]  # and the marker says exactly that
+    assert _seeded("".join(corpus for _, _, corpus in slices)) == set(range(_SEEDED))
+    backlog = await curation_service.curator_event_backlog(
+        dataset.owner, curation_service.WIKI_EXTERNAL, stored
+    )
+    assert backlog["distinct_events"] == 0  # the backlog drained, rather than being deferred
+
+
+@pytest.mark.asyncio
+async def test_a_run_that_runs_out_of_time_keeps_the_slices_it_committed(
+    dataset, client, pool, monkeypatch, sprite_exec
+):
+    """Out of time is still a failure, and still progress: what a slice committed stays."""
+    from backend.services import agent_service, sprite_agent_service
+    from backend.tasks.agent_schedules import _run_curator_now
+
+    monkeypatch.setattr(sprite_agent_service.settings, "CURATOR_RUN_TIMEOUT_SECONDS", _BUDGET)
+    monkeypatch.setattr(curation_service, "_MAX_EVENTS", 2)
+    await _seed_backlog(client, dataset, monkeypatch)
+    agent = await agent_service.get_or_create_curator(dataset.owner, wiki="external")
+    curator = UUID(agent["id"])
+    read = curation_service.position_of(agent)
+    monkeypatch.setattr(
+        curation,
+        "run_scope",
+        _stall_once_a_slice_is_committed(curator, read, _BUDGET),
+    )
+    windows = _record_windows(monkeypatch)
+    commits = _record_commits(monkeypatch)
+
+    with pytest.raises(RuntimeError, match="run time limit"):
+        await _run_curator_now(curator, metered=False)
+
+    slices = _slices(windows)
+    stored = curation_service.position_of(await agent_service.get_agent_by_id(curator))
+    assert stored.ahead(read)  # the watermark moved at all
+    assert stored == commits[-1]  # to exactly the position a slice actually committed
+    assert len(commits) < len(slices)  # the slice that ran out of time never committed
+    row = await pool.fetchrow(
+        "SELECT last_run_outcome,last_run_error FROM agents WHERE id=$1", curator
+    )
+    assert row["last_run_outcome"] == "failed"  # loud, never a quiet partial success
+    assert "run time limit" in row["last_run_error"]
+    backlog = await curation_service.curator_event_backlog(
+        dataset.owner, curation_service.WIKI_EXTERNAL, stored
+    )
+    assert 0 < backlog["distinct_events"] < 6  # less owed than at the start, not all of it
+    assert sprite_exec.redis.data == {}
+
+
+@pytest.mark.asyncio
+async def test_the_next_run_resumes_at_the_watermark_the_last_run_committed(
+    dataset, client, pool, monkeypatch, sprite_exec
+):
+    """A timed-out run has to leave the next one less to do, or the backlog never drains:
+    the second run reads from the position the first one proved, so it shows the model
+    neither the events already curated nor the ones still ahead unread."""
+    from backend.services import agent_service, sprite_agent_service
+    from backend.tasks.agent_schedules import _run_curator_now
+
+    monkeypatch.setattr(sprite_agent_service.settings, "CURATOR_RUN_TIMEOUT_SECONDS", _BUDGET)
+    monkeypatch.setattr(curation_service, "_MAX_EVENTS", 2)
+    await _seed_backlog(client, dataset, monkeypatch)
+    agent = await agent_service.get_or_create_curator(dataset.owner, wiki="external")
+    curator = UUID(agent["id"])
+    read = curation_service.position_of(agent)
+    monkeypatch.setattr(
+        curation,
+        "run_scope",
+        _stall_once_a_slice_is_committed(curator, read, _BUDGET),
+    )
+    windows = _record_windows(monkeypatch)
+    with pytest.raises(RuntimeError, match="run time limit"):
+        await _run_curator_now(curator, metered=False)
+    first = _slices(windows)
+    resumed_at = curation_service.position_of(await agent_service.get_agent_by_id(curator))
+    assert resumed_at.ahead(read)
+
+    monkeypatch.setattr(sprite_agent_service.settings, "CURATOR_RUN_TIMEOUT_SECONDS", 3600.0)
+    monkeypatch.setattr(curation, "run_scope", _curates_without_a_model())
+    windows.clear()
+    await _run_curator_now(curator, metered=False)
+
+    second = _slices(windows)
+    assert second[0][0] == resumed_at  # it read the new watermark, not 2026-08-22
+    assert second[0][0] != read
+    # What the first run EARNED is one slice: it showed one seeded event and committed
+    # it. The slice it was reading when time ran out earned nothing, so the next run
+    # reads those events again — the price of never letting a watermark claim material
+    # that no slice committed.
+    assert _seeded(first[0][2]) == {0}
+    assert _seeded("".join(corpus for _, _, corpus in second)) == {1, 2, 3, 4}
+    assert len(second) == 2  # four events left, two to a window: the tail in two slices
+    stored = curation_service.position_of(await agent_service.get_agent_by_id(curator))
+    backlog = await curation_service.curator_event_backlog(
+        dataset.owner, curation_service.WIKI_EXTERNAL, stored
+    )
+    assert backlog["distinct_events"] == 0  # the two runs together emptied it
+
+
+@pytest.mark.asyncio
+async def test_a_slice_cut_in_the_middle_of_a_tie_resumes_at_that_event(
+    dataset, client, pool, monkeypatch, sprite_exec
+):
+    """A push lands hundreds of events on one `created_at`, so a slice boundary inside
+    such an instant is the common case. The position it stores names the event it
+    consumed, and a slice that resumed at the instant alone could not express that: the
+    rest of the instant would be curated by nobody while the watermark — which does
+    count those events — walked past them.
+    """
+    from backend.services import agent_service, sprite_agent_service
+    from backend.tasks.agent_schedules import _run_curator_now
+
+    monkeypatch.setattr(sprite_agent_service.settings, "CURATOR_RUN_TIMEOUT_SECONDS", _BUDGET)
+    monkeypatch.setattr(curation_service, "_MAX_EVENTS", 2)
+    tied = datetime.now(UTC)
+    await _seed_backlog(client, dataset, monkeypatch, at=tied)
+    agent = await agent_service.get_or_create_curator(dataset.owner, wiki="external")
+    curator = UUID(agent["id"])
+    read = curation_service.position_of(agent)
+    monkeypatch.setattr(
+        curation,
+        "run_scope",
+        _stall_once_a_slice_is_committed(curator, read, _BUDGET),
+    )
+    windows = _record_windows(monkeypatch)
+    with pytest.raises(RuntimeError, match="run time limit"):
+        await _run_curator_now(curator, metered=False)
+
+    first = _slices(windows)
+    stopped_at = curation_service.position_of(await agent_service.get_agent_by_id(curator))
+    assert stopped_at.at == tied  # the slice it committed ended inside the tied instant
+    assert stopped_at.event_id is not None  # and it says which event of it it consumed
+
+    monkeypatch.setattr(sprite_agent_service.settings, "CURATOR_RUN_TIMEOUT_SECONDS", 3600.0)
+    monkeypatch.setattr(curation, "run_scope", _curates_without_a_model())
+    windows.clear()
+    await _run_curator_now(curator, metered=False)
+
+    second = _slices(windows)
+    assert second[0][0] == stopped_at  # resumed at that event, not at its instant
+    assert _seeded("".join(corpus for _, _, corpus in first + second)) == set(range(_SEEDED))
+    stored = curation_service.position_of(await agent_service.get_agent_by_id(curator))
+    backlog = await curation_service.curator_event_backlog(
+        dataset.owner, curation_service.WIKI_EXTERNAL, stored
+    )
+    assert backlog["distinct_events"] == 0
 
 
 # --- The scoped lane commits its watermark under the same compare-and-set every

@@ -133,6 +133,25 @@ everything before it is captured in git history (`git log`), not here.
 
 ### Fixed
 
+- A self-hosted curator now gets through its backlog, one slice at a time. On a stack whose
+  curator runs on a local model, the nightly curation of a shared workspace used to read every
+  event still owed, curate all of it, and only then write down how far it had come — so when the
+  run hit its time limit, as a month of transcripts on a slow model always did, the failure was
+  total: nothing was remembered, the next night's run started from exactly the same place, and a
+  backlog that one hour cannot curate was never going to drain however many nights passed. The
+  symptom was a wiki that quietly stopped being written while the schedule looked healthy: on the
+  founder's own stack the curation position had not moved in five weeks across 42 runs, each of
+  them failing with the same message. A run now walks its backlog in slices and records its
+  position after each one, so a run that runs out of time is still a failure but keeps the slices
+  it finished, and the next run starts where this one stopped and does strictly less work. The
+  budget is its own setting, `CURATOR_RUN_TIMEOUT_SECONDS` (default one hour, kept below the
+  worker's own ceiling so the run can still report its cause), and the hour-long limit that stops
+  a chat reply is untouched. Nothing about what counts as curated changed: the position still
+  moves only to material the run actually read, still refuses to overwrite a move somebody else
+  made while it was working, and a slice that stopped in the middle of one instant resumes at that
+  event rather than after it, so no material is ever curated by nobody. Guarded by
+  `backend/tests/test_scoped_curation.py` and `backend/tests/test_celery_time_limits.py`.
+
 - A skill's agent URL survives republishing it. The address under `/api/v1/mcp/skills/…` is
   what a person pastes into their coding agent so that agent can read a shared skill, and it
   used to be written down against a handle that lasted exactly one publication: unpublish the

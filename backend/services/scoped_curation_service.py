@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Literal
@@ -297,9 +298,15 @@ async def load_scope(
     destination: UUID,
     user_ids: list[UUID],
     session_id: str,
-    since,
-    until,
+    since: curation_service.Position,
+    until: datetime,
 ) -> CurationScope:
+    """One scope's material, read from `since` up to and including `until`.
+
+    `since` is a position rather than an instant because a slice can stop in the middle
+    of one: the pair says which event of that instant this scope has already seen, and
+    the instant alone would start the next slice after everything still unread there.
+    `until` is the whole instant the window closes on, as in the shared feed."""
     scope = CurationScope(
         workspace["id"],
         workspace["scope_user_id"],
@@ -334,24 +341,31 @@ async def load_scope(
             }
             if writable:
                 scope.writable[p["id"]] = dict(p)
+        args: list = [scope.owner_id, user_ids, purpose == "internal"]
+        where = (
+            "he.owner_user_id=$1 AND s.deleted_at IS NULL "
+            "AND (s.end_user_id=ANY($2::uuid[]) OR ($3 AND s.end_user_id IS NULL)) "
+            f"AND {curation_service.curator_run_exclusion_clause('he.session_id')} "
+            # The same cursor clause the feed, the gate and the backlog read: four
+            # readers of one position, so a slice cannot resume somewhere the feed
+            # would not have offered it.
+            f"{curation_service.position_bound(args, since)}"
+        )
+        args.append(until)
+        where += f" AND he.created_at<=${len(args)}"
+        args.extend([purpose == "shared", list(_RETRIEVAL_TOOLS)])
+        tools, retrieval = len(args) - 1, len(args)
+        where += (
+            f" AND (NOT ${tools} OR he.tool_name IS NULL"
+            f" OR he.tool_name<>ALL(${retrieval}::text[]))"
+        )
+        args.append(purpose == "shared")
+        where += f" AND (NOT ${len(args)} OR {curation_service.cleared_project_clause('s')})"
         events = await conn.fetch(
             "SELECT he.session_id,he.event_type,he.tool_name,he.content,he.created_at "
             "FROM history_events he JOIN sessions s ON s.owner_user_id=he.owner_user_id "
-            "AND s.session_id=he.session_id WHERE he.owner_user_id=$1 AND s.deleted_at IS NULL "
-            "AND (s.end_user_id=ANY($2::uuid[]) OR ($3 AND s.end_user_id IS NULL)) "
-            f"AND {curation_service.curator_run_exclusion_clause('he.session_id')} "
-            "AND ($4::timestamptz IS NULL OR he.created_at>$4) AND he.created_at<=$5 "
-            "AND (NOT $6 OR he.tool_name IS NULL OR he.tool_name<>ALL($7::text[])) "
-            f"AND (NOT $8 OR {curation_service.cleared_project_clause('s')}) "
-            "ORDER BY he.created_at,he.id",
-            scope.owner_id,
-            user_ids,
-            purpose == "internal",
-            since,
-            until,
-            purpose == "shared",
-            list(_RETRIEVAL_TOOLS),
-            purpose == "shared",
+            "AND s.session_id=he.session_id WHERE " + where + " ORDER BY he.created_at,he.id",
+            *args,
         )
         for e in events:
             key = f"session:{e['session_id']}"
@@ -372,7 +386,10 @@ async def load_scope(
             scope.owner_id,
             user_ids,
             purpose == "internal",
-            since,
+            # Files carry no event id, so a position's second half means nothing here:
+            # these two relations are windowed by the cursor's instant, as they were
+            # before a slice could stop inside one.
+            since.at,
             until,
         )
         for f in files:
@@ -391,7 +408,7 @@ async def load_scope(
             scope.owner_id,
             user_ids,
             purpose == "internal",
-            since,
+            since.at,
             until,
         )
         for d in sources:
@@ -448,6 +465,57 @@ async def run_scope(
     raise RuntimeError("Curator exhausted its tool turns before completing")
 
 
+async def _load_slice(
+    agent: dict,
+    workspace: dict,
+    session: str,
+    since: curation_service.Position,
+    until: datetime,
+) -> list[CurationScope]:
+    """The material of one slice: every scope this run walks, over one shared window.
+
+    This curator's own wiki is the widest feed the run reads — an internal curator
+    reads the unfiltered feed, an external one reads the shared feed at the same width
+    as its shared scope, and every private scope is a subset of it — so a window
+    clamped here cannot let the watermark outrun a narrower scope. Every scope reads
+    the same `(since, until]` it is curated from, which is what lets the slice commit
+    one position all of them agree on.
+    """
+    owner = workspace["scope_user_id"]
+    if agent["curator_wiki"] == "internal":
+        memory = await files_tree_service.get_or_create_memory_folder(owner, owner)
+        return [await load_scope(workspace, "internal", memory["id"], [], session, since, until)]
+    scopes = []
+    users = await get_pool().fetch(
+        "SELECT id,wiki_folder_id,share_wiki FROM end_users WHERE workspace_id=$1 ORDER BY id",
+        workspace["id"],
+    )
+    for user in users:
+        private = await load_scope(
+            workspace,
+            "private",
+            user["wiki_folder_id"],
+            [user["id"]],
+            session,
+            since,
+            until,
+        )
+        if any(key.startswith(("session:", "file:", "source:")) for key in private.documents):
+            scopes.append(private)
+    scopes.append(
+        await load_scope(
+            workspace,
+            "shared",
+            workspace["external_wiki_folder_id"],
+            [u["id"] for u in users if u["share_wiki"]],
+            session,
+            since,
+            until,
+        )
+    )
+    return scopes
+
+
 async def run(
     agent: dict,
     workspace: dict,
@@ -455,6 +523,12 @@ async def run(
     read_position: curation_service.Position,
 ) -> str:
     """Each private run and the shared run start with completely fresh model state.
+
+    A run does not have to finish its backlog to advance: it walks the backlog in
+    slices, and every slice it completes commits its own position before the next one
+    starts. A run that spends its budget therefore stops loud with the slices it
+    curated kept, and the next run starts where this one stopped instead of re-reading
+    the whole backlog from the position the failed one never left.
 
     `read_position` is the pair the dispatcher loaded from this agent row, which is
     where the run read from — the position the committing compare-and-set fences
@@ -473,54 +547,20 @@ async def run(
             f"{agent['curator_folder_id']}; scoped curation has no folder scope"
         )
     owner = workspace["scope_user_id"]
-    # One provider for the whole run — every scope of one run completes on the
-    # same provider it started on, and the probe is one knock per run, not per
-    # scope.
+    # One provider for the whole run — every scope of every slice completes on the
+    # same provider it started on, and the probe is one knock per run, not per scope.
     route = await require_route(owner, agent)
-    position = curation_service.position_of(agent)
-    since = position.at
-    # This curator's own wiki is the widest feed the run reads — an internal
-    # curator reads the unfiltered feed, an external one reads the shared feed at
-    # the same width as its shared scope, and every private scope is a subset of
-    # it — so clamping here cannot let the watermark outrun a narrower scope.
-    until = await curation_service.complete_through(
-        owner, position, datetime.now(UTC), agent["curator_wiki"]
-    )
+    # A run that commits more than once cannot carry its whole story in one position,
+    # so the loop tracks the two it plays. `fence` is the position the next
+    # compare-and-set must still find stored: it starts at what the dispatcher read and
+    # afterwards becomes whatever each commit proved, which is what keeps the fence
+    # honest for the slice after the first. `cursor` is where the next slice reads
+    # from — the same position for an incremental run, `NEVER` for a `full_history`
+    # backfill, which reads the entire corpus while staying allowed to write only
+    # against the position it started from.
+    fence = read_position
+    cursor = curation_service.position_of(agent)
     session = f"{curation_service.CURATOR_SESSION_ID_PREFIX}{agent['id']}-{run_stamp}"
-    scopes = []
-    if agent["curator_wiki"] == "internal":
-        memory = await files_tree_service.get_or_create_memory_folder(owner, owner)
-        scopes.append(
-            await load_scope(workspace, "internal", memory["id"], [], session, since, until.at)
-        )
-    else:
-        users = await get_pool().fetch(
-            "SELECT id,wiki_folder_id,share_wiki FROM end_users WHERE workspace_id=$1 ORDER BY id",
-            workspace["id"],
-        )
-        for user in users:
-            private = await load_scope(
-                workspace,
-                "private",
-                user["wiki_folder_id"],
-                [user["id"]],
-                session,
-                since,
-                until.at,
-            )
-            if any(key.startswith(("session:", "file:", "source:")) for key in private.documents):
-                scopes.append(private)
-        scopes.append(
-            await load_scope(
-                workspace,
-                "shared",
-                workspace["external_wiki_folder_id"],
-                [u["id"] for u in users if u["share_wiki"]],
-                session,
-                since,
-                until.at,
-            )
-        )
     concurrency = asyncio.Semaphore(_MAX_CONCURRENT_SCOPES)
 
     async def curate(scope: CurationScope) -> str:
@@ -538,18 +578,47 @@ async def run(
             )
             return record
 
-    # A failed scope cancels and joins its siblings before releasing the run lock.
-    async with asyncio.TaskGroup() as group:
-        tasks = [group.create_task(curate(scope)) for scope in scopes]
-    summaries = [task.result() for task in tasks]
-    # Commit progress under the same permission lock as the writes, and under the
-    # same fence every other forward writer obeys: one fenced statement, run on this
-    # transaction's conn, so the row stays locked against a competing writer from the
-    # fence until these writes commit and a concurrent opt-out's reset or an
-    # overlapping run's advance refuses this completion instead of being clobbered.
-    async with get_pool().acquire() as conn, conn.transaction():
-        await scopes[-1].check(conn)
-        await agent_service.advance_watermark(conn, UUID(str(agent["id"])), read_position, until)
+    started = time.monotonic()
+    summaries: list[str] = []
+    while True:
+        # Checked before a slice starts, never inside one: a slice that committed is
+        # kept, and one that would not fit is not begun. The run still raises, because
+        # a backlog left half-curated has to read as a failure — the difference from
+        # the shape this replaced is that the next run inherits less work, not the
+        # same work again. `run_scheduled` keeps its own wall around this call for the
+        # case a single slice never returns at all.
+        if time.monotonic() - started > settings.CURATOR_RUN_TIMEOUT_SECONDS:
+            raise RuntimeError("Scoped curation exceeded its run time limit")
+        # Where this slice's window ends, decided by the same boundary primitive every
+        # other reader uses, from the position the last slice committed.
+        until = await curation_service.complete_through(
+            owner, cursor, datetime.now(UTC), agent["curator_wiki"]
+        )
+        scopes = await _load_slice(agent, workspace, session, cursor, until.at)
+        # A failed scope cancels and joins its siblings before releasing the run lock,
+        # and a slice that did not finish curating does not commit.
+        async with asyncio.TaskGroup() as group:
+            tasks = [group.create_task(curate(scope)) for scope in scopes]
+        summaries.extend(task.result() for task in tasks)
+        # Commit this slice under the same permission lock as the writes, and under the
+        # same fence every other forward writer obeys: one fenced statement, run on this
+        # transaction's conn, so the row stays locked against a competing writer from the
+        # fence until these writes commit and a concurrent opt-out's reset or an
+        # overlapping run's advance refuses this slice instead of being clobbered. The
+        # position it returns is the next slice's fence: if anything moved the marker
+        # meanwhile, this is where the run finds out, and it ends with the slices it
+        # already committed retained rather than having overwritten them.
+        async with get_pool().acquire() as conn, conn.transaction():
+            await scopes[-1].check(conn)
+            fence = await agent_service.advance_watermark(
+                conn, UUID(str(agent["id"])), fence, until
+            )
+        cursor = until
+        if until.event_id is None:
+            # The boundary primitive names a whole instant exactly when the feed it
+            # read was not truncated, which is the backlog saying it has nothing left
+            # to offer this wiki. Slice, and stop slicing.
+            break
     await memory_service.push_event(
         owner,
         agent["name"],

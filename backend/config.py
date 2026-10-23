@@ -395,6 +395,18 @@ class Settings:
         "LOCAL_STASH_API_URL", f"http://localhost:{os.getenv('PORT', '3456')}"
     )
     AGENT_TURN_TIMEOUT_SECONDS: int = int(os.getenv("AGENT_TURN_TIMEOUT_SECONDS", "600"))
+    # How long one scoped curator run may take, across all the slices of its backlog.
+    # This is not the chat-turn budget above: a turn answers one founder in a chat, a
+    # curation run walks a backlog, and on a self-hosted stack with a local model the
+    # two facts differ by an order of magnitude (measured on the founder stack
+    # 2026-09-23: a month of events, 600 s, zero progress retried daily). A run that
+    # reaches it stops between slices, keeps the slices it committed, and is recorded
+    # as a failure — never a quiet partial success.
+    # Keep it under HARNESS_SOFT_TIME_LIMIT (5400 s) in `tasks/agent_schedules.py`,
+    # which is what bounds the Celery task this runs inside: a run killed by the worker
+    # dies mid-slice without recording its cause, which is the outcome the budget here
+    # exists to avoid.
+    CURATOR_RUN_TIMEOUT_SECONDS: int = int(os.getenv("CURATOR_RUN_TIMEOUT_SECONDS", "3600"))
 
 
 settings = Settings()
