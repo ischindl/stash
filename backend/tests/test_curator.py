@@ -546,7 +546,13 @@ async def test_failed_run_records_error_and_refunds_credit(
 ):
     """A failed run must be visible (last_run_error) and must not eat the
     free monthly allowance — an infra outage would otherwise silently burn
-    all credits."""
+    all credits.
+
+    The recovery below reads both founder-visible columns: the error clearing is what
+    this test always proved, and the outcome returning to 'ran' is the half that was
+    never read anywhere for a lane that had genuinely failed. The scoped lane pins the
+    same pair in
+    `test_scoped_curation.py::test_the_next_run_resumes_at_the_watermark_the_last_run_committed`."""
     from backend.services import sprite_agent_service
     from backend.tasks.agent_schedules import _run_due, _run_scheduled_agent, run_scheduled_agent
 
@@ -590,10 +596,11 @@ async def test_failed_run_records_error_and_refunds_credit(
     assert await _run_due() == 1
     await _run_scheduled_agent(UUID(dispatched[1][0]), dispatched[1][1])
     row = await _db_pool.fetchrow(
-        "SELECT last_run_error, month_run_count FROM agents WHERE id = $1",
+        "SELECT last_run_error, last_run_outcome, month_run_count FROM agents WHERE id = $1",
         UUID(curator["id"]),
     )
     assert row["last_run_error"] is None
+    assert row["last_run_outcome"] == "ran"  # the lane reads healthy, not merely quiet
     assert row["month_run_count"] == 1
 
 

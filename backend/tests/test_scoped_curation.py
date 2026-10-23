@@ -13,6 +13,7 @@ from pydantic import ValidationError
 from backend.services import (
     curation_service,
     end_user_service,
+    llm,
     session_folder_service,
     source_service,
 )
@@ -594,6 +595,10 @@ async def test_scoped_run_timeout_preserves_progress_and_releases_lock(
 
     monkeypatch.setattr(curation, "run_scope", stuck)
     monkeypatch.setattr(sprite_agent_service.settings, "CURATOR_RUN_TIMEOUT_SECONDS", 0.05)
+    # Compressed but not zero: this slice never returns, so the wall is the mechanism, and
+    # a grace of 0 would collapse the wall onto the budget and prove nothing. Left at the
+    # real window this test would wait out a whole completion.
+    monkeypatch.setattr(llm, "LOCAL_COMPLETION_TIMEOUT_S", 0.05)
     agent = await agent_service.get_or_create_curator(dataset.owner, wiki="external")
     before = await pool.fetchval(
         "SELECT curated_through FROM agents WHERE id=$1", UUID(agent["id"])
@@ -770,7 +775,10 @@ async def test_a_run_slices_a_backlog_larger_than_one_feed_window(
 async def test_a_run_that_runs_out_of_time_keeps_the_slices_it_committed(
     dataset, client, pool, monkeypatch, sprite_exec
 ):
-    """Out of time is still a failure, and still progress: what a slice committed stays."""
+    """Out of time is still a failure, and still progress: what a slice committed stays,
+    and no slice is left half-taken. The test beside this one pins WHICH exit closed the
+    run — the run's own between-slice check or the caller's wall; this one pins what
+    either exit leaves behind."""
     from backend.services import agent_service, sprite_agent_service
     from backend.tasks.agent_schedules import _run_curator_now
 
@@ -795,7 +803,9 @@ async def test_a_run_that_runs_out_of_time_keeps_the_slices_it_committed(
     stored = curation_service.position_of(await agent_service.get_agent_by_id(curator))
     assert stored.ahead(read)  # the watermark moved at all
     assert stored == commits[-1]  # to exactly the position a slice actually committed
-    assert len(commits) < len(slices)  # the slice that ran out of time never committed
+    # Every slice that ran is kept, and the run stopped rather than beginning another one
+    # into which no budget could fit.
+    assert len(commits) == len(slices) == 2
     row = await pool.fetchrow(
         "SELECT last_run_outcome,last_run_error FROM agents WHERE id=$1", curator
     )
@@ -809,12 +819,72 @@ async def test_a_run_that_runs_out_of_time_keeps_the_slices_it_committed(
 
 
 @pytest.mark.asyncio
+async def test_the_run_stops_itself_at_the_next_boundary_and_keeps_the_slice_that_arrived_late(
+    dataset, client, pool, monkeypatch, sprite_exec
+):
+    """A slice that lands after the budget is spent is the run's own business, not the
+    wall's: the run closes at the next boundary and keeps that slice.
+
+    Both exits carry the same message on purpose — the founder reads one failure, "ran
+    out of time" — so what tells them apart is the cause. The run's own between-slice
+    check raises with nothing beneath it; the caller's wall raises *from* a cancelled
+    slice, so its `__cause__` is the `TimeoutError` that killed it, and the slice that
+    was in flight is gone. Only the first of these keeps work the model already finished.
+
+    This patches the budget and pointedly not the completion window the wall sits past
+    it, so the wall is ~300 s away and cannot be what stopped this run.
+    """
+    from backend.services import agent_service, sprite_agent_service
+    from backend.tasks.agent_schedules import _run_curator_now
+
+    monkeypatch.setattr(sprite_agent_service.settings, "CURATOR_RUN_TIMEOUT_SECONDS", _BUDGET)
+    monkeypatch.setattr(curation_service, "_MAX_EVENTS", 2)
+    await _seed_backlog(client, dataset, monkeypatch)
+    agent = await agent_service.get_or_create_curator(dataset.owner, wiki="external")
+    curator = UUID(agent["id"])
+    read = curation_service.position_of(agent)
+    monkeypatch.setattr(
+        curation,
+        "run_scope",
+        _stall_once_a_slice_is_committed(curator, read, _BUDGET),
+    )
+    windows = _record_windows(monkeypatch)
+    commits = _record_commits(monkeypatch)
+
+    with pytest.raises(RuntimeError, match="run time limit") as stop:
+        await _run_curator_now(curator, metered=False)
+
+    assert stop.value.__cause__ is None  # the run raised; no slice was cancelled to do it
+    slices = _slices(windows)
+    # The late slice committed, and the run stopped rather than beginning a third.
+    assert len(commits) == len(slices) == 2
+    stored = curation_service.position_of(await agent_service.get_agent_by_id(curator))
+    assert stored == commits[-1]  # the marker claims exactly what a slice earned
+    row = await pool.fetchrow(
+        "SELECT last_run_outcome,last_run_error FROM agents WHERE id=$1", curator
+    )
+    assert row["last_run_outcome"] == "failed"  # a half-curated backlog still reads loud
+    assert "run time limit" in row["last_run_error"]
+    backlog = await curation_service.curator_event_backlog(
+        dataset.owner, curation_service.WIKI_EXTERNAL, stored
+    )
+    assert 0 < backlog["distinct_events"] < 6  # less owed than at the start, not all of it
+    assert sprite_exec.redis.data == {}  # both locks released on the run's own exit
+
+
+@pytest.mark.asyncio
 async def test_the_next_run_resumes_at_the_watermark_the_last_run_committed(
     dataset, client, pool, monkeypatch, sprite_exec
 ):
     """A timed-out run has to leave the next one less to do, or the backlog never drains:
     the second run reads from the position the first one proved, so it shows the model
-    neither the events already curated nor the ones still ahead unread."""
+    neither the events already curated nor the ones still ahead unread.
+
+    This is also the scoped lane's only proof of what a recovery looks like to the
+    founder: the first run left the row `failed` with a cause, and this one has to hand
+    back `ran` with the cause gone. The outcome half is the half nobody asserted —
+    `test_curator.py::test_failed_run_records_error_and_refunds_credit` covers the same
+    recovery in the harness lane and reads only the error column."""
     from backend.services import agent_service, sprite_agent_service
     from backend.tasks.agent_schedules import _run_curator_now
 
@@ -844,14 +914,24 @@ async def test_the_next_run_resumes_at_the_watermark_the_last_run_committed(
     second = _slices(windows)
     assert second[0][0] == resumed_at  # it read the new watermark, not 2026-08-22
     assert second[0][0] != read
-    # What the first run EARNED is one slice: it showed one seeded event and committed
-    # it. The slice it was reading when time ran out earned nothing, so the next run
-    # reads those events again — the price of never letting a watermark claim material
-    # that no slice committed.
+    # What the first run EARNED is two slices: one that fitted inside the budget, and
+    # one that came back after the budget was spent and was kept, because the run stops
+    # itself at the next boundary instead of being cut mid-flight (STAS-364). Only the
+    # events no slice committed are read again — the watermark still never claims
+    # material that is not behind it.
     assert _seeded(first[0][2]) == {0}
-    assert _seeded("".join(corpus for _, _, corpus in second)) == {1, 2, 3, 4}
-    assert len(second) == 2  # four events left, two to a window: the tail in two slices
+    assert _seeded("".join(corpus for _, _, corpus in first)) == {0, 1, 2}
+    assert _seeded("".join(corpus for _, _, corpus in second)) == {3, 4}
+    assert len(second) == 1  # the debt the stop left: two events, one window
     stored = curation_service.position_of(await agent_service.get_agent_by_id(curator))
+    row = await pool.fetchrow(
+        "SELECT last_run_outcome,last_run_error FROM agents WHERE id=$1", curator
+    )
+    # Both halves of a recovery, not one of them: `mark_run` wiped the cause as this run
+    # started and `mark_run_succeeded` resolved the outcome, so nothing a founder reads
+    # still says the lane timed out.
+    assert row["last_run_outcome"] == "ran"
+    assert row["last_run_error"] is None
     backlog = await curation_service.curator_event_backlog(
         dataset.owner, curation_service.WIKI_EXTERNAL, stored
     )

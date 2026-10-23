@@ -189,10 +189,13 @@ class _AnthropicRoute:
         )
 
 
-# A local box reads a backlog in one request: the probe's 5-second budget is a
-# reachability knock, not a completion budget. The whole run is still capped
-# upstream by settings.AGENT_TURN_TIMEOUT_SECONDS.
-_LOCAL_COMPLETION_TIMEOUT_S = 300.0
+# One completion request against the operator's box, start to finish. The probe's
+# 5-second budget is a reachability knock, not a completion budget: a local box reads
+# a backlog in one request and needs minutes rather than seconds.
+# `scoped_curation_service.run_wall_timeout` is this number's second consumer — a
+# scoped run's outer wall sits one window past the run's own budget, which is what
+# lets the run close a slice that finished late instead of the wall cancelling it.
+LOCAL_COMPLETION_TIMEOUT_S = 300
 # The two words a chat-completions server uses for what a tool loop cares about.
 _LOCAL_STOP_REASONS = {"stop": "end_turn", "tool_calls": "tool_use"}
 
@@ -237,7 +240,7 @@ class _LocalRoute:
             # codepath, as `_local_auth`'s dummy key does for pi's config.
             "Authorization": f"Bearer {self.api_key or 'local'}",
         }
-        async with httpx.AsyncClient(timeout=_LOCAL_COMPLETION_TIMEOUT_S) as http:
+        async with httpx.AsyncClient(timeout=LOCAL_COMPLETION_TIMEOUT_S) as http:
             response = await http.post(self.completions_url, json=payload, headers=headers)
         if not 200 <= response.status_code < 300:
             raise RuntimeError(

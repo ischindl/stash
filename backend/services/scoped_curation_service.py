@@ -516,6 +516,26 @@ async def _load_slice(
     return scopes
 
 
+def run_wall_timeout() -> int:
+    """One number for how long a scoped run may occupy the lane from the outside.
+
+    A run that spends its budget stops itself: the between-slice check in `run` is the
+    live path, and it is the only exit that keeps a slice which finished *after* the
+    budget was spent. That check can only run once the slice in flight returns, so a
+    wall set at the budget itself always wins the race and cancels the very slice the
+    sliced run exists to keep. One completion window of slack is what makes the run's
+    own stop the one that fires.
+
+    Both consumers take this value — the caller's `asyncio.wait_for` timeout and the
+    session lock's TTL, because a lock whose TTL expired mid-run belongs to whoever
+    takes it next. The residual no wall can remove: `run_scope` is a loop of up to
+    `_MAX_TURNS` completions and this window ceilings only *one* of them, so a slice
+    still working when the wall arrives is cancelled and lost whole. Stopping at turn
+    boundaries as well as slice boundaries is the larger fix and a separate decision.
+    """
+    return settings.CURATOR_RUN_TIMEOUT_SECONDS + llm.LOCAL_COMPLETION_TIMEOUT_S
+
+
 async def run(
     agent: dict,
     workspace: dict,
@@ -547,6 +567,9 @@ async def run(
             f"{agent['curator_folder_id']}; scoped curation has no folder scope"
         )
     owner = workspace["scope_user_id"]
+    # The run's budget measures the whole run, route probe included, so the run's clock
+    # and the caller's wall share one origin instead of the wall carrying a head start.
+    started = time.monotonic()
     # One provider for the whole run — every scope of every slice completes on the
     # same provider it started on, and the probe is one knock per run, not per scope.
     route = await require_route(owner, agent)
@@ -578,15 +601,16 @@ async def run(
             )
             return record
 
-    started = time.monotonic()
     summaries: list[str] = []
     while True:
         # Checked before a slice starts, never inside one: a slice that committed is
-        # kept, and one that would not fit is not begun. The run still raises, because
-        # a backlog left half-curated has to read as a failure — the difference from
-        # the shape this replaced is that the next run inherits less work, not the
-        # same work again. `run_scheduled` keeps its own wall around this call for the
-        # case a single slice never returns at all.
+        # kept, and one that would not fit is not begun — which is also why a slice that
+        # returns late is kept rather than cancelled. The run still raises, because a
+        # backlog left half-curated has to read as a failure; the difference from the
+        # shape this replaced is that the next run inherits less work, not the same work
+        # again. This is the live exit: `run_scheduled`'s wall sits one completion window
+        # past this budget (see `run_wall_timeout`) so that this check, not the wall,
+        # closes a run that spends its budget.
         if time.monotonic() - started > settings.CURATOR_RUN_TIMEOUT_SECONDS:
             raise RuntimeError("Scoped curation exceeded its run time limit")
         # Where this slice's window ends, decided by the same boundary primitive every

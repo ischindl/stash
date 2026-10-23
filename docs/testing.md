@@ -148,15 +148,26 @@ window's lower bound is `curation_service.position_bound` and not the cursor's i
 slice that stops inside a tie has to resume *at* that event; resuming at the instant would leave
 the rest of it to be curated by nobody while the marker walked past. The budget is
 `settings.CURATOR_RUN_TIMEOUT_SECONDS` — its own setting, because a curation run and a chat turn
-are different facts — checked between slices, so what a run committed stays while the run still
-raises, and `run_scheduled` keeps its `wait_for` wall around the call for the case a single slice
-never returns at all. Pinned by `test_scoped_curation.py`'s
+are different facts — checked between slices, and that check is the live exit: what a slice
+committed stays, a slice that returns *after* the budget was spent is kept, and the run still
+raises. The `wait_for` wall in `run_scheduled` is the ceiling above that exit rather than the plan,
+and it sits one completion window past the budget — `run_wall_timeout()` is one number for both it
+and the session lock's TTL, because the between-slice check can only fire once the slice in flight
+returns, and a wall set at the budget itself always wins that race and cancels the very slice
+slicing exists to keep; a lock on a shorter number than the wall would expire mid-run and belong to
+the next dispatch. Pinned by `test_scoped_curation.py`'s
 `test_a_run_slices_a_backlog_larger_than_one_feed_window`,
 `test_a_run_that_runs_out_of_time_keeps_the_slices_it_committed`,
+`test_the_run_stops_itself_at_the_next_boundary_and_keeps_the_slice_that_arrived_late` — which
+tells the two exits apart by `__cause__`, the run's own stop carrying none and the wall's carrying
+the `TimeoutError` it cancelled —
 `test_the_next_run_resumes_at_the_watermark_the_last_run_committed` and
-`test_a_slice_cut_in_the_middle_of_a_tie_resumes_at_that_event`, with the budget's place under the
+`test_a_slice_cut_in_the_middle_of_a_tie_resumes_at_that_event`, with the wall's place under the
 worker's own ceiling pinned by
-`test_celery_time_limits.py::test_curator_run_budget_stays_under_the_worker_ceiling`.
+`test_celery_time_limits.py::test_curator_run_budget_stays_under_the_worker_ceiling`. A test that
+patches the budget alone therefore cannot reach the wall in reasonable time: it patches
+`llm.LOCAL_COMPLETION_TIMEOUT_S` beside it, and non-zero — a grace of 0 collapses the wall onto the
+budget, and the test passes having proved nothing.
 
 **The stored pair has to survive the trip through the run's own feed command.** A sprite curator
 reads its changes through a command the server renders into its prompt —

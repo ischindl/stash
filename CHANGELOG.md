@@ -152,6 +152,23 @@ everything before it is captured in git history (`git log`), not here.
   event rather than after it, so no material is ever curated by nobody. Guarded by
   `backend/tests/test_scoped_curation.py` and `backend/tests/test_celery_time_limits.py`.
 
+- A curator run that runs out of time now stops itself, and keeps the work it finished last. The
+  slicing above only pays off if a run that spends its budget stops *between* slices, which is what
+  its own budget check was written to do. It never got the chance: the caller wrapped the run in a
+  timer of its own using the same one-hour number, but started counting earlier, before the run had
+  chosen a model endpoint, so the caller's timer always won and the run's check never ran. Every
+  timed-out run was cancelled rather than stopped, and a cancellation discards the slice in flight
+  whole — the model work it had already paid for and the position it had earned, gone. A run now
+  starts its clock as its first act, and the caller's timer sits one completion window past the
+  budget, so the run's own stop is the exit that fires: a slice that comes back late is kept and
+  committed, and the outer timer remains only for a slice that never comes back. That ceiling and
+  the run's session lock are now one derived number, so the lock no longer expires while its own
+  run is still inside the limit — which used to let a second curation into the same session. What
+  an operator reads is unchanged and now actually true: a run out of time still reports `failed`
+  with its cause, a run that succeeds after one reports `ran` with the cause cleared, and the next
+  run still has strictly less to do. Guarded by `backend/tests/test_scoped_curation.py` and
+  `backend/tests/test_celery_time_limits.py`.
+
 - A skill's agent URL survives republishing it. The address under `/api/v1/mcp/skills/…` is
   what a person pastes into their coding agent so that agent can read a shared skill, and it
   used to be written down against a handle that lasted exactly one publication: unpublish the

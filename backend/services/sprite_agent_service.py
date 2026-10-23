@@ -715,18 +715,27 @@ async def _run_scheduled_turn(agent: dict, run_stamp: str, read_position: Positi
     if workspace is not None:
         # One run per agent is the dispatcher's `agent_run_lock`, taken before
         # this call; the sprite path gets this session lock from `run_chat`,
-        # which a scoped run does not go through.
-        async with _turn_lock(
-            f"{scheduled_session_prefix(agent)}{run_stamp}", settings.CURATOR_RUN_TIMEOUT_SECONDS
-        ):
+        # which a scoped run does not go through. The lock's TTL is the run's whole
+        # wall rather than its budget: a lock that expired while a legitimate run was
+        # still inside its own ceiling would let a second dispatch join the session.
+        wall = scoped_curation_service.run_wall_timeout()
+        async with _turn_lock(f"{scheduled_session_prefix(agent)}{run_stamp}", wall):
             try:
-                # The backstop, not the plan: `scoped_curation_service.run` stops
-                # itself between slices on this same budget and keeps what it
-                # committed. This wall is what bounds a slice that never returns — a
-                # model that stops answering — which no between-slice check can see.
+                # The run stops itself: `scoped_curation_service.run` checks its budget
+                # between slices and keeps every slice it committed, one that finished
+                # after the budget was spent included. That check can only run once the
+                # slice in flight returns, so a wall at the budget itself always fires
+                # first and discards the slice worth keeping — hence the one completion
+                # window of slack in `wall`, the longest a single request can hold a
+                # slice open. Reaching this wall therefore means a slice never returned
+                # at all — a model that stopped answering, which no between-slice check
+                # can see — and it is cancelled whole. Both exits raise the same message
+                # because the founder reads one failure, "ran out of time"; `__cause__`
+                # tells them apart, empty for the run's own stop and this `TimeoutError`
+                # for the wall. Pinned by that pair in `test_scoped_curation.py`.
                 return await asyncio.wait_for(
                     scoped_curation_service.run(agent, workspace, run_stamp, read_position),
-                    timeout=settings.CURATOR_RUN_TIMEOUT_SECONDS,
+                    timeout=wall,
                 )
             except TimeoutError as exc:
                 raise RuntimeError("Scoped curation exceeded its run time limit") from exc

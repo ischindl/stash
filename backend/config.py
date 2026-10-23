@@ -402,10 +402,13 @@ class Settings:
     # 2026-09-23: a month of events, 600 s, zero progress retried daily). A run that
     # reaches it stops between slices, keeps the slices it committed, and is recorded
     # as a failure — never a quiet partial success.
-    # Keep it under HARNESS_SOFT_TIME_LIMIT (5400 s) in `tasks/agent_schedules.py`,
-    # which is what bounds the Celery task this runs inside: a run killed by the worker
-    # dies mid-slice without recording its cause, which is the outcome the budget here
-    # exists to avoid.
+    # What has to stay under HARNESS_SOFT_TIME_LIMIT (5400 s) in
+    # `tasks/agent_schedules.py` is not this budget but the wall around the run —
+    # `scoped_curation_service.run_wall_timeout()`, this budget plus one model
+    # completion window — because that is the number occupying the Celery task: a run
+    # killed by the worker dies mid-slice without recording its cause, which is the
+    # outcome the budget here exists to avoid. That ordering is pinned by
+    # `test_celery_time_limits.py::test_curator_run_budget_stays_under_the_worker_ceiling`.
     CURATOR_RUN_TIMEOUT_SECONDS: int = int(os.getenv("CURATOR_RUN_TIMEOUT_SECONDS", "3600"))
 
 
