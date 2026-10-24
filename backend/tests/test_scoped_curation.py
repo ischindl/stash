@@ -775,14 +775,26 @@ async def test_a_run_slices_a_backlog_larger_than_one_feed_window(
 async def test_a_run_that_runs_out_of_time_keeps_the_slices_it_committed(
     dataset, client, pool, monkeypatch, sprite_exec
 ):
-    """Out of time is still a failure, and still progress: what a slice committed stays,
-    and no slice is left half-taken. The test beside this one pins WHICH exit closed the
-    run — the run's own between-slice check or the caller's wall; this one pins what
-    either exit leaves behind."""
+    """The wall's exit: a slice that never returns is cancelled and lost whole, and the
+    run keeps only what the slices before it committed.
+
+    Both exits carry one message on purpose, so the cause and the lost slice are what
+    tell them apart. This one closes on the caller's `wait_for` and carries its
+    `TimeoutError`; the run's own stop is pinned by
+    test_the_run_stops_itself_at_the_next_boundary_and_keeps_the_slice_that_arrived_late,
+    which leaves the completion window alone so the wall sits 300 s away, and carries no
+    cause at all while keeping the slice that arrived late."""
     from backend.services import agent_service, sprite_agent_service
     from backend.tasks.agent_schedules import _run_curator_now
 
     monkeypatch.setattr(sprite_agent_service.settings, "CURATOR_RUN_TIMEOUT_SECONDS", _BUDGET)
+    # The wall sits one completion window past the budget: 2.0 + 1 = 3.0 s. That is past
+    # the budget, so the run's own boundary check had its chance and the slice was
+    # already in flight, and inside the stall's 2 × budget = 4.0 s, so the wall is what
+    # cuts it. Zero would collapse the wall onto the budget — the shape this file exists
+    # to rule out — and 2.0 or more would move the wall past the stall and hand the run
+    # back to its own stop.
+    monkeypatch.setattr(llm, "LOCAL_COMPLETION_TIMEOUT_S", 1)
     monkeypatch.setattr(curation_service, "_MAX_EVENTS", 2)
     await _seed_backlog(client, dataset, monkeypatch)
     agent = await agent_service.get_or_create_curator(dataset.owner, wiki="external")
@@ -796,16 +808,18 @@ async def test_a_run_that_runs_out_of_time_keeps_the_slices_it_committed(
     windows = _record_windows(monkeypatch)
     commits = _record_commits(monkeypatch)
 
-    with pytest.raises(RuntimeError, match="run time limit"):
+    with pytest.raises(RuntimeError, match="run time limit") as stop:
         await _run_curator_now(curator, metered=False)
 
+    assert isinstance(stop.value.__cause__, TimeoutError)  # the wall cancelled a slice
     slices = _slices(windows)
     stored = curation_service.position_of(await agent_service.get_agent_by_id(curator))
     assert stored.ahead(read)  # the watermark moved at all
     assert stored == commits[-1]  # to exactly the position a slice actually committed
-    # Every slice that ran is kept, and the run stopped rather than beginning another one
-    # into which no budget could fit.
-    assert len(commits) == len(slices) == 2
+    # The slice in flight is gone: it had already loaded its window, so it counts as a
+    # slice, and it committed nothing, so it is missing from the commits. That gap is
+    # what separates this exit from the run's own stop, which keeps the late slice.
+    assert len(commits) < len(slices) == 2
     row = await pool.fetchrow(
         "SELECT last_run_outcome,last_run_error FROM agents WHERE id=$1", curator
     )

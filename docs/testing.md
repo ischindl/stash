@@ -159,15 +159,19 @@ the next dispatch. Pinned by `test_scoped_curation.py`'s
 `test_a_run_slices_a_backlog_larger_than_one_feed_window`,
 `test_a_run_that_runs_out_of_time_keeps_the_slices_it_committed`,
 `test_the_run_stops_itself_at_the_next_boundary_and_keeps_the_slice_that_arrived_late` — which
-tells the two exits apart by `__cause__`, the run's own stop carrying none and the wall's carrying
-the `TimeoutError` it cancelled —
+together tell the two exits apart by `__cause__`, each test asserting the cause of the exit it
+pins: the run's own stop carrying none, the wall's carrying the `TimeoutError` it cancelled —
 `test_the_next_run_resumes_at_the_watermark_the_last_run_committed` and
 `test_a_slice_cut_in_the_middle_of_a_tie_resumes_at_that_event`, with the wall's place under the
 worker's own ceiling pinned by
 `test_celery_time_limits.py::test_curator_run_budget_stays_under_the_worker_ceiling`. A test that
-patches the budget alone therefore cannot reach the wall in reasonable time: it patches
-`llm.LOCAL_COMPLETION_TIMEOUT_S` beside it, and non-zero — a grace of 0 collapses the wall onto the
-budget, and the test passes having proved nothing.
+patches the budget alone therefore never reaches the wall in reasonable time, so the tests that
+mean the wall patch `llm.LOCAL_COMPLETION_TIMEOUT_S` beside it, and never with 0 — a grace of 0
+collapses the wall onto the budget, the shape this slack exists to rule out, and the test passes
+having proved nothing — while the tests that mean the run's own stop leave the window at its real
+300 s, so the wall is nowhere near the run they close. The two tests that name an exit then assert
+that exit's own `__cause__` rather than the message both exits share, so neither can pass for the
+other's reason.
 
 **The stored pair has to survive the trip through the run's own feed command.** A sprite curator
 reads its changes through a command the server renders into its prompt —
