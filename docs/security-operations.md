@@ -153,6 +153,39 @@ Operating procedure:
 - If sensitive data reaches logs, treat it as an incident and rotate affected
   credentials.
 
+### Operational Alerting
+
+Operational alerts — a failed or stranded scheduled run, a stale curator, a
+stalled source sync — leave through the installed Stash Slack bot. Which of two
+declared modes an installation is in is decided by whether both
+`ALERT_SLACK_TEAM_ID` and `ALERT_SLACK_CHANNEL_ID` are set; either half missing
+counts as unset.
+
+- **Configured:** alerts post to that channel. Delivery additionally needs a
+  `slack_bot_installs` row for the team, created by the Slack install flow, and
+  that bot must be a member of the channel. Variables set with no install row is
+  an alarm that cannot ring: every delivery raises `The alert workspace has no
+  Stash Slack bot installation`.
+- **Disabled:** nothing is delivered, and nothing is lost — each caller records
+  its own decision instead (the agent row, plus its `logger.exception` or
+  `logger.error` line) and never asks the Slack transport for a delivery.
+
+The mode is announced once per process at worker startup: `WARNING` when
+disabled, `INFO` naming team and channel when configured. Every Celery worker lane
+carries that line — `worker`, `heavy-worker`, `sync-worker` and `reward-worker`
+share one Celery app, so they share the startup hook. `backend` and `beat` do not:
+the web process makes no alert call and runs no worker-startup hook, and `beat` is
+a scheduler that never boots one.
+
+To tell a live stack's mode: `docker exec <lane> printenv | grep ALERT_SLACK`
+in each lane, read that lane's startup line in `docker logs`, and
+`select count(*) from slack_bot_installs` in the database.
+
+The rule both modes share: an alert never replaces the failure it reports. A
+failing run writes its own cause to the agent row and logs its own traceback
+before any alert is attempted, so a delivery that then fails — in either mode —
+leaves the run's error as the thing in the log and on the row.
+
 ## Subprocessors
 
 Maintain a customer-facing list of infrastructure and subprocessors before

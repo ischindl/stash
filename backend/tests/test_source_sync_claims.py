@@ -333,7 +333,9 @@ def test_worker_startup_announces_disabled_mode(monkeypatch, caplog):
         alert_service._announce_alert_mode()
     lines = [r for r in caplog.records if r.name == "backend.services.alert_service"]
     assert len(lines) == 1
-    assert lines[0].levelno == logging.INFO
+    # Above INFO on purpose: this mode drops every failure alarm the process
+    # produces, so it has to survive a log level that hides INFO (STAS-315).
+    assert lines[0].levelno == logging.WARNING
     assert "ALERT_SLACK_TEAM_ID" in lines[0].getMessage()
     assert "ALERT_SLACK_CHANNEL_ID" in lines[0].getMessage()
 

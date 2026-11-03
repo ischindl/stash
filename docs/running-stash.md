@@ -111,6 +111,13 @@ Before starting:
   your first login. With neither, every scheduled curator skips every tick — the
   backend logs `no runnable model` at WARNING and each curator row reads
   `No model connected` until a model exists.
+- Operational alerts stay off unless you finish them: set both `ALERT_SLACK_*`
+  variables in `.env` and install the Stash Slack bot into that workspace, so
+  the team has a `slack_bot_installs` row and its bot is in the alert channel.
+  Two variables with no installed bot raise on every delivery attempt and page
+  you nothing. Either way each worker lane names its mode at startup — WARNING
+  when this installation sends no operational alerts — and `docker logs
+  <worker-lane> | grep 'operational alerts'` shows it.
 
 ```bash
 docker compose -f docker-compose.prod.yml config --quiet

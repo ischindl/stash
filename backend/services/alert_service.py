@@ -28,7 +28,10 @@ def _announce_alert_mode(**_: Any) -> None:
             settings.ALERT_SLACK_CHANNEL_ID,
         )
         return
-    logger.info(
+    # WARNING, not INFO: in this mode every failure alarm this process produces is
+    # dropped, and an INFO line buried at the top of a boot log is exactly how the
+    # founder stack lost its alarms for weeks while looking healthy (STAS-315).
+    logger.warning(
         "operational alerts disabled: ALERT_SLACK_TEAM_ID and ALERT_SLACK_CHANNEL_ID "
         "are unset, so scheduled-run failures, the stranded-run sweep, and the stall and "
         "curator watchdogs record their decisions without delivering"

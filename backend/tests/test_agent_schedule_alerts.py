@@ -372,6 +372,57 @@ async def test_configured_delivery_failure_still_raises_after_the_run_is_recorde
 
 
 @pytest.mark.asyncio
+async def test_configured_destination_without_a_bot_install_names_its_own_cause(
+    client: AsyncClient, sprite_exec, monkeypatch, caplog
+):
+    """The state an operator lands in by following the alerting docs halfway.
+
+    Measured on the founder stack 2026-11-03: `slack_bot_installs` held 0 rows,
+    so setting the two `ALERT_SLACK_*` variables alone produces an alarm that
+    cannot ring. This runs the real `send_alert` — the install lookup is what
+    fails, not a stubbed transport — and pins what the operator's log then says:
+    the run's own failure is already recorded (row, outcome, traceback) before the
+    alert names its own cause, so the two failures sit side by side and neither
+    stands in for the other.
+    """
+    agent_id, stamp, held_at_failure = await _failing_scheduled_run(
+        client, sprite_exec, monkeypatch, cause="sprite exploded"
+    )
+    _configure_alerts(monkeypatch)
+    assert await get_pool().fetchval("SELECT count(*) FROM slack_bot_installs") == 0
+
+    with caplog.at_level(logging.ERROR):
+        with pytest.raises(RuntimeError, match="no Stash Slack bot installation"):
+            await agent_schedules._run_scheduled_agent(agent_id, stamp)
+
+    row = await get_pool().fetchrow(
+        "SELECT last_run_error, last_run_outcome FROM agents WHERE id = $1", agent_id
+    )
+    assert row["last_run_outcome"] == "failed"
+    assert "sprite exploded" in row["last_run_error"]
+    assert held_at_failure == [f"agent-run:{agent_id}"]
+    assert f"agent-run:{agent_id}" not in sprite_exec.redis.data
+
+    # The run's own record: the handler's traceback, naming the run's cause.
+    assert any(
+        record.exc_info is not None and str(record.exc_info[1]) == "sprite exploded"
+        for record in caplog.records
+        if record.name == "backend.tasks.agent_schedules"
+    )
+    # The alert's own record, distinct from the run's record and from the error
+    # the delivery raises: the alarm states what it meant to report even though it
+    # could not deliver it.
+    alert_lines = [
+        record.getMessage()
+        for record in caplog.records
+        if record.name == "backend.services.alert_service"
+    ]
+    assert len(alert_lines) == 1
+    assert alert_lines[0].startswith("ALERT: Scheduled agent run failed:")
+    assert "sprite exploded" in alert_lines[0]
+
+
+@pytest.mark.asyncio
 async def test_run_due_records_no_changes_skip(client: AsyncClient, monkeypatch):
     from backend.services import agent_auth, curation_service
 
