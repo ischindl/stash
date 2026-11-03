@@ -22,14 +22,14 @@ Downgrade restores main's pre-STAS-186 six-value set and drops the column; it is
 written for the main-side ledger, not for the founder's DB (that one's history
 predates this file and is never rewound).
 
-Revision ID: 0240
-Revises: 0239
+Revision ID: 0260
+Revises: 0259
 """
 
 from alembic import op
 
-revision = "0240"
-down_revision = "0239"
+revision = "0260"
+down_revision = "0259"
 branch_labels = None
 depends_on = None
 

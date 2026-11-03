@@ -61,15 +61,15 @@ re-issued above the highest absorbed slot, so this sits on the run above `0236`.
 Its SQL is byte-identical to what trunk reviewed; only the number and this
 paragraph differ.
 
-Revision ID: 0249
-Revises: 0248
+Revision ID: 0269
+Revises: 0268
 """
 
 from alembic import op
 from sqlalchemy import text
 
-revision = "0249"
-down_revision = "0248"
+revision = "0269"
+down_revision = "0268"
 branch_labels = None
 depends_on = None
 

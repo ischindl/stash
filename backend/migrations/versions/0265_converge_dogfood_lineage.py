@@ -69,8 +69,8 @@ fix deleted that absorb node, so this file is `0222` on `0221` and
 `CREATE TABLE IF NOT EXISTS` below is a no-op on every path today and stays only
 because dropping migration SQL is a decision of its own.
 
-Revision ID: 0245
-Revises: 0244
+Revision ID: 0265
+Revises: 0264
 """
 
 import hashlib
@@ -79,8 +79,8 @@ import re
 from alembic import op
 from sqlalchemy import text
 
-revision = "0245"
-down_revision = "0244"
+revision = "0265"
+down_revision = "0264"
 branch_labels = None
 depends_on = None
 

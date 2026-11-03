@@ -19,14 +19,14 @@ the same table: this owner's events, after this instant. The `id` column is what
 makes the walk's tie order match the feed's `ORDER BY created_at, id`, so the LIMIT
 cuts in the right place rather than mid-timestamp.
 
-Revision ID: 0239
-Revises: 0238
+Revision ID: 0259
+Revises: 0258
 """
 
 from alembic import op
 
-revision = "0239"
-down_revision = "0238"
+revision = "0259"
+down_revision = "0258"
 branch_labels = None
 depends_on = None
 

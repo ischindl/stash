@@ -46,14 +46,14 @@ out become the durable rows and no deployed URL rotates at deploy. There is no
 the select cannot name one folder twice — and if it ever did, the upgrade is
 supposed to fail loudly rather than keep a different handle.
 
-Revision ID: 0250
-Revises: 0249
+Revision ID: 0270
+Revises: 0269
 """
 
 from alembic import op
 
-revision = "0250"
-down_revision = "0249"
+revision = "0270"
+down_revision = "0269"
 branch_labels = None
 depends_on = None
 

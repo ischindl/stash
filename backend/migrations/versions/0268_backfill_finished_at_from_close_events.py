@@ -88,8 +88,8 @@ it has run on, so no partial index ships with this revision. Add one on
 measured scan on close-bearing data no longer fits the cold-start budget of the
 deployment it would stall — not before.
 
-Revision ID: 0248
-Revises: 0247
+Revision ID: 0268
+Revises: 0267
 """
 
 from alembic import op
@@ -97,8 +97,8 @@ from sqlalchemy import text
 
 from backend.services.session_service import CLOSE_EVENT_TYPE
 
-revision = "0248"
-down_revision = "0247"
+revision = "0268"
+down_revision = "0267"
 branch_labels = None
 depends_on = None
 

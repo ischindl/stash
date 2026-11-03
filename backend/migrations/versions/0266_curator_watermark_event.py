@@ -25,14 +25,14 @@ marker into one owner's ordering at one instant, not a reference to live
 material: history is prunable, and the watermark must stay readable (and the
 pair comparable) after the row it names is gone.
 
-Revision ID: 0246
-Revises: 0245
+Revision ID: 0266
+Revises: 0265
 """
 
 from alembic import op
 
-revision = "0246"
-down_revision = "0245"
+revision = "0266"
+down_revision = "0265"
 branch_labels = None
 depends_on = None
 
