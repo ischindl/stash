@@ -28,6 +28,16 @@ logger = logging.getLogger(__name__)
 # per-chain bound, executions share seven automatic continuations per 24h.
 CURATOR_CATCHUP_PASSES = 8
 
+# The two tasks that carry a run need a ceiling of their own. The worker's global
+# 1500/1800 sits only 300 s past a run that spends its whole wall, and a task killed
+# there dies mid-cancellation: it records neither the run's error nor its cause, which
+# is the outcome the wall exists to avoid. These clear
+# `scoped_curation_service.run_wall_timeout()` (1200 s at the default run timeout) by
+# the scheduler's own margin. The beat dispatchers keep the global fallback, so a sweep
+# never holds a worker slot for half an hour. Pinned by `test_celery_time_limits.py`.
+CURATOR_RUN_SOFT_TIME_LIMIT = 1800
+CURATOR_RUN_TIME_LIMIT = 2100
+
 
 def _is_due(cron: str, last_run: datetime | None, now: datetime) -> bool:
     """True if a cron tick falls in (last_run, now]. Never fires on the very
@@ -46,12 +56,20 @@ def run_due() -> int:
     return run_async(_run_due())
 
 
-@celery.task(name="backend.tasks.agent_schedules.run_scheduled_agent")
+@celery.task(
+    name="backend.tasks.agent_schedules.run_scheduled_agent",
+    soft_time_limit=CURATOR_RUN_SOFT_TIME_LIMIT,
+    time_limit=CURATOR_RUN_TIME_LIMIT,
+)
 def run_scheduled_agent(agent_id: str, stamp: str) -> None:
     run_async(_run_scheduled_agent(UUID(agent_id), stamp))
 
 
-@celery.task(name="backend.tasks.agent_schedules.run_curator_now")
+@celery.task(
+    name="backend.tasks.agent_schedules.run_curator_now",
+    soft_time_limit=CURATOR_RUN_SOFT_TIME_LIMIT,
+    time_limit=CURATOR_RUN_TIME_LIMIT,
+)
 def run_curator_now(
     agent_id: str,
     full_history: bool = False,
@@ -103,18 +121,19 @@ async def _run_curator_now(
 
 
 # The scheduler's lock also covers the gates before the run and the bookkeeping
-# after it, so it must outlive the run's own timeout.
+# after it, so it must outlive the run's own timeout. It takes the ceiling that can
+# actually kill the task: a lock that expires while its task is still running lets the
+# next dispatch join a live run.
 _RUN_LOCK_MARGIN_SECONDS = 600
 
 
 def _run_lock(agent: dict, workspace):
-    from ..config import settings
     from ..services import sprite_agent_service
 
     return (
         sprite_agent_service._TurnLock(
             f"scoped-curator-{agent['id']}",
-            ttl=settings.AGENT_TURN_TIMEOUT_SECONDS + _RUN_LOCK_MARGIN_SECONDS,
+            ttl=CURATOR_RUN_TIME_LIMIT + _RUN_LOCK_MARGIN_SECONDS,
         )
         if workspace is not None
         else nullcontext()

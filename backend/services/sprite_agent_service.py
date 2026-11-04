@@ -408,13 +408,19 @@ async def run_scheduled(
     if workspace is not None:
         # Scoped runs use fresh in-process model state. Their per-agent lock
         # already serializes every run; a second session lock is unnecessary.
+        # The lock and the wall take one number: a lock set to the run's bare timeout
+        # expires while a run still inside its wall is working, and the next dispatch
+        # would then join a live run.
+        wall = scoped_curation_service.run_wall_timeout()
         async with (
-            nullcontext() if scoped_lock_held else _TurnLock(f"scoped-curator-{agent['id']}")
+            nullcontext()
+            if scoped_lock_held
+            else _TurnLock(f"scoped-curator-{agent['id']}", ttl=wall)
         ):
             try:
                 return await asyncio.wait_for(
                     scoped_curation_service.run(agent, workspace, run_stamp),
-                    timeout=settings.AGENT_TURN_TIMEOUT_SECONDS,
+                    timeout=wall,
                 )
             except TimeoutError as exc:
                 raise RuntimeError("Scoped curation exceeded its run time limit") from exc

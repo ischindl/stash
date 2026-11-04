@@ -18,6 +18,12 @@ everything before it is captured in git history (`git log`), not here.
   schedules one full interval of grace, and first-pass page writes fit in a
   single model response.
 
+- A developer wiki run that needs its full time keeps it. The wall around a run
+  now sits one model completion past the run's own timeout, so a completion still
+  inside the model client's allowance finishes and saves rather than being
+  cancelled at the timeout, and the tasks that carry a run have limits that
+  outlive that wall, so a worker can no longer stop a run without recording why.
+
 - Developer wiki curation can edit a small passage without regenerating an entire
   page. Runs start from new input, skip scopes with no new documents, and use
   smaller responses to reduce timeout and truncation failures.

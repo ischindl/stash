@@ -51,6 +51,13 @@ _MAX_EDIT_CHARS = 5_000
 _RETRY_LIMITS = {"write_page": {"content": 4000}, "edit_page": {"old_text": 2000, "new_text": 2000}}
 
 
+# One model completion, start to finish. The client decides this for us: its default
+# request timeout allows 600 s of read per request. A run can therefore still be inside
+# a legitimate request when its own timeout arrives, which is why the wall around a run
+# is that timeout plus one window rather than the timeout itself.
+MODEL_COMPLETION_WINDOW_S = 600
+
+
 class Search(BaseModel):
     model_config = ConfigDict(extra="forbid")
     query: str
@@ -712,6 +719,21 @@ async def run_scope(scope: CurationScope, instructions: str | None) -> str:
                 )
         messages.append({"role": "user", "content": results})
     raise RuntimeError("Curator exhausted its tool turns before completing")
+
+
+def run_wall_timeout() -> int:
+    """How long a scoped run may hold its lane, counted from outside the run.
+
+    The run's timeout is how long it is allowed to work; this is how long everything
+    around it has to wait for it. They differ by `MODEL_COMPLETION_WINDOW_S` because a
+    completion already in flight when the timeout arrives is still inside the client's
+    own allowance, and cancelling it there discards writes that were going to land.
+
+    Both consumers take this one number — the caller's `asyncio.wait_for` and the
+    session lock's TTL — because a lock on the bare timeout expires while a run that is
+    still inside its wall is working, and the next dispatch then joins a live run.
+    """
+    return settings.AGENT_TURN_TIMEOUT_SECONDS + MODEL_COMPLETION_WINDOW_S
 
 
 async def run(agent: dict, workspace: dict, run_stamp: str) -> str:

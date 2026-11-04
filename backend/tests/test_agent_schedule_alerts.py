@@ -706,6 +706,10 @@ async def test_scheduler_lock_outlives_the_run_timeout(client, fake_redis):
             f"agent-turn:scoped-curator-{agent['id']}"
         )
     assert ttl > settings.AGENT_TURN_TIMEOUT_SECONDS
+    # The number the lock has to clear is the ceiling that can kill the task, not the
+    # run's timeout: a lock that expires while its task is still running lets the next
+    # dispatch join a live run.
+    assert ttl > agent_schedules.run_curator_now.time_limit
     assert await fake_redis.ttl(f"agent-turn:scoped-curator-{agent['id']}") == -2
 
 

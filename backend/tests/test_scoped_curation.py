@@ -775,6 +775,10 @@ async def test_scoped_run_timeout_preserves_progress_and_releases_lock(
 
     monkeypatch.setattr(curation, "run_scope", stuck)
     monkeypatch.setattr(sprite_agent_service.settings, "AGENT_TURN_TIMEOUT_SECONDS", 0.05)
+    # The wall is the run timeout plus one completion window, so a test that means to
+    # reach the wall has to shorten both terms; patching the window to 0 would collapse
+    # the wall onto the timeout, which is the shape the window exists to rule out.
+    monkeypatch.setattr(curation, "MODEL_COMPLETION_WINDOW_S", 0.05)
     agent = await agent_service.get_or_create_curator(dataset.owner, wiki="external")
     before = await pool.fetchval(
         "SELECT curated_through FROM agents WHERE id=$1", UUID(agent["id"])
