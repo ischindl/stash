@@ -56,12 +56,15 @@ The second predicate is the load-bearing one. A checkout that is not on `main` i
 trunk, not a source of truth about it, and the count line prints two zeros even for a detached
 checkout that holds no branch at all.
 
-- One mechanism moves local trunk: prove the candidate tip descends from the current ref
-  (`git merge-base --is-ancestor <tip> refs/heads/main`), then advance it by a
-  compare-and-swap write of `refs/heads/main` carrying the expected old value — the move the
-  engine records as `fusion landing: STAS-<id>`. Read `git rev-parse refs/heads/main`
-  immediately before and immediately after the write; those two SHAs are the proof of a
-  landing. A directory's `HEAD` says nothing about a ref.
+- One mechanism moves local trunk: prove the candidate tip descends from the current ref —
+  `git merge-base --is-ancestor refs/heads/main <tip>` exits 0 only when the candidate
+  already contains current trunk, which is the direction a forward landing needs. Git tests
+  the FIRST operand as the ancestor, so the reversed order proves the opposite: that the tip
+  is already inside trunk — where a stale tree sits, and the read that licenses moving trunk
+  backwards. Then advance the ref by a compare-and-swap write of `refs/heads/main` carrying
+  the expected old value — the move the engine records as `fusion landing: STAS-<id>`. Read
+  `git rev-parse refs/heads/main` immediately before and immediately after the write; those
+  two SHAs are the proof of a landing. A directory's `HEAD` says nothing about a ref.
 - Never advance the trunk ref from a linked worktree by an unguarded write: no `git branch -f`,
   no message-less `update-ref`, no fetch refspec into the trunk branch, no
   `--ignore-other-worktrees` — and never at all while some worktree holds the trunk branch
