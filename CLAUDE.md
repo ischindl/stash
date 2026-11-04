@@ -38,31 +38,64 @@ Never commit screenshots, recordings, or other assets that exist only to support
 
 ### Landing hygiene
 
-The trunk checkout — the one checkout where the trunk branch is checked out — is shared:
-other sessions move its ref while it sleeps, so its on-disk state is never yours to assume.
+Trunk is `refs/heads/main`. Name it as that ref and quote it with the SHA read from the ref
+itself at that moment — `git rev-parse refs/heads/main` — never as a checkout's `HEAD`, which
+can sit detached behind the ref it is named for while the ref moves on without it.
 
-- Never advance the trunk ref from a linked worktree: no `update-ref`, no `git branch -f`, no
-  fetch refspec into the trunk branch, no `--ignore-other-worktrees` — card work never happens in the trunk checkout, so the
-  trunk ref moves only by merging inside it: `git merge --ff-only <sha>` run inside the trunk checkout,
-  the one primitive that moves the ref *and* refreshes the index and files in the same step.
-  A ref write with no message leaves that checkout behind its own ref, and the difference
-  reads as a huge staged revert of work that already landed; the next commit from there lands
-  the revert.
-- Verify that checkout on both sides of the landing. `status --porcelain` must print nothing on BOTH sides of the
-  merge, and clean is two facts, not one: the listing is
+**Pre-landing gate.** Run this block before any landing and before any measurement taken from
+a tree. STOP on any mismatch: a tree that fails the gate yields no measurement and no report.
+
+```bash
+TREE="${TRUNK_TREE:?the checkout you intend to land from or measure in}"
+git rev-parse --verify refs/heads/main  # must print a SHA
+git -C "$TREE" rev-parse --abbrev-ref HEAD  # must print main
+git -C "$TREE" rev-list --left-right --count refs/heads/main...HEAD  # must print two tab-separated zeros
+```
+
+The second predicate is the load-bearing one. A checkout that is not on `main` is a mirror of
+trunk, not a source of truth about it, and the count line prints two zeros even for a detached
+checkout that holds no branch at all.
+
+- One mechanism moves local trunk: prove the candidate tip descends from the current ref
+  (`git merge-base --is-ancestor <tip> refs/heads/main`), then advance it by a
+  compare-and-swap write of `refs/heads/main` carrying the expected old value — the move the
+  engine records as `fusion landing: STAS-<id>`. Read `git rev-parse refs/heads/main`
+  immediately before and immediately after the write; those two SHAs are the proof of a
+  landing. A directory's `HEAD` says nothing about a ref.
+- Never advance the trunk ref from a linked worktree by an unguarded write: no `git branch -f`,
+  no message-less `update-ref`, no fetch refspec into the trunk branch, no
+  `--ignore-other-worktrees` — and never at all while some worktree holds the trunk branch
+  checked out, because card work never happens in the trunk checkout and a held ref belongs to
+  that tree. When the ref is held, the write is an operator leg: hand over the exact command
+  with its expected-old value.
+- Fast-forwarding a checked-out tree is retired as the landing mechanism for this repository's
+  local trunk; the engine repository has its own rail and keeps it. The retired recipe was a
+  `git merge --ff-only` run in a trunk tree, and it had somewhere to land only while some
+  checkout actually held `refs/heads/main`. Against a detached checkout it advances `HEAD` and
+  moves no ref, so it exits 0 and leaves the work unreferenced. The loud variant — a branch not
+  at the tip — fails; the quiet variant does the damage.
+- Verify every tree the landing touches, on both sides. Where a worktree does hold trunk,
+  `status --porcelain` must print nothing on BOTH sides of the move, and clean is two facts, not one: the listing is
   empty AND its `write-tree` equals `HEAD^{tree}`. Read the output — a successful exit code
-  proves neither. A merge that reports success while either side is dirty is a failure.
-- A landing is that one merge plus the files it brings — never a hand-picked file copy from
+  proves neither. A landing that reports success while a side is dirty is a failure.
+- A landing is the ref move plus the commits it brings — never a hand-picked file copy from
   another worktree, never a bare `commit -a`.
-- A trunk checkout dirty with edits you did not make is a STOP-and-report condition: do not `commit -a`,
-  `stash`, `reset --hard`, or `clean` them away. First prove per path that the content is
-  byte-identical to a previous trunk tip recorded in the trunk's own reflog — zero unique
-  content — and only then restore those paths to the current commit with an explicit `--source=HEAD`.
+- A trunk checkout dirty with edits you did not make is a STOP-and-report condition: do not
+  `commit -a`, `stash`, `reset --hard`, or `clean` them away. First prove per path that the
+  content is byte-identical to a previous trunk tip recorded in the trunk's own reflog — zero
+  unique content — and only then restore those paths to the current commit with an explicit `--source=HEAD`.
   The flag-less `restore --staged --worktree` names no source, so the command line never says which
   content it restores; `--source=HEAD` does. On git 2.55.0 the flag-less form was measured to exit 0
   and leave index and work tree at HEAD's content — empty `status --porcelain`, on the phantom and
   on a HEAD/index/work-tree three-way split alike — and no other git was measured here, so the
-  source is named, not assumed.
+  source is named, not assumed. Nothing lands into a mirror any more, so a mirror's drift is
+  stale-mirror noise to be checked out again, never a revert waiting to be committed — which is
+  precisely why the gate's tree predicate is mandatory.
+
+STAS-244 wrote this rule while a checkout really did hold `main`, where a message-less ref
+write left that tree behind its own ref and the difference read as a huge staged revert of work
+that had already landed. That diagnosis and every clause above stand; only the primitive
+changed, because the primitive it named no longer has a tree to move.
 
 <!-- stash-context -->
 ## Stash

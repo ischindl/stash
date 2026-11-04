@@ -23,13 +23,14 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 RULE_HEADING = "### Landing hygiene"
 MANAGED_BLOCK_MARKER = "<!-- stash-context -->"
 
-# Each literal pins one behaviour a landing agent must be told: no ref write from elsewhere,
-# merge inside the trunk, verify both sides, one merge not a copy, STOP, and the restore form
+# Each literal pins one behaviour a landing agent must be told: no unguarded ref write from
+# elsewhere, the compare-and-swap ref move that replaced the trunk-tree fast-forward, verify
+# both sides, one move not a copy, STOP, and the restore form
 # that names the content source (the flag-less form names none).
 REQUIRED_LITERALS = (
     "card work never happens in the trunk checkout",
     "Never advance the trunk ref from a linked worktree",
-    "`git merge --ff-only <sha>` run inside the trunk checkout",
+    "compare-and-swap write of `refs/heads/main`",
     "`status --porcelain` must print nothing on BOTH sides",
     "empty AND its `write-tree` equals `HEAD^{tree}`",
     "never a bare `commit -a`",
