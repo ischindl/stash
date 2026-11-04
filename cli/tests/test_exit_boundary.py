@@ -164,13 +164,14 @@ def test_missing_argument_usage_error_stays_clean(monkeypatch, capsys) -> None:
     (a ``UsageError`` subclass) during parsing — before any command body or
     client call runs — instead of rendering the error itself. The boundary
     catch must route that through typer's Rich error panel plus the
-    ``Hint:`` line (both stderr) and exit 2, the same exit a dependencyless
-    success invocation would, so a missing arg never surfaces as an unhandled
-    Click traceback.
+    ``Hint:`` line (both stderr) and exit with the user-error code (1) — a
+    missing argument is caller-fixable, so it is not the internal-fault band a
+    dependencyless success (exit 0) or a backend failure (exit 2) would give,
+    and it must never surface as an unhandled Click traceback.
     """
     code, out, err = _run_main(monkeypatch, capsys, ["stash", "search"])
 
-    assert code == EXIT_INTERNAL_ERROR
+    assert code == EXIT_USER_ERROR
     assert "Missing argument" in err
     assert "Hint:" in err
     assert out == ""

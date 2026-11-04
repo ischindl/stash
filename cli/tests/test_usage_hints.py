@@ -4,8 +4,10 @@ The convention these tests lock: whenever Click fails to parse an
 invocation — unknown command (top-level or under a group), unknown option,
 missing argument, option requiring an argument — ``main`` renders typer's
 unchanged Rich error panel to stderr, appends exactly one ``Hint:`` line to
-stderr, and exits with Click's usage-error code (2). The hint prefers a
-concrete runnable suggestion (``Did you mean `stash skills list`?``) over a
+stderr, and exits with the user-error code (1) — an invocation failure is the
+caller-fixable band, so an agent can tell a mistyped command from a dead
+backend. The hint prefers a concrete runnable suggestion
+(``Did you mean `stash skills list`?``) over a
 ``--help`` pointer. Hints are guidance, not data: they never write to
 stdout, so they can never enter the ``--json`` data channel, and they are
 never suppressed. The success paths (``--version``, bare help) stay
@@ -17,7 +19,7 @@ from __future__ import annotations
 import pytest
 
 from cli import main
-from cli.exit_codes import EXIT_SUCCESS
+from cli.exit_codes import EXIT_SUCCESS, EXIT_USER_ERROR
 
 
 def _run_cli(monkeypatch, capsys, argv) -> tuple[int, str, str]:
@@ -46,10 +48,10 @@ def _hint_line(err: str) -> str:
 
 
 def test_top_level_typo_suggests_command(monkeypatch, capsys) -> None:
-    """`stash skil list` → panel + Did-you-mean hint, stdout clean, exit 2."""
+    """`stash skil list` → panel + Did-you-mean hint, stdout clean, exit 1."""
     code, out, err = _run_cli(monkeypatch, capsys, ["skil", "list"])
 
-    assert code == 2
+    assert code == EXIT_USER_ERROR
     assert out == ""
     assert "No such command 'skil'" in err  # the error panel is preserved
     hint = _hint_line(err)
@@ -61,7 +63,7 @@ def test_group_level_typo_suggests_full_path(monkeypatch, capsys) -> None:
     """`stash skills lst` → hint carries the full runnable path."""
     code, out, err = _run_cli(monkeypatch, capsys, ["skills", "lst"])
 
-    assert code == 2
+    assert code == EXIT_USER_ERROR
     assert out == ""
     assert "No such command 'lst'" in err
     assert "Did you mean `stash skills list`?" in _hint_line(err)
@@ -71,7 +73,7 @@ def test_hyphenated_typo_suggests(monkeypatch, capsys) -> None:
     """`stash skil-list` (dash where a space belongs) still gets a suggestion."""
     code, out, err = _run_cli(monkeypatch, capsys, ["skil-list"])
 
-    assert code == 2
+    assert code == EXIT_USER_ERROR
     assert out == ""
     assert "Did you mean" in _hint_line(err)
 
@@ -80,7 +82,7 @@ def test_unmatched_command_gets_help_fallback(monkeypatch, capsys) -> None:
     """No close match at all → the root --help fallback, never a blank hint."""
     code, out, err = _run_cli(monkeypatch, capsys, ["zzznope"])
 
-    assert code == 2
+    assert code == EXIT_USER_ERROR
     assert out == ""
     assert "No such command 'zzznope'" in err
     hint = _hint_line(err)
@@ -95,27 +97,27 @@ def test_missing_required_argument_points_to_help(monkeypatch, capsys) -> None:
     """`stash skills add` (FOLDER missing) → --help pointer for that command."""
     code, out, err = _run_cli(monkeypatch, capsys, ["skills", "add"])
 
-    assert code == 2
+    assert code == EXIT_USER_ERROR
     assert out == ""
     assert "Missing argument" in err
     assert "Pass `stash skills add --help` to see this command's options." in _hint_line(err)
 
 
 def test_unknown_option_points_to_help(monkeypatch, capsys) -> None:
-    """`stash skills add --bogus x.md` → --help pointer, exit 2."""
+    """`stash skills add --bogus x.md` → --help pointer, exit 1."""
     code, out, err = _run_cli(monkeypatch, capsys, ["skills", "add", "--bogus", "x.md"])
 
-    assert code == 2
+    assert code == EXIT_USER_ERROR
     assert out == ""
     assert "No such option" in err
     assert "Pass `stash skills add --help`" in _hint_line(err)
 
 
 def test_option_requiring_argument_points_to_help(monkeypatch, capsys) -> None:
-    """`stash browse --sort` (value required) → --help pointer, exit 2."""
+    """`stash browse --sort` (value required) → --help pointer, exit 1."""
     code, out, err = _run_cli(monkeypatch, capsys, ["browse", "--sort"])
 
-    assert code == 2
+    assert code == EXIT_USER_ERROR
     assert out == ""
     assert "requires an argument" in err
     assert "Pass `stash browse --help`" in _hint_line(err)
@@ -125,7 +127,7 @@ def test_root_unknown_option_points_to_root_help(monkeypatch, capsys) -> None:
     """An option Click can't resolve before any command gets the root hint."""
     code, out, err = _run_cli(monkeypatch, capsys, ["--bogus"])
 
-    assert code == 2
+    assert code == EXIT_USER_ERROR
     assert out == ""
     assert "Pass `stash --help` to see all commands and options." in _hint_line(err)
 
@@ -137,7 +139,7 @@ def test_json_mode_keeps_stdout_empty(monkeypatch, capsys) -> None:
     """Global --json before a bad command: stdout stays empty, hint on stderr."""
     code, out, err = _run_cli(monkeypatch, capsys, ["--json", "skil", "list"])
 
-    assert code == 2
+    assert code == EXIT_USER_ERROR
     assert out == ""
     assert "Hint:" in err
     assert "Did you mean" in err
@@ -170,7 +172,7 @@ def test_usage_failures_never_write_stdout(monkeypatch, capsys, argv) -> None:
     construction, so --json mode can never carry a hint)."""
     code, out, err = _run_cli(monkeypatch, capsys, argv)
 
-    assert code == 2
+    assert code == EXIT_USER_ERROR
     assert out == ""
     assert "Hint:" in err
 

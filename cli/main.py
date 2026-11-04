@@ -7437,8 +7437,9 @@ def tools_install(
 # typer's unchanged Rich error panel to stderr, then appends exactly one
 # `Hint:` line via echo_hint. Hints are guidance, not data: they never
 # write to stdout, so they can never enter the --json data channel, and
-# they are never suppressed. The exit code stays Click's usage-error code
-# (2); the panel stays typer's rich_format_error output, unmodified.
+# they are never suppressed. The exit code is the contract's user-error code
+# (1) — an invocation failure is caller-fixable, never an internal fault; the
+# panel stays typer's rich_format_error output, unmodified.
 
 
 def _collect_command_vocabulary() -> tuple[set[str], dict[str, set[str]]]:
@@ -7575,7 +7576,9 @@ def main() -> None:
       unknown option, missing/invalid argument; there is no separate
       NoSuchCommand class in Click 8.3) renders typer's unchanged Rich
       error panel, appends one contextual ``Hint:`` line (see
-      ``_emit_usage_hint``), and exits with Click's usage-error code (2).
+      ``_emit_usage_hint``), and exits with the user-error code (1): an
+      invocation failure is caller-fixable, so it must not be confusable with
+      the internal-fault code (2) that a dead backend produces.
     - ``StashError`` escaping a command body routes through the same
       classification and stderr emission as ``_err`` (user error 1, internal
       error 2).
@@ -7603,7 +7606,7 @@ def main() -> None:
     except click.UsageError as e:
         rich_utils.rich_format_error(e)
         _emit_usage_hint(args, e)
-        raise SystemExit(e.exit_code)
+        raise SystemExit(EXIT_USER_ERROR)
     except click.exceptions.Abort:
         _emit_abort()
         raise SystemExit(EXIT_USER_ERROR)
