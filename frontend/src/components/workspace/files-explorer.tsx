@@ -532,7 +532,7 @@ export default function FilesExplorer({
         <div
           ref={shareRef}
           className="fixed z-50"
-          style={{ left: Math.min(sharing.x, typeof window === "undefined" ? sharing.x : window.innerWidth - 440), top: sharing.y }}
+          style={{ left: sharing.x, top: sharing.y }}
         >
           <div className="relative w-[420px]">
             <ResourceShareDialog

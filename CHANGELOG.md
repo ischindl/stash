@@ -133,6 +133,16 @@ everything before it is captured in git history (`git log`), not here.
 
 ### Fixed
 
+- The folder share panel stays on screen on a narrow display, and with it the address you
+  hand an agent. The popover used to be placed by CSS alone: `right-0` pinned it against
+  its button and `max-w-[calc(100vw-2rem)]` only ever shrank its width, so the panel's left
+  edge landed wherever its button's right edge happened to be and nothing pulled it back —
+  on a 420 px window it measured 10 px past the right edge, with the `Agent access (MCP)`
+  row and its `Copy agent URL` button sitting in the part you cannot reach. The panel's
+  position is now calculated from its anchor in one single place and clamped inside the
+  window, so at 320, 420 and 768 px the whole panel including the agent address is on
+  screen, and in a desktop window it lands on exactly the pixels it used to.
+
 - A self-hosted curator now gets through its backlog, one slice at a time. On a stack whose
   curator runs on a local model, the nightly curation of a shared workspace used to read every
   event still owed, curate all of it, and only then write down how far it had come — so when the

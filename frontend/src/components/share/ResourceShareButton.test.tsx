@@ -217,4 +217,60 @@ describe("ResourceShareButton", () => {
     expect(screen.queryByText("Agent access (MCP)")).not.toBeInTheDocument();
   });
 
+  // jsdom has no layout, so this proves only what jsdom can prove: that the
+  // popover's coordinates come from the viewport-aware calculation and are
+  // applied to the element. The browser render is measured separately, in the
+  // task's Step 0/6 evidence - never claim this test is that measurement.
+  it("keeps the popover inside a 320px viewport anchored mid-screen", async () => {
+    vi.mocked(getShareState).mockResolvedValueOnce({
+      shares: [],
+      generalAccess: "read",
+      mcpUrl: "http://localhost:3457/api/v1/mcp/folders/folder-1",
+    });
+    // An anchor that leaves no room to the right of it: right-0 anchoring would
+    // put the panel's left edge at -104.
+    const realRect = HTMLElement.prototype.getBoundingClientRect;
+    const realInnerWidth = Object.getOwnPropertyDescriptor(window, "innerWidth");
+    HTMLElement.prototype.getBoundingClientRect =
+      () =>
+        ({
+          x: 101,
+          y: 34,
+          left: 101,
+          top: 34,
+          right: 181,
+          bottom: 50,
+          width: 80,
+          height: 16,
+          toJSON: () => ({}),
+        }) as DOMRect;
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: 320 });
+    try {
+      render(
+        <ResourceShareButton
+          objectType="folder"
+          objectId="folder-1"
+          resourceName="Research"
+          resourceUrlPath="/folders/folder-1"
+          currentUser={currentUser}
+        />,
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Share" }));
+      const dialog = await screen.findByRole("dialog", { name: "Share Research" });
+      const left = parseFloat(dialog.style.left);
+      const top = parseFloat(dialog.style.top);
+      const width = parseFloat(dialog.style.width);
+      expect([left, top, width].every(Number.isFinite)).toBe(true);
+      expect(left).toBeGreaterThanOrEqual(0);
+      expect(left + width).toBeLessThanOrEqual(320);
+      expect(await screen.findByRole("button", { name: "Copy agent URL" })).toBeInTheDocument();
+    } finally {
+      HTMLElement.prototype.getBoundingClientRect = realRect;
+      if (realInnerWidth) {
+        Object.defineProperty(window, "innerWidth", realInnerWidth);
+      } else {
+        Reflect.deleteProperty(window, "innerWidth");
+      }
+    }
+  });
 });

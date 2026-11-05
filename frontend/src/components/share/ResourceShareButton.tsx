@@ -5,6 +5,7 @@ import {
   RefObject,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
 } from "react";
@@ -21,6 +22,7 @@ import {
   type ObjectShare,
   type SharedObjectType,
 } from "../../lib/api";
+import { anchorPopover } from "../../lib/popover-anchor";
 import type { User } from "../../lib/types";
 
 type SharePermission = Extract<GeneralPermission, "read" | "comment" | "write">;
@@ -116,6 +118,12 @@ export function ResourceShareDialog({
   const [generalAccess, setGeneralAccess] = useState<GeneralPermission>("none");
   const [mcpUrl, setMcpUrl] = useState<string | null>(null);
   const [savingAccess, setSavingAccess] = useState(false);
+  const [panelStyle, setPanelStyle] = useState<{
+    top: number;
+    left: number;
+    width: number;
+  } | null>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
 
   const supportsGeneralAccess = GENERAL_ACCESS_TYPES.includes(objectType);
 
@@ -163,6 +171,30 @@ export function ResourceShareDialog({
   useEffect(() => {
     void loadShares();
   }, [loadShares]);
+
+  // The panel's offset from the viewport depends on where its anchor sits, which
+  // CSS never knows, so it is measured rather than styled. The anchor is the
+  // element this panel is mounted inside, not `boundaryRef`: on the row-menu path
+  // that ref is attached in the same commit as this effect, and a child's layout
+  // effect runs before its parent's ref exists, so reading the ref here crashes
+  // the page. Layout effect, so the first paint is already anchored; re-measured
+  // on resize/scroll, because a viewport-fixed panel no longer tracks its anchor
+  // for free the way an absolutely positioned one did.
+  useLayoutEffect(() => {
+    const boundary = panelRef.current?.parentElement;
+    if (!boundary) {
+      throw new Error("ResourceShareDialog must be mounted inside the element that anchors it");
+    }
+    const measure = () =>
+      setPanelStyle(anchorPopover(boundary.getBoundingClientRect(), window.innerWidth));
+    measure();
+    window.addEventListener("resize", measure);
+    window.addEventListener("scroll", measure, true);
+    return () => {
+      window.removeEventListener("resize", measure);
+      window.removeEventListener("scroll", measure, true);
+    };
+  }, []);
 
   useEffect(() => {
     function onDown(event: MouseEvent) {
@@ -254,9 +286,11 @@ export function ResourceShareDialog({
 
   return (
     <div
+      ref={panelRef}
       role="dialog"
       aria-label={`Share ${displayName}`}
-      className="absolute right-0 top-full z-40 mt-1.5 w-[420px] max-w-[calc(100vw-2rem)] rounded-lg border border-border bg-base p-4 shadow-lg"
+      style={panelStyle ?? undefined}
+      className="fixed z-40 rounded-lg border border-border bg-base p-4 shadow-lg"
     >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
