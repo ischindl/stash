@@ -1,25 +1,15 @@
 """The daily Memory curator: provisioning, change feed, cost gate, prompt."""
 
-import asyncio
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock
-from uuid import UUID, uuid4
+from uuid import UUID
 
-import asyncpg
 import pytest
 from httpx import AsyncClient
 
-from backend.services import (
-    agent_service,
-    alert_service,
-    curation_service,
-    prompts,
-    session_folder_service,
-)
-from backend.services.curation_service import NEVER, Position
+from backend.services import agent_service, alert_service, curation_service, prompts
 
 from .conftest import unique_name
-from .test_source_sync_claims import _configure_alerts
 
 
 async def _register(client: AsyncClient) -> tuple[str, UUID]:
@@ -47,42 +37,6 @@ async def test_curator_provisioned_reserved_and_due(client: AsyncClient, _db_poo
     # Idempotent — same row on second call.
     again = await agent_service.get_or_create_curator(uid)
     assert again["id"] == curator["id"]
-
-
-@pytest.mark.asyncio
-async def test_watermark_pair_accepts_a_whole_instant(client: AsyncClient, _db_pool):
-    """Migration 0242: the event half is a nullable uuid column, and NULL there is
-    a complete position — the instant alone, every event at it behind — which is
-    what every watermark stored before the column existed. That reading is why the
-    migration backfills nothing and why this legal write needs no event id."""
-    key, uid = await _register(client)
-    curator = await agent_service.get_or_create_curator(uid)
-    await _db_pool.execute(
-        "UPDATE agents SET curated_through = $2, curated_through_event_id = NULL WHERE id = $1",
-        UUID(curator["id"]),
-        datetime(2026, 1, 1, tzinfo=UTC),
-    )
-    stored = await _db_pool.fetchrow(
-        "SELECT curated_through, curated_through_event_id FROM agents WHERE id = $1",
-        UUID(curator["id"]),
-    )
-    assert stored["curated_through"] == datetime(2026, 1, 1, tzinfo=UTC)
-    assert stored["curated_through_event_id"] is None
-
-
-@pytest.mark.asyncio
-async def test_watermark_pair_rejects_an_event_with_no_instant(client: AsyncClient, _db_pool):
-    """The pair's CHECK: an event id at no instant is a half-written position, not
-    a position that bounds nothing. Every reader may treat the two columns as one
-    value only because no row can hold half of it."""
-    key, uid = await _register(client)
-    curator = await agent_service.get_or_create_curator(uid)
-    with pytest.raises(asyncpg.CheckViolationError):
-        await _db_pool.execute(
-            "UPDATE agents SET curated_through = NULL, curated_through_event_id = $2 WHERE id = $1",
-            UUID(curator["id"]),
-            uuid4(),
-        )
 
 
 @pytest.mark.asyncio
@@ -159,11 +113,9 @@ async def test_has_changes_and_feed_exclude_memory(client: AsyncClient, _db_pool
         json={"name": "Notes", "content": "a real note"},
         headers=_auth(key),
     )
-    assert (
-        await curation_service.has_changes_since(uid, uid, Position(old), wiki="internal") is True
-    )
+    assert await curation_service.has_changes_since(uid, uid, old) is True
 
-    feed = await curation_service.changes_since(uid, uid, Position(old), wiki="internal")
+    feed = await curation_service.changes_since(uid, uid, old)
     assert any(p["name"] == "Notes" for p in feed["pages"])
 
     # A page written INTO the Memory folder must NOT appear (no self-curation).
@@ -173,7 +125,7 @@ async def test_has_changes_and_feed_exclude_memory(client: AsyncClient, _db_pool
         json={"name": "Wiki Page", "content": "curated", "folder_id": mem["id"]},
         headers=_auth(key),
     )
-    feed2 = await curation_service.changes_since(uid, uid, Position(old), wiki="internal")
+    feed2 = await curation_service.changes_since(uid, uid, old)
     assert all(p["name"] != "Wiki Page" for p in feed2["pages"])
 
 
@@ -201,10 +153,8 @@ async def test_hydrated_saves_flow_through_the_feed(client: AsyncClient, _db_poo
         UUID(source["id"]),
     )
 
-    assert (
-        await curation_service.has_changes_since(uid, uid, Position(old), wiki="internal") is True
-    )
-    feed = await curation_service.changes_since(uid, uid, Position(old), wiki="internal")
+    assert await curation_service.has_changes_since(uid, uid, old) is True
+    feed = await curation_service.changes_since(uid, uid, old)
     assert feed["counts"]["saves"] == 1
     save = feed["saves"][0]
     assert save["name"] == "@bob - 77"
@@ -238,23 +188,17 @@ async def test_changed_drive_docs_flow_through_the_feed(client: AsyncClient, _db
         UUID(source["id"]),
     )
 
-    assert (
-        await curation_service.has_changes_since(uid, uid, Position(old), wiki="internal") is True
-    )
-    feed = await curation_service.changes_since(uid, uid, Position(old), wiki="internal")
+    assert await curation_service.has_changes_since(uid, uid, old) is True
+    feed = await curation_service.changes_since(uid, uid, old)
     assert feed["counts"]["source_docs"] == 1
     doc = feed["source_docs"][0]
     assert doc["path"] == "Sheets/Brakes"
     assert doc["snippet"] == "the final recipe"
 
 
-async def _push_events(
-    client: AsyncClient, key: str, events: list[dict], headers: dict | None = None
-) -> None:
+async def _push_events(client: AsyncClient, key: str, events: list[dict]) -> None:
     r = await client.post(
-        "/api/v1/me/sessions/events/batch",
-        json={"events": events},
-        headers=headers or _auth(key),
+        "/api/v1/me/sessions/events/batch", json={"events": events}, headers=_auth(key)
     )
     assert r.status_code == 201
 
@@ -285,30 +229,23 @@ async def test_feed_overflow_never_drops_events(client: AsyncClient, _db_pool, m
         ],
     )
 
-    feed = await curation_service.changes_since(uid, uid, Position(old), wiki="internal")
+    feed = await curation_service.changes_since(uid, uid, old)
     assert feed["history_has_more"] is True
     assert [h["content"] for h in feed["history"]] == ["turn 0", "turn 1", "turn 2"]
 
     until = base + timedelta(hours=1)
-    through = await curation_service.complete_through(uid, Position(old), until, wiki="internal")
-    # Complete only through the last event that fit — the third one, mid-instant —
-    # not through `until`. The instant is not the boundary any more either: these
-    # three events have distinct timestamps, so its event half names `turn 2`.
-    boundary_event = await _db_pool.fetchval(
-        "SELECT id FROM history_events WHERE owner_user_id = $1 AND content = $2", uid, "turn 2"
-    )
-    assert through == Position(base + timedelta(minutes=2), boundary_event)
+    through = await curation_service.complete_through(uid, old, until)
+    # Complete only through the last event that fit, not through `until`.
+    assert through < base + timedelta(minutes=3)
 
-    # The next run's feed starts where this one stopped: nothing was lost. And
-    # unlike the instant-only cursor, the boundary event does NOT re-appear — the
-    # position says which event at that instant was read, so a resuming run sees
-    # each event exactly once instead of paying for a duplicate on every overflow.
-    next_feed = await curation_service.changes_since(uid, uid, through, wiki="internal")
-    assert [h["content"] for h in next_feed["history"]] == ["turn 3", "turn 4"]
+    # The next run's feed starts where this one stopped: nothing was lost.
+    # The boundary event re-appears by design — the watermark backs off a
+    # microsecond so events sharing its timestamp can never be skipped; a
+    # duplicated boundary event is the cheap side of that trade.
+    next_feed = await curation_service.changes_since(uid, uid, through)
+    assert [h["content"] for h in next_feed["history"]] == ["turn 2", "turn 3", "turn 4"]
     assert next_feed["history_has_more"] is False
-    assert await curation_service.complete_through(
-        uid, through, until, wiki="internal"
-    ) == Position(until)
+    assert await curation_service.complete_through(uid, through, until) == until
 
 
 @pytest.mark.asyncio
@@ -345,12 +282,12 @@ async def test_curate_sessions_do_not_consume_feed_slots(
     ]
     await _push_events(client, key, curate_noise + real)
 
-    feed = await curation_service.changes_since(uid, uid, Position(old), wiki="internal")
+    feed = await curation_service.changes_since(uid, uid, old)
     assert [h["content"] for h in feed["history"]] == ["real 0", "real 1"]
     assert feed["history_has_more"] is False
     assert await curation_service.complete_through(
-        uid, Position(old), base + timedelta(hours=1), wiki="internal"
-    ) == Position(base + timedelta(hours=1))
+        uid, old, base + timedelta(hours=1)
+    ) == base + timedelta(hours=1)
 
 
 async def test_has_changes_false_after_watermark(client: AsyncClient, _db_pool):
@@ -360,10 +297,7 @@ async def test_has_changes_false_after_watermark(client: AsyncClient, _db_pool):
     )
     future = datetime.now(UTC) + timedelta(hours=1)
     # Nothing changed after a future watermark → no changes → curator skipped.
-    assert (
-        await curation_service.has_changes_since(uid, uid, Position(future), wiki="internal")
-        is False
-    )
+    assert await curation_service.has_changes_since(uid, uid, future) is False
 
 
 @pytest.mark.asyncio
@@ -461,19 +395,13 @@ async def test_curator_run_does_not_echo_loop(
     await _run_scheduled_agent(UUID(dispatched[0][0]), dispatched[0][1])
 
     row = await _db_pool.fetchrow(
-        "SELECT curated_through, curated_through_event_id, last_run_outcome FROM agents "
-        "WHERE id = $1",
-        UUID(curator["id"]),
+        "SELECT curated_through, last_run_outcome FROM agents WHERE id = $1", UUID(curator["id"])
     )
     # Watermark advanced past the page change, and the run's own transcript
     # doesn't re-trigger the gate or appear in the feed.
     assert row["last_run_outcome"] == "ran"
-    advanced_position = curation_service.position_of(row)
-    assert (
-        await curation_service.has_changes_since(uid, uid, advanced_position, wiki="internal")
-        is False
-    )
-    feed = await curation_service.changes_since(uid, uid, advanced_position, wiki="internal")
+    assert await curation_service.has_changes_since(uid, uid, row["curated_through"]) is False
+    feed = await curation_service.changes_since(uid, uid, row["curated_through"])
     assert all(not str(e["session_id"] or "").startswith("agent-curate-") for e in feed["history"])
 
 
@@ -510,8 +438,6 @@ async def test_failed_curator_run_preserves_watermark(
     from backend.services import sprite_agent_service
     from backend.tasks.agent_schedules import _run_due, _run_scheduled_agent, run_scheduled_agent
 
-    # A patched `send_alert` claims configured mode (STAS-268 gates the call).
-    _configure_alerts(monkeypatch)
     send_alert = AsyncMock()
     monkeypatch.setattr(alert_service, "send_alert", send_alert)
 
@@ -523,7 +449,7 @@ async def test_failed_curator_run_preserves_watermark(
     watermark = datetime.now(UTC) - timedelta(minutes=2)
     await _make_due(_db_pool, curator["id"], watermark)
 
-    async def boom(agent, stamp, read_position):
+    async def boom(agent, stamp):
         raise RuntimeError("sprite exploded")
 
     monkeypatch.setattr(sprite_agent_service, "run_scheduled", boom)
@@ -546,18 +472,10 @@ async def test_failed_run_records_error_and_refunds_credit(
 ):
     """A failed run must be visible (last_run_error) and must not eat the
     free monthly allowance — an infra outage would otherwise silently burn
-    all credits.
-
-    The recovery below reads both founder-visible columns: the error clearing is what
-    this test always proved, and the outcome returning to 'ran' is the half that was
-    never read anywhere for a lane that had genuinely failed. The scoped lane pins the
-    same pair in
-    `test_scoped_curation.py::test_the_next_run_resumes_at_the_watermark_the_last_run_committed`."""
+    all credits."""
     from backend.services import sprite_agent_service
     from backend.tasks.agent_schedules import _run_due, _run_scheduled_agent, run_scheduled_agent
 
-    # A patched `send_alert` claims configured mode (STAS-268 gates the call).
-    _configure_alerts(monkeypatch)
     send_alert = AsyncMock()
     monkeypatch.setattr(alert_service, "send_alert", send_alert)
 
@@ -568,7 +486,7 @@ async def test_failed_run_records_error_and_refunds_credit(
     )
     await _make_due(_db_pool, curator["id"], datetime.now(UTC) - timedelta(minutes=2))
 
-    async def boom(agent, stamp, read_position):
+    async def boom(agent, stamp):
         raise RuntimeError("sprite exploded")
 
     real_run_scheduled = sprite_agent_service.run_scheduled
@@ -596,11 +514,10 @@ async def test_failed_run_records_error_and_refunds_credit(
     assert await _run_due() == 1
     await _run_scheduled_agent(UUID(dispatched[1][0]), dispatched[1][1])
     row = await _db_pool.fetchrow(
-        "SELECT last_run_error, last_run_outcome, month_run_count FROM agents WHERE id = $1",
+        "SELECT last_run_error, month_run_count FROM agents WHERE id = $1",
         UUID(curator["id"]),
     )
     assert row["last_run_error"] is None
-    assert row["last_run_outcome"] == "ran"  # the lane reads healthy, not merely quiet
     assert row["month_run_count"] == 1
 
 
@@ -662,7 +579,7 @@ async def test_failed_manual_recompute_records_error(
     key, uid = await _register(client)
     curator = await agent_service.get_or_create_curator(uid)
 
-    async def boom(agent, stamp, read_position):
+    async def boom(agent, stamp):
         raise RuntimeError("harness missing")
 
     monkeypatch.setattr(sprite_agent_service, "run_scheduled", boom)
@@ -694,7 +611,7 @@ async def test_manual_recompute_bookkeeping_failure_records_failed_outcome(
     _key, uid = await _register(client)
     curator = await agent_service.get_or_create_curator(uid)
 
-    async def boom(user_id, curated_through, now, wiki, folder_id=None):
+    async def boom(user_id, curated_through, now):
         raise RuntimeError("watermark write failed")
 
     monkeypatch.setattr(curation_service, "complete_through", boom)
@@ -722,26 +639,11 @@ async def test_recompute_409_when_nothing_changed(client: AsyncClient, _db_pool)
 
 
 @pytest.mark.asyncio
-async def test_recompute_metered_like_the_scheduler(client: AsyncClient, _db_pool, monkeypatch):
+async def test_recompute_metered_like_the_scheduler(client: AsyncClient, _db_pool):
     """Manual runs draw from the same monthly sleep-time allowance: free
     accounts stop at the cap, enterprise is unlimited."""
     from backend.config import settings
-    from backend.services import agent_auth
     from backend.tasks.agent_schedules import run_curator_now
-
-    # The recompute trigger resolves the user's credentials up front; a fresh
-    # user has none, so give them a connected local endpoint to test the
-    # metering in isolation (STAS-131 removed the no-credential fallback).
-    async def local_cred(user_id, provider=None):
-        if provider == "local":
-            return {
-                "provider": "local",
-                "kind": "endpoint",
-                "secret": '{"base_url": "http://127.0.0.1:11434/v1", "model": "m"}',
-            }
-        return None
-
-    monkeypatch.setattr(agent_auth, "_get_credential", local_cred)
 
     key, uid = await _register(client)
     curator = await agent_service.get_or_create_curator(uid)
@@ -839,797 +741,56 @@ async def test_memory_tree_nests_folders_and_scopes_to_memory(client: AsyncClien
     assert all(f["id"] != mem["id"] for f in files_tree["folders"])
 
 
-async def _file_session_into_folder(
-    client: AsyncClient, key: str, uid: UUID, pool, session_id: str
-) -> str:
-    """Create the "Acme Corp" folder, push one event for `session_id`, and
-    file that session into the folder through the production assign route.
-    Returns the folder id."""
-    r = await client.post(
-        "/api/v1/me/session-folders", json={"name": "Acme Corp"}, headers=_auth(key)
-    )
-    assert r.status_code == 200
-    folder = r.json()
-
-    await _push_events(
-        client,
-        key,
-        [
-            {
-                "agent_name": "heavi-chat",
-                "event_type": "user_message",
-                "content": "filing the session",
-                "session_id": session_id,
-                "created_at": datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC).isoformat(),
-            }
-        ],
-    )
-    row_id = await pool.fetchval(
-        "SELECT id FROM sessions WHERE owner_user_id = $1 AND session_id = $2",
-        uid,
-        session_id,
-    )
-    r = await client.post(
-        "/api/v1/me/session-folders/assign",
-        json={"session_row_ids": [str(row_id)], "folder_id": str(folder["id"])},
-        headers=_auth(key),
-    )
-    assert r.status_code == 200
-    assert r.json() == {"ok": True, "moved": 1}
-    return folder["id"]
-
-
 @pytest.mark.asyncio
-async def test_feed_carries_session_folder(client: AsyncClient, _db_pool):
-    """The personal curator prompt tells the curator that each history event
-    carries its session's folder — folder placement is the owner's deliberate
-    curation signal. The feed must actually deliver it: a filed session
-    presents its folder name (plus the id at row level), a bare session
-    presents null, and the pre-existing keys stay untouched."""
-    key, uid = await _register(client)
-    old = datetime(2020, 1, 1, tzinfo=UTC)
-
-    folder_id = await _file_session_into_folder(client, key, uid, _db_pool, "conv-folder")
-    await _push_events(
-        client,
-        key,
-        [
-            {
-                "agent_name": "heavi-chat",
-                "event_type": "user_message",
-                "content": "no folder here",
-                "session_id": "conv-bare",
-                "created_at": datetime(2026, 1, 1, 12, 5, 0, tzinfo=UTC).isoformat(),
-            }
-        ],
+async def test_text_bounded_feed_eventually_covers_every_event(client, pool):
+    _, uid = await _register(client)
+    base = datetime(2026, 1, 1, tzinfo=UTC)
+    await pool.executemany(
+        "INSERT INTO history_events (owner_user_id,created_by,agent_name,event_type,session_id,content,created_at) "
+        "VALUES ($1,$1,'test','user_message','text-budget-test',$2,$3)",
+        [(uid, str(i) * 60, base + timedelta(minutes=i)) for i in range(5)],
     )
-
-    feed = await curation_service.changes_since(uid, uid, Position(old), wiki="internal")
-    by_session = {h["session_id"]: h for h in feed["history"]}
-    filed, bare = by_session["conv-folder"], by_session["conv-bare"]
-    assert filed["session_folder"] == "Acme Corp"
-    assert bare["session_folder"] is None
-    # The pre-existing contract is untouched: same keys, same values.
-    for h in (filed, bare):
-        assert h["agent_name"] == "heavi-chat"
-        assert h["event_type"] == "user_message"
-        assert h["content"]
-        assert h["created_at"]
-        assert h["user"] is None
-        assert h["user_share_wiki"] is None
-
-    # Row level carries the id too — 1:1, so no fan-out and no missing row.
-    rows, has_more = await curation_service._feed_events(
-        uid, Position(old), None, 100, wiki="internal"
-    )
-    assert has_more is False
-    rows_by_session = {r["session_id"]: r for r in rows}
-    assert rows_by_session["conv-folder"]["session_folder"] == "Acme Corp"
-    assert rows_by_session["conv-folder"]["session_folder_id"] == UUID(folder_id)
-    assert rows_by_session["conv-bare"]["session_folder"] is None
-    assert rows_by_session["conv-bare"]["session_folder_id"] is None
-
-
-@pytest.mark.asyncio
-async def test_changes_endpoint_exposes_session_folder(client: AsyncClient, _db_pool):
-    """GET /api/v1/me/changes is the exact JSON `stash changes --json` passes
-    through — the curator's actual input must carry the session's folder,
-    since the prompt's folder rules are dead text without it."""
-    key, uid = await _register(client)
-    old = datetime(2020, 1, 1, tzinfo=UTC)
-
-    await _file_session_into_folder(client, key, uid, _db_pool, "conv-folder")
-
-    r = await client.get(
-        "/api/v1/me/changes", params={"since": old.isoformat()}, headers=_auth(key)
-    )
-    assert r.status_code == 200
-    body = r.json()
-    entry = next(h for h in body["history"] if h["session_id"] == "conv-folder")
-    assert entry["session_folder"] == "Acme Corp"
-
-
-async def _push_one(client: AsyncClient, key: str, session_id: str, when: datetime) -> None:
-    await _push_events(
-        client,
-        key,
-        [
-            {
-                "agent_name": "heavi-chat",
-                "event_type": "user_message",
-                "content": f"work in {session_id}",
-                "session_id": session_id,
-                "created_at": when.isoformat(),
-            }
-        ],
-    )
-
-
-async def _file_session(
-    client: AsyncClient, key: str, uid: UUID, pool, session_id: str, folder_id: str
-) -> None:
-    row_id = await pool.fetchval(
-        "SELECT id FROM sessions WHERE owner_user_id = $1 AND session_id = $2",
-        uid,
-        session_id,
-    )
-    r = await client.post(
-        "/api/v1/me/session-folders/assign",
-        json={"session_row_ids": [str(row_id)], "folder_id": str(folder_id)},
-        headers=_auth(key),
-    )
-    assert r.status_code == 200, r.text
-
-
-async def _default_folder_id(client: AsyncClient, key: str) -> str:
-    """Listing a scope's folders lazily ensures its Default — like any console
-    visit does."""
-    r = await client.get("/api/v1/me/session-folders", headers=_auth(key))
-    assert r.status_code == 200
-    return next(f["id"] for f in r.json()["folders"] if f["is_default"])
-
-
-@pytest.mark.asyncio
-async def test_feed_marks_which_projects_are_cleared(client: AsyncClient, _db_pool):
-    """The shared wiki now clears whole projects, not just whole users, so each
-    history event has to say whether ITS project is cleared.
-
-    Four data states, because only the middle distinction is the product:
-    a session under no folder and a session in the Default folder are both
-    UNFILED (nobody deliberately placed them, so there is no project decision to
-    honor) — while a filed session reports its project's switch either way.
-    `session_folder` keeps its raw value throughout: the name is the personal
-    curator's context signal and is not this field's business.
-    """
-    key, uid = await _register(client)
-    old = datetime(2020, 1, 1, tzinfo=UTC)
-    at = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
-
-    await _push_one(client, key, "conv-unfiled", at)
-
-    default_id = await _default_folder_id(client, key)
-    await _push_one(client, key, "conv-default", at)
-    await _file_session(client, key, uid, _db_pool, "conv-default", default_id)
-
-    off_folder = await client.post(
-        "/api/v1/me/session-folders", json={"name": "quiet-project"}, headers=_auth(key)
-    )
-    assert off_folder.status_code == 200
-    await _push_one(client, key, "conv-off", at)
-    await _file_session(client, key, uid, _db_pool, "conv-off", off_folder.json()["id"])
-
-    on_folder = await client.post(
-        "/api/v1/me/session-folders", json={"name": "loud-project"}, headers=_auth(key)
-    )
-    assert on_folder.status_code == 200
-    await session_folder_service.set_folder_share_wiki(
-        scope_user_id=uid,
-        folder_id=UUID(on_folder.json()["id"]),
-        share_wiki=True,
-    )
-    await _push_one(client, key, "conv-on", at)
-    await _file_session(client, key, uid, _db_pool, "conv-on", on_folder.json()["id"])
-
-    feed = await curation_service.changes_since(uid, uid, Position(old), wiki="internal")
-    by_session = {h["session_id"]: h for h in feed["history"]}
-
-    assert by_session["conv-unfiled"]["session_folder_share_wiki"] is None
-    assert by_session["conv-default"]["session_folder_share_wiki"] is None
-    assert by_session["conv-off"]["session_folder_share_wiki"] is False
-    assert by_session["conv-on"]["session_folder_share_wiki"] is True
-
-    # The raw name survives untouched for the personal curator — Default still
-    # reads as "Default" even though its clearance normalized to null.
-    assert by_session["conv-unfiled"]["session_folder"] is None
-    assert by_session["conv-default"]["session_folder"] == "Default"
-    assert by_session["conv-off"]["session_folder"] == "quiet-project"
-    assert by_session["conv-on"]["session_folder"] == "loud-project"
-
-    # The user contract is untouched by the new field.
-    for h in by_session.values():
-        assert h["user"] is None
-        assert h["user_share_wiki"] is None
-
-
-@pytest.mark.asyncio
-async def test_changes_endpoint_exposes_project_clearance(client: AsyncClient, _db_pool):
-    """`stash changes --json` passes this payload through verbatim, so the
-    project clearance the prompt routes on has to be in the HTTP shape too — the
-    cleared project reads true and its sibling reads false."""
-    key, uid = await _register(client)
-    old = datetime(2020, 1, 1, tzinfo=UTC)
-    at = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
-
-    on = await client.post(
-        "/api/v1/me/session-folders", json={"name": "loud-project"}, headers=_auth(key)
-    )
-    await session_folder_service.set_folder_share_wiki(
-        scope_user_id=uid, folder_id=UUID(on.json()["id"]), share_wiki=True
-    )
-    await _push_one(client, key, "conv-on", at)
-    await _file_session(client, key, uid, _db_pool, "conv-on", on.json()["id"])
-
-    r = await client.get(
-        "/api/v1/me/changes", params={"since": old.isoformat()}, headers=_auth(key)
-    )
-    assert r.status_code == 200
-    entry = next(h for h in r.json()["history"] if h["session_id"] == "conv-on")
-    assert entry["session_folder_share_wiki"] is True
-    assert entry["session_folder"] == "loud-project"
-
-
-@pytest.mark.asyncio
-async def test_mark_curated_cannot_walk_the_watermark_back(client: AsyncClient, _db_pool):
-    """The watermark advance is a compare-and-set that stays monotonic inside a
-    match: the write lands only while the stored PAIR is the position the run
-    read, and the clamp in the SET means a matched-but-behind proposal keeps the
-    stored position rather than clobbering it — a run that computed its position
-    from a snapshot taken before an overlapping run finished cannot walk the
-    watermark backwards. A run whose read position moved under it raises instead
-    of writing (see test_a_pre_rewind_completion_cannot_swallow_a_reopened_window).
-    A never-curated lane must still accept its first advance, and a proposal is
-    only legal as a pair: the clamp compares the whole (instant, event), which an
-    instant-only comparison could not do."""
-    _key, uid = await _register(client)
-    curator = await agent_service.get_or_create_curator(uid)
-    cid = UUID(curator["id"])
-    never = datetime(2020, 1, 1, tzinfo=UTC)
-    later = datetime(2026, 6, 1, 12, 0, tzinfo=UTC)
-
-    async def stored() -> datetime:
-        return await _db_pool.fetchval("SELECT curated_through FROM agents WHERE id = $1", cid)
-
-    await _db_pool.execute("UPDATE agents SET curated_through = NULL WHERE id = $1", cid)
-    await agent_service.mark_curated(cid, NEVER, Position(never))  # seed from NULL
-    assert await stored() == never
-
-    await agent_service.mark_curated(cid, Position(never), Position(later))
-    await agent_service.mark_curated(
-        cid, Position(later), Position(never)
-    )  # matched read, behind proposal: clamps
-    assert await stored() == later
-
-    # Drift under the run: the position it read is no longer the stored one.
-    with pytest.raises(agent_service.CuratorWatermarkConflict):
-        await agent_service.mark_curated(
-            cid, Position(never), Position(datetime(2030, 1, 1, tzinfo=UTC))
+    since = base - timedelta(seconds=1)
+    target = base + timedelta(hours=1)
+    seen = []
+    passes = 0
+    while since < target:
+        through = await curation_service.complete_through(uid, since, target, max_event_chars=100)
+        assert through > since
+        batch = await pool.fetch(
+            "SELECT content FROM history_events WHERE owner_user_id=$1 "
+            "AND created_at>$2 AND created_at<=$3 ORDER BY created_at,id",
+            uid,
+            since,
+            through,
         )
-    assert await stored() == later
+        assert sum(len(row["content"]) for row in batch) <= 100
+        seen.extend(row["content"] for row in batch)
+        since = through
+        passes += 1
+        assert passes <= 5
+    assert passes == 5
+    assert seen == [str(i) * 60 for i in range(5)]
 
 
 @pytest.mark.asyncio
-async def test_a_refused_watermark_advance_is_visible_in_the_log(
-    client: AsyncClient, _db_pool, caplog
-):
-    """The monotonic clamp must not erase a number in silence: when a run
-    proposes a position behind the stored one — a full_history re-read or a
-    stale overlapping completion — the log names the curator, the refused
-    position, and the position that was kept. The CEO read a silently-vanished
-    advance as 'the curator never curates'."""
-    import logging
-
-    caplog.set_level(logging.INFO, logger="backend.services.agent_service")
-    _key, uid = await _register(client)
-    curator = await agent_service.get_or_create_curator(uid)
-    cid = UUID(curator["id"])
-    ahead = datetime(2026, 6, 1, 12, 0, tzinfo=UTC)
-    behind = datetime(2020, 1, 1, tzinfo=UTC)
-
-    await _db_pool.execute("UPDATE agents SET curated_through = NULL WHERE id = $1", cid)
-    assert await agent_service.mark_curated(cid, NEVER, Position(behind)) == Position(
-        behind
-    )  # seed from NULL
-    assert await agent_service.mark_curated(cid, Position(behind), Position(ahead)) == Position(
-        ahead
-    )  # matched read, advance
-    assert "not moved" not in caplog.text  # genuine advances stay quiet
-
-    # A matched read whose proposal sits behind the stored value clamps (does not
-    # raise — that is the drift case) and the refusal is logged.
-    assert await agent_service.mark_curated(cid, Position(ahead), Position(behind)) == Position(
-        ahead
-    )  # refused clamp
-    assert "not moved" in caplog.text
-    assert str(cid) in caplog.text
-    assert str(behind) in caplog.text and str(ahead) in caplog.text
-
-
-@pytest.mark.asyncio
-async def test_full_history_backfill_cannot_regress_an_advanced_watermark(
-    client: AsyncClient, sprite_exec, _db_pool, monkeypatch
-):
-    """The backfill reads from the oldest event, so when its feed overflows the
-    position it computes sits BELOW the stored watermark. The successful run
-    keeps the advanced cursor — 'the full history' is a re-read, not a reset."""
-    from backend.services import curation_service
-    from backend.tasks.agent_schedules import _run_curator_now
-    from backend.tasks.session_titles import generate_session_title
-
-    # sprite_exec sets the test Anthropic key, which arms the title dispatch —
-    # no broker here (same neutralization conftest applies to the first-day tick).
-    monkeypatch.setattr(generate_session_title, "delay", lambda *a, **k: None)
-    key, uid = await _register(client)
-    curator = await agent_service.get_or_create_curator(uid)
-    cid = UUID(curator["id"])
-    old = datetime.now(UTC) - timedelta(days=3)
-    await _push_one(client, key, "conv-old-a", old)
-    await _push_one(client, key, "conv-old-b", old + timedelta(hours=1))
-    stored = datetime.now(UTC) - timedelta(hours=2)
-    await _db_pool.execute("UPDATE agents SET curated_through = $2 WHERE id = $1", cid, stored)
-
-    # Two events under a cap of one: the full-history feed overflows, so
-    # complete_through lands mid-instant on the single event it read — below
-    # the stored watermark.
-    monkeypatch.setattr(curation_service, "_MAX_EVENTS", 1)
-    await _run_curator_now(cid, full_history=True, metered=False)
-
-    row = await _db_pool.fetchrow(
-        "SELECT curated_through, last_run_outcome FROM agents WHERE id = $1", cid
+async def test_text_budget_keeps_an_oversized_first_timestamp_group(client, pool):
+    _, uid = await _register(client)
+    base = datetime(2026, 1, 1, tzinfo=UTC)
+    await pool.executemany(
+        "INSERT INTO history_events (owner_user_id,created_by,agent_name,event_type,session_id,content,created_at) "
+        "VALUES ($1,$1,'test','user_message','text-budget-test',$2,$3)",
+        [
+            (uid, "large" * 100, base),
+            (uid, "same timestamp", base),
+            (uid, "next", base + timedelta(seconds=1)),
+        ],
     )
-    assert row["last_run_outcome"] == "ran"
-    assert row["curated_through"] == stored
-
-
-@pytest.mark.asyncio
-async def test_stale_completion_cannot_regress_an_overlapping_run(
-    client: AsyncClient, sprite_exec, _db_pool, monkeypatch
-):
-    """Two overlapping curator runs: the slower one finished its turn after the
-    faster one had already advanced the watermark. The slower run's bookkeeping
-    is computed from its pre-turn snapshot, and the position it read has moved
-    under it — so under the compare-and-set contract it is refused loudly rather
-    than clamped into silence, while the other run's progress survives untouched.
-    Refuse-loud replaces the old clamp-and-succeed: 'must not discard the other
-    run's progress' (the CEO invariant) still holds, but the discarded-looking
-    run now records a visible failure instead of resolving as `ran`."""
-    from backend.services import sprite_agent_service
-    from backend.tasks.agent_schedules import _run_curator_now
-    from backend.tasks.session_titles import generate_session_title
-
-    # sprite_exec sets the test Anthropic key, which arms the title dispatch —
-    # no broker here (same neutralization conftest applies to the first-day tick).
-    monkeypatch.setattr(generate_session_title, "delay", lambda *a, **k: None)
-    key, uid = await _register(client)
-    curator = await agent_service.get_or_create_curator(uid)
-    cid = UUID(curator["id"])
-    await _push_one(client, key, "conv-live", datetime.now(UTC) - timedelta(minutes=5))
-    seeded = datetime.now(UTC) - timedelta(days=1)
-    await _db_pool.execute("UPDATE agents SET curated_through = $2 WHERE id = $1", cid, seeded)
-    advanced = datetime.now(UTC) + timedelta(minutes=10)
-
-    async def overlapping_run_finished(agent, stamp, read_position):
-        # Stands in for the other run completing mid-turn. It started from the
-        # same stored position this run read, so ITS compare-and-set matches and
-        # its (newer) watermark lands.
-        await agent_service.mark_curated(cid, Position(seeded), Position(advanced))
-
-    monkeypatch.setattr(sprite_agent_service, "run_scheduled", overlapping_run_finished)
-    with pytest.raises(agent_service.CuratorWatermarkConflict):
-        await _run_curator_now(cid, metered=False)
-
-    row = await _db_pool.fetchrow(
-        "SELECT curated_through, last_run_outcome FROM agents WHERE id = $1", cid
+    target = base + timedelta(hours=1)
+    through = await curation_service.complete_through(
+        uid, base - timedelta(seconds=1), target, max_event_chars=100
     )
-    assert row["last_run_outcome"] == "failed"
-    assert row["curated_through"] == advanced  # the other run's progress survives
-
-
-@pytest.mark.asyncio
-async def test_a_pre_rewind_completion_cannot_swallow_a_reopened_window(
-    client: AsyncClient, _db_pool
-):
-    """The founder interleaving of 2026-09-05 (measured live on that account),
-    now refused: an ingest rewind re-opened history the curator had already
-    passed, and a run that had read its position *before* that rewind then tried
-    to complete. Its proposal is HIGHER than the rewound cursor, so a plain
-    monotonic `greatest()` would accept it and close the deliberately re-opened
-    window unread — the ~4,300-row silent skip. The advance is instead a
-    compare-and-set on the position the run actually read: because that position
-    moved under the run, the write is refused and raised, the rewound cursor
-    stands exactly, and the window stays open for the next run to re-read."""
-    key, uid = await _register(client)
-    curator = await agent_service.get_or_create_curator(uid)
-    cid = UUID(curator["id"])
-    re_imported = datetime.now(UTC) - timedelta(days=3)
-    position = datetime.now(UTC) - timedelta(days=1)
-
-    await _push_one(client, key, "conv-imported", re_imported)
-    await _db_pool.execute("UPDATE agents SET curated_through = $2 WHERE id = $1", cid, position)
-
-    # A late import older than the watermark drags it back — the rewind doing its
-    # job: history the curator had walked past is pending again.
-    await _push_one(client, key, "conv-imported-late", re_imported + timedelta(days=1))
-    rewound = await _db_pool.fetchval("SELECT curated_through FROM agents WHERE id = $1", cid)
-    assert rewound < position
-    assert await curation_service.has_changes_since(
-        uid, uid, Position(rewound), curation_service.WIKI_INTERNAL
-    )
-
-    # A run dispatched before the rewind, completing from its own pre-rewind read
-    # (`position`) and proposing a point ahead of it. The stored value moved to
-    # `rewound`, so this completion may not write.
-    stale_proposal = datetime.now(UTC) + timedelta(hours=1)
-    with pytest.raises(agent_service.CuratorWatermarkConflict):
-        await agent_service.mark_curated(cid, Position(position), Position(stale_proposal))
-
+    assert base <= through < base + timedelta(seconds=1)
     assert (
-        await _db_pool.fetchval("SELECT curated_through FROM agents WHERE id = $1", cid) == rewound
-    )  # the rewind is honored exactly — nothing swallowed it
-    assert await curation_service.has_changes_since(
-        uid, uid, Position(rewound), curation_service.WIKI_INTERNAL
-    )  # the re-opened window stays open, not shut unread
-
-
-@pytest.mark.asyncio
-async def test_a_mid_run_ingest_rewind_fails_the_curator_run_loud(
-    client: AsyncClient, sprite_exec, _db_pool, monkeypatch
-):
-    """The same loss reached through the real entry point, not a hand-set value:
-    an ingest rewind fires *while* the curator's turn is in flight (the exact
-    `push_event` call the ingest endpoint makes), moving the stored watermark
-    below the position the run read. The completion is refused and the conflict
-    propagates out of `_run_curator_now`, the run resolves `failed`, the rewind
-    survives, the metered credit it charged is refunded (mark_run_failed's job —
-    pinned here), and the re-opened window stays open for the next run."""
-    from backend.services import sprite_agent_service
-    from backend.tasks.agent_schedules import _run_curator_now
-    from backend.tasks.session_titles import generate_session_title
-
-    monkeypatch.setattr(generate_session_title, "delay", lambda *a, **k: None)
-    key, uid = await _register(client)
-    curator = await agent_service.get_or_create_curator(uid)
-    cid = UUID(curator["id"])
-    await _push_one(client, key, "conv-live", datetime.now(UTC) - timedelta(minutes=5))
-    position = datetime.now(UTC) - timedelta(days=1)
-    await _db_pool.execute("UPDATE agents SET curated_through = $2 WHERE id = $1", cid, position)
-    meter_before = await _db_pool.fetchval("SELECT month_run_count FROM agents WHERE id = $1", cid)
-
-    async def ingest_older_history(agent, stamp, read_position):
-        # A late import lands mid-turn; its rewind drags the stored watermark
-        # below the position this run read at start. Real ingest path.
-        await _push_one(client, key, "conv-late-import", datetime.now(UTC) - timedelta(days=3))
-
-    monkeypatch.setattr(sprite_agent_service, "run_scheduled", ingest_older_history)
-
-    with pytest.raises(agent_service.CuratorWatermarkConflict):
-        await _run_curator_now(cid)  # metered: the user-requested path
-
-    rewound = await _db_pool.fetchval("SELECT curated_through FROM agents WHERE id = $1", cid)
-    assert rewound < position  # the mid-run rewind survived the refused write
-    row = await _db_pool.fetchrow(
-        "SELECT last_run_outcome, month_run_count FROM agents WHERE id = $1", cid
-    )
-    assert row["last_run_outcome"] == "failed"
-    assert row["month_run_count"] == meter_before  # the metered run was refunded
-    assert await curation_service.has_changes_since(
-        uid, uid, Position(rewound), curation_service.WIKI_INTERNAL
-    )  # the re-opened window stays open
-
-
-@pytest.mark.asyncio
-async def test_the_scheduled_curator_run_fails_loud_when_the_watermark_moves(
-    client: AsyncClient, sprite_exec, _db_pool, monkeypatch
-):
-    """The beat caller (`_run_scheduled_agent`) honors the same CAS contract. It
-    records failures rather than re-raising to the broker, so the refusal surfaces
-    as a visible `failed` outcome + alert on the agent row, and the other writer's
-    stored value — the progress this run must never clobber — survives untouched."""
-    from backend.services import alert_service, sprite_agent_service
-    from backend.tasks.agent_schedules import _run_scheduled_agent
-    from backend.tasks.session_titles import generate_session_title
-
-    monkeypatch.setattr(generate_session_title, "delay", lambda *a, **k: None)
-    # A patched `send_alert` claims configured mode (STAS-268 gates the call).
-    _configure_alerts(monkeypatch)
-    alerts: list[str] = []
-
-    async def capture_alert(text: str) -> None:
-        alerts.append(text)
-
-    monkeypatch.setattr(alert_service, "send_alert", capture_alert)
-
-    key, uid = await _register(client)
-    curator = await agent_service.get_or_create_curator(uid)
-    cid = UUID(curator["id"])
-    await _push_one(client, key, "conv-live", datetime.now(UTC) - timedelta(minutes=5))
-    seeded = datetime.now(UTC) - timedelta(days=1)
-    await _db_pool.execute("UPDATE agents SET curated_through = $2 WHERE id = $1", cid, seeded)
-    advanced = datetime.now(UTC) + timedelta(minutes=10)
-
-    async def overlapping_writer(agent, stamp, read_position):
-        # The other run advanced the watermark mid-turn; its own CAS matches
-        # (it started from the same stored position), so its write lands.
-        await agent_service.mark_curated(cid, Position(seeded), Position(advanced))
-
-    monkeypatch.setattr(sprite_agent_service, "run_scheduled", overlapping_writer)
-
-    await _run_scheduled_agent(cid, "202609050000")  # records the failure, no re-raise
-
-    row = await _db_pool.fetchrow(
-        "SELECT curated_through, last_run_outcome, last_run_error FROM agents WHERE id = $1", cid
-    )
-    assert row["curated_through"] == advanced  # the other writer's value survives
-    assert row["last_run_outcome"] == "failed"
-    assert "watermark" in (row["last_run_error"] or "")
-    assert alerts  # the failure is escalated, not swallowed
-
-
-@pytest.mark.asyncio
-async def test_double_dispatch_on_one_agent_runs_single_flight(
-    client: AsyncClient, sprite_exec, _db_pool, monkeypatch
-):
-    """The live fingerprint: two `run_curator_now` dispatches for the same agent
-    arriving seconds apart, each holding a 13–80 minute turn. Overlap is what
-    made one run discard the other's finished curation, so the second dispatch
-    must not get a second turn — it writes nothing at all, leaving the meter and
-    the watermark the run in flight is responsible for untouched."""
-    import asyncio
-
-    from backend.services import sprite_agent_service
-    from backend.tasks.agent_schedules import _run_curator_now
-    from backend.tasks.session_titles import generate_session_title
-
-    # sprite_exec sets the test Anthropic key, which arms the title dispatch on
-    # ingest — no broker here (same neutralization the sibling tests apply).
-    monkeypatch.setattr(generate_session_title, "delay", lambda *a, **k: None)
-
-    key, uid = await _register(client)
-    curator = await agent_service.get_or_create_curator(uid)
-    cid = UUID(curator["id"])
-    await _push_one(client, key, "conv-flight", datetime.now(UTC) - timedelta(minutes=30))
-    seeded = datetime.now(UTC) - timedelta(hours=2)
-    await _db_pool.execute("UPDATE agents SET curated_through = $2 WHERE id = $1", cid, seeded)
-    meter_before = await _db_pool.fetchval("SELECT month_run_count FROM agents WHERE id = $1", cid)
-
-    turn_started = asyncio.Event()
-    turn_released = asyncio.Event()
-    turns: list[str] = []
-
-    async def turn_holds_the_agent(agent, stamp, read_position):
-        turns.append(stamp)
-        turn_started.set()
-        await turn_released.wait()
-        return "curated"
-
-    monkeypatch.setattr(sprite_agent_service, "run_scheduled", turn_holds_the_agent)
-
-    running = asyncio.create_task(_run_curator_now(cid, metered=False))
-    await turn_started.wait()
-
-    # A manual run / recompute / first-day tick lands mid-turn: no second turn,
-    # no charge, the watermark stays exactly where the running run left it, and
-    # the lane still reads as the run in flight. The contended dispatch consumed
-    # no tick, so it must not resolve the outcome as its own skip — 'started' is
-    # what `alert_stale_curators` pages on, and overwriting it would make a run
-    # that dies mid-turn look like a designed skip forever.
-    await _run_curator_now(cid)
-    row = await _db_pool.fetchrow(
-        "SELECT curated_through, last_run_outcome, month_run_count FROM agents WHERE id = $1", cid
-    )
-    assert len(turns) == 1, "the contended dispatch must not wake a second harness turn"
-    assert row["curated_through"] == seeded
-    assert row["month_run_count"] == meter_before
-    assert row["last_run_outcome"] == "started", (
-        "the in-flight run's state must survive the contended dispatch"
-    )
-
-    # The in-flight run finishes normally, and the lock went with it: the next
-    # dispatch is not locked out by a run that is already over.
-    turn_released.set()
-    await running
-    done = await _db_pool.fetchrow(
-        "SELECT curated_through, last_run_outcome, month_run_count FROM agents WHERE id = $1", cid
-    )
-    assert done["last_run_outcome"] == "ran"
-    assert done["curated_through"] > seeded
-
-    turn_started.clear()
-    await _run_curator_now(cid, metered=False)
-    assert len(turns) == 2, "a dispatch after the run released the lock must execute"
-
-
-@pytest.mark.asyncio
-async def test_a_requeued_beat_dispatch_never_resolves_the_run_in_flight_outcome(
-    client: AsyncClient, sprite_exec, _db_pool, monkeypatch
-):
-    """The founder fingerprint of 2026-10-01 (schedule 9f0cab42, task 11c28222):
-    the beat consumed the tick at 11:42:20Z and the run worked for 90 minutes;
-    at 12:42:21Z the broker's 3600-second visibility timeout re-delivered the
-    SAME still-unacked dispatch, the copy hit the single-flight guard, and it
-    stamped `skipped_already_running` over the live run's row. The original died
-    only at 13:12:20Z to the soft-time-limit kill, so for half an hour the
-    operator-readable outcome column reported a verdict that had not happened —
-    and because `alert_stale_curators` pages on an unresolved 'started', the
-    false skip muted the alarm too.
-
-    A dispatch that never acquired the run lock owns no outcome, so it writes
-    nothing: the row keeps reading 'started' until the run that holds the lock
-    resolves it as 'ran' or 'failed'. This is the same rule `_run_curator_now`
-    already enforces, applied to the beat's path."""
-    import asyncio
-
-    from backend.services import sprite_agent_service
-    from backend.tasks.agent_schedules import _run_scheduled_agent
-    from backend.tasks.session_titles import generate_session_title
-
-    monkeypatch.setattr(generate_session_title, "delay", lambda *a, **k: None)
-
-    key, uid = await _register(client)
-    curator = await agent_service.get_or_create_curator(uid)
-    cid = UUID(curator["id"])
-    await _push_one(client, key, "conv-requeued", datetime.now(UTC) - timedelta(minutes=30))
-    seeded = datetime.now(UTC) - timedelta(hours=2)
-    await _db_pool.execute("UPDATE agents SET curated_through = $2 WHERE id = $1", cid, seeded)
-
-    turn_started = asyncio.Event()
-    turn_released = asyncio.Event()
-    turns: list[str] = []
-
-    async def turn_holds_the_agent(agent, stamp, read_position):
-        turns.append(stamp)
-        turn_started.set()
-        await turn_released.wait()
-        return "curated"
-
-    monkeypatch.setattr(sprite_agent_service, "run_scheduled", turn_holds_the_agent)
-
-    # The beat: `_run_due` consumes the tick and meters the run BEFORE dispatching.
-    await agent_service.mark_run(cid)
-    metered = await _db_pool.fetchval("SELECT month_run_count FROM agents WHERE id = $1", cid)
-
-    running = asyncio.create_task(_run_scheduled_agent(cid, "202610011142"))
-    await turn_started.wait()
-
-    # The re-delivered copy of that same dispatch, carrying the same minute stamp.
-    await _run_scheduled_agent(cid, "202610011142")
-
-    row = await _db_pool.fetchrow(
-        "SELECT curated_through, last_run_outcome, last_run_error, month_run_count "
-        "FROM agents WHERE id = $1",
-        cid,
-    )
-    assert row["last_run_outcome"] == "started", (
-        "the requeued copy wrote its own skip over the in-flight run's outcome — "
-        "the operator column now reports a verdict no run made"
-    )
-    assert row["month_run_count"] == metered, "the contended dispatch must not re-meter the tick"
-    assert row["last_run_error"] is None
-    assert len(turns) == 1, "the contended dispatch must not wake a second harness turn"
-    assert row["curated_through"] == seeded
-
-    turn_released.set()
-    await running
-    done = await _db_pool.fetchrow(
-        "SELECT curated_through, last_run_outcome FROM agents WHERE id = $1", cid
-    )
-    assert done["last_run_outcome"] == "ran", "the run in flight still owns its terminal outcome"
-    assert done["curated_through"] > seeded
-
-
-# --- The window the fence is responsible for (STAS-250). A compare-and-set only
-# protects what it covers: the statement refuses a position that already moved,
-# but it has to also hold the row from the moment it decides until the curation it
-# is stamping is committed. These two pin that window and the crash boundary.
-
-
-async def _fenced_commit(conn, cid: UUID, read: Position, through: Position) -> Position:
-    """One lane's whole commit: the fenced advance on the transaction that publishes
-    its writes. This is the shape `scoped_curation_service.run` commits under."""
-    async with conn.transaction():
-        return await agent_service.advance_watermark(conn, cid, read, through)
-
-
-@pytest.mark.asyncio
-async def test_the_fence_holds_the_agent_row_until_its_commit_lands(client: AsyncClient, _db_pool):
-    """The window between deciding and committing is the one a competing writer used
-    to fall into: two lanes reading the same position both pass their own fence, and
-    the second discards the first. Holding the row from the match to the commit is
-    what makes that impossible, so a rival that starts its fenced commit while the
-    first transaction is still open provably waits on it — and is then refused, so
-    the first run's progress stands. Nothing here assumes a duration: the test polls
-    until Postgres reports the rival blocked BY the holding backend (the row lock the
-    fence leaves uncommitted), then releases the holder, and a rival that finished
-    early fails the assertion outright rather than passing."""
-    _key, uid = await _register(client)
-    curator = await agent_service.get_or_create_curator(uid)
-    cid = UUID(curator["id"])
-    seed = Position(datetime(2026, 6, 1, tzinfo=UTC))
-    await _db_pool.execute(
-        "UPDATE agents SET curated_through = NULL, curated_through_event_id = NULL WHERE id = $1",
-        cid,
-    )
-    await agent_service.mark_curated(cid, NEVER, seed)
-
-    first = Position(datetime(2026, 7, 1, tzinfo=UTC))
-    rival = Position(datetime(2026, 8, 1, tzinfo=UTC))
-
-    async with _db_pool.acquire() as holder, _db_pool.acquire() as rival_conn:
-        holder_pid = await holder.fetchval("SELECT pg_backend_pid()")
-        rival_pid = await rival_conn.fetchval("SELECT pg_backend_pid()")
-        async with holder.transaction():
-            assert await agent_service.advance_watermark(holder, cid, seed, first) == first
-            rival_write = asyncio.create_task(_fenced_commit(rival_conn, cid, seed, rival))
-
-            for _ in range(600):  # a 3s ceiling on reaching the lock, not a timing bet
-                assert not rival_write.done(), (
-                    "the competing writer completed its advance while the first run's "
-                    "transaction was still open — the fence does not cover the commit window"
-                )
-                blocked_by = await _db_pool.fetchval(
-                    "SELECT pg_blocking_pids($1) @> array[$2::int]",
-                    rival_pid,
-                    holder_pid,
-                )
-                if blocked_by:
-                    break
-                await asyncio.sleep(0.005)
-            else:
-                pytest.fail("the competing writer never blocked on the first run's open fence")
-
-        with pytest.raises(agent_service.CuratorWatermarkConflict):
-            await rival_write
-
-    kept = await _db_pool.fetchrow(
-        "SELECT curated_through, curated_through_event_id FROM agents WHERE id = $1", cid
-    )
-    assert curation_service.position_of(kept) == first
-
-
-@pytest.mark.asyncio
-async def test_a_failure_after_the_fence_publishes_neither_the_watermark_nor_the_window(
-    client: AsyncClient, _db_pool
-):
-    """The crash boundary of the same window. A lane commits its watermark in the one
-    transaction that publishes its writes, so a failure raised after the fenced
-    statement has already matched must roll the stamp back with everything else: a
-    run that advanced the marker and then died would report a stretch of history as
-    curated that it never wrote, and the feed would never offer it again — which is
-    the loss this card exists to make impossible, in the opposite direction."""
-    key, uid = await _register(client)
-    curator = await agent_service.get_or_create_curator(uid)
-    cid = UUID(curator["id"])
-    read = Position(datetime(2026, 6, 1, tzinfo=UTC))
-    await _db_pool.execute(
-        "UPDATE agents SET curated_through = NULL, curated_through_event_id = NULL WHERE id = $1",
-        cid,
-    )
-    await agent_service.mark_curated(cid, NEVER, read)
-    await client.post(
-        "/api/v1/me/pages/new", json={"name": "After the fence", "content": "x"}, headers=_auth(key)
-    )
-
-    async with _db_pool.acquire() as conn:
-        with pytest.raises(RuntimeError, match="publish failed after the fence"):
-            async with conn.transaction():
-                await agent_service.advance_watermark(
-                    conn, cid, read, Position(datetime(2026, 7, 1, tzinfo=UTC))
-                )
-                raise RuntimeError("publish failed after the fence")
-
-    kept = await _db_pool.fetchrow(
-        "SELECT curated_through, curated_through_event_id FROM agents WHERE id = $1", cid
-    )
-    assert curation_service.position_of(kept) == read, "the crashed run advanced the marker"
-    assert await curation_service.has_changes_since(uid, uid, read, wiki="internal"), (
-        "the crashed run's window stopped being offered to the next one"
+        await curation_service.complete_through(uid, through, target, max_event_chars=100) == target
     )

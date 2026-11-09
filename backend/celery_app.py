@@ -43,6 +43,11 @@ celery = Celery(
         "backend.tasks.reward_models",
         "backend.tasks.workbench",
         "backend.tasks.optimization",
+        "backend.tasks.intuitions",
+        "backend.tasks.behaviors",
+        "backend.tasks.agent_judge",
+        "backend.tasks.evals",
+        "backend.tasks.test_sets",
         "backend.integrations.google.exporters.slides",
         "backend.exports.pdf",
         "backend.exports.pptx",
@@ -78,6 +83,13 @@ celery.conf.update(
         "backend.tasks.reward_models.collect_examples": {"queue": "reward"},
         "backend.tasks.reward_models.train_evaluator": {"queue": "reward"},
         "backend.tasks.optimization.score_run": {"queue": "reward"},
+        "backend.tasks.intuitions.improve": {"queue": "heavy"},
+        "backend.tasks.intuitions.refine": {"queue": "heavy"},
+        "backend.tasks.behaviors.scan_models": {"queue": "heavy"},
+        "backend.tasks.behaviors.triage": {"queue": "heavy"},
+        "backend.tasks.agent_judge.investigate": {"queue": "heavy"},
+        "backend.tasks.evals.build_eval": {"queue": "heavy"},
+        "backend.tasks.test_sets.score_run": {"queue": "heavy"},
     },
     task_acks_late=True,
     task_reject_on_worker_lost=True,
@@ -123,6 +135,15 @@ celery.conf.update(
         "shared-evaluator-reconcile": {
             "task": "backend.tasks.reward_models.reconcile",
             "schedule": 30.0,
+        },
+        "behaviors-reconcile": {
+            "task": "backend.tasks.behaviors.reconcile",
+            "schedule": 30.0,
+        },
+        # Restarts eval builds and channel reads a lost task left stuck.
+        "evals-sweep": {
+            "task": "backend.tasks.evals.sweep",
+            "schedule": 60.0,
         },
         "embedding-reconcile": {
             "task": "backend.tasks.embeddings.reconcile",
@@ -177,27 +198,6 @@ celery.conf.update(
         "agent-schedules-run-due": {
             "task": "backend.tasks.agent_schedules.run_due",
             "schedule": 60.0,
-        },
-        "agent-schedules-drain-curator-backlog": {
-            "task": "backend.tasks.agent_schedules.drain_curator_backlog",
-            # A curator lane with more material than one run fits is still behind
-            # after a successful run, so waiting for its nightly cron makes the
-            # backlog a multi-day queue. Five minutes is the cheapest interval
-            # that keeps a run's two lanes of capacity busy without overlapping
-            # dispatches: a run holds its agent lock for its whole duration, so a
-            # lane already running is stepped past by the next tick.
-            "schedule": 300.0,
-        },
-        "reap-stranded-agent-runs": {
-            "task": "backend.tasks.agent_schedules.reap_stranded_runs",
-            # The backstop for a run whose worker died without resolving its lane
-            # (hard timeout, OOM recycle, SIGKILL): nothing in that process can
-            # run, so only a sweep can free the lane. Five minutes on the default
-            # queue is the latency floor between a kill and a dispatchable lane —
-            # the sweep is one indexed UPDATE, so the cadence costs nothing, and
-            # it must not be rarer than the strike age it enforces or every
-            # stranded lane waits that much longer to be freed.
-            "schedule": 300.0,
         },
         "agent-schedules-alert-stale-curators": {
             "task": "backend.tasks.agent_schedules.alert_stale_curators",

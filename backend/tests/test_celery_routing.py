@@ -9,14 +9,14 @@ from backend.celery_app import celery
 from backend.exports.pdf import export_pdf
 from backend.exports.pptx import export_pptx
 from backend.integrations.google.exporters.slides import export_to_google_slides
-from backend.tasks.agent_schedules import (
-    drain_curator_backlog,
-    run_curator_now,
-    run_scheduled_agent,
-)
+from backend.tasks.agent_judge import investigate
+from backend.tasks.agent_schedules import run_curator_now, run_scheduled_agent
+from backend.tasks.behaviors import scan_models, triage
 from backend.tasks.clips import process_url_imports
 from backend.tasks.drive_extraction import extract_drive_document
+from backend.tasks.evals import build_eval
 from backend.tasks.extraction import extract_file_text
+from backend.tasks.intuitions import improve, refine
 from backend.tasks.optimization import score_run
 from backend.tasks.reward_models import (
     collect_examples,
@@ -29,6 +29,7 @@ from backend.tasks.reward_models import (
     train_reward_model,
 )
 from backend.tasks.sources import sync_source
+from backend.tasks.test_sets import score_run as score_test_run
 from backend.tasks.viz import precompute
 
 HEAVY_TASKS = {
@@ -41,6 +42,13 @@ HEAVY_TASKS = {
     run_scheduled_agent.name,
     run_curator_now.name,
     precompute.name,
+    improve.name,
+    refine.name,
+    scan_models.name,
+    triage.name,
+    investigate.name,
+    score_test_run.name,
+    build_eval.name,
 }
 
 
@@ -79,18 +87,6 @@ def test_only_expensive_viz_beat_task_is_heavy():
 def test_shared_training_timeout_allows_three_remote_stages():
     assert train_evaluator.time_limit == 3900
     assert train_evaluator.soft_time_limit == 3800
-
-
-def test_curator_drain_beat_task_keeps_a_continuous_cadence():
-    # The drain is what turns one curator run a day into a continuous queue, so a
-    # cadence drift silently restores the nightly wait (AC: no lane idles more
-    # than ~15 minutes between automated dispatches). It must also stay off the
-    # heavy queue: a drain that queues behind the turns it starts is a nightly
-    # cadence with extra steps, and it no longer fills the heavy pool's slots.
-    entry = celery.conf.beat_schedule["agent-schedules-drain-curator-backlog"]
-    assert entry["task"] == drain_curator_backlog.name
-    assert entry["schedule"] <= 15 * 60
-    assert entry["task"] not in celery.conf.task_routes
 
 
 def test_bare_worker_consumes_declared_queues():

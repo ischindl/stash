@@ -4,27 +4,15 @@ The beat task fires every minute and is a pure dispatcher: it finds agents
 whose cron tick is due, consumes the tick, applies the cheap gates (credits,
 credential, pending changes), and hands each eligible run to
 `run_scheduled_agent` on the heavy queue — a headless agent turn runs for
-minutes and must not hold a default-queue slot.
-
-Two beat tasks dispatch, and both are pure dispatchers that run nothing
-themselves: `run_due` fires an agent whose own cron tick has come, and
-`drain_curator_backlog` keeps a lane that has more material than one run can
-read from waiting a whole day for its next slice. Every run they start is
-executed by `run_curator_now`/`run_scheduled_agent` on the heavy queue.
-
-One run per agent at a time, enforced by `agent_run_lock` (Redis, keyed by
-agent id) at the task entry points. The per-session turn lock is not that
-lock: a scheduled run's session id carries a per-run stamp, so two runs of the
-same agent never contend on it — which is how two overlapping curator runs
-came to discard each other's finished curation.
+minutes and must not hold a default-queue slot. The agent's own turn lock
+(Redis) prevents overlap with an in-flight run.
 """
 
 from __future__ import annotations
 
 import logging
-from collections.abc import Coroutine
+from contextlib import nullcontext
 from datetime import UTC, datetime, timedelta
-from typing import Any
 from uuid import UUID
 
 from croniter import croniter
@@ -34,22 +22,11 @@ from ._celery_helpers import run_async
 
 logger = logging.getLogger(__name__)
 
-# A harness agent run (PI curation) routinely takes 13+ minutes and can
-# exceed 25 minutes on a large delta — the global 1500s soft / 1800s hard
-# ceiling (celery_app.py) was killing them mid-run: partial wiki writes
-# survive, but the run is marked failed and the watermark does not advance,
-# so the next run re-reads the same delta. These two tasks are the only
-# Celery tasks that run a harness agent; they carry their own limits so the
-# global stays the ceiling for everything else.
-HARNESS_SOFT_TIME_LIMIT = 5400  # 90 min
-HARNESS_TIME_LIMIT = 5700  # 95 min
-
-# The single-flight run lock has to outlive the limit that kills the run, or an
-# honest long run loses its lock mid-turn and a second dispatch joins it. The
-# margin covers the gap between the hard timeout firing and the worker exiting;
-# a worker killed before its `finally` releases the lock on this TTL rather
-# than wedging the agent's schedule forever.
-AGENT_RUN_LOCK_TTL = HARNESS_TIME_LIMIT + 900
+# Each pass keeps the existing event and time limits. Queue the next pass
+# separately so a busy developer account does not wait another day for its
+# next 500 inputs, or monopolize one worker indefinitely. In addition to this
+# per-chain bound, executions share seven automatic continuations per 24h.
+CURATOR_CATCHUP_PASSES = 8
 
 
 def _is_due(cron: str, last_run: datetime | None, now: datetime) -> bool:
@@ -69,201 +46,214 @@ def run_due() -> int:
     return run_async(_run_due())
 
 
-def _run_guarded(agent_uuid: UUID, metered: bool, run: Coroutine[Any, Any, None]) -> None:
-    """Run one of the two harness-run bodies, resolving the lane if the body
-    escapes it.
-
-    `mark_run` promises that every path after `started` resolves the outcome, and
-    the coroutine keeps that promise with its `except` and `finally`. Neither of
-    them can catch this class of exit: Celery's prefork pool raises
-    `SoftTimeLimitExceeded` from a SIGALRM handler, so the raise lands in the
-    loop machinery under `run_async` — outside every frame of the coroutine.
-    Measured on the founder stack on 2026-09-28: the RunFusion lane was stamped
-    `started` at 12:51:57Z, its soft limit fired at 14:21:57Z, and a dispatch at
-    14:03:19Z still deferred to it as a "curator run in flight" — the row stayed
-    `started` and the lock stayed held until its TTL.
-
-    So the guard sits outside `run_async`, and catches `BaseException` rather
-    than `Exception`: a deploy's `CancelledError` leaves through the same hole,
-    and the coroutine's `except Exception` cannot see it either. The exception is
-    re-raised untouched — what Celery logs, retries, and pages on is the worker's
-    own report of why the task died, and rewriting that would hide the timeout
-    that is the actual finding.
-
-    The escaped coroutine is not dead, only unscheduled: `run_until_complete`
-    returns with its task still pending, and the next task this child runs
-    resumes it — measured here, 2026-09-28: after the raise the task was still in
-    `asyncio.all_tasks(loop)` and completed ("body-completed", its `finally` run)
-    during the following unrelated `run_until_complete`. Two consequences are by
-    design rather than accidents. A resumed run that really does finish may stamp
-    `ran` over this guard's `failed`, which is the truth arriving late — the CAS
-    only protects the other direction, a lane already resolved by the run itself.
-    And the resumed run still holds its lane lock token: `_TurnLock.release`
-    compares tokens, so its late release cannot delete a key the guard already
-    dropped for the next dispatch.
-    """
-    try:
-        run_async(run)
-    except BaseException as exc:
-        _resolve_escaped_run(agent_uuid, exc, metered=metered)
-        raise
-
-
-def _resolve_escaped_run(agent_uuid: UUID, exc: BaseException, *, metered: bool) -> None:
-    """Record and unlock a run that is never going to resolve its own lane.
-
-    The write is the shared compare-and-set (`agent_service.resolve_started_runs`)
-    because the lane may already have resolved itself — a run that recorded `ran`
-    before the raise reached the loop, or a pre-STAS-317 row a contended dispatch
-    had already stamped as its skip — and neither may be stamped over as a failure.
-
-    Nothing here outranks the escaped exception. If the write fails, the lane is
-    left `started` for the stranded-run sweep, which exists for exactly that, and
-    the original exception still propagates. No alert goes out from here either:
-    the propagated exception is the worker's loud report, `alert_stale_curators`
-    pages if the outcome persists, and `send_alert` raising for missing Slack
-    credentials must not cost the lane its resolution.
-    """
-    from ..services import agent_service, sprite_agent_service
-
-    cause = f"agent run aborted before it resolved: {type(exc).__name__}: {exc}"
-    try:
-        flipped = run_async(
-            agent_service.resolve_started_runs([agent_uuid], cause, metered=metered)
-        )
-    except BaseException:
-        logger.exception(
-            "escaped agent run: could not resolve lane %s — the stranded-run sweep owns it",
-            agent_uuid,
-        )
-        return
-    try:
-        run_async(sprite_agent_service.drop_agent_run_lock(agent_uuid))
-    except BaseException:
-        logger.exception("escaped agent run: could not release lane %s's lock", agent_uuid)
-    if flipped:
-        logger.error("lane %s resolved by the run-escape guard: %s", agent_uuid, cause)
-
-
-@celery.task(
-    name="backend.tasks.agent_schedules.run_scheduled_agent",
-    soft_time_limit=HARNESS_SOFT_TIME_LIMIT,
-    time_limit=HARNESS_TIME_LIMIT,
-)
+@celery.task(name="backend.tasks.agent_schedules.run_scheduled_agent")
 def run_scheduled_agent(agent_id: str, stamp: str) -> None:
-    # The beat consumed the tick and metered the run before dispatching (`mark_run`
-    # in `_run_due`), so this body always owes a metered run.
-    agent_uuid = UUID(agent_id)
-    _run_guarded(agent_uuid, True, _run_scheduled_agent(agent_uuid, stamp))
+    run_async(_run_scheduled_agent(UUID(agent_id), stamp))
 
 
-@celery.task(
-    name="backend.tasks.agent_schedules.run_curator_now",
-    soft_time_limit=HARNESS_SOFT_TIME_LIMIT,
-    time_limit=HARNESS_TIME_LIMIT,
-)
-def run_curator_now(agent_id: str, full_history: bool = False, metered: bool = True) -> None:
-    agent_uuid = UUID(agent_id)
-    _run_guarded(agent_uuid, metered, _run_curator_now(agent_uuid, full_history, metered))
+@celery.task(name="backend.tasks.agent_schedules.run_curator_now")
+def run_curator_now(
+    agent_id: str,
+    full_history: bool = False,
+    metered: bool = True,
+    catchup_remaining: int = CURATOR_CATCHUP_PASSES - 1,
+    catchup: bool = False,
+) -> None:
+    run_async(_run_curator_now(UUID(agent_id), full_history, metered, catchup_remaining, catchup))
 
 
 async def _run_curator_now(
-    agent_id: UUID, full_history: bool = False, metered: bool = True
+    agent_id: UUID,
+    full_history: bool = False,
+    metered: bool = True,
+    catchup_remaining: int = CURATOR_CATCHUP_PASSES - 1,
+    catchup: bool = False,
 ) -> None:
     """A user-requested curator run: same execution as the daily tick, minus
     the due-check — the user is the trigger. The router already enforced the
     free-tier allowance and resolved credentials.
 
-    `full_history` is the backfill: the run reads with no watermark, so the
-    prompt bootstraps from everything ever uploaded. It never clears the stored
-    watermark — a failed backfill keeps the incremental position, and because
-    the advance is a monotonic compare-and-set (see agent_service.mark_curated),
-    even a successful one cannot move it back to where the re-read started.
+    `full_history` is the backfill: the run reads with no watermark, but the
+    stored watermark is only advanced after success — a failed backfill must
+    not have thrown away the incremental position.
 
     `metered=False` is for runs the platform initiates on its own (the
-    first-day curator): they must not eat the user's free monthly allowance.
-
-    One run per agent: a dispatch that lands while this agent's run is still
-    mid-turn records nothing at all. It costs nothing and is not a failure — the
-    run in flight advances the watermark past exactly what it read, so the
-    contended dispatch discards no work and never charges the allowance (it
-    returns before the run is metered). It also must not resolve the lane's
-    outcome as a skip: this dispatch consumed no tick, so the row belongs to the
-    run in flight, and `alert_stale_curators` pages on an unresolved 'started'. A
-    skip written over that 'started' would hide a run that dies mid-turn forever
-    — the lane would read as a designed skip with a stale watermark and stay quiet."""
+    first-day curator): they must not eat the user's free monthly allowance."""
     from ..services import (
         agent_service,
+        scoped_curation_service,
+        sprite_agent_service,
+    )
+
+    agent = await agent_service.get_agent_by_id(agent_id)
+    workspace = await scoped_curation_service.workspace_for_agent(agent)
+    try:
+        async with _run_lock(agent, workspace):
+            agent = await agent_service.get_agent_by_id(agent_id)
+            await _run_curator_locked(
+                agent, workspace, full_history, metered, catchup_remaining, catchup
+            )
+    except sprite_agent_service.TurnInProgress:
+        # No mark_run and no charge happened: leave the active run untouched.
+        logger.info("agent schedule: curator %s is busy; skipping", agent_id)
+
+
+def _run_lock(agent: dict, workspace):
+    from ..config import settings
+    from ..services import sprite_agent_service
+
+    return (
+        sprite_agent_service._TurnLock(
+            f"scoped-curator-{agent['id']}", settings.AGENT_TURN_TIMEOUT_SECONDS
+        )
+        if workspace is not None
+        else nullcontext()
+    )
+
+
+async def _run_turn(agent, stamp, workspace):
+    from ..services import sprite_agent_service
+
+    if workspace is None:
+        return await sprite_agent_service.run_scheduled(agent, stamp)
+    return await sprite_agent_service.run_scheduled(
+        agent, stamp, workspace=workspace, scoped_lock_held=True
+    )
+
+
+async def _pending_input(agent: dict, workspace) -> bool:
+    from ..services import curation_service, scoped_curation_inputs
+
+    if workspace is not None:
+        return await scoped_curation_inputs.has_pending(agent, workspace)
+    owner = UUID(str(agent["user_id"]))
+    return await curation_service.has_changes_since(owner, owner, agent["curated_through"])
+
+
+async def _run_curator_locked(agent, workspace, full_history, metered, catchup_remaining, catchup):
+    from ..services import (
+        agent_service,
+        billing_service,
         curation_service,
         scoped_curation_service,
         sprite_agent_service,
     )
 
-    lock = sprite_agent_service.agent_run_lock(agent_id, AGENT_RUN_LOCK_TTL)
-    try:
-        await lock.acquire()
-    except sprite_agent_service.TurnInProgress:
-        logger.info(
-            "curator run in flight for agent %s — this dispatch defers to it and writes nothing",
-            agent_id,
-        )
+    agent_id = UUID(str(agent["id"]))
+    if not metered and agent["run_mode"] != "scheduled":
         return
-    try:
-        agent = await agent_service.get_agent_by_id(agent_id)
-        # An unmetered run is a platform trigger (the first-day tick). A curator
-        # the user parked as chat-only must stay parked: the platform may not
-        # run an agent the user turned off, metered or not.
-        if not metered and agent["run_mode"] != "scheduled":
+    if catchup:
+        if workspace is None:
             return
-        # The compare-and-set anchor for mark_curated is the stored position this
-        # run actually loaded — captured BEFORE the full_history override below,
-        # which zeroes the feed's position but must not change what the run may
-        # write against. A rewind or an overlapping run that moves the stored
-        # position during the turn makes this run's completion refuse loudly.
-        read = curation_service.position_of(agent)
-        if full_history:
-            agent = {**agent, "curated_through": None, "curated_through_event_id": None}
-        now = datetime.now(UTC)
-        await agent_service.mark_run(agent_id, metered=metered)
-        try:
-            # Seconds-resolution stamp so a manual run never shares a session
-            # with the beat's minute-stamped run. The stamp separates history
-            # only — single flight is `lock` above, not this.
-            await sprite_agent_service.run_scheduled(agent, now.strftime("%Y%m%d%H%M%S"), read)
-            # A scoped workspace run commits its own watermark inside its own
-            # transaction, fenced on this same `read`: a concurrent opt-out's reset
-            # or an overlapping run's advance refuses this completion rather than
-            # being stamped over by it.
-            if await scoped_curation_service.workspace_for_agent(agent) is None:
-                # The boundary is computed from the position the run ACTUALLY read
-                # from, which the full_history override moved to `never`: a backfill
-                # counts the whole corpus as its backlog, so its overflow boundary
-                # sits under the stored cursor and the clamp keeps the cursor where
-                # an earlier run left it. Deriving it from `read` instead would read
-                # an already-consumed window as "nothing left" and advance the cursor
-                # over everything the backfill was dispatched to catch up on.
-                through = await curation_service.complete_through(
-                    UUID(str(agent["user_id"])),
-                    curation_service.position_of(agent),
-                    now,
-                    agent["curator_wiki"],
-                    agent.get("curator_folder_id"),
-                )
-                await agent_service.mark_curated(agent_id, read, through)
-            await agent_service.mark_run_succeeded(agent_id)
-        except Exception as e:
-            await agent_service.mark_run_failed(agent_id, str(e), metered=metered)
-            raise
-    finally:
-        await lock.release()
+        await scoped_curation_service.require_run_auth(agent, workspace=workspace)
+        owner = UUID(str(agent["user_id"]))
+        if not await billing_service.is_pro(owner) or not await _pending_input(agent, workspace):
+            return
+        if not await agent_service.claim_catchup(agent_id, CURATOR_CATCHUP_PASSES - 1):
+            return
+    if full_history:
+        agent = {**agent, "curated_through": None, "curation_cursor": {}}
+    now = datetime.now(UTC)
+    await agent_service.mark_run(agent_id, metered=metered)
+    try:
+        # Seconds-resolution stamp so a manual run never shares a session with
+        # the beat's minute-stamped run.
+        await _run_turn(agent, now.strftime("%Y%m%d%H%M%S"), workspace)
+        if workspace is None:
+            through = await curation_service.complete_through(
+                UUID(str(agent["user_id"])), agent["curated_through"], now
+            )
+            # The completion write is a compare-and-set on the position this run read,
+            # so an ingest rewind or an overlapping run cannot be written over.
+            await agent_service.mark_curated(
+                agent_id,
+                curation_service.position_of(agent),
+                curation_service.Position(through),
+            )
+        await agent_service.mark_run_succeeded(agent_id)
+    except Exception as e:
+        if workspace is not None and isinstance(e, sprite_agent_service.TurnInProgress):
+            await _skip_busy_curator(agent_id, metered=metered)
+            return
+        await agent_service.mark_run_failed(agent_id, str(e), metered=metered)
+        raise
+    await _dispatch_curator_catchup(agent, now, catchup_remaining, workspace=workspace)
+
+
+async def _skip_busy_curator(agent_id: UUID, *, metered: bool) -> None:
+    """The active run owns the shared outcome; refund only this skipped charge."""
+    from ..services import agent_service
+
+    if metered:
+        await agent_service.refund_run(agent_id)
+    logger.info(
+        "agent schedule: curator %s is already running; skipping overlapping pass", agent_id
+    )
+
+
+_WORKSPACE_UNSET = object()
+
+
+async def _dispatch_curator_catchup(
+    agent: dict, run_started: datetime, remaining: int, *, workspace=_WORKSPACE_UNSET
+) -> None:
+    """A dispatch failure must not undo a successfully completed batch."""
+    from ..services import alert_service
+
+    try:
+        await _queue_curator_catchup(agent, run_started, remaining, workspace=workspace)
+    except Exception:
+        logger.exception("agent schedule: catch-up dispatch failed for agent %s", agent["id"])
+        # Asked before the call, never caught after it: a mode that sends no
+        # operational alerts makes send_alert raise, and a raise here would
+        # replace the failure this alert exists to report.
+        if alert_service.alerts_enabled():
+            await alert_service.send_alert(
+                f"Curator catch-up dispatch failed for agent {agent['id']}; "
+                "the completed batch and its checkpoint are preserved."
+            )
+
+
+async def _queue_curator_catchup(
+    agent: dict, run_started: datetime, remaining: int, *, workspace=_WORKSPACE_UNSET
+) -> None:
+    from ..services import agent_service, billing_service, scoped_curation_service
+
+    if workspace is _WORKSPACE_UNSET:
+        workspace = await scoped_curation_service.workspace_for_agent(agent)
+    if remaining <= 0 or workspace is None:
+        return
+    current = await agent_service.get_agent_by_id(UUID(str(agent["id"])))
+    through = current["curated_through"]
+    before = agent["curated_through"]
+    if (
+        current["run_mode"] != "scheduled"
+        or current["last_run_outcome"] != "ran"
+        or through is None
+        or (
+            before is not None
+            and through <= before
+            and current.get("curation_cursor") == agent.get("curation_cursor")
+        )
+        or not await billing_service.is_pro(UUID(str(current["user_id"])))
+    ):
+        return
+    if not await _pending_input(current, workspace):
+        return
+    # Only successful, advancing, bounded batches can continue. No retry
+    # chain on failure or permission revocation, and no paid personal runs.
+    run_curator_now.apply_async(
+        args=[str(agent["id"])],
+        kwargs={"metered": False, "catchup_remaining": remaining - 1, "catchup": True},
+        countdown=15,
+    )
 
 
 # During a scope's first day its wiki updates after every conversation, not
 # just on the nightly tick — a user who just signed up (or a developer who
 # just activated the platform) watches the wiki grow while they get set up.
-# Debounced so a stream of event batches coalesces into at most one dispatch
-# per window; a dispatch that still lands on a run in flight defers to it and
-# records nothing (see `_run_curator_now`).
+# Debounced so a stream of event batches coalesces into at most one run per
+# window; the agent's Redis turn lock already prevents overlapping runs.
 FIRST_DAY_HOURS = 24
 FIRST_DAY_DEBOUNCE = timedelta(minutes=10)
 
@@ -299,36 +289,8 @@ async def _first_day_curator_tick(scope_user_id: UUID) -> None:
         await _maybe_dispatch_first_day_run(scope_user_id, agent, now)
 
 
-async def _require_run_auth(scope_user_id: UUID, agent: dict) -> None:
-    """Preflight the credential a run needs, raising NeedsAuth/ProviderNotConfigured.
-
-    A developer-platform workspace curates with no user credential in play, so
-    its gate is the provider the backend is configured for — its own key, or the
-    local endpoint its scope account connected when there is no key. Everything
-    else — personal Memory, project-folder curators, scheduled non-curator
-    agents — runs on the scope's credential, and that credential is a *pinned
-    local endpoint* as much as a key provider: resolving without
-    `model_id`/`credential_id` would send the run to a provider the row never
-    chose (or fail it as a mismatch).
-
-    `scope_user_id` is the owner of the feed, which for a folder curator is not
-    necessarily `agent["user_id"]`.
-    """
-    from ..services import agent_auth, scoped_curation_service
-
-    if await scoped_curation_service.workspace_for_agent(agent) is not None:
-        await scoped_curation_service.require_route(scope_user_id, agent)
-        return
-    await agent_auth.resolve(
-        scope_user_id,
-        agent["model_provider"],
-        model_id=agent.get("model_id"),
-        credential_id=agent.get("credential_id"),
-    )
-
-
 async def _maybe_dispatch_first_day_run(scope_user_id: UUID, agent: dict, now: datetime) -> None:
-    from ..services import agent_auth, curation_service
+    from ..services import agent_auth, scoped_curation_service
 
     if agent["run_mode"] != "scheduled":
         return
@@ -341,20 +303,12 @@ async def _maybe_dispatch_first_day_run(scope_user_id: UUID, agent: dict, now: d
         and agent["last_run_at"] > now - FIRST_DAY_DEBOUNCE
     ):
         return
+    workspace = await scoped_curation_service.workspace_for_agent(agent)
     try:
-        await _require_run_auth(scope_user_id, agent)
+        await scoped_curation_service.require_run_auth(agent, workspace=workspace)
     except (agent_auth.NeedsAuth, agent_auth.ProviderNotConfigured):
-        # Silent by design, unlike the beat's tick: this path re-asks on every
-        # event and costs nothing while no model exists, so the block is stated
-        # once a day by _run_due instead of once per conversation here.
         return
-    if not await curation_service.has_changes_since(
-        scope_user_id,
-        scope_user_id,
-        curation_service.position_of(agent),
-        agent["curator_wiki"],
-        agent.get("curator_folder_id"),
-    ):
+    if not await _pending_input(agent, workspace):
         return
     # Unmetered: the platform is the trigger, so the run must not eat the
     # scope's free monthly curator allowance.
@@ -362,12 +316,10 @@ async def _maybe_dispatch_first_day_run(scope_user_id: UUID, agent: dict, now: d
 
 
 async def _run_due() -> int:
-    from ..config import settings
     from ..services import (
-        agent_auth,
         agent_service,
-        billing_service,
-        curation_service,
+        scoped_curation_service,
+        sprite_agent_service,
     )
 
     now = datetime.now(UTC)
@@ -376,207 +328,56 @@ async def _run_due() -> int:
     for agent in await agent_service.list_scheduled():
         if not _is_due(agent["schedule_cron"], agent["last_run_at"], now):
             continue
-        user_id = UUID(str(agent["user_id"]))
-        # Consume the tick up front so a skipped, slow, or failing run can't be
-        # re-fired by the next beat. The curator's delta watermark is separate
-        # (curated_through) and only advances after a successful run, so a
-        # skipped or failed run never discards un-curated changes.
-        month_runs = await agent_service.mark_run(agent["id"])
-        # Sleep-time compute is metered: free accounts get a monthly curator
-        # allowance; Pro and enterprise are unlimited.
-        if (
-            agent["is_curator"]
-            and month_runs > settings.FREE_CURATOR_RUNS_PER_MONTH
-            and not await billing_service.is_pro(user_id)
-        ):
-            logger.info("agent schedule: curator credits exhausted for user %s — skipping", user_id)
-            await agent_service.mark_run_skipped(agent["id"], "credits")
-            continue
-        # No runnable model for this scope (no backend key and no connected
-        # endpoint) → nothing can run, and nothing about the row improves on its
-        # own.
+        workspace = await scoped_curation_service.workspace_for_agent(agent)
         try:
-            await _require_run_auth(user_id, agent)
-        except (agent_auth.NeedsAuth, agent_auth.ProviderNotConfigured):
-            # WARNING, not INFO: this skip recurs every tick forever, INFO drowns
-            # in a beat that ticks every minute, and `docker compose logs` is the
-            # first place a self-hoster looks. The row shows the same block.
-            logger.warning(
-                "agent schedule: no runnable model for agent %s — every tick will skip until "
-                "ANTHROPIC_API_KEY is set on the backend or a model endpoint is connected "
-                "under Settings → Cloud agent model",
-                agent["id"],
-            )
-            await agent_service.mark_run_skipped(agent["id"], "no_credential")
+            async with _run_lock(agent, workspace):
+                agent = await agent_service.get_agent_by_id(UUID(str(agent["id"])))
+                if _is_due(agent["schedule_cron"], agent["last_run_at"], now):
+                    dispatched += await _dispatch_due_agent(agent, stamp, workspace)
+        except sprite_agent_service.TurnInProgress:
             continue
-        # Cost gate: skip the curator (and the sprite wake) when nothing changed
-        # since its watermark. Idle users cost one EXISTS per day. Gated on the
-        # agent's own wiki, so an external curator is never woken for activity
-        # its feed cannot show it.
-        if agent["is_curator"] and not await curation_service.has_changes_since(
-            user_id,
-            user_id,
-            curation_service.position_of(agent),
-            agent["curator_wiki"],
-            agent.get("curator_folder_id"),
-        ):
-            await agent_service.mark_run_skipped(agent["id"], "no_changes")
-            continue
-        run_scheduled_agent.delay(str(agent["id"]), stamp)
-        dispatched += 1
     return dispatched
 
 
-# ── Backlog drain ────────────────────────────────────────────────────────────
-#
-# A curator's cron fires once a day, so a lane holding more material than one run
-# can read waits another full day for every slice it did not fit. The founder's
-# lanes are the extreme case: ~140k distinct events behind at ~20-40 min per run
-# is weeks of calendar at one run per lane per day. This beat task closes the gap
-# on the platform's own clock — the nightly cron stays exactly as it was and keeps
-# owning every outcome the drain deliberately holds back (see
-# `_drain_curator_backlog`). Re-dispatching from inside a finished run was the
-# alternative and was rejected: a chain that re-arms itself dies silently on a
-# worker restart, and one more beat entry costs nothing.
-#
-# Two lanes per tick because that is exactly the heavy pool's width
-# (`--concurrency=2` in docker-compose.prod.yml and start.sh): a third dispatch
-# would only queue behind the two turns in flight, so it buys no throughput and
-# blurs the "at most ~2 lanes run at once" guarantee.
-CURATOR_DRAIN_LANES_PER_TICK = 2
-
-
-@celery.task(name="backend.tasks.agent_schedules.drain_curator_backlog")
-def drain_curator_backlog() -> int:
-    return run_async(_drain_curator_backlog())
-
-
-def _run_in_flight(agent: dict, now: datetime) -> bool:
-    """True while this lane's own run still holds its single-flight lock.
-
-    `mark_run` stamps `last_run_at` as it records 'started' — that is the only
-    start timestamp a lane has — and the lock's TTL outlives the hard limit that
-    kills a run, so an unresolved 'started' younger than that TTL is a run still
-    in flight. An *older* one is a lane whose worker died mid-run without
-    releasing the lock: calling that busy would strand the lane forever, so it is
-    not — the next dispatch finds the lock expired and runs.
-    """
-    return (
-        agent["last_run_outcome"] == "started"
-        and agent["last_run_at"] is not None
-        and agent["last_run_at"] > now - timedelta(seconds=AGENT_RUN_LOCK_TTL)
-    )
-
-
-def _drain_order(agent: dict) -> datetime:
-    """Most-behind lane first. A curator that has never run has no watermark at
-    all, which is further behind than any timestamp can be. The position is read
-    whole so a row with a stray event half fails here rather than sorting as
-    never-run; the instant alone orders the lanes, because two lanes parked at the
-    two halves of one instant are a microsecond apart and either may run first."""
-    from ..services import curation_service
-
-    return curation_service.position_of(agent).at or datetime.min.replace(tzinfo=UTC)
-
-
-async def _drain_curator_backlog() -> int:
-    """Dispatch the most-behind curator lanes that have material waiting.
-
-    Every dispatch is metered exactly as a nightly run is, because the free-tier
-    allowance is only real if continuous dispatch spends it — an unmetered drain
-    would hand every free scope unlimited curator runs, which is why the
-    first-day path's `metered=False` is deliberately not copied here. The
-    entitlement gate below is therefore the drain's own stop sign; it never
-    raises the allowance, and `_run_due`'s meter-before-gates design is untouched.
-
-    Which path owns each outcome, so a lane cannot be stranded by this dispatcher:
-      - run in flight → skipped here, and the ≤daily `_run_due` tick retries it;
-      - last run failed → left to `_run_due` alone. A failed run is refunded its
-        allowance credit, so an always-failing lane would otherwise re-dispatch
-        for free every tick forever; the nightly tick still retries it daily, and
-        `alert_stale_curators` pages on the failed outcome if it persists;
-      - 'started' older than the lock TTL → un-sticks here (see `_run_in_flight`),
-        which is what stops a killed run from looking busy forever;
-      - lane not runnable / allowance spent / nothing pending → skipped here with
-        no row write, because a drain tick consumes nothing to ask. "Runnable" is
-        `_require_run_auth`'s answer and no other: a personal or project lane
-        needs the credential its row names, a scoped lane needs the backend key,
-        and a lane that cannot start its run must not be dispatched to fail at.
-
-    Skips are logged at debug rather than written into the lane: a drain tick that
-    dispatches nothing has consumed nothing, and its return value is what shows in
-    the worker's own task-completion line.
-    """
+async def _dispatch_due_agent(agent, stamp, workspace):
     from ..config import settings
-    from ..services import agent_auth, agent_service, billing_service, curation_service
+    from ..services import agent_auth, agent_service, billing_service, scoped_curation_service
 
-    now = datetime.now(UTC)
-    lanes = sorted(
-        (agent for agent in await agent_service.list_scheduled() if agent["is_curator"]),
-        key=_drain_order,
-    )
-    dispatched = 0
-    for agent in lanes:
-        if dispatched >= CURATOR_DRAIN_LANES_PER_TICK:
-            break
-        user_id = UUID(str(agent["user_id"]))
-        # Busy first: a lane whose run is mid-turn resolves nothing when a copy
-        # lands on its guard (see `_run_scheduled_agent`), so this dispatch would
-        # be pure queue noise — and stepping past it here is what stops one
-        # long-running lane from eating the tick's whole budget of two lanes.
-        if _run_in_flight(agent, now):
-            logger.debug("curator drain: lane %s has a run in flight", agent["id"])
-            continue
-        if agent["last_run_outcome"] == "failed":
-            logger.debug(
-                "curator drain: lane %s is failing — the nightly tick owns it", agent["id"]
-            )
-            continue
-        # The dispatched task meters itself when it starts, so this reads the same
-        # allowance `_run_due` enforces from one run ahead of the counter: the run
-        # may be dispatched while it still lands inside the monthly budget.
-        if agent_service.month_runs_used(agent) + 1 > settings.FREE_CURATOR_RUNS_PER_MONTH:
-            # Pro and enterprise are unlimited, as on the nightly path.
-            if not await billing_service.is_pro(user_id):
-                logger.debug("curator drain: lane %s has spent its allowance", agent["id"])
-                continue
-        try:
-            # One question, one answer: the same gate the run itself applies.
-            # Resolving a credential here instead would ask the owner's account,
-            # so a workspace's scoped lanes would pass on the box its console
-            # connected, spend a metered dispatch and one of the tick's two heavy
-            # slots, and only die later inside the run on the missing backend key.
-            await _require_run_auth(user_id, agent)
-        except (agent_auth.NeedsAuth, agent_auth.ProviderNotConfigured):
-            logger.debug("curator drain: lane %s has no runnable credential", agent["id"])
-            continue
-        # Cost gate, same one the nightly tick applies: a lane caught up to its
-        # watermark costs one EXISTS and no run.
-        if not await curation_service.has_changes_since(
-            user_id,
-            user_id,
-            curation_service.position_of(agent),
-            agent["curator_wiki"],
-            agent.get("curator_folder_id"),
-        ):
-            continue
-        logger.info(
-            "curator backlog drain: dispatching lane %s (wiki=%s folder=%s)",
-            agent["id"],
-            agent["curator_wiki"],
-            agent.get("curator_folder_id"),
-        )
-        run_curator_now.delay(str(agent["id"]))
-        dispatched += 1
-    return dispatched
+    user_id = UUID(str(agent["user_id"]))
+    # Consume the tick up front so a skipped, slow, or failing run can't be
+    # re-fired by the next beat. The curator's delta watermark is separate
+    # (curated_through) and only advances after a successful run, so a
+    # skipped or failed run never discards un-curated changes.
+    month_runs = await agent_service.mark_run(agent["id"])
+    # Sleep-time compute is metered: free accounts get a monthly curator
+    # allowance; Pro and enterprise are unlimited.
+    if (
+        agent["is_curator"]
+        and month_runs > settings.FREE_CURATOR_RUNS_PER_MONTH
+        and not await billing_service.is_pro(user_id)
+    ):
+        logger.info("agent schedule: curator credits exhausted for user %s — skipping", user_id)
+        await agent_service.mark_run_skipped(agent["id"], "credits")
+        return 0
+    # No runnable credential (unconnected free user) → nothing can run.
+    try:
+        await scoped_curation_service.require_run_auth(agent, workspace=workspace)
+    except (agent_auth.NeedsAuth, agent_auth.ProviderNotConfigured):
+        logger.info("agent schedule: no credential for agent %s — skipping", agent["id"])
+        await agent_service.mark_run_skipped(agent["id"], "no_credential")
+        return 0
+    # Cost gate: skip the curator (and the sprite wake) when nothing changed
+    # since its watermark. Idle users cost one EXISTS per day.
+    if agent["is_curator"] and not await _pending_input(agent, workspace):
+        await agent_service.mark_run_skipped(agent["id"], "no_changes")
+        return 0
+    run_scheduled_agent.delay(str(agent["id"]), stamp)
+    return 1
 
 
 async def _run_scheduled_agent(agent_id: UUID, stamp: str) -> None:
-    from ..database import get_pool
     from ..services import (
         agent_service,
-        alert_service,
-        curation_service,
         scoped_curation_service,
         sprite_agent_service,
     )
@@ -588,149 +389,64 @@ async def _run_scheduled_agent(agent_id: UUID, stamp: str) -> None:
         # agent row left to record a failure on.
         logger.info("agent schedule: agent %s deleted before its run", agent_id)
         return
+    workspace = await scoped_curation_service.workspace_for_agent(agent)
+    try:
+        async with _run_lock(agent, workspace):
+            agent = await agent_service.get_agent_by_id(agent_id)
+            await _run_scheduled_locked(agent, stamp, workspace)
+    except sprite_agent_service.TurnInProgress:
+        await _skip_busy_curator(agent_id, metered=True)
+
+
+async def _run_scheduled_locked(agent, stamp, workspace):
+    from ..database import get_pool
+    from ..services import agent_service, alert_service, curation_service, sprite_agent_service
+
+    agent_id = UUID(str(agent["id"]))
     if agent["run_mode"] != "scheduled":
         return
     user_id = UUID(str(agent["user_id"]))
     now = datetime.now(UTC)
-    lock = sprite_agent_service.agent_run_lock(agent_id, AGENT_RUN_LOCK_TTL)
     try:
-        await lock.acquire()
-    except sprite_agent_service.TurnInProgress:
-        # Writes nothing, and that is the whole rule (the same rule
-        # `_run_curator_now` states for the drain/manual path). The beat consumed
-        # this tick and its credit at dispatch time — the same accounting as every
-        # other designed skip in this module — and the run holding the lock is the
-        # only writer of this lane's outcome. A skip written here would overwrite
-        # the operator-readable verdict of a run that never skipped and mute
-        # `alert_stale_curators`, which pages on an unresolved 'started'.
-        # Measured on the founder stack 2026-10-01: a 60-minute broker requeue
-        # landed inside a 5400-second run and reported `skipped_already_running`
-        # while the original was still curating.
-        logger.info(
-            "agent %s has a run in flight — this dispatch defers to it and writes nothing",
-            agent_id,
-        )
-        return
-    # The position this dispatch loaded IS the position its run reads from, so it is
-    # captured before the run starts and handed to it: the scoped lane fences its own
-    # commit on this value, and the lanes that commit outside the run fence the
-    # `mark_curated` below on it — one value, so the position written against and the
-    # position read cannot drift; a move under the run fails loudly.
-    read = curation_service.position_of(agent)
-    try:
-        await sprite_agent_service.run_scheduled(agent, stamp, read)
-        if agent["is_curator"] and await scoped_curation_service.workspace_for_agent(agent) is None:
+        await _run_turn(agent, stamp, workspace)
+        if agent["is_curator"] and workspace is None:
             # `now` predates the run, so changes made during it stay ahead of
             # the watermark and are picked up next time. If the delta
             # overflowed the event cap, the watermark stops at the last event
             # that fit — the overflow drains on subsequent runs. Bookkeeping
             # failures share the run's try so they also record last_run_error
-            # and alert, instead of dying as a bare task error. The cursor handed
-            # to `complete_through` is that same loaded position; a move under the
-            # run fails loudly here.
+            # and alert, instead of dying as a bare task error.
             through = await curation_service.complete_through(
-                user_id,
-                read,
-                now,
-                agent["curator_wiki"],
-                agent.get("curator_folder_id"),
+                user_id, agent["curated_through"], now
             )
-            await agent_service.mark_curated(agent_id, read, through)
+            # The completion write is a compare-and-set on the position this run read,
+            # so an ingest rewind or an overlapping run cannot be written over.
+            await agent_service.mark_curated(
+                agent_id,
+                curation_service.position_of(agent),
+                curation_service.Position(through),
+            )
         await agent_service.mark_run_succeeded(agent_id)
     except Exception as e:
+        if workspace is not None and isinstance(e, sprite_agent_service.TurnInProgress):
+            await _skip_busy_curator(agent_id, metered=True)
+            return
         logger.exception("agent schedule: run failed for agent %s", agent_id)
         await agent_service.mark_run_failed(agent_id, str(e))
         email = await get_pool().fetchval("SELECT email FROM users WHERE id = $1", user_id)
-        # Asked before the call, never caught after it: a delivery in a mode that
-        # sends no operational alerts raises, and a raise from inside this handler
-        # would replace the run's own failure — the one thing this handler exists
-        # to report. The `logger.exception` above already is the record here.
+        # Asked before the call, never caught after it: a mode that sends no
+        # operational alerts makes send_alert raise, and a raise here would
+        # replace the failure this alert exists to report.
         if alert_service.alerts_enabled():
             await alert_service.send_alert(
                 f"Scheduled agent run failed: {agent['name']!r} for {email}: {str(e)[:300]}"
             )
-    finally:
-        await lock.release()
+    else:
+        await _dispatch_curator_catchup(agent, now, CURATOR_CATCHUP_PASSES - 1, workspace=workspace)
 
 
-# A lane whose `started` is older than the run lock's TTL has no live worker
-# behind it: the TTL is by construction longer than anything a run may legally
-# hold the lock for, so an unresolved `started` past it can only be a run that
-# will never resolve its lane — killed by the hard limit, OOM-recycled, or
-# SIGKILLed by a deploy. Reaping any earlier would fail a healthy run: a 90-minute
-# curation sits inside this window by design. One constant with the lock it
-# replaces, so the two cannot drift apart.
-REAP_STRIKE_AGE_SECONDS = AGENT_RUN_LOCK_TTL
-
-
-@celery.task(name="backend.tasks.agent_schedules.reap_stranded_runs")
-def reap_stranded_runs() -> int:
-    return run_async(_reap_stranded_runs())
-
-
-async def _reap_stranded_runs() -> int:
-    """Resolve lanes whose run died without resolving them, and free their locks.
-
-    The in-process escape guard cannot catch every death: a child killed by the
-    hard time limit, the memory-recycle, or a SIGKILL never returns from
-    `run_async`, so nothing runs in it. This is the backstop for those, and it is
-    a beat sweep precisely because it must fire with nobody alive to call it.
-
-    The write is the same compare-and-set the guard uses — one statement for the
-    whole sweep rather than a write per lane, and a lane that resolved itself
-    between the read and the write is not touched. Locks are keyed by agent id,
-    so freeing them needs no second query either.
-
-    The allowance is deliberately not refunded: `mark_run` stores no metering
-    flag, so a sweep cannot tell a credit the run was charged for from one the
-    platform ran unmetered, and guessing would move a user's monthly allowance
-    either way. The sweep repairs the lane, not the accounting, and its alert says
-    so.
-
-    Selection does not condition on the lane being runnable. A curator its owner
-    paused between the beat's dispatch and the run's own gate is one of the lanes
-    this exists to free, and waiting for it to look runnable again waits forever.
-    Nor does it touch source sync lanes: those have their own termination path
-    (`tasks/sources.py`, test_sync_lane_termination.py), and a second owner would
-    only race it.
-    """
-    from ..database import get_pool
-    from ..services import agent_service, alert_service, sprite_agent_service
-
-    stale = await get_pool().fetch(
-        "SELECT id FROM agents"
-        " WHERE last_run_outcome = 'started'"
-        "   AND last_run_at < now() - make_interval(secs => $1)",
-        REAP_STRIKE_AGE_SECONDS,
-    )
-    if not stale:
-        return 0
-
-    cause = (
-        "agent run never resolved its lane: no worker was left alive behind it, "
-        "so the stranded-run sweep recorded it as failed"
-    )
-    flipped = await agent_service.resolve_started_runs(
-        [row["id"] for row in stale], cause, metered=False
-    )
-    for lane in flipped:
-        await sprite_agent_service.drop_agent_run_lock(lane["id"])
-    # The resolution and the lock drop above are already durable, so a mode that
-    # sends no operational alerts may not cost a lane its repair. The sweep's own
-    # summary line below is the record in that mode.
-    if alert_service.alerts_enabled():
-        for lane in flipped:
-            await alert_service.send_alert(
-                f"Stranded agent run resolved: lane {lane['id']} ({lane['name']}) held "
-                f"'started' past the {REAP_STRIKE_AGE_SECONDS}s run-lock TTL. Recorded as "
-                f"failed and its run lock released; allowance untouched. Cause: {cause}"
-            )
-    logger.error("stranded-run sweep resolved %d lane(s): %s", len(flipped), cause)
-    return len(flipped)
-
-
-# A curator whose watermark is older than this while changes are pending has
-# been failing for multiple nightly runs — one bad night must not page.
+# Pending input older than this is stale even when individual batches succeed.
+# One bad night must not page.
 STALE_CURATOR_HOURS = 48
 
 
@@ -740,56 +456,63 @@ def alert_stale_curators() -> int:
 
 
 async def _alert_stale_curators() -> int:
-    """Record curators whose watermark stopped advancing despite pending
-    changes, and deliver that record where this installation sends operational
-    alerts. Alerting on the stale *outcome* catches every cause — dead provider
-    keys, harness bugs, a wedged beat — where per-run failure alerts only catch
-    runs that started. A failed outcome or an unresolved started outcome
-    qualifies. Designed skips resolve explicitly and stay quiet.
+    """Alert on curators whose watermark stopped advancing despite pending
+    changes. Alerting on the stale *outcome* catches every cause — dead
+    provider keys, harness bugs, a wedged beat — where per-run failure alerts
+    only catch runs that started. Successful runs with an undrained backlog
+    also qualify. Designed skips resolve explicitly and stay quiet.
     """
     from ..database import get_pool
-    from ..services import alert_service, curation_service
+    from ..services import alert_service
 
-    cutoff = datetime.now(UTC) - timedelta(hours=STALE_CURATOR_HOURS)
+    now = datetime.now(UTC)
+    cutoff = now - timedelta(hours=STALE_CURATOR_HOURS)
     rows = await get_pool().fetch(
         """
-        SELECT a.user_id, a.curated_through, a.curated_through_event_id,
-               a.last_run_error, a.last_run_outcome,
-               a.curator_wiki, a.curator_folder_id, u.email
+        SELECT a.*, u.email
         FROM agents a JOIN users u ON u.id = a.user_id
         WHERE a.is_curator AND a.run_mode = 'scheduled'
           AND a.curated_through IS NOT NULL AND a.curated_through < $1
-          AND a.last_run_outcome IN ('started', 'failed')
+          AND a.last_run_outcome IN ('started', 'failed', 'ran')
         """,
         cutoff,
     )
-    stale = [
-        r
-        for r in rows
-        if await curation_service.has_changes_since(
-            r["user_id"],
-            r["user_id"],
-            curation_service.position_of(r),
-            r["curator_wiki"],
-            r["curator_folder_id"],
-        )
-    ]
+    from ..services import scoped_curation_service
+
+    stale = []
+    for row in rows:
+        # Allow a slow cron its next scheduled run plus a day's grace. A daily
+        # curator with an old undrained backlog still alerts after 48 hours.
+        if row["last_run_outcome"] == "ran":
+            try:
+                due = croniter(row["schedule_cron"], row["curated_through"]).get_next(datetime)
+                if now < due + timedelta(hours=24):
+                    continue
+            except (ValueError, KeyError, TypeError):
+                pass
+        workspace = await scoped_curation_service.workspace_for_agent(dict(row))
+        if await _pending_input(dict(row), workspace):
+            stale.append(row)
     if not stale:
         return 0
-    lines = [
-        f"- {r['email']}: last curated {r['curated_through']:%Y-%m-%d %H:%M} UTC "
-        f"({(r['last_run_error'] or 'run started but never resolved')[:200]})"
-        for r in stale
-    ]
-    report = (
-        f"{len(stale)} Memory curator(s) stale >{STALE_CURATOR_HOURS}h with pending changes:\n"
-        + "\n".join(lines)
-    )
-    # The record comes first and in every mode: a watchdog that only speaks by
-    # delivering goes silent on exactly the installations that never deliver.
-    # The cause it names is already on the agent row (`mark_run_failed`), so the
-    # row needs no second write.
-    logger.error("stale curator watchdog: %s", report)
+    lines = []
+    for row in stale:
+        outcome = {
+            "ran": "backlog remains after a successful batch",
+            "failed": "last run failed without an error message",
+            "started": "run started but never resolved",
+        }[row["last_run_outcome"]]
+        detail = row["last_run_error"] or outcome
+        lines.append(
+            f"- {row['email']}: last curated {row['curated_through']:%Y-%m-%d %H:%M} UTC "
+            f"({detail[:200]})"
+        )
+    # Asked before the call, never caught after it: a mode that sends no
+    # operational alerts makes send_alert raise, and a raise here would
+    # replace the failure this alert exists to report.
     if alert_service.alerts_enabled():
-        await alert_service.send_alert(report)
+        await alert_service.send_alert(
+            f"{len(stale)} Memory curator(s) stale >{STALE_CURATOR_HOURS}h with pending changes:\n"
+            + "\n".join(lines)
+        )
     return len(stale)

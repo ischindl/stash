@@ -7,6 +7,7 @@ import DeveloperGate from "@/components/developer/DeveloperGate";
 import { useScope } from "@/lib/scope-store";
 import { useWorkspace } from "@/lib/workspace-store";
 import type { User } from "@/lib/types";
+import { cn } from "@/lib/utils";
 import { Toaster } from "@/components/ui/sonner";
 import Persistence from "./persistence";
 import Rail from "./rail";
@@ -137,6 +138,9 @@ export default function WorkspaceShell({
     if (redirectToRewards) router.replace("/reward-models");
   }, [redirectToPlatform, redirectToRewards, router]);
   const scope = useScope();
+  // Below md the rail is a drawer behind the top bar's menu button; it closes on navigation.
+  const [navOpen, setNavOpen] = useState(false);
+  useEffect(() => setNavOpen(false), [pathname]);
   const routeSection = sectionForPath(pathname);
   const requestedSection = searchParams.get("section");
   const selectedSection = EXPLORER_SECTIONS.find((s) => s === requestedSection) ?? null;
@@ -177,21 +181,33 @@ export default function WorkspaceShell({
     );
   }
 
+  const rail = user.reward_models_enabled
+    ? <RewardRail user={user} onLogout={onLogout} />
+    : <Rail user={user} onLogout={onLogout} />;
+
+  const contentFrameClass = user.reward_models_enabled && user.product_checkpoint !== "floodgate-2026-10-05"
+    ? "rounded-tl-[4px] border-l border-t border-border bg-base"
+    : "rounded-tl-2xl border-l border-t border-border bg-base shadow-[-10px_-6px_28px_-16px_rgba(30,25,15,0.10)]";
+
   return (
     // Chrome surface — the content panel floats on top of it.
     <div className="flex h-screen flex-col overflow-hidden bg-sidebar">
       <Persistence />
-      <Topbar />
+      <Topbar onMenu={() => setNavOpen(true)} />
       <div className="flex min-h-0 flex-1">
-        {user.reward_models_enabled
-          ? <RewardRail user={user} onLogout={onLogout} />
-          : <Rail user={user} onLogout={onLogout} />}
+        <div className="hidden md:flex">{rail}</div>
+        {navOpen && (
+          <div className="fixed inset-0 z-50 flex md:hidden">
+            <div className="flex h-full bg-rail shadow-xl">{rail}</div>
+            <button type="button" aria-label="Close navigation" className="flex-1 bg-black/30" onClick={() => setNavOpen(false)} />
+          </div>
+        )}
         <div className="min-w-0 flex-1 pb-0">
           {section && !isFilesHome ? (
             <div className="flex h-full">
               {showExplorer && <ExplorerPanel section={section} />}
               {/* Floating content panel: clean white paper, subtly elevated. */}
-              <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-tl-2xl border-l border-t border-border bg-base shadow-[-10px_-6px_28px_-16px_rgba(30,25,15,0.10)]">
+              <div className={cn("flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden", contentFrameClass)}>
                 {renderRouteContent ? (
                   <main className="flex h-full min-h-0 flex-col overflow-hidden">{children}</main>
                 ) : (
@@ -200,7 +216,7 @@ export default function WorkspaceShell({
               </div>
             </div>
           ) : (
-            <main className="h-full overflow-y-auto rounded-tl-2xl border-l border-t border-border bg-base shadow-[-10px_-6px_28px_-16px_rgba(30,25,15,0.10)]">{children}</main>
+            <main className={cn("h-full overflow-y-auto", contentFrameClass)}>{children}</main>
           )}
         </div>
       </div>

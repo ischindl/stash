@@ -57,7 +57,7 @@ export default function KeyTable({ refresh }: { refresh: number }) {
   if (keys === null) return <p className="text-[14px] text-muted-foreground">Loading…</p>;
   if (keys.length === 0) {
     return (
-      <p className="rounded border border-dashed border-border px-6 py-8 text-center text-[15px] leading-7 text-muted-foreground">
+      <p className="rounded border border-border px-6 py-8 text-center text-[15px] leading-7 text-muted-foreground">
         No active keys. Create one — it is shown once, then only its name lives here.
       </p>
     );
@@ -78,11 +78,11 @@ export default function KeyTable({ refresh }: { refresh: number }) {
               {key.name}
             </span>
             <span className="mt-0.5 block truncate font-mono text-[12px] text-muted-foreground">
-              {key.key_prefix ? `${key.key_prefix}…${key.key_suffix} · ` : ""}
-              created {when(key.created_at)} · last used {when(key.last_used_at)}
+              {key.key_prefix ? `${key.key_prefix}…${key.key_suffix}, ` : ""}
+              created {when(key.created_at)}, last used {when(key.last_used_at)}
               {key.expires_at && (
                 <>
-                  {" · "}
+                  {", "}
                   <span className={expired(key.expires_at) ? "text-error" : undefined}>
                     {expired(key.expires_at) ? "expired" : "expires"} {when(key.expires_at)}
                   </span>

@@ -304,7 +304,7 @@ export default function SessionViewerPage({ sessionId }: { sessionId: string }) 
     <div className="relative flex min-h-0 flex-1">
       <ConversationScrollRail items={markers} scroller={scroller} />
       <div ref={scroller} className="scroll-thin min-w-0 flex-1 overflow-y-auto">
-        <div className="mx-auto grid max-w-[1440px] gap-7 px-12 pb-20 pt-7 lg:grid-cols-[minmax(0,1fr)_260px]">
+        <div className="mx-auto grid max-w-[1100px] gap-7 px-12 pb-20 pt-7 lg:grid-cols-[minmax(0,1fr)_260px]">
           <main className="min-w-0">
             {inDeveloperConsole && (
               <Link
@@ -380,7 +380,7 @@ export default function SessionViewerPage({ sessionId }: { sessionId: string }) 
                 </div>
               )}
               {!error && totalTurns === 0 && (
-                <div className="rounded-lg border border-dashed border-border bg-surface/30 px-4 py-6 text-center text-[12.5px] text-muted-foreground">
+                <div className="rounded-lg border border-border bg-surface/30 px-4 py-6 text-center text-[12.5px] text-muted-foreground">
                   No transcript events yet.
                 </div>
               )}

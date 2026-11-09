@@ -5,6 +5,8 @@ import type { Example, Metrics, OutputType } from "@/lib/intuition-api";
 import { itemSummary, labelText, num, pct } from "./im-helpers";
 import { Metric, MetricGrid, Panel } from "./im-ui";
 import ReliabilityChart from "./ReliabilityChart";
+import DifficultyChart from "./DifficultyChart";
+import ClassificationTable from "./ClassificationTable";
 
 export function ConfusionMatrix({ confusion, classes }: { confusion: Record<string, Record<string, number>>; classes: string[] }) {
   const max = Math.max(1, ...classes.flatMap((a) => classes.map((p) => confusion[a]?.[p] ?? 0)));
@@ -75,8 +77,8 @@ export default function MetricsPanel({
       </MetricGrid>
       {opts && (
         <p className="m-0 font-mono text-[11px] text-muted-foreground">
-          fit on {opts.rows} rows · {opts.train_on === "all" ? "all data" : "train split"} · l2 {opts.l2} · {opts.sources ? opts.sources.join("+") : "all sources"}
-          {opts.calibrate ? " · calibrated" : ""}
+          fit on {opts.rows} rows, {opts.train_on === "all" ? "all data" : "train split"}, l2 {opts.l2}, {opts.sources ? opts.sources.join("+") : "all sources"}
+          {opts.calibrate ? ", calibrated" : ""}
         </p>
       )}
       {held.n === 0 ? (
@@ -88,6 +90,16 @@ export default function MetricsPanel({
               <ConfusionMatrix confusion={held.confusion} classes={classes} />
             </Panel>
           )}
+          {outputType === "choice" && held.classification && (
+            <Panel title="Per-class (held-out)">
+              <ClassificationTable classification={held.classification} />
+            </Panel>
+          )}
+          {!!held.by_difficulty?.length && (
+            <Panel title="Accuracy by difficulty (held-out)">
+              <DifficultyChart buckets={held.by_difficulty} />
+            </Panel>
+          )}
           {held.reliability && held.reliability.length > 0 && (
             <Panel title="Reliability (held-out)">
               <ReliabilityChart bins={held.reliability} />
@@ -96,7 +108,7 @@ export default function MetricsPanel({
         </div>
       )}
       {mistakes.length > 0 && (
-        <Panel title={`Held-out mistakes · ${mistakes.length}`} description="Most confidently wrong first. Open one to relabel it, or use it to write a sharper question.">
+        <Panel title={`Held-out mistakes, ${mistakes.length}`} description="Most confidently wrong first. Open one to relabel it, or use it to write a sharper question.">
           <ul className="m-0 -my-1 list-none divide-y divide-border-subtle p-0">
             {mistakes.slice(0, 12).map((r) => {
               const e = byId.get(r.example_id);

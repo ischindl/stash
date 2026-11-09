@@ -1,8 +1,11 @@
 """MCP server exposing Stash tools to any MCP client."""
 
 import json
+from typing import Annotated
+from uuid import UUID
 
 from mcp.server.fastmcp import FastMCP
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
 from cli.client import StashClient, split_source_tokens
 from cli.config import load_config, save_scope
@@ -905,8 +908,13 @@ def stash_optimization_begin(
     initial_prompt: str = "",
     runs_per_arm: int = 20,
     max_rounds: int = 10,
+    eval_id: str = "",
+    target_label: str = "",
 ) -> str:
     """Begin ongoing prompt optimization when the user asks to improve this agent.
+    Runs are scored by reward_model_id, or by an eval: pass eval_id (leave
+    reward_model_id empty) and target_label, the eval decision that counts as
+    success; the eval's saved version is pinned for the whole program.
     Authorizes up to max_rounds candidate generations and remote scoring of submitted
     runs. Future tasks receive randomized current/candidate instructions; winners
     promote automatically when the selected reward model establishes an improvement.
@@ -921,7 +929,11 @@ def stash_optimization_begin(
                 "/api/v1/rm/optimizations",
                 json={
                     "name": name,
-                    "reward_model_id": reward_model_id,
+                    **(
+                        {"eval_id": eval_id, "target_label": target_label or None}
+                        if eval_id
+                        else {"reward_model_id": reward_model_id}
+                    ),
                     "agent": agent,
                     "scope": scope,
                     "initial_prompt": initial_prompt,
@@ -1055,6 +1067,133 @@ def stash_optimization_abandon_run(run_id: str, reason: str) -> str:
         )
 
 
+# ── Reward functions (judge evals) ──────────────────────────────
+
+
+class RewardFunctionTrait(BaseModel):
+    """A rubric trait, matching the judge eval API's editable fields."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=60)]
+    good: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=400)]
+    bad: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=400)]
+    basis: str = Field(default="", max_length=300)
+
+
+RewardFunctionTraits = Annotated[list[RewardFunctionTrait], Field(min_length=1, max_length=12)]
+
+
+class RewardFunctionOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    text: str = Field(default="", max_length=200_000)
+    images: list[str] = Field(default_factory=list, max_length=20)
+
+
+def _reward_traits(traits: list[RewardFunctionTrait]) -> list[dict]:
+    if len({t.name.lower() for t in traits}) != len(traits):
+        raise ValueError("Trait names must be unique")
+    return [t.model_dump() for t in traits]
+
+
+@mcp.tool()
+def stash_reward_function_list() -> str:
+    """List your reward functions (judge evals), including IDs, rubrics and readiness.
+    These are the functions in Stash's Evals UI, not trained reward-model checkpoints."""
+    with _client() as client:
+        return _json(client._get("/api/v1/evals"))
+
+
+@mcp.tool()
+def stash_reward_function_get(eval_id: UUID) -> str:
+    """Read a reward function's instructions, traits, current version and score endpoint.
+    Use the returned version as base_version when editing its rubric."""
+    with _client() as client:
+        return _json(client._get(f"/api/v1/evals/{eval_id}"))
+
+
+@mcp.tool()
+def stash_reward_function_create(
+    name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=160)],
+    instructions: Annotated[str, Field(max_length=2000)],
+    traits: RewardFunctionTraits,
+) -> str:
+    """Create a ready-to-score reward function in Stash's Evals UI from explicit criteria.
+    Each trait has name, good, bad, and optional basis (why the user wants it).
+    Instructions describe the task and grading rules. Provide 1-12 unique traits;
+    the initial score is their mean. This saves a rubric without training a model
+    or inventing labeled examples. It can be scored immediately with
+    stash_reward_function_score. If setup fails after creation, the error includes
+    the created ID: get it and set its rubric, rather than creating a duplicate."""
+    rubric = _reward_traits(traits)
+    with _client() as client:
+        created = client._post("/api/v1/evals", json={"name": name, "instructions": instructions})
+        eval_id = created["id"]
+        try:
+            client._put(f"/api/v1/evals/{eval_id}/rubric", json={"base": 0, "traits": rubric})
+            return _json(client._get(f"/api/v1/evals/{eval_id}"))
+        except Exception as exc:
+            raise RuntimeError(
+                f"Reward function {eval_id} was created, but setup could not be verified: {exc}. "
+                "Use stash_reward_function_get, then stash_reward_function_set_rubric with its "
+                "current version (0 if null) if needed. Do not create it again."
+            ) from exc
+
+
+@mcp.tool()
+def stash_reward_function_set_rubric(
+    eval_id: UUID,
+    traits: RewardFunctionTraits,
+    base_version: Annotated[int, Field(ge=0)],
+) -> str:
+    """Replace a reward function's rubric with explicit user criteria. Pass the version
+    you read from stash_reward_function_get (0 if null); a stale version is rejected
+    instead of overwriting newer edits. Human-written traits are preserved by later
+    automatic revisions. Returns rubric version history."""
+    rubric = _reward_traits(traits)
+    with _client() as client:
+        return _json(
+            client._put(
+                f"/api/v1/evals/{eval_id}/rubric", json={"base": base_version, "traits": rubric}
+            )
+        )
+
+
+@mcp.tool()
+def stash_reward_function_score(
+    eval_id: UUID,
+    output: RewardFunctionOutput,
+    trace: list[dict] | str | None = None,
+    caller: Annotated[str, Field(max_length=100)] = "mcp",
+    ref: Annotated[str, Field(max_length=200)] = "",
+    change: Annotated[str, Field(max_length=200_000)] = "",
+    before: RewardFunctionOutput | None = None,
+) -> str:
+    """Score work with a saved reward function. output contains text and/or images
+    (base64 or data URLs). trace is optional conversation context. Returns a 0-1
+    score, trait grades, reasons, fixes and a logged call_id. This calls the hosted
+    judge and records the submission; it does not add a training label.
+    To judge only an edit, supply change (request/diff) and/or before (prior output).
+    Omit both to grade the whole output. ref is your optional identifier for the work."""
+    with _client() as client:
+        return _json(
+            client._request(
+                "POST",
+                f"/api/v1/evals/{eval_id}/score",
+                json={
+                    "output": output.model_dump(),
+                    "trace": trace,
+                    "caller": caller,
+                    "ref": ref or None,
+                    "change": change,
+                    "before": before.model_dump() if before is not None else None,
+                },
+                timeout=180,
+            ).json()
+        )
+
+
 # ── Intuition models (personal judges) ───────────────────────────
 
 
@@ -1085,20 +1224,52 @@ def stash_intuition_get(model_id: str) -> str:
 
 
 @mcp.tool()
-def stash_intuition_predict(model_id: str, item: str, caller: str = "agent") -> str:
+def stash_intuition_predict(
+    model_id: str, item: str, caller: str = "agent", ref: str = "", run: str = ""
+) -> str:
     """Judge one item with the user's active intuition model. `item` is text or a
     JSON object string shaped like the model's examples. Returns the label,
     per-label probabilities, confidence, the rubric answers and each answer's
     contribution. Low-confidence results deserve a human check. The call is
-    logged; if the user corrects it, send the correction with
-    stash_intuition_review so the model learns."""
+    logged; pass `ref` (your own id for the thing judged, e.g. a ticket id) so
+    later feedback can find it, and `run` (the task this decision is part of) so the
+    task's eventual outcome can be credited to it with stash_intuition_run_outcome. If
+    the user corrects it, send the correction with stash_intuition_review; for
+    outcomes of this one call use stash_intuition_feedback."""
     with _client() as client:
         return _json(
             client._post(
                 f"/api/v1/intuitions/{model_id}/predict",
-                json={"item": _item(item), "caller": caller},
+                json={
+                    "item": _item(item),
+                    "caller": caller,
+                    "ref": ref or None,
+                    "run": run or None,
+                },
             )
         )
+
+
+@mcp.tool()
+def stash_intuition_run_outcome(run: str, value: float, note: str = "") -> str:
+    """Report how a task ended, from 0 (failed) to 1 (succeeded). `run` is the id
+    passed to stash_intuition_predict for the decisions made during that task; the
+    outcome is credited to those decisions across every eval that was called."""
+    with _client() as client:
+        return _json(
+            client._post(
+                f"/api/v1/intuitions/runs/{run}/outcome", json={"value": value, "note": note}
+            )
+        )
+
+
+@mcp.tool()
+def stash_intuition_credit(model_id: str) -> str:
+    """Whether an intuition model's decisions inside runs predict the runs'
+    outcomes: success rate per decision, learned weights with intervals,
+    cross-validated accuracy, and the calls that pushed against their run's outcome."""
+    with _client() as client:
+        return _json(client._get(f"/api/v1/intuitions/{model_id}/credit"))
 
 
 @mcp.tool()
@@ -1112,6 +1283,64 @@ def stash_intuition_compare(model_id: str, item_a: str, item_b: str, caller: str
                 json={"item_a": _item(item_a), "item_b": _item(item_b), "caller": caller},
             )
         )
+
+
+@mcp.tool()
+def stash_intuition_feedback(
+    model_id: str,
+    prediction_id: str = "",
+    ref: str = "",
+    label: str = "",
+    value: float | None = None,
+    source: str = "outcome",
+    note: str = "",
+    learn: bool = False,
+) -> str:
+    """Attach feedback to a served call, now or days later. Identify the call by
+    prediction_id or by the `ref` passed to predict. `source` is 'human' (a person's
+    correction), 'outcome' (what actually happened, e.g. the customer escalated) or
+    'downstream' (another system's verdict). Give the label it should have had
+    and/or a numeric outcome `value`. Monitoring measures accuracy against this
+    feedback; learn=True also turns a labeled one into a training example."""
+    body = {"source": source, "note": note, "learn": learn}
+    body |= {"prediction_id": prediction_id} if prediction_id else {"ref": ref}
+    if label:
+        body["label"] = label
+    if value is not None:
+        body["value"] = value
+    with _client() as client:
+        return _json(client._post(f"/api/v1/intuitions/{model_id}/feedback", json=body))
+
+
+@mcp.tool()
+def stash_intuition_monitoring(model_id: str, days: int = 30) -> str:
+    """How an intuition model is doing in use: calls and failures per day, accuracy
+    and calibration against feedback, per-version results, drift of recent calls
+    versus its training examples, and the calls where it disagreed with feedback."""
+    with _client() as client:
+        return _json(client._get(f"/api/v1/intuitions/{model_id}/monitoring?days={days}"))
+
+
+@mcp.tool()
+def stash_intuition_label_queue(model_id: str, limit: int = 10) -> str:
+    """Unreviewed calls of an intuition model ranked by how much a label would teach
+    it (it was unsure, the input is unlike its examples, or an outcome already
+    disagrees), each with its reasons. Ask the user to label the top ones, then
+    send each with stash_intuition_review."""
+    with _client() as client:
+        return _json(client._get(f"/api/v1/intuitions/{model_id}/label-queue?limit={limit}"))
+
+
+@mcp.tool()
+def stash_intuition_improve(model_id: str, start: bool = False) -> str:
+    """Search for better rubric questions for a saved intuition model. start=True
+    launches the background search (minutes); call again with start=False to read
+    its progress and result: each candidate's cross-validated accuracy, the winner,
+    and the regression gate. The winner becomes the draft; promote it with
+    stash_intuition_promote (blocked if it regresses unless forced)."""
+    with _client() as client:
+        path = f"/api/v1/intuitions/{model_id}/improve"
+        return _json(client._post(path) if start else client._get(path))
 
 
 @mcp.tool()

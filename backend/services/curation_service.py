@@ -7,42 +7,21 @@ and the user's connected sources as pointers (the agent pulls source
 specifics with `stash search`) — the curator never sees its own output.
 `has_changes_since` is the cheap EXISTS the beat task uses to skip idle users
 without waking a sprite.
-
-A caller names which wiki it reads: the owner's own (`internal`) or the
-workspace's shared, anonymized one (`external`). The shared wiki may be built
-only from sessions of end users who share, and that rule is enforced in SQL
-rather than left to prompt prose — for the cheap gate too, so a curator is
-never woken for a delta its own feed cannot show. `has_changes_since`,
-`_feed_events`, `complete_through` and `curator_event_backlog` therefore all
-splice the single clause in `_SHARE_WIKI_EVENT_SCOPE`, share the one eligibility
-clause in `_CURATOR_FEED_ELIGIBILITY`, bound on the one cursor clause in
-`position_bound`, and collapse copies with the one identity in `_event_identity`
-— the gate splicing `_canonical_rows()` as well, because a cursor standing inside
-a tie is exactly when a row count and the feed's answer would otherwise disagree.
-The backlog reaches the same truth through the group instead: an identity's copies
-all share one instant, so it asks `row_ahead` per row and calls a group pending only
-when every copy is ahead, which is the same statement as "its canonical row is
-ahead" without a per-row anti-join. A second near-identical query would let gate
-and feed disagree, which is the failure this file exists to make impossible: the
-gate says there is work, the feed and the watermark boundary read exactly that
-work, and the backlog reports exactly what is left of it — so the backlog reads
-zero precisely when the feed comes back empty.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from uuid import UUID
 
 from ..database import get_pool
 from . import files_tree_service, source_service
 
 # Caps so a single delta stays bounded (a long-idle account's first delta, a
-# high-volume account's busy day). The unit is a distinct event, not a row: a
-# session re-pushed eight times spends one slot (see _event_identity). Overflowing
-# _MAX_EVENTS never loses events: the watermark only advances through what fit (see
-# complete_through), so the remaining distinct events are re-presented next run.
+# high-volume account's busy day). Overflowing _MAX_EVENTS never loses events:
+# the watermark only advances through what fit (see complete_through), so the
+# remainder is re-presented on the next run.
 _MAX_EVENTS = 500
 _MAX_PAGES = 100
 _MAX_FILES = 100
@@ -50,32 +29,296 @@ _MAX_SAVES = 100
 _MAX_SOURCE_DOCS = 100
 _SNIPPET = 280
 
+
+async def has_changes_since(owner_user_id: UUID, user_id: UUID, since: datetime | None) -> bool:
+    """True if anything the curator cares about changed after `since`. A cheap
+    gate — the beat task skips a curator run (and the sprite wake) when False."""
+    if since is None:
+        return True  # never curated → bootstrap.
+    pool = get_pool()
+    memory_ids = await files_tree_service.memory_subtree_folder_ids(owner_user_id)
+    exists = await pool.fetchval(
+        """
+        SELECT
+          EXISTS (SELECT 1 FROM history_events
+                  WHERE owner_user_id = $1 AND created_at > $2
+                    AND (session_id IS NULL OR session_id NOT LIKE 'agent-curate-%'))
+          OR EXISTS (SELECT 1 FROM pages
+                     WHERE owner_user_id = $1 AND updated_at > $2
+                       AND ($3::uuid[] IS NULL OR folder_id IS NULL
+                            OR folder_id <> ALL($3)))
+          OR EXISTS (SELECT 1 FROM files
+                     WHERE owner_user_id = $1 AND created_at > $2)
+          OR EXISTS (SELECT 1 FROM drive_documents
+                     WHERE owner_user_id = $1 AND updated_at > $2
+                       AND extraction_status = 'done' AND deleted_at IS NULL)
+          OR EXISTS (SELECT 1 FROM x_save_docs
+                     WHERE owner_user_id = $1 AND updated_at > $2
+                       AND hydration_status = 'done' AND deleted_at IS NULL)
+          OR EXISTS (SELECT 1 FROM instagram_save_docs
+                     WHERE owner_user_id = $1 AND updated_at > $2
+                       AND hydration_status = 'done' AND deleted_at IS NULL)
+        """,
+        owner_user_id,
+        since,
+        list(memory_ids) or None,
+        column=0,
+    )
+    return bool(exists)
+
+
+async def changes_since(owner_user_id: UUID, user_id: UUID, since: datetime | None) -> dict:
+    """The delta the curator reads: history events, changed pages (excl. Memory),
+    new files, changed Drive-folder documents, newly hydrated X/Instagram
+    saves, and connected-source pointers."""
+    pool = get_pool()
+    memory_ids = await files_tree_service.memory_subtree_folder_ids(owner_user_id)
+    exclude = list(memory_ids) or None
+
+    events, history_has_more = await _feed_events(owner_user_id, since, None, _MAX_EVENTS)
+    history = [
+        {
+            "session_id": e.get("session_id"),
+            "agent_name": e.get("agent_name"),
+            "event_type": e.get("event_type"),
+            "content": (e.get("content") or "")[:_SNIPPET],
+            "created_at": _iso(e.get("created_at")),
+            "user": e.get("user"),
+            "user_share_wiki": e.get("user_share_wiki"),
+        }
+        for e in events
+    ]
+
+    page_rows = await pool.fetch(
+        """
+        SELECT id, name, folder_id, updated_at,
+               left(coalesce(content_markdown, ''), $4) AS snippet
+        FROM pages
+        WHERE owner_user_id = $1
+          AND ($5::uuid[] IS NULL OR folder_id IS NULL OR folder_id <> ALL($5))
+          AND ($2::timestamptz IS NULL OR updated_at > $2)
+        ORDER BY updated_at DESC LIMIT $3
+        """,
+        owner_user_id,
+        since,
+        _MAX_PAGES,
+        _SNIPPET,
+        exclude,
+    )
+    pages = [
+        {
+            "id": str(r["id"]),
+            "name": r["name"],
+            "folder_id": str(r["folder_id"]) if r["folder_id"] else None,
+            "updated_at": _iso(r["updated_at"]),
+            "snippet": r["snippet"],
+        }
+        for r in page_rows
+    ]
+
+    file_rows = await pool.fetch(
+        """
+        SELECT id, name, created_at, left(coalesce(extracted_text, ''), $4) AS snippet
+        FROM files
+        WHERE owner_user_id = $1 AND ($2::timestamptz IS NULL OR created_at > $2)
+        ORDER BY created_at DESC LIMIT $3
+        """,
+        owner_user_id,
+        since,
+        _MAX_FILES,
+        _SNIPPET,
+    )
+    files = [
+        {
+            "id": str(r["id"]),
+            "name": r["name"],
+            "created_at": _iso(r["created_at"]),
+            "snippet": r["snippet"],
+        }
+        for r in file_rows
+    ]
+
+    # Changed Drive-folder documents, as items rather than source pointers — a
+    # picked Drive folder is the user's curated document set (edited outside
+    # Stash), so an edit there is curation input the same way an upload is.
+    # `updated_at` moves only on a real change: the sync upsert bumps it when
+    # Drive's modifiedTime differs, and extraction bumps it when the new body
+    # lands. Gating on 'done' presents a doc only once its text is readable.
+    source_doc_rows = await pool.fetch(
+        """
+        SELECT path, name, updated_at, left(coalesce(content, ''), $4) AS snippet
+        FROM drive_documents
+        WHERE owner_user_id = $1
+          AND ($2::timestamptz IS NULL OR updated_at > $2)
+          AND extraction_status = 'done' AND deleted_at IS NULL
+        ORDER BY updated_at DESC LIMIT $3
+        """,
+        owner_user_id,
+        since,
+        _MAX_SOURCE_DOCS,
+        _SNIPPET,
+    )
+    source_docs = [
+        {
+            "path": r["path"],
+            "name": r["name"],
+            "updated_at": _iso(r["updated_at"]),
+            "snippet": r["snippet"],
+        }
+        for r in source_doc_rows
+    ]
+
+    # Newly hydrated X/Instagram saves, as items rather than source pointers —
+    # a save the user made is deliberate curation input, like an upload.
+    save_rows = await pool.fetch(
+        """
+        SELECT source, kind, name, url, updated_at, snippet FROM (
+            SELECT 'x' AS source, kind, name,
+                   'https://x.com/i/status/' || external_ref AS url,
+                   updated_at, left(coalesce(content, ''), $4) AS snippet
+            FROM x_save_docs
+            WHERE owner_user_id = $1
+              AND ($2::timestamptz IS NULL OR updated_at > $2)
+              AND hydration_status = 'done' AND deleted_at IS NULL
+            UNION ALL
+            SELECT 'instagram', kind, name,
+                   'https://www.instagram.com/p/' || external_ref || '/',
+                   updated_at, left(coalesce(content, ''), $4)
+            FROM instagram_save_docs
+            WHERE owner_user_id = $1
+              AND ($2::timestamptz IS NULL OR updated_at > $2)
+              AND hydration_status = 'done' AND deleted_at IS NULL
+        ) all_saves
+        ORDER BY updated_at DESC LIMIT $3
+        """,
+        owner_user_id,
+        since,
+        _MAX_SAVES,
+        _SNIPPET,
+    )
+    saves = [
+        {
+            "source": r["source"],
+            "kind": r["kind"],
+            "name": r["name"],
+            "url": r["url"],
+            "updated_at": _iso(r["updated_at"]),
+            "snippet": r["snippet"],
+        }
+        for r in save_rows
+    ]
+
+    all_sources = await source_service.list_sources(owner_user_id, user_id)
+    sources = [
+        {"source": s.get("source"), "type": s.get("type"), "display_name": s.get("display_name")}
+        for s in all_sources
+        if not str(s.get("type", "")).startswith("native_")
+    ]
+
+    return {
+        "since": _iso(since),
+        "counts": {
+            "history": len(history),
+            "pages": len(pages),
+            "files": len(files),
+            "source_docs": len(source_docs),
+            "saves": len(saves),
+            "sources": len(sources),
+        },
+        "history": history,
+        "history_has_more": history_has_more,
+        "pages": pages,
+        "files": files,
+        "source_docs": source_docs,
+        "saves": saves,
+        "sources": sources,
+    }
+
+
+async def _feed_events(
+    owner_user_id: UUID,
+    since: datetime | None,
+    until: datetime | None,
+    limit: int,
+) -> tuple[list[dict], bool]:
+    """The curator's event feed, oldest first. Returns (events, has_more).
+
+    The curator's own run transcripts (`agent-curate-%` sessions) are excluded
+    in SQL — feeding them back would echo-loop the daily gate and pollute the
+    wiki, and filtering after the query would let them consume feed slots that
+    belong to real activity.
+
+    Each event carries its session's end user (name and wiki opt-out) when it
+    has one — the external curator routes by it: every user's material feeds
+    that user's own wiki, and only share_wiki users feed the shared anonymized
+    wiki."""
+    pool = get_pool()
+    args: list = [owner_user_id]
+    where = "he.owner_user_id = $1 AND (he.session_id IS NULL OR he.session_id NOT LIKE 'agent-curate-%')"
+    if since is not None:
+        args.append(since)
+        where += f" AND he.created_at > ${len(args)}"
+    if until is not None:
+        args.append(until)
+        where += f" AND he.created_at <= ${len(args)}"
+    rows = await pool.fetch(
+        f"SELECT he.session_id, he.agent_name, he.event_type, he.content, he.created_at, "
+        f"eu.name AS user, eu.share_wiki AS user_share_wiki "
+        f"FROM history_events he "
+        f"LEFT JOIN sessions s ON s.owner_user_id = he.owner_user_id "
+        f"  AND s.session_id = he.session_id "
+        f"LEFT JOIN end_users eu ON eu.id = s.end_user_id "
+        f"WHERE {where} "
+        f"ORDER BY he.created_at, he.id LIMIT {limit + 1}",
+        *args,
+    )
+    has_more = len(rows) > limit
+    return [dict(r) for r in rows[:limit]], has_more
+
+
+async def complete_through(
+    owner_user_id: UUID,
+    since: datetime | None,
+    until: datetime,
+    *,
+    max_event_chars: int | None = None,
+) -> datetime:
+    """How far the curator's watermark may advance after a successful run.
+
+    The feed is complete through `until` unless it overflowed _MAX_EVENTS or
+    the optional event-text budget. In that case it is only complete through
+    the last event that fit — minus a
+    microsecond, so events sharing that exact timestamp are re-presented next
+    run rather than skipped. Overflow therefore drains run by run and no event
+    is ever silently dropped from curation."""
+    events, has_more = await _feed_events(owner_user_id, since, until, _MAX_EVENTS)
+    if max_event_chars is not None and events:
+        characters = 0
+        for event in events:
+            characters += len(event["content"] or "")
+            # Never split a timestamp group, or stall forever on one large
+            # event. Keep the first group and stop before the next group that
+            # exceeds the text budget; the next pass receives the remainder.
+            if characters > max_event_chars and event["created_at"] > events[0]["created_at"]:
+                return event["created_at"] - timedelta(microseconds=1)
+    if not has_more:
+        return until
+    return events[-1]["created_at"] - timedelta(microseconds=1)
+
+
+def _iso(dt) -> str | None:
+    return dt.isoformat() if isinstance(dt, datetime) else None
+
+
 # The two wikis a curator writes. Which one a run belongs to is a property of
 # the agent (`agents.curator_wiki`), and it decides what its feed may contain.
 WIKI_INTERNAL = "internal"
+
+
 WIKI_EXTERNAL = "external"
+
+
 WIKI_VALUES = (WIKI_INTERNAL, WIKI_EXTERNAL)
-
-
-# --- The watermark position --------------------------------------------------
-#
-# A feed read is ordered `(created_at, id)`, so a position on it is a PAIR: an
-# instant plus one event id naming how far inside that instant the read reached.
-# An instant alone was the old shape, and it plateaued — when one `created_at`
-# held more distinct events than the feed budget, the overflow advance
-# (`T - 1µs`) landed behind the whole tie, every later run re-read the same
-# first-budget window, and the backlog never drained (STAS-235).
-#
-# `event_id=None` is a full position, not an unset half: it means the instant
-# alone carries the read — every event at that instant is behind it. That is
-# exactly what every pre-pair watermark already asserted, which is why
-# migration 0242 backfills nothing.
-#
-# One order governs the pair, rendered twice from the same rule: `ahead()` in
-# Python, `_position_sql` in SQL, which every reader reaches through
-# `position_bound` (what may be read) and `position_ahead` (what may be written).
-# A second encoding — a hand-copied OR chain, a `greatest(...)`, a ±1µs step — is
-# how the feed, the gate, the backlog and the watermark would start disagreeing.
 
 
 # The greatest uuid a row can have. A pair with no event half encodes its id as
@@ -301,6 +544,7 @@ _SHARE_WIKI_EVENT_SCOPE = (
     f"AND we.share_wiki AND {cleared_project_clause('wse')})"
 )
 
+
 # What the curator is permitted to read, as one clause. Its own run transcripts
 # (`agent-curate-%` sessions) are the one thing an owner-scoped feed must never
 # show: they would echo-loop the daily gate and pollute the wiki, and filtering
@@ -334,6 +578,7 @@ def curator_run_exclusion_clause(sessions_column: str) -> str:
 _CURATOR_FEED_ELIGIBILITY = (
     "AND (he.session_id IS NULL OR " + curator_run_exclusion_clause("he.session_id") + ")"
 )
+
 
 # One event, no matter how many times its session was re-uploaded. A re-import
 # (onboarding, a client resending a transcript) inserts rows that differ only in
@@ -375,30 +620,6 @@ def _event_identity(alias: str) -> str:
     columns = [f"{alias}.{column}" for column in _IDENTITY_COLUMNS]
     columns.append(f"md5({alias}.content)")
     return ", ".join(columns)
-
-
-# One rendering of "this row is the copy the feed offers", naming the alias `he`
-# the way every reader here names it. The feed has always spliced it; the gate and
-# the backlog splice it too now that a watermark can stand inside a tie.
-#
-# The two claims are NOT interchangeable and the difference is the backlog: rows
-# this predicate rejects are not pending work (their canonical twin was offered
-# whenever that twin was behind the cursor), but they are rows a run read, so the
-# `raw_rows` half of the backlog still counts them. Splicing this into a backlog
-# WHERE would therefore collapse `raw_rows` into `distinct_events` and erase the
-# re-import amplification the pair exists to expose — so the backlog aggregates it
-# per identity group instead of filtering on it.
-def _canonical_rows() -> str:
-    """The `AND` term admitting only canonical rows: no lower `id` carries this
-    row's identity, so of a transcript's N re-imported copies only the first is
-    ever offered to a curator."""
-    return (
-        "NOT EXISTS ( "
-        "SELECT 1 FROM history_events dup "
-        "WHERE dup.owner_user_id = he.owner_user_id "
-        f"AND ({_event_identity('dup')}) = ({_event_identity('he')}) "
-        "AND dup.id < he.id)"
-    )
 
 
 def _wiki_event_scope(wiki: str) -> str:
@@ -469,383 +690,6 @@ def _feed_conditions(
         args.append(until)
         where += f" AND he.created_at <= ${len(args)}"
     return where
-
-
-async def has_changes_since(
-    owner_user_id: UUID,
-    user_id: UUID,
-    position: Position,
-    wiki: str,
-    folder_id: UUID | None = None,
-) -> bool:
-    """True if anything this wiki's curator cares about is ahead of `position`.
-
-    A cheap gate — the beat task skips a curator run (and the sprite wake) when
-    False. Its event clause carries the same scope AND the same cursor the feed
-    does, which is what makes "the gate fired" mean "the feed has something to
-    read". Every other clause stays owner-wide: they are filtered downstream, so
-    they can only over-trigger, and tightening one clause without the others is
-    exactly how the gate and the feed stop agreeing.
-
-    `folder_id` scopes a folder-bound curator: then events are the whole gate —
-    the scoped feed reads nothing else (the folder's wiki pages are the
-    curator's artifact, excluded the way Memory is), so the page and
-    owner-wide branches could only fire runs with nothing to read.
-
-    The event half also splices the canonical-row test, and it did not used to. While
-    the cursor was an instant that test was unnecessary here: every copy of an
-    identity shares one `created_at`, so a group was either wholly inside or wholly
-    outside the window. A cursor standing INSIDE a tie breaks that — the duplicates
-    of an event already shown carry HIGHER ids, so they sit ahead of the cursor
-    while their canonical twin sits behind it, and an EXISTS over bare rows would
-    fire the beat forever on copies the feed will never offer. The test is cheap
-    where it matters: the id/created_at walk stops at the first qualifying row
-    rather than hashing the whole window. This is the equivalence this file exists
-    to protect."""
-    if position.at is None:
-        return True  # never curated → bootstrap.
-    pool = get_pool()
-    memory_ids = await files_tree_service.memory_subtree_folder_ids(owner_user_id)
-    args: list = [owner_user_id]
-    where = (
-        f"he.owner_user_id = $1 {_CURATOR_FEED_ELIGIBILITY}{_wiki_event_scope(wiki)}"
-        f"{position_bound(args, position)} AND {_canonical_rows()}"
-    )
-    if folder_id is not None:
-        where += _folder_event_scope(folder_id, args)
-        branches = [f"EXISTS (SELECT 1 FROM history_events he WHERE {where})"]
-    else:
-        args.append(position.at)
-        instant = len(args)
-        args.append(list(memory_ids) or None)
-        excluded = len(args)
-        page_scope = (
-            f"AND (${excluded}::uuid[] IS NULL "
-            f"OR folder_id IS NULL OR folder_id <> ALL(${excluded}))"
-        )
-        branches = [
-            f"EXISTS (SELECT 1 FROM history_events he WHERE {where})",
-            f"EXISTS (SELECT 1 FROM pages WHERE owner_user_id = $1 "
-            f"AND updated_at > ${instant} {page_scope})",
-            f"EXISTS (SELECT 1 FROM files WHERE owner_user_id = $1 AND created_at > ${instant})",
-            f"EXISTS (SELECT 1 FROM drive_documents WHERE owner_user_id = $1 AND updated_at > ${instant} "
-            "AND extraction_status = 'done' AND deleted_at IS NULL)",
-            f"EXISTS (SELECT 1 FROM x_save_docs WHERE owner_user_id = $1 AND updated_at > ${instant} "
-            "AND hydration_status = 'done' AND deleted_at IS NULL)",
-            f"EXISTS (SELECT 1 FROM instagram_save_docs WHERE owner_user_id = $1 "
-            f"AND updated_at > ${instant} "
-            "AND hydration_status = 'done' AND deleted_at IS NULL)",
-        ]
-    exists = await pool.fetchval(
-        f"SELECT {' OR '.join(branches)}",
-        *args,
-        column=0,
-    )
-    return bool(exists)
-
-
-def _project_share_wiki(event: dict) -> bool | None:
-    """Whether the project this event is filed in is cleared for the shared wiki.
-
-    None means "not filed in a project": no folder at all, or the scope's
-    Default folder. Default is the catch-all for sessions nobody deliberately
-    placed, so it carries no routing decision of its own — normalizing it here
-    is the one place that rule lives, so the SQL stays a plain read.
-
-    A non-null answer is therefore the single signal that this event belongs to
-    a project, and whether that project's history may be distilled across users.
-    """
-    if event.get("session_folder_id") is None or event.get("session_folder_is_default"):
-        return None
-    return event["session_folder_share_wiki"]
-
-
-async def changes_since(
-    owner_user_id: UUID,
-    user_id: UUID,
-    position: Position,
-    wiki: str,
-    folder_id: UUID | None = None,
-) -> dict:
-    """The delta the curator reads: history events, changed pages (excl. Memory),
-    new files, changed Drive-folder documents, newly hydrated X/Instagram saves,
-    and connected-source pointers.
-
-    `wiki` scopes the events only — see `_feed_events`. Pages, files, saves, and
-    source pointers come from the caller's own scope and are filtered
-    downstream, so they stay owner-wide here.
-
-    `folder_id` marks the folder-scoped curator: its work set is its folder's
-    events and its folder's pages, nothing else — files, Drive documents, saves,
-    and source pointers come back empty because a scoped curator has no wiki
-    outside the folder to fold them into. The scoping is in SQL, not in prose:
-    material outside the folder never reaches the scoped curator's prompt."""
-    pool = get_pool()
-    memory_ids = await files_tree_service.memory_subtree_folder_ids(owner_user_id)
-    exclude = list(memory_ids) or None
-
-    events, history_has_more = await _feed_events(
-        owner_user_id, position, None, _MAX_EVENTS, wiki, folder_id
-    )
-    history = [
-        {
-            "session_id": e.get("session_id"),
-            "agent_name": e.get("agent_name"),
-            "event_type": e.get("event_type"),
-            "content": (e.get("content") or "")[:_SNIPPET],
-            "created_at": _iso(e.get("created_at")),
-            "user": e.get("user"),
-            "user_share_wiki": e.get("user_share_wiki"),
-            "session_folder": e.get("session_folder"),
-            "session_folder_share_wiki": _project_share_wiki(e),
-        }
-        for e in events
-    ]
-
-    if folder_id is not None:
-        # A folder curator's own wiki is its compiled artifact, not input — the
-        # same exclusion that keeps Memory out of the workspace feed. The run
-        # reads the pages it maintains through ls/read before folding in.
-        pages = []
-    else:
-        page_rows = await pool.fetch(
-            """
-            SELECT id, name, folder_id, updated_at,
-                   left(coalesce(content_markdown, ''), $4) AS snippet
-            FROM pages
-            WHERE owner_user_id = $1
-              AND ($5::uuid[] IS NULL OR folder_id IS NULL OR folder_id <> ALL($5))
-              AND ($2::timestamptz IS NULL OR updated_at > $2)
-            ORDER BY updated_at DESC LIMIT $3
-            """,
-            owner_user_id,
-            position.at,
-            _MAX_PAGES,
-            _SNIPPET,
-            exclude,
-        )
-        pages = [
-            {
-                "id": str(r["id"]),
-                "name": r["name"],
-                "folder_id": str(r["folder_id"]) if r["folder_id"] else None,
-                "updated_at": _iso(r["updated_at"]),
-                "snippet": r["snippet"],
-            }
-            for r in page_rows
-        ]
-
-    if folder_id is None:
-        files, source_docs, saves, sources = await _owner_wide_sections(
-            pool, owner_user_id, user_id, position.at
-        )
-    else:
-        files = source_docs = saves = sources = []
-
-    return {
-        "since": _iso(position.at),
-        "counts": {
-            "history": len(history),
-            "pages": len(pages),
-            "files": len(files),
-            "source_docs": len(source_docs),
-            "saves": len(saves),
-            "sources": len(sources),
-        },
-        "history": history,
-        "history_has_more": history_has_more,
-        "pages": pages,
-        "files": files,
-        "source_docs": source_docs,
-        "saves": saves,
-        "sources": sources,
-    }
-
-
-async def _owner_wide_sections(pool, owner_user_id: UUID, user_id: UUID, since: datetime | None):
-    """The delta halves only a workspace-wide curator reads: new files, changed
-    Drive documents, newly hydrated saves, and connected-source pointers. A
-    folder-scoped curator has no wiki outside its folder to fold them into, so
-    they are not fetched for it at all."""
-    file_rows = await pool.fetch(
-        """
-        SELECT id, name, created_at, left(coalesce(extracted_text, ''), $4) AS snippet
-        FROM files
-        WHERE owner_user_id = $1 AND ($2::timestamptz IS NULL OR created_at > $2)
-        ORDER BY created_at DESC LIMIT $3
-        """,
-        owner_user_id,
-        since,
-        _MAX_FILES,
-        _SNIPPET,
-    )
-    files = [
-        {
-            "id": str(r["id"]),
-            "name": r["name"],
-            "created_at": _iso(r["created_at"]),
-            "snippet": r["snippet"],
-        }
-        for r in file_rows
-    ]
-
-    # Changed Drive-folder documents, as items rather than source pointers — a
-    # picked Drive folder is the user's curated document set (edited outside
-    # Stash), so an edit there is curation input the same way an upload is.
-    # `updated_at` moves only on a real change: the sync upsert bumps it when
-    # Drive's modifiedTime differs, and extraction bumps it when the new body
-    # lands. Gating on 'done' presents a doc only once its text is readable.
-    source_doc_rows = await pool.fetch(
-        """
-        SELECT path, name, updated_at, left(coalesce(content, ''), $4) AS snippet
-        FROM drive_documents
-        WHERE owner_user_id = $1
-          AND ($2::timestamptz IS NULL OR updated_at > $2)
-          AND extraction_status = 'done' AND deleted_at IS NULL
-        ORDER BY updated_at DESC LIMIT $3
-        """,
-        owner_user_id,
-        since,
-        _MAX_SOURCE_DOCS,
-        _SNIPPET,
-    )
-    source_docs = [
-        {
-            "path": r["path"],
-            "name": r["name"],
-            "updated_at": _iso(r["updated_at"]),
-            "snippet": r["snippet"],
-        }
-        for r in source_doc_rows
-    ]
-
-    # Newly hydrated X/Instagram saves, as items rather than source pointers —
-    # a save the user made is deliberate curation input, like an upload.
-    save_rows = await pool.fetch(
-        """
-        SELECT source, kind, name, url, updated_at, snippet FROM (
-            SELECT 'x' AS source, kind, name,
-                   'https://x.com/i/status/' || external_ref AS url,
-                   updated_at, left(coalesce(content, ''), $4) AS snippet
-            FROM x_save_docs
-            WHERE owner_user_id = $1
-              AND ($2::timestamptz IS NULL OR updated_at > $2)
-              AND hydration_status = 'done' AND deleted_at IS NULL
-            UNION ALL
-            SELECT 'instagram', kind, name,
-                   'https://www.instagram.com/p/' || external_ref || '/',
-                   updated_at, left(coalesce(content, ''), $4)
-            FROM instagram_save_docs
-            WHERE owner_user_id = $1
-              AND ($2::timestamptz IS NULL OR updated_at > $2)
-              AND hydration_status = 'done' AND deleted_at IS NULL
-        ) all_saves
-        ORDER BY updated_at DESC LIMIT $3
-        """,
-        owner_user_id,
-        since,
-        _MAX_SAVES,
-        _SNIPPET,
-    )
-    saves = [
-        {
-            "source": r["source"],
-            "kind": r["kind"],
-            "name": r["name"],
-            "url": r["url"],
-            "updated_at": _iso(r["updated_at"]),
-            "snippet": r["snippet"],
-        }
-        for r in save_rows
-    ]
-
-    all_sources = await source_service.list_sources(owner_user_id, user_id)
-    sources = [
-        {"source": s.get("source"), "type": s.get("type"), "display_name": s.get("display_name")}
-        for s in all_sources
-        if not str(s.get("type", "")).startswith("native_")
-    ]
-    return files, source_docs, saves, sources
-
-
-async def _feed_events(
-    owner_user_id: UUID,
-    position: Position,
-    until: datetime | None,
-    limit: int,
-    wiki: str,
-    folder_id: UUID | None = None,
-) -> tuple[list[dict], bool]:
-    """The curator's event feed, oldest first. Returns (events, has_more).
-
-    The curator's own run transcripts (`agent-curate-%` sessions) are excluded
-    in SQL — feeding them back would echo-loop the daily gate and pollute the
-    wiki, and filtering after the query would let them consume feed slots that
-    belong to real activity.
-
-    `wiki` decides which events are in the feed at all, in SQL: the shared wiki
-    reads only sessions whose end user still shares it. Scoping here rather than
-    downstream is what lets the feed, the gate, and `complete_through` tell one
-    story, and it means an opted-out session cannot consume the slots a
-    shareable session needs.
-
-    The end user still rides along on every event that does reach the feed,
-    because the curator's roster names people by what they share: the flag
-    identifies the users whose material lands only in their own wiki, and it
-    cannot be recovered once their sessions are absent from the feed.
-
-    Events also carry the session's folder (name and id) or null — the personal
-    curator attributes learning to that folder's context — plus that folder's
-    shared-wiki clearance and whether it is the Default one, which the external
-    curator routes the separate, per-project opt-in by.
-
-    One row per event identity, not per insert (`_canonical_rows`), so a transcript
-    re-pushed eight times buys the per-run budget once. Eligibility and sharing
-    scope are applied *before* dedupe — never inside the scoping clause — so an
-    out-of-scope row can never become the representative of anything the wiki then
-    reads. A duplicate's twin is always eligible too (the identity carries
-    `session_id`, so both copies share it).
-
-    The id is projected as `event_id` because it is half of a position: when the
-    feed saturates its budget inside one `created_at`, `complete_through` writes
-    the last shown event's id as the curator's new position, and a feed that did
-    not name the events it showed could not say where it stopped.
-
-    The canonical test is an anti-join rather than `DISTINCT ON`, with the narrow
-    id/created_at selection and the LIMIT pushed inside it, because the feed is the
-    hot path. `DISTINCT ON` has to order the whole window by the identity before the
-    oldest-first limit can apply: 1945ms and a 28MB disk spill on a founder-scale
-    317k-row window, against 27ms end to end walking the owner+created_at index, the
-    walk stopping once it has read the 724 rows that hold the budget. Only the
-    `limit + 1` winners are re-joined for their transcript text."""
-    pool = get_pool()
-    args: list = [owner_user_id]
-    where = _feed_conditions(wiki, position, until, args, folder_id)
-    rows = await pool.fetch(
-        f"SELECT picked.id AS event_id, he.session_id, he.agent_name, he.event_type, "
-        f"he.content, he.created_at, "
-        f"eu.name AS user, eu.share_wiki AS user_share_wiki, "
-        f"sf.name AS session_folder, sf.id AS session_folder_id, "
-        f"sf.share_wiki AS session_folder_share_wiki, "
-        f"sf.is_default AS session_folder_is_default "
-        f"FROM ( "
-        f"  SELECT he.id, he.created_at "
-        f"  FROM history_events he "
-        f"  WHERE {where} "
-        f"  AND {_canonical_rows()} "
-        f"  ORDER BY he.created_at, he.id "
-        f"  LIMIT {limit + 1} "
-        f") picked "
-        f"JOIN history_events he ON he.id = picked.id "
-        f"LEFT JOIN sessions s ON s.owner_user_id = he.owner_user_id "
-        f"  AND s.session_id = he.session_id "
-        f"LEFT JOIN end_users eu ON eu.id = s.end_user_id "
-        f"LEFT JOIN session_folders sf ON sf.id = s.session_folder_id "
-        f"ORDER BY picked.created_at, picked.id",
-        *args,
-    )
-    has_more = len(rows) > limit
-    return [dict(r) for r in rows[:limit]], has_more
 
 
 async def curator_event_backlog(
@@ -929,38 +773,3 @@ async def curator_event_backlog(
         "raw_rows": row["raw_rows"],
         "distinct_sessions": row["distinct_sessions"],
     }
-
-
-async def complete_through(
-    owner_user_id: UUID,
-    position: Position,
-    until: datetime,
-    wiki: str,
-    folder_id: UUID | None = None,
-) -> Position:
-    """Where the curator's watermark may stand after one successful run.
-
-    The feed is complete through `until` unless it overflowed _MAX_EVENTS, in which
-    case it is complete through exactly the last event that fit: `Position(T_k,
-    id_k)`, standing INSIDE the saturated instant rather than a microsecond before
-    it. The old `-1µs` step is what made a tie a plateau — it landed behind the
-    whole tie, so every run re-read the same first budget and the backlog never
-    drained (STAS-235). A result is therefore always strictly ahead of the position
-    it was read from: with no overflow the whole instant `until` is behind, which is
-    ahead of any mid-tie position inside that instant; with overflow the event id
-    advances within the instant.
-
-    `wiki` must be the value the run's feed was read with: this decides how far
-    that run's watermark may move, so a wider scope here would let the watermark
-    step past events the curator was never shown. `folder_id` likewise must be
-    the folder the scoped feed was cut by."""
-    events, has_more = await _feed_events(
-        owner_user_id, position, until, _MAX_EVENTS, wiki, folder_id
-    )
-    if not has_more:
-        return Position(at=until)
-    return Position(at=events[-1]["created_at"], event_id=events[-1]["event_id"])
-
-
-def _iso(dt) -> str | None:
-    return dt.isoformat() if isinstance(dt, datetime) else None

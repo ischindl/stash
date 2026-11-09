@@ -1,0 +1,56 @@
+.scene {
+  position: relative;
+  flex-shrink: 0;
+  height: 330px;
+  overflow: hidden;
+  margin-top: auto;
+}
+
+.invitation {
+  position: relative;
+  z-index: 1;
+  margin: 12px 0 0;
+  text-align: center;
+  color: #52614a;
+  font-size: 14px;
+}
+
+.valley {
+  position: absolute;
+  inset: 40px 0 0;
+}
+
+.landscape {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+}
+
+.hill { transition: fill 250ms; }
+
+.choice {
+  position: absolute;
+  transform: translateX(-50%);
+  width: 26%;
+  bottom: 0;
+  min-height: 44px;
+  cursor: pointer;
+}
+
+.choice:focus-visible { outline: 2px solid #3f5438; outline-offset: 2px; }
+.route { stroke-dasharray: 1; stroke-dashoffset: 0; animation: climb 1600ms ease-out both; }
+.projection { opacity: 0.55; animation: project 600ms ease-out 1600ms both; }
+.flag { animation: arrive 1600ms ease-out both; }
+@keyframes project { from { transform: scaleX(0); opacity: 0; } to { transform: scaleX(1); opacity: 0.55; } }
+@keyframes climb { from { stroke-dashoffset: 1; } to { stroke-dashoffset: 0; } }
+@keyframes arrive { 0%, 80% { opacity: 0; } 100% { opacity: 1; } }
+
+@media (max-width: 540px) {
+  .scene { height: 280px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hill { transition: none; }
+  .route, .projection { opacity: 0.55; animation: project 600ms ease-out 1600ms both; }
+.flag { animation: none; }
+}

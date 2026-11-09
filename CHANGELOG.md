@@ -44,6 +44,21 @@ everything before it is captured in git history (`git log`), not here.
 
 ### Changed
 
+- The line this build is cut from now contains the upstream product in full. Upstream
+  shipped about a hundred releases since the September split and our trunk had drifted
+  away from all of them, so everything upstream owns — the curator, the wiki, the evals,
+  the reward models — is now theirs here too, and features that were unreachable because
+  we sat behind them (the intuition-MCP surface, resumable wiki curation) are reachable.
+  Absorbing them retired work we had done twice over: our curator's slice-the-backlog
+  loop and its run timeout are gone in favour of upstream's durable cursor and capped
+  catch-up chain (`091a86370`), and our separately-derived turn wall is gone in favour of
+  upstream's single `AGENT_TURN_TIMEOUT_SECONDS`. Our local release-number bumps are
+  discarded, because upstream is what PyPI serves. Two things deliberately survived:
+  the fenced watermark advance, because upstream ships the reset path that a bare update
+  silently clobbers, and our own sharing surfaces — the MCP-handle answers for folders and
+  shares, and the pi plugin assets — which came through untouched. The MCP integration
+  guide's tool roster and its advertised count now match the server, at 102 tools.
+
 - `stash shares ls` now hands over a folder's MCP handle, so reading a share no longer
   needs a raw REST call. A folder whose link is granted has *no* named people on it — its
   answer sits in the same endpoint response as a `mcp_url` the CLI was throwing away,
@@ -547,6 +562,33 @@ everything before it is captured in git history (`git log`), not here.
   transcripts GUI-side, and moves sessions between projects. A project's
   opt-in only widens an opted-in user's material — a user's own opt-out stays
   the hard floor. Newly created projects start dark.
+
+- Shared developer wikis require an independent privacy review of each complete
+  page before customer retrieval. Existing unreviewed pages are quarantined,
+  edits invalidate prior approval, and customer views omit raw provenance,
+  unreviewed folder names and shared attachments. Private wikis remain available.
+
+- Developer wiki curation can edit a small passage without regenerating an entire
+  page. Runs start from new input, skip scopes with no new documents, and use
+  smaller responses to reduce timeout and truncation failures.
+  History, extracted files, and source documents share a bounded input budget;
+  large inputs resume from saved offsets without advancing past unread content.
+  Combined session documents retain chunk bounds per event, keeping source
+  offsets distinct from paging offsets in the supplied document.
+  Automatic catch-up attempts share a seven-run allowance per curator over 24
+  hours, across all triggering chains. Busy attempts preserve the active run's
+  status, concurrent page creation forces a fresh snapshot, and stale alerts
+  respect slower schedules and ignore the curator's own wiki output.
+
+- Recover from duplicate page titles during developer wiki curation. Successful
+  batches respect a history-event text budget; paid developer accounts queue up
+  to seven bounded catch-up passes instead of waiting another day; stale backlogs remain visible in alerts
+  even after a successful batch. Truncated responses get one smaller-response
+  retry without executing partial writes. Concurrent human edits stay protected,
+  and overlapping curator passes skip without reporting a false failure.
+
+- Replace the marketing homepage with a concise verifier research introduction,
+  a Fergana-inspired interactive valley, and matching social previews.
 
 - Bring in intuition models with a playground, prediction inbox, editable
   examples and rubrics, and evaluated model versions. Click a trained reward

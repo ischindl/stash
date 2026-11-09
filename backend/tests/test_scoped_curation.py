@@ -10,23 +10,21 @@ import pytest
 import pytest_asyncio
 from pydantic import ValidationError
 
-from backend.services import (
-    curation_service,
-    end_user_service,
-    llm,
-    session_folder_service,
-    source_service,
-)
+from backend.services import end_user_service, source_service
 from backend.services import scoped_curation_service as curation
-from backend.services.curation_service import Position
 
 from .conftest import unique_name
+from .shared_wiki_helpers import approve_fixture_pages
 from .test_developer_platform import _developer, _event, _mint_workspace_key, _push
 from .test_permissions import _auth
 
 
 @pytest_asyncio.fixture
-async def dataset(client, pool):
+async def dataset(client, pool, monkeypatch):
+    async def approve(**kwargs):
+        return curation.shared_wiki_privacy.PrivacyReview(approved=True, issues=[])
+
+    monkeypatch.setattr(curation.shared_wiki_privacy.llm, "complete_structured", approve)
     api_key, _, workspace = await _developer(client)
     key = await _mint_workspace_key(client, api_key, workspace)
     events = [
@@ -98,6 +96,8 @@ async def dataset(client, pool):
 
 
 async def scope(data, purpose, user="public"):
+    async with curation.get_pool().acquire() as conn:
+        await approve_fixture_pages(conn, data.workspace)
     if purpose == "shared":
         destination = data.workspace["external_wiki_folder_id"]
         users = [data.users["public"]["id"]]
@@ -110,7 +110,7 @@ async def scope(data, purpose, user="public"):
         destination,
         users,
         "agent-curate-security-test",
-        curation_service.NEVER,
+        None,
         datetime.now(UTC),
     )
 
@@ -137,52 +137,6 @@ async def test_shared_curator_cannot_discover_or_guess_protected_material(datase
 
 
 @pytest.mark.asyncio
-async def test_shared_completion_excludes_a_project_the_developer_has_not_cleared(dataset, pool):
-    """Per-project clearance is the developer's veto over their own workspace: a
-    project they have not cleared feeds nothing to the shared wiki, even when
-    its sessions belong to an end user who shares their own history.
-
-    It is asserted here, against the query that selects the shared completion's
-    inputs, rather than against prompt prose: a rule the model is told can be
-    disobeyed or quietly dropped by the next prompt rewrite, and the boundary
-    this suite exists to prove is the one the backend enforces."""
-    owner = dataset.owner
-
-    async def file_the_participating_session(folder_id):
-        await pool.execute(
-            "UPDATE sessions SET session_folder_id=$2 WHERE session_id='public-job' "
-            "AND owner_user_id=$1",
-            owner,
-            folder_id,
-        )
-
-    uncleared = (
-        await session_folder_service.create_folder(owner, unique_name("uncleared-project"))
-    )["id"]
-    assert uncleared is not None
-    await file_the_participating_session(uncleared)
-    assert "ALLOWED_TRANSCRIPT" not in json.dumps((await scope(dataset, "shared")).documents)
-
-    # Clearance is a toggle, not a verdict: clearing the project returns it to
-    # the shared corpus with the same session in it.
-    await pool.execute("UPDATE session_folders SET share_wiki=TRUE WHERE id=$1", uncleared)
-    assert "ALLOWED_TRANSCRIPT" in json.dumps((await scope(dataset, "shared")).documents)
-
-    # The Default folder is the unfiled catch-all, so it carries no routing
-    # decision of its own: filing there must not withhold a sharing user's event.
-    default = (await session_folder_service.ensure_default_folder(owner))["id"]
-    await file_the_participating_session(default)
-    assert "ALLOWED_TRANSCRIPT" in json.dumps((await scope(dataset, "shared")).documents)
-
-    # An uncleared project governs the shared wiki only. The sharing user's
-    # own private wiki keeps reading the same session: the veto is about what
-    # crosses between users, never about what a user may curate for themselves.
-    await pool.execute("UPDATE session_folders SET share_wiki=FALSE WHERE id=$1", uncleared)
-    await file_the_participating_session(uncleared)
-    assert "ALLOWED_TRANSCRIPT" in json.dumps((await scope(dataset, "private", "public")).documents)
-
-
-@pytest.mark.asyncio
 async def test_private_curator_reads_own_material_and_shared_knowledge_only(dataset):
     private = await scope(dataset, "private", "private")
     corpus = json.dumps(private.documents)
@@ -193,20 +147,21 @@ async def test_private_curator_reads_own_material_and_shared_knowledge_only(data
     assert "ALLOWED_SHARED_KNOWLEDGE" in corpus
     assert "ALLOWED_TRANSCRIPT" not in corpus and "PUBLIC_WIKI_SECRET" not in corpus
     for page in (dataset.shared, dataset.pages["public"]):
-        with pytest.raises(PermissionError):
-            await private.tool(
-                "write_page", {"page_id": str(page), "title": "Leak", "content": "SECRET"}
-            )
-    with pytest.raises(ValidationError):
-        await private.tool(
-            "write_page",
-            {
-                "page_id": None,
-                "title": "Leak",
-                "content": "SECRET",
-                "folder_id": str(dataset.workspace["external_wiki_folder_id"]),
-            },
+        denied = await private.tool(
+            "write_page", {"page_id": str(page), "title": "Leak", "content": "SECRET"}
         )
+        assert "outside" in denied["error"]
+    denied = await private.tool(
+        "write_page",
+        {
+            "page_id": None,
+            "title": "Leak",
+            "content": "SECRET",
+            "folder_id": str(dataset.workspace["external_wiki_folder_id"]),
+        },
+    )
+    assert "Invalid tool arguments" in denied["error"]
+    assert denied["fields"][0]["field"] == "folder_id"
 
 
 @pytest.mark.asyncio
@@ -223,11 +178,11 @@ async def test_model_can_write_only_its_fixed_destination(dataset, pool):
         "write_page",
         {"page_id": str(page["id"]), "title": "Maintenance", "content": "Updated SECRET_RECORD"},
     )
-    with pytest.raises(PermissionError):
-        shared = await scope(dataset, "shared")
-        await shared.tool(
-            "write_page", {"page_id": str(page["id"]), "title": "Public", "content": "SECRET"}
-        )
+    shared = await scope(dataset, "shared")
+    denied = await shared.tool(
+        "write_page", {"page_id": str(page["id"]), "title": "Public", "content": "SECRET"}
+    )
+    assert "outside" in denied["error"]
 
 
 @pytest.mark.asyncio
@@ -303,13 +258,12 @@ async def test_shared_reads_recheck_consent_even_without_a_generation_change(dat
 async def test_separate_model_contexts_and_no_sprite_execution(
     dataset, pool, monkeypatch, sprite_exec
 ):
-    from backend.services import agent_service, curation_service, sprite_agent_service
+    from backend.services import agent_service, sprite_agent_service
 
     calls = []
     all_started = asyncio.Event()
 
-    # `route` arrives because run() hands every scope of a run the one provider it resolved
-    async def fake_run(scope, instructions, route=None):
+    async def fake_run(scope, instructions):
         calls.append((scope.purpose, json.dumps(scope.documents)))
         if len(calls) == 3:
             all_started.set()
@@ -322,12 +276,8 @@ async def test_separate_model_contexts_and_no_sprite_execution(
     monkeypatch.setattr(curation, "run_scope", fake_run)
     monkeypatch.setattr(sprite_agent_service, "run_chat", forbidden)
     agent = await agent_service.get_or_create_curator(dataset.owner, wiki="external")
-    # The whole corpus is this run's feed, so its position is nulled — but the
-    # watermark fence anchors on the position the caller loaded, exactly as
-    # `_run_curator_now` captures it before the same override.
-    read = curation_service.position_of(agent)
     agent["curated_through"] = None
-    await sprite_agent_service.run_scheduled(agent, "security-test", read)
+    await sprite_agent_service.run_scheduled(agent, "security-test")
     assert len([p for p, _ in calls if p == "private"]) == 2
     assert len([p for p, _ in calls if p == "shared"]) == 1
     assert all("SECRET_TRANSCRIPT" not in text for p, text in calls if p == "shared")
@@ -339,11 +289,11 @@ async def test_separate_model_contexts_and_no_sprite_execution(
 async def test_internal_developer_curator_cannot_read_customer_inputs(
     dataset, pool, monkeypatch, sprite_exec
 ):
-    from backend.services import agent_service, curation_service, sprite_agent_service
+    from backend.services import agent_service, sprite_agent_service
 
     calls = []
 
-    async def fake_run(scope, instructions, route=None):
+    async def fake_run(scope, instructions):
         calls.append(scope)
         assert "SECRET_TRANSCRIPT" not in json.dumps(scope.documents)
         assert "ALLOWED_TRANSCRIPT" not in json.dumps(scope.documents)
@@ -351,9 +301,8 @@ async def test_internal_developer_curator_cannot_read_customer_inputs(
 
     monkeypatch.setattr(curation, "run_scope", fake_run)
     agent = await agent_service.get_or_create_curator(dataset.owner, wiki="internal")
-    read = curation_service.position_of(agent)
     agent["curated_through"] = None
-    await sprite_agent_service.run_scheduled(agent, "security-test", read)
+    await sprite_agent_service.run_scheduled(agent, "security-test")
     assert len(calls) == 1 and calls[0].purpose == "internal"
     assert sprite_exec.calls == [] and sprite_exec.writes == []
     with pytest.raises(PermissionError):
@@ -413,6 +362,7 @@ async def test_native_model_loop_uses_fresh_messages_and_restricted_tools(
         assert {t["name"] for t in kwargs["tools"]} == {
             "search_documents",
             "read_document",
+            "edit_page",
             "write_page",
         }
         if len(requests) == 1:
@@ -427,6 +377,7 @@ async def test_native_model_loop_uses_fresh_messages_and_restricted_tools(
                     )
                 ],
             )
+
         return SimpleNamespace(
             stop_reason="end_turn", content=[TextBlock(type="text", text="Done.")]
         )
@@ -479,6 +430,236 @@ async def test_denied_lookup_is_an_explicit_tool_error_without_protected_content
     result = requests[1]["messages"][-1]["content"][0]
     assert result["is_error"] and "unavailable" in result["content"]
     assert "SECRET_TRANSCRIPT" not in json.dumps(requests)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tool_name", ["edit_page", "write_page"])
+async def test_model_corrects_malformed_page_id_without_aborting_scope(
+    dataset, pool, monkeypatch, sprite_exec, tool_name
+):
+    from anthropic.types import TextBlock, ToolUseBlock
+
+    shared = await scope(dataset, "shared")
+    calls = 0
+
+    async def create(**kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            result = kwargs["messages"][-1]["content"][0]
+            assert result["is_error"]
+            assert "page_id" in result["content"] and "UUID" in result["content"]
+            assert await pool.fetchval("SELECT count(*) FROM page_edits") == 0
+        if calls <= 2:
+            arguments = (
+                {"old_text": "ALLOWED_SHARED_KNOWLEDGE", "new_text": "Corrected knowledge"}
+                if tool_name == "edit_page"
+                else {"title": "Index", "content": "Corrected knowledge"}
+            )
+            return SimpleNamespace(
+                stop_reason="tool_use",
+                content=[
+                    ToolUseBlock(
+                        type="tool_use",
+                        id=f"edit-{calls}",
+                        name=tool_name,
+                        input={
+                            "page_id": "d792f10c-d6ac40fe-a73d-f5a2e493a3df"
+                            if calls == 1
+                            else str(dataset.shared),
+                            **arguments,
+                        },
+                    )
+                ],
+            )
+        assert not kwargs["messages"][-1]["content"][0]["is_error"]
+        return SimpleNamespace(
+            stop_reason="end_turn", content=[TextBlock(type="text", text="Done.")]
+        )
+
+    monkeypatch.setattr(
+        curation.llm,
+        "_get_client",
+        lambda: SimpleNamespace(messages=SimpleNamespace(create=create)),
+    )
+    assert await curation.run_scope(shared, None) == "Done."
+    assert calls == 3
+    assert await pool.fetchval("SELECT count(*) FROM page_edits") == 1
+    assert (
+        await pool.fetchval("SELECT content_markdown FROM pages WHERE id=$1", dataset.shared)
+        == "Corrected knowledge"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("name", "arguments", "field"),
+    [
+        ("search_documents", {"query": "", "offset": -1}, "offset"),
+        ("read_document", {}, "document_id"),
+        ("edit_page", {"page_id": "bad", "old_text": "old", "new_text": "new"}, "page_id"),
+        ("write_page", {"page_id": None, "title": "", "content": "SECRET"}, "title"),
+    ],
+)
+async def test_invalid_tool_arguments_return_errors_without_writes(
+    dataset, pool, name, arguments, field
+):
+    shared = await scope(dataset, "shared")
+    result = await shared.tool(name, arguments)
+    assert "Invalid tool arguments" in result["error"]
+    assert any(error["field"] == field for error in result["fields"])
+    assert "SECRET" not in json.dumps(result)
+    assert await pool.fetchval("SELECT count(*) FROM page_edits") == 0
+    assert "documents" in await shared.tool("search_documents", {"query": ""})
+
+
+@pytest.mark.asyncio
+async def test_invalid_tool_arguments_do_not_mask_revoked_permissions(dataset):
+    shared = await scope(dataset, "shared")
+    await end_user_service.update_end_user(dataset.users["public"]["id"], share_wiki=False)
+    with pytest.raises(PermissionError):
+        await shared.tool("edit_page", {"page_id": "bad"})
+
+
+@pytest.mark.asyncio
+async def test_tool_argument_recovery_does_not_swallow_internal_validation_failure(
+    dataset, monkeypatch
+):
+    shared = await scope(dataset, "shared")
+
+    async def broken_write(*args, **kwargs):
+        curation.Search.model_validate({"query": []})
+
+    monkeypatch.setattr(shared, "write", broken_write)
+    with pytest.raises(ValidationError):
+        await shared.tool("write_page", {"page_id": None, "title": "Valid", "content": "Valid"})
+
+
+@pytest.mark.asyncio
+async def test_repeated_invalid_arguments_still_exhaust_the_turn_limit(
+    dataset, monkeypatch, sprite_exec
+):
+    from anthropic.types import ToolUseBlock
+
+    calls = 0
+
+    async def create(**kwargs):
+        nonlocal calls
+        calls += 1
+        return SimpleNamespace(
+            stop_reason="tool_use",
+            content=[
+                ToolUseBlock(type="tool_use", id=f"bad-{calls}", name="read_document", input={})
+            ],
+        )
+
+    monkeypatch.setattr(curation, "_MAX_TURNS", 2)
+    monkeypatch.setattr(
+        curation.llm,
+        "_get_client",
+        lambda: SimpleNamespace(messages=SimpleNamespace(create=create)),
+    )
+    with pytest.raises(RuntimeError, match="exhausted its tool turns"):
+        await curation.run_scope(await scope(dataset, "shared"), None)
+    assert calls == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("empty_text", [None, " \n\t"])
+async def test_empty_completion_continues_without_replaying_saved_write(
+    dataset, pool, monkeypatch, sprite_exec, empty_text
+):
+    from anthropic.types import TextBlock, ToolUseBlock
+
+    calls = 0
+
+    async def create(**kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return SimpleNamespace(
+                stop_reason="tool_use",
+                content=[
+                    ToolUseBlock(
+                        type="tool_use",
+                        id="saved-edit",
+                        name="edit_page",
+                        input={
+                            "page_id": str(dataset.shared),
+                            "old_text": "ALLOWED_SHARED_KNOWLEDGE",
+                            "new_text": "Saved knowledge",
+                        },
+                    )
+                ],
+            )
+        if calls == 2:
+            assert not kwargs["messages"][-1]["content"][0]["is_error"]
+            return SimpleNamespace(
+                stop_reason="end_turn",
+                content=[] if empty_text is None else [TextBlock(type="text", text=empty_text)],
+            )
+        assert calls == 3
+        messages = kwargs["messages"]
+        assert messages[-1]["role"] == "user"
+        assert "summary" in messages[-1]["content"]
+        assert messages[-2]["content"][0]["tool_use_id"] == "saved-edit"
+        assert all(message["content"] for message in messages)
+        assert await pool.fetchval("SELECT count(*) FROM page_edits") == 1
+        return SimpleNamespace(
+            stop_reason="end_turn", content=[TextBlock(type="text", text="Updated wiki.")]
+        )
+
+    monkeypatch.setattr(
+        curation.llm,
+        "_get_client",
+        lambda: SimpleNamespace(messages=SimpleNamespace(create=create)),
+    )
+    assert await curation.run_scope(await scope(dataset, "shared"), None) == "Updated wiki."
+    assert calls == 3
+    assert await pool.fetchval("SELECT count(*) FROM page_edits") == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("turn_limit", [1, 40])
+async def test_empty_completion_retry_is_bounded(dataset, monkeypatch, sprite_exec, turn_limit):
+    calls = 0
+
+    async def create(**kwargs):
+        nonlocal calls
+        calls += 1
+        return SimpleNamespace(stop_reason="end_turn", content=[])
+
+    monkeypatch.setattr(curation, "_MAX_TURNS", turn_limit)
+    monkeypatch.setattr(
+        curation.llm,
+        "_get_client",
+        lambda: SimpleNamespace(messages=SimpleNamespace(create=create)),
+    )
+    error = RuntimeError if turn_limit == 1 else ValueError
+    with pytest.raises(error, match="exhausted its tool turns|no completion summary"):
+        await curation.run_scope(await scope(dataset, "shared"), None)
+    assert calls == min(turn_limit, 2)
+
+
+@pytest.mark.asyncio
+async def test_empty_completion_does_not_retry_after_optout(dataset, monkeypatch, sprite_exec):
+    shared = await scope(dataset, "shared")
+    calls = 0
+
+    async def create(**kwargs):
+        nonlocal calls
+        calls += 1
+        await end_user_service.update_end_user(dataset.users["public"]["id"], share_wiki=False)
+        return SimpleNamespace(stop_reason="end_turn", content=[])
+
+    monkeypatch.setattr(
+        curation.llm,
+        "_get_client",
+        lambda: SimpleNamespace(messages=SimpleNamespace(create=create)),
+    )
+    with pytest.raises(PermissionError, match="permissions changed"):
+        await curation.run_scope(shared, None)
+    assert calls == 1
 
 
 @pytest.mark.asyncio
@@ -541,13 +722,13 @@ async def test_developer_prompt_preview_describes_scoped_runner(dataset):
 async def test_failed_shared_run_does_not_report_success_or_advance_watermark(
     dataset, pool, monkeypatch, sprite_exec
 ):
-    from backend.services import agent_service, curation_service, sprite_agent_service
+    from backend.services import agent_service, sprite_agent_service
 
     private_started = set()
     private_cancelled = set()
     all_private_started = asyncio.Event()
 
-    async def fail_shared(scope, instructions, route=None):
+    async def fail_shared(scope, instructions):
         if scope.purpose == "shared":
             await asyncio.wait_for(all_private_started.wait(), timeout=1)
             raise PermissionError("Publication denied")
@@ -562,13 +743,12 @@ async def test_failed_shared_run_does_not_report_success_or_advance_watermark(
 
     monkeypatch.setattr(curation, "run_scope", fail_shared)
     agent = await agent_service.get_or_create_curator(dataset.owner, wiki="external")
+    agent["curated_through"] = None
     before = await pool.fetchval(
         "SELECT curated_through FROM agents WHERE id=$1", UUID(agent["id"])
     )
-    read = curation_service.position_of(agent)
-    agent["curated_through"] = None
     with pytest.raises(ExceptionGroup) as failure:
-        await sprite_agent_service.run_scheduled(agent, "failed-test", read)
+        await sprite_agent_service.run_scheduled(agent, "failed-test")
     assert any(isinstance(exc, PermissionError) for exc in failure.value.exceptions)
     assert private_cancelled == private_started and len(private_cancelled) == 2
     assert (
@@ -594,11 +774,7 @@ async def test_scoped_run_timeout_preserves_progress_and_releases_lock(
         await asyncio.Event().wait()
 
     monkeypatch.setattr(curation, "run_scope", stuck)
-    monkeypatch.setattr(sprite_agent_service.settings, "CURATOR_RUN_TIMEOUT_SECONDS", 0.05)
-    # Compressed but not zero: this slice never returns, so the wall is the mechanism, and
-    # a grace of 0 would collapse the wall onto the budget and prove nothing. Left at the
-    # real window this test would wait out a whole completion.
-    monkeypatch.setattr(llm, "LOCAL_COMPLETION_TIMEOUT_S", 0.05)
+    monkeypatch.setattr(sprite_agent_service.settings, "AGENT_TURN_TIMEOUT_SECONDS", 0.05)
     agent = await agent_service.get_or_create_curator(dataset.owner, wiki="external")
     before = await pool.fetchval(
         "SELECT curated_through FROM agents WHERE id=$1", UUID(agent["id"])
@@ -614,519 +790,922 @@ async def test_scoped_run_timeout_preserves_progress_and_releases_lock(
     assert sprite_exec.redis.data == {}
 
 
-# --- One run walks its backlog in slices under a budget of its own (STAS-266, measured
-# on the founder stack 2026-09-23). A run used to bound every event still owed into one
-# window and commit once, at the end, so a backlog larger than one budget died at the
-# ceiling with the watermark exactly where it started: 600 s on a local model, 1.27M
-# events ahead, `curated_through` unmoved since 2026-08-22, retried once a day forever.
-# Each slice now commits through the same fenced compare-and-set every other forward
-# writer obeys, the next slice reads from the pair that commit left behind, and a run
-# that runs out of time stays a loud failure that keeps the slices it finished.
-
-_SEEDED = 5  # events _seed_backlog pushes, one per session
-_BUDGET = 2.0  # a slice's work is DB-only here, so one slice always lands inside this
-
-
-async def _seed_backlog(
-    client, dataset, monkeypatch, count: int = _SEEDED, at: datetime | None = None
-):
-    """Push `count` events into the feed of the customer who shares their transcript.
-
-    One event per session, so each is a distinct event the feed has to show. `at` pins
-    them all to one instant, which is what forces a slice boundary to fall inside a
-    tie rather than between two instants.
-
-    Ingest of a title-bearing event queues a title job, and these tests run with the
-    fake provider key `sprite_exec` installs and with no Celery broker to take it.
-    """
-    from backend.tasks.session_titles import generate_session_title
-
-    monkeypatch.setattr(generate_session_title, "delay", lambda *a, **k: None)
-    events = []
-    for i in range(count):
-        event = _event(f"sess-slice-{i}", "public", "Participating customer")
-        instant = at if at is not None else datetime.now(UTC) + timedelta(milliseconds=i)
-        event["created_at"] = instant.isoformat()
-        events.append(event)
-    await _push(client, dataset.key, events)
-
-
-def _curates_without_a_model():
-    async def fake(scope, instructions, route=None):
-        return "Curated this slice."
-
-    return fake
-
-
-def _stall_once_a_slice_is_committed(curator: UUID, read: Position, budget: float):
-    """A `run_scope` that curates instantly until one slice is committed behind it, then
-    outlives the run's whole budget.
-
-    A slice only starts once the slice before it committed, so a stored watermark ahead
-    of where the run began is proof the first slice landed. Stalling on that fact rather
-    than on the clock makes the timeout deterministic, and it cannot fire before the run
-    has something durable to keep — which is the property these tests then assert.
-    """
-
-    async def fake(scope, instructions, route=None):
-        from backend.services import agent_service
-
-        stored = curation_service.position_of(await agent_service.get_agent_by_id(curator))
-        if stored.ahead(read):
-            await asyncio.sleep(budget * 2)
-        return "Curated this slice."
-
-    return fake
-
-
-def _record_windows(monkeypatch) -> list[tuple]:
-    """Capture every scope load a run performs, as (purpose, since, until, corpus).
-
-    A slice loads one scope per wiki it walks, so one window is recorded per scope, and
-    the shared scope belongs to every slice: the `shared` series is therefore one entry
-    per slice. `since` and `until` are the bounds the load was really given, so a slice
-    that resumed at an instant instead of at the stored pair — or that read from past a
-    position its previous slice never committed — is visible here rather than inferred.
-    """
-    windows: list[tuple] = []
-    real = curation.load_scope
-
-    async def spy(workspace, purpose, destination, user_ids, session_id, since, until):
-        scope = await real(workspace, purpose, destination, user_ids, session_id, since, until)
-        windows.append((purpose, since, until, json.dumps(scope.documents)))
-        return scope
-
-    monkeypatch.setattr(curation, "load_scope", spy)
-    return windows
-
-
-def _slices(windows: list[tuple]) -> list[tuple]:
-    """The recorded slices — one per slice — as (since, until, corpus)."""
-    return [w[1:] for w in windows if w[0] == "shared"]
-
-
-def _record_commits(monkeypatch) -> list[Position]:
-    """Every position a slice actually committed, in the order it committed them.
-
-    The window a slice loads is not the position it earns: a slice that ran out of time
-    loaded a window and never committed it. What a run may claim is what the
-    compare-and-set accepted, so this spies on that one statement and records what it
-    stored — which is also the fence the next slice has to honour.
-    """
-    from backend.services import agent_service
-
-    committed: list[Position] = []
-    real = agent_service.advance_watermark
-
-    async def spy(conn, agent_id, read, through):
-        stored = await real(conn, agent_id, read, through)
-        committed.append(stored)
-        return stored
-
-    monkeypatch.setattr(agent_service, "advance_watermark", spy)
-    return committed
-
-
-def _seeded(corpus: str) -> set[int]:
-    """Which seeded sessions a recorded window actually put in front of the model."""
-    return {i for i in range(_SEEDED) if f"hello from sess-slice-{i}" in corpus}
+@pytest.mark.asyncio
+async def test_duplicate_create_returns_existing_page_without_overwriting_it(dataset, pool):
+    shared = await scope(dataset, "shared")
+    result = await shared.tool(
+        "write_page", {"page_id": None, "title": "Index", "content": "Accidental replacement"}
+    )
+    assert "already exists" in result["error"]
+    assert result["page_id"] == str(dataset.shared)
+    assert (
+        await pool.fetchval("SELECT content_markdown FROM pages WHERE id=$1", dataset.shared)
+        == "ALLOWED_SHARED_KNOWLEDGE"
+    )
+    assert (
+        await pool.fetchval("SELECT count(*) FROM page_edits WHERE page_id=$1", dataset.shared) == 0
+    )
+    # The conflict rolls back to a savepoint; the same scope can read and
+    # deliberately update the existing page instead of aborting the run.
+    doc = await shared.tool("read_document", {"document_id": result["page_id"]})
+    assert doc["content"] == "ALLOWED_SHARED_KNOWLEDGE"
+    await shared.tool(
+        "write_page", {"page_id": result["page_id"], "title": "Index", "content": "Reviewed update"}
+    )
+    assert (
+        await pool.fetchval("SELECT content_markdown FROM pages WHERE id=$1", dataset.shared)
+        == "Reviewed update"
+    )
 
 
 @pytest.mark.asyncio
-async def test_a_run_slices_a_backlog_larger_than_one_feed_window(
-    dataset, client, pool, monkeypatch, sprite_exec
-):
-    """The founder's case in miniature: the backlog holds more than one feed window."""
-    from backend.services import agent_service
-    from backend.tasks.agent_schedules import _run_curator_now
-
-    monkeypatch.setattr(curation_service, "_MAX_EVENTS", 2)
-    monkeypatch.setattr(curation, "run_scope", _curates_without_a_model())
-    await _seed_backlog(client, dataset, monkeypatch)
-    agent = await agent_service.get_or_create_curator(dataset.owner, wiki="external")
-    curator = UUID(agent["id"])
-    read = curation_service.position_of(agent)
-    assert read == curation_service.NEVER  # the lane never ran, so everything is owed
-    windows = _record_windows(monkeypatch)
-    commits = _record_commits(monkeypatch)
-
-    await _run_curator_now(curator, metered=False)
-
-    slices = _slices(windows)
-    # Six events owed, two to a feed window: three slices. One run that reads all six
-    # in one window is the shape that used to commit nothing until all six were curated.
-    assert len(slices) == 3
-    assert len(commits) == 3  # every slice committed, none of them waited on the others
-    assert slices[0][0] == read  # the first slice reads where the dispatcher loaded
-    for committed, next_slice in zip(commits, slices[1:]):
-        # The next slice reads the exact pair this one committed, event id included.
-        assert next_slice[0] == committed
-    stored = curation_service.position_of(await agent_service.get_agent_by_id(curator))
-    assert commits[-1].event_id is None  # the run stopped on a whole instant, then stopped
-    assert stored == commits[-1]  # and the marker says exactly that
-    assert _seeded("".join(corpus for _, _, corpus in slices)) == set(range(_SEEDED))
-    backlog = await curation_service.curator_event_backlog(
-        dataset.owner, curation_service.WIKI_EXTERNAL, stored
+async def test_conflicting_rename_preserves_both_pages(dataset, pool):
+    shared = await scope(dataset, "shared")
+    other = await shared.tool(
+        "write_page", {"page_id": None, "title": "Other", "content": "Original other page"}
     )
-    assert backlog["distinct_events"] == 0  # the backlog drained, rather than being deferred
-
-
-@pytest.mark.asyncio
-async def test_a_run_that_runs_out_of_time_keeps_the_slices_it_committed(
-    dataset, client, pool, monkeypatch, sprite_exec
-):
-    """The wall's exit: a slice that never returns is cancelled and lost whole, and the
-    run keeps only what the slices before it committed.
-
-    Both exits carry one message on purpose, so the cause and the lost slice are what
-    tell them apart. This one closes on the caller's `wait_for` and carries its
-    `TimeoutError`; the run's own stop is pinned by
-    test_the_run_stops_itself_at_the_next_boundary_and_keeps_the_slice_that_arrived_late,
-    which leaves the completion window alone so the wall sits 300 s away, and carries no
-    cause at all while keeping the slice that arrived late."""
-    from backend.services import agent_service, sprite_agent_service
-    from backend.tasks.agent_schedules import _run_curator_now
-
-    monkeypatch.setattr(sprite_agent_service.settings, "CURATOR_RUN_TIMEOUT_SECONDS", _BUDGET)
-    # The wall sits one completion window past the budget: 2.0 + 1 = 3.0 s. That is past
-    # the budget, so the run's own boundary check had its chance and the slice was
-    # already in flight, and inside the stall's 2 × budget = 4.0 s, so the wall is what
-    # cuts it. Zero would collapse the wall onto the budget — the shape this file exists
-    # to rule out — and 2.0 or more would move the wall past the stall and hand the run
-    # back to its own stop.
-    monkeypatch.setattr(llm, "LOCAL_COMPLETION_TIMEOUT_S", 1)
-    monkeypatch.setattr(curation_service, "_MAX_EVENTS", 2)
-    await _seed_backlog(client, dataset, monkeypatch)
-    agent = await agent_service.get_or_create_curator(dataset.owner, wiki="external")
-    curator = UUID(agent["id"])
-    read = curation_service.position_of(agent)
-    monkeypatch.setattr(
-        curation,
-        "run_scope",
-        _stall_once_a_slice_is_committed(curator, read, _BUDGET),
+    conflict = await shared.tool(
+        "write_page", {"page_id": other["page_id"], "title": "Index", "content": "Bad rename"}
     )
-    windows = _record_windows(monkeypatch)
-    commits = _record_commits(monkeypatch)
-
-    with pytest.raises(RuntimeError, match="run time limit") as stop:
-        await _run_curator_now(curator, metered=False)
-
-    assert isinstance(stop.value.__cause__, TimeoutError)  # the wall cancelled a slice
-    slices = _slices(windows)
-    stored = curation_service.position_of(await agent_service.get_agent_by_id(curator))
-    assert stored.ahead(read)  # the watermark moved at all
-    assert stored == commits[-1]  # to exactly the position a slice actually committed
-    # The slice in flight is gone: it had already loaded its window, so it counts as a
-    # slice, and it committed nothing, so it is missing from the commits. That gap is
-    # what separates this exit from the run's own stop, which keeps the late slice.
-    assert len(commits) < len(slices) == 2
-    row = await pool.fetchrow(
-        "SELECT last_run_outcome,last_run_error FROM agents WHERE id=$1", curator
-    )
-    assert row["last_run_outcome"] == "failed"  # loud, never a quiet partial success
-    assert "run time limit" in row["last_run_error"]
-    backlog = await curation_service.curator_event_backlog(
-        dataset.owner, curation_service.WIKI_EXTERNAL, stored
-    )
-    assert 0 < backlog["distinct_events"] < 6  # less owed than at the start, not all of it
-    assert sprite_exec.redis.data == {}
-
-
-@pytest.mark.asyncio
-async def test_the_run_stops_itself_at_the_next_boundary_and_keeps_the_slice_that_arrived_late(
-    dataset, client, pool, monkeypatch, sprite_exec
-):
-    """A slice that lands after the budget is spent is the run's own business, not the
-    wall's: the run closes at the next boundary and keeps that slice.
-
-    Both exits carry the same message on purpose — the founder reads one failure, "ran
-    out of time" — so what tells them apart is the cause. The run's own between-slice
-    check raises with nothing beneath it; the caller's wall raises *from* a cancelled
-    slice, so its `__cause__` is the `TimeoutError` that killed it, and the slice that
-    was in flight is gone. Only the first of these keeps work the model already finished.
-
-    This patches the budget and pointedly not the completion window the wall sits past
-    it, so the wall is ~300 s away and cannot be what stopped this run.
-    """
-    from backend.services import agent_service, sprite_agent_service
-    from backend.tasks.agent_schedules import _run_curator_now
-
-    monkeypatch.setattr(sprite_agent_service.settings, "CURATOR_RUN_TIMEOUT_SECONDS", _BUDGET)
-    monkeypatch.setattr(curation_service, "_MAX_EVENTS", 2)
-    await _seed_backlog(client, dataset, monkeypatch)
-    agent = await agent_service.get_or_create_curator(dataset.owner, wiki="external")
-    curator = UUID(agent["id"])
-    read = curation_service.position_of(agent)
-    monkeypatch.setattr(
-        curation,
-        "run_scope",
-        _stall_once_a_slice_is_committed(curator, read, _BUDGET),
-    )
-    windows = _record_windows(monkeypatch)
-    commits = _record_commits(monkeypatch)
-
-    with pytest.raises(RuntimeError, match="run time limit") as stop:
-        await _run_curator_now(curator, metered=False)
-
-    assert stop.value.__cause__ is None  # the run raised; no slice was cancelled to do it
-    slices = _slices(windows)
-    # The late slice committed, and the run stopped rather than beginning a third.
-    assert len(commits) == len(slices) == 2
-    stored = curation_service.position_of(await agent_service.get_agent_by_id(curator))
-    assert stored == commits[-1]  # the marker claims exactly what a slice earned
-    row = await pool.fetchrow(
-        "SELECT last_run_outcome,last_run_error FROM agents WHERE id=$1", curator
-    )
-    assert row["last_run_outcome"] == "failed"  # a half-curated backlog still reads loud
-    assert "run time limit" in row["last_run_error"]
-    backlog = await curation_service.curator_event_backlog(
-        dataset.owner, curation_service.WIKI_EXTERNAL, stored
-    )
-    assert 0 < backlog["distinct_events"] < 6  # less owed than at the start, not all of it
-    assert sprite_exec.redis.data == {}  # both locks released on the run's own exit
-
-
-@pytest.mark.asyncio
-async def test_the_next_run_resumes_at_the_watermark_the_last_run_committed(
-    dataset, client, pool, monkeypatch, sprite_exec
-):
-    """A timed-out run has to leave the next one less to do, or the backlog never drains:
-    the second run reads from the position the first one proved, so it shows the model
-    neither the events already curated nor the ones still ahead unread.
-
-    This is also the scoped lane's only proof of what a recovery looks like to the
-    founder: the first run left the row `failed` with a cause, and this one has to hand
-    back `ran` with the cause gone. The outcome half is the half nobody asserted —
-    `test_curator.py::test_failed_run_records_error_and_refunds_credit` covers the same
-    recovery in the harness lane and reads only the error column."""
-    from backend.services import agent_service, sprite_agent_service
-    from backend.tasks.agent_schedules import _run_curator_now
-
-    monkeypatch.setattr(sprite_agent_service.settings, "CURATOR_RUN_TIMEOUT_SECONDS", _BUDGET)
-    monkeypatch.setattr(curation_service, "_MAX_EVENTS", 2)
-    await _seed_backlog(client, dataset, monkeypatch)
-    agent = await agent_service.get_or_create_curator(dataset.owner, wiki="external")
-    curator = UUID(agent["id"])
-    read = curation_service.position_of(agent)
-    monkeypatch.setattr(
-        curation,
-        "run_scope",
-        _stall_once_a_slice_is_committed(curator, read, _BUDGET),
-    )
-    windows = _record_windows(monkeypatch)
-    with pytest.raises(RuntimeError, match="run time limit"):
-        await _run_curator_now(curator, metered=False)
-    first = _slices(windows)
-    resumed_at = curation_service.position_of(await agent_service.get_agent_by_id(curator))
-    assert resumed_at.ahead(read)
-
-    monkeypatch.setattr(sprite_agent_service.settings, "CURATOR_RUN_TIMEOUT_SECONDS", 3600.0)
-    monkeypatch.setattr(curation, "run_scope", _curates_without_a_model())
-    windows.clear()
-    await _run_curator_now(curator, metered=False)
-
-    second = _slices(windows)
-    assert second[0][0] == resumed_at  # it read the new watermark, not 2026-08-22
-    assert second[0][0] != read
-    # What the first run EARNED is two slices: one that fitted inside the budget, and
-    # one that came back after the budget was spent and was kept, because the run stops
-    # itself at the next boundary instead of being cut mid-flight (STAS-364). Only the
-    # events no slice committed are read again — the watermark still never claims
-    # material that is not behind it.
-    assert _seeded(first[0][2]) == {0}
-    assert _seeded("".join(corpus for _, _, corpus in first)) == {0, 1, 2}
-    assert _seeded("".join(corpus for _, _, corpus in second)) == {3, 4}
-    assert len(second) == 1  # the debt the stop left: two events, one window
-    stored = curation_service.position_of(await agent_service.get_agent_by_id(curator))
-    row = await pool.fetchrow(
-        "SELECT last_run_outcome,last_run_error FROM agents WHERE id=$1", curator
-    )
-    # Both halves of a recovery, not one of them: `mark_run` wiped the cause as this run
-    # started and `mark_run_succeeded` resolved the outcome, so nothing a founder reads
-    # still says the lane timed out.
-    assert row["last_run_outcome"] == "ran"
-    assert row["last_run_error"] is None
-    backlog = await curation_service.curator_event_backlog(
-        dataset.owner, curation_service.WIKI_EXTERNAL, stored
-    )
-    assert backlog["distinct_events"] == 0  # the two runs together emptied it
-
-
-@pytest.mark.asyncio
-async def test_a_slice_cut_in_the_middle_of_a_tie_resumes_at_that_event(
-    dataset, client, pool, monkeypatch, sprite_exec
-):
-    """A push lands hundreds of events on one `created_at`, so a slice boundary inside
-    such an instant is the common case. The position it stores names the event it
-    consumed, and a slice that resumed at the instant alone could not express that: the
-    rest of the instant would be curated by nobody while the watermark — which does
-    count those events — walked past them.
-    """
-    from backend.services import agent_service, sprite_agent_service
-    from backend.tasks.agent_schedules import _run_curator_now
-
-    monkeypatch.setattr(sprite_agent_service.settings, "CURATOR_RUN_TIMEOUT_SECONDS", _BUDGET)
-    monkeypatch.setattr(curation_service, "_MAX_EVENTS", 2)
-    tied = datetime.now(UTC)
-    await _seed_backlog(client, dataset, monkeypatch, at=tied)
-    agent = await agent_service.get_or_create_curator(dataset.owner, wiki="external")
-    curator = UUID(agent["id"])
-    read = curation_service.position_of(agent)
-    monkeypatch.setattr(
-        curation,
-        "run_scope",
-        _stall_once_a_slice_is_committed(curator, read, _BUDGET),
-    )
-    windows = _record_windows(monkeypatch)
-    with pytest.raises(RuntimeError, match="run time limit"):
-        await _run_curator_now(curator, metered=False)
-
-    first = _slices(windows)
-    stopped_at = curation_service.position_of(await agent_service.get_agent_by_id(curator))
-    assert stopped_at.at == tied  # the slice it committed ended inside the tied instant
-    assert stopped_at.event_id is not None  # and it says which event of it it consumed
-
-    monkeypatch.setattr(sprite_agent_service.settings, "CURATOR_RUN_TIMEOUT_SECONDS", 3600.0)
-    monkeypatch.setattr(curation, "run_scope", _curates_without_a_model())
-    windows.clear()
-    await _run_curator_now(curator, metered=False)
-
-    second = _slices(windows)
-    assert second[0][0] == stopped_at  # resumed at that event, not at its instant
-    assert _seeded("".join(corpus for _, _, corpus in first + second)) == set(range(_SEEDED))
-    stored = curation_service.position_of(await agent_service.get_agent_by_id(curator))
-    backlog = await curation_service.curator_event_backlog(
-        dataset.owner, curation_service.WIKI_EXTERNAL, stored
-    )
-    assert backlog["distinct_events"] == 0
-
-
-# --- The scoped lane commits its watermark under the same compare-and-set every
-# other forward writer already uses (STAS-250). Before this, `run` stamped its own
-# boundary with a bare UPDATE, so the fence `mark_curated` enforces for the Memory
-# and folder curators stopped at the one lane that also moves the marker forward.
-
-
-@pytest.mark.asyncio
-async def test_a_scoped_run_cannot_discard_an_overlapping_run_watermark_advance(
-    dataset, pool, monkeypatch, sprite_exec
-):
-    """An overlapping run advanced this lane mid-turn: its progress stands, this
-    run's completion is refused loud, and the refused run claims no completion in
-    the curator log. This is the founder's 2026-09-05 loss (one run discarding
-    another's finished curation) reached through the second forward writer — the
-    lane's unconditional stamp discarded the other run's advance without a word."""
-    from backend.services import agent_service, curation_service
-    from backend.tasks.agent_schedules import _run_curator_now
-
-    agent = await agent_service.get_or_create_curator(dataset.owner, wiki="external")
-    curator = UUID(agent["id"])
-    read = datetime.now(UTC) - timedelta(minutes=5)
-    await pool.execute("UPDATE agents SET curated_through=$2 WHERE id=$1", curator, read)
-    advanced = curation_service.Position(datetime.now(UTC) + timedelta(minutes=10))
-
-    overlapped = False
-
-    async def overlapping_run_finished(scope, instructions, route=None):
-        # The other run started from this same stored position, so its own
-        # compare-and-set matches and its advance lands once, while this run is
-        # mid-turn. The guard is the other run's single completion: this run's
-        # fan-out visits several scopes, and one curation run advances the marker
-        # once however many scopes it walks.
-        nonlocal overlapped
-        if not overlapped:
-            overlapped = True
-            await agent_service.mark_curated(curator, curation_service.Position(read), advanced)
-        return "Completed this isolated wiki."
-
-    monkeypatch.setattr(curation, "run_scope", overlapping_run_finished)
-    with pytest.raises(agent_service.CuratorWatermarkConflict):
-        await _run_curator_now(curator, metered=False)
-
-    row = await pool.fetchrow(
-        "SELECT curated_through,curated_through_event_id,last_run_outcome FROM agents WHERE id=$1",
-        curator,
-    )
-    assert row["curated_through"] == advanced.at  # the other run's advance survives exactly
-    assert row["curated_through_event_id"] == advanced.event_id
-    assert row["last_run_outcome"] == "failed"
+    assert conflict["page_id"] == str(dataset.shared) and "error" in conflict
     assert (
         await pool.fetchval(
-            "SELECT count(*) FROM history_events "
-            "WHERE session_id LIKE 'agent-curate-%' AND event_type='assistant_message'"
+            "SELECT content_markdown FROM pages WHERE id=$1", UUID(other["page_id"])
         )
-        == 0
+        == "Original other page"
+    )
+    assert (
+        await pool.fetchval("SELECT content_markdown FROM pages WHERE id=$1", dataset.shared)
+        == "ALLOWED_SHARED_KNOWLEDGE"
     )
 
 
 @pytest.mark.asyncio
-async def test_a_scoped_run_cannot_swallow_a_concurrent_reset_to_never(
+async def test_duplicate_title_lookup_never_returns_another_wikis_page(dataset, pool):
+    shared = await scope(dataset, "shared")
+    result = await shared.tool(
+        "write_page", {"page_id": None, "title": "private notes", "content": "Public knowledge"}
+    )
+    assert "error" not in result
+    assert result["page_id"] != str(dataset.pages["private"])
+    assert "PRIVATE_WIKI_SECRET" not in json.dumps(shared.documents)
+
+
+@pytest.mark.asyncio
+async def test_successful_scoped_batches_queue_and_drain_without_skipping_private_input(
     dataset, pool, monkeypatch, sprite_exec
 ):
-    """The reset-to-NULL class, which only a compare-and-set can see: revoking a
-    shared wiki clears its curator's pair — what `end_user_service`'s `_archive_shared_wiki`
-    does — so re-sharing re-curates from the start. A run that read before the reset holds
-    a position the stored value no longer is, so its advance is refused: stamped over the
-    NULL it would have closed the corpus the reset deliberately re-opened."""
-    from backend.services import agent_service, curation_service
-    from backend.tasks.agent_schedules import _run_curator_now
+    from backend.services import agent_service, billing_service, curation_service
+    from backend.tasks import agent_schedules
 
-    agent = await agent_service.get_or_create_curator(dataset.owner, wiki="external")
-    curator = UUID(agent["id"])
-    read = datetime.now(UTC) - timedelta(minutes=5)
-    await pool.execute("UPDATE agents SET curated_through=$2 WHERE id=$1", curator, read)
+    async def entitled(_):
+        return True
 
-    async def revoked_mid_turn(scope, instructions, route=None):
-        # The revocation's own write, in its own shape: both halves cleared.
+    monkeypatch.setattr(billing_service, "is_pro", entitled)
+    await pool.execute(
+        "INSERT INTO history_events (owner_user_id,created_by,agent_name,event_type,session_id,content) "
+        "VALUES ($1,$1,'heavi-chat','user_message','public-job','Another permitted lesson')",
+        dataset.owner,
+    )
+    # DB and runner clocks may differ; make this a fixed historical backlog.
+    inputs = await pool.fetch(
+        "SELECT id FROM history_events WHERE owner_user_id=$1 ORDER BY created_at,id", dataset.owner
+    )
+    base = datetime.now(UTC) - timedelta(minutes=1)
+    for index, event in enumerate(inputs):
         await pool.execute(
-            "UPDATE agents SET curated_through=NULL,curated_through_event_id=NULL WHERE id=$1",
-            curator,
+            "UPDATE history_events SET created_at=$2 WHERE id=$1",
+            event["id"],
+            base + timedelta(milliseconds=index),
         )
-        return "Completed this isolated wiki."
+    monkeypatch.setattr(curation_service, "_MAX_EVENTS", 2)
+    seen = []
 
-    monkeypatch.setattr(curation, "run_scope", revoked_mid_turn)
-    with pytest.raises(agent_service.CuratorWatermarkConflict):
-        await _run_curator_now(curator, metered=False)
+    async def fake_run(scope, instructions):
+        text = json.dumps(scope.documents)
+        if scope.purpose == "shared":
+            assert "SECRET_TRANSCRIPT" not in text
+        seen.append(text)
+        return "Reviewed this batch."
 
-    row = await pool.fetchrow(
-        "SELECT curated_through,curated_through_event_id,last_run_outcome FROM agents WHERE id=$1",
-        curator,
+    monkeypatch.setattr(curation, "run_scope", fake_run)
+    queued = []
+    monkeypatch.setattr(
+        agent_schedules.run_curator_now, "apply_async", lambda **kw: queued.append(kw)
     )
-    assert row["curated_through"] is None and row["curated_through_event_id"] is None
-    assert row["last_run_outcome"] == "failed"
-    # The window the reset re-opened is still open — nothing was skipped unread.
-    assert await curation_service.has_changes_since(
-        dataset.owner, dataset.owner, curation_service.NEVER, curation_service.WIKI_EXTERNAL
+    agent = await agent_service.get_or_create_curator(dataset.owner, wiki="external")
+    await pool.execute("UPDATE agents SET curated_through=NULL WHERE id=$1", UUID(agent["id"]))
+    # A small event limit must split the real input rather than moving the
+    # watermark over unseen data. Re-run only the tasks actually dispatched.
+    await agent_schedules._run_curator_now(UUID(agent["id"]), metered=False)
+    passes = 1
+    while queued:
+        task = queued.pop(0)
+        await agent_schedules._run_curator_now(UUID(task["args"][0]), **task["kwargs"])
+        passes += 1
+        assert passes <= agent_schedules.CURATOR_CATCHUP_PASSES
+    current = await agent_service.get_agent_by_id(UUID(agent["id"]))
+    latest_input = await pool.fetchval(
+        "SELECT max(created_at) FROM history_events WHERE owner_user_id=$1 "
+        "AND session_id NOT LIKE 'agent-curate-%'",
+        dataset.owner,
+    )
+    assert passes >= 2
+    assert current["curated_through"] >= latest_input
+    assert current["last_run_outcome"] == "ran"
+    assert current["month_run_count"] == 0
+    assert any("SECRET_TRANSCRIPT" in text for text in seen)
+
+
+@pytest.mark.asyncio
+async def test_truncated_write_is_discarded_before_one_complete_retry(
+    dataset, pool, monkeypatch, sprite_exec
+):
+    from anthropic.types import TextBlock, ToolUseBlock
+
+    requests = []
+
+    async def create(**kwargs):
+        requests.append(json.loads(json.dumps(kwargs)))
+        if len(requests) <= 2:
+            truncated = len(requests) == 1
+            return SimpleNamespace(
+                stop_reason="max_tokens" if truncated else "tool_use",
+                content=[
+                    ToolUseBlock(
+                        type="tool_use",
+                        id=f"write-{len(requests)}",
+                        name="write_page",
+                        input={
+                            "page_id": None,
+                            "title": "Partial page" if truncated else "Concise page",
+                            "content": "Discard this partial output"
+                            if truncated
+                            else "Complete permitted lesson.",
+                        },
+                    )
+                ],
+            )
+        return SimpleNamespace(
+            stop_reason="end_turn", content=[TextBlock(type="text", text="Done.")]
+        )
+
+    monkeypatch.setattr(
+        curation.llm,
+        "_get_client",
+        lambda: SimpleNamespace(messages=SimpleNamespace(create=create)),
+    )
+    assert await curation.run_scope(await scope(dataset, "shared"), None) == "Done."
+    assert await pool.fetchval("SELECT count(*) FROM pages WHERE name='Partial page'") == 0
+    assert await pool.fetchval("SELECT count(*) FROM pages WHERE name='Concise page'") == 1
+    assert len(requests) == 3
+    assert "Discard this partial output" not in json.dumps(requests[1:])
+    assert "Partial page" in requests[1]["messages"][-1]["content"]
+    retry_tools = {tool["name"]: tool for tool in requests[1]["tools"]}
+    assert retry_tools["write_page"]["input_schema"]["properties"]["content"]["maxLength"] == 4000
+    assert retry_tools["edit_page"]["input_schema"]["properties"]["new_text"]["maxLength"] == 2000
+
+
+@pytest.mark.asyncio
+async def test_rename_collision_resolves_in_the_pages_subfolder_not_the_wiki_root(dataset, pool):
+    folder = await pool.fetchval(
+        "INSERT INTO folders (owner_user_id,created_by,name,parent_folder_id) "
+        "VALUES ($1,$1,'Nested',$2) RETURNING id",
+        dataset.owner,
+        dataset.workspace["external_wiki_folder_id"],
+    )
+    pages = {}
+    for name in ("Index", "Other"):
+        pages[name] = await pool.fetchval(
+            "INSERT INTO pages (owner_user_id,folder_id,name,content_markdown,created_by) "
+            "VALUES ($1,$2,$3,$4,$1) RETURNING id",
+            dataset.owner,
+            folder,
+            name,
+            "Nested " + name,
+        )
+    shared = await scope(dataset, "shared")
+    result = await shared.tool(
+        "write_page", {"page_id": str(pages["Other"]), "title": "Index", "content": "Bad rename"}
+    )
+    assert result["page_id"] == str(pages["Index"]) and "error" in result
+    assert (
+        await pool.fetchval("SELECT content_markdown FROM pages WHERE id=$1", dataset.shared)
+        == "ALLOWED_SHARED_KNOWLEDGE"
+    )
+    assert (
+        await pool.fetchval("SELECT content_markdown FROM pages WHERE id=$1", pages["Other"])
+        == "Nested Other"
     )
 
 
 @pytest.mark.asyncio
-async def test_a_full_history_scoped_run_advances_the_position_it_read(
+async def test_duplicate_title_does_not_refresh_a_revision_changed_by_a_human(dataset, pool):
+    shared = await scope(dataset, "shared")
+    original = dict(shared.writable[dataset.shared])
+    await pool.execute(
+        "UPDATE pages SET content_markdown='Human edit',content_hash='human-revision' WHERE id=$1",
+        dataset.shared,
+    )
+    with pytest.raises(ValueError, match="changed during curation"):
+        await shared.tool(
+            "write_page", {"page_id": None, "title": "Index", "content": "Stale replacement"}
+        )
+    assert shared.writable[dataset.shared] == original
+    # Nor can a subsequent ordinary update reuse a silently refreshed hash.
+    with pytest.raises(ValueError, match="changed during curation"):
+        await shared.tool(
+            "write_page",
+            {"page_id": str(dataset.shared), "title": "Index", "content": "Stale replacement"},
+        )
+    assert (
+        await pool.fetchval("SELECT content_markdown FROM pages WHERE id=$1", dataset.shared)
+        == "Human edit"
+    )
+
+
+@pytest.mark.asyncio
+async def test_small_edit_preserves_large_page_and_tracks_revision(dataset, pool):
+    text = "Existing detail.\n" * 3000 + "Unique ending."
+    await pool.execute("UPDATE pages SET content_markdown=$2 WHERE id=$1", dataset.shared, text)
+    shared = await scope(dataset, "shared")
+    for old, new in [
+        ("Unique ending.", "Unique ending.\nNew lesson."),
+        ("New lesson.", "Verified new lesson."),
+    ]:
+        await shared.tool(
+            "edit_page",
+            {
+                "page_id": str(dataset.shared),
+                "old_text": old,
+                "new_text": new,
+            },
+        )
+    assert await pool.fetchval(
+        "SELECT content_markdown FROM pages WHERE id=$1", dataset.shared
+    ) == (text + "\nVerified new lesson.")
+    assert (
+        await pool.fetchval("SELECT count(*) FROM page_edits WHERE page_id=$1", dataset.shared) == 2
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("old,new", [("absent", "new"), ("repeat", "new"), ("repeat repeat", "")])
+async def test_ambiguous_missing_or_destructive_edit_does_not_write(dataset, pool, old, new):
+    await pool.execute(
+        "UPDATE pages SET content_markdown='repeat repeat' WHERE id=$1", dataset.shared
+    )
+    shared = await scope(dataset, "shared")
+    result = await shared.tool(
+        "edit_page",
+        {
+            "page_id": str(dataset.shared),
+            "old_text": old,
+            "new_text": new,
+        },
+    )
+    assert "error" in result
+    assert (
+        await pool.fetchval("SELECT content_markdown FROM pages WHERE id=$1", dataset.shared)
+        == "repeat repeat"
+    )
+
+
+@pytest.mark.asyncio
+async def test_edit_cannot_overwrite_a_concurrent_human_edit(dataset, pool):
+    shared = await scope(dataset, "shared")
+    original = shared.documents[str(dataset.shared)]["content"]
+    await pool.execute(
+        "UPDATE pages SET content_markdown='Human edit',content_hash='new-revision' WHERE id=$1",
+        dataset.shared,
+    )
+    with pytest.raises(ValueError, match="changed during curation"):
+        await shared.tool(
+            "edit_page",
+            {
+                "page_id": str(dataset.shared),
+                "old_text": original,
+                "new_text": "Agent edit",
+            },
+        )
+    assert (
+        await pool.fetchval("SELECT content_markdown FROM pages WHERE id=$1", dataset.shared)
+        == "Human edit"
+    )
+
+
+@pytest.mark.asyncio
+async def test_edit_enforces_writable_scope_and_permission_revocation(dataset):
+    private = await scope(dataset, "private")
+    denied = await private.tool(
+        "edit_page",
+        {
+            "page_id": str(dataset.shared),
+            "old_text": "ALLOWED_SHARED_KNOWLEDGE",
+            "new_text": "Bad edit",
+        },
+    )
+    assert "outside" in denied["error"]
+    shared = await scope(dataset, "shared")
+    await end_user_service.update_end_user(dataset.users["public"]["id"], share_wiki=False)
+    with pytest.raises(PermissionError):
+        await shared.tool(
+            "edit_page",
+            {
+                "page_id": str(dataset.shared),
+                "old_text": "ALLOWED_SHARED_KNOWLEDGE",
+                "new_text": "Bad edit",
+            },
+        )
+
+
+@pytest.mark.asyncio
+async def test_initial_prompt_identifies_delta_inputs_not_existing_wiki(
+    dataset, monkeypatch, sprite_exec
+):
+    from anthropic.types import TextBlock
+
+    requests = []
+
+    async def create(**kwargs):
+        requests.append(kwargs)
+        return SimpleNamespace(
+            stop_reason="end_turn", content=[TextBlock(type="text", text="No update needed.")]
+        )
+
+    monkeypatch.setattr(
+        curation.llm,
+        "_get_client",
+        lambda: SimpleNamespace(messages=SimpleNamespace(create=create)),
+    )
+    shared = await scope(dataset, "shared")
+    await curation.run_scope(shared, None)
+    manifest = requests[0]["messages"][0]["content"]
+    assert "session:public-job" in manifest
+    assert "session:private-job" not in manifest
+    assert "ALLOWED_SHARED_KNOWLEDGE" not in manifest
+    assert requests[0]["max_tokens"] == 4096
+    shared.documents = {
+        key: doc
+        for key, doc in shared.documents.items()
+        if not key.startswith(("session:", "file:", "source:"))
+    }
+    assert "No new input" in await curation.run_scope(shared, None)
+    assert len(requests) == 1
+
+
+@pytest.mark.asyncio
+async def test_text_edit_preserves_a_concurrent_title_only_change(dataset, pool):
+    shared = await scope(dataset, "shared")
+    await pool.execute("UPDATE pages SET name='Human title' WHERE id=$1", dataset.shared)
+    await shared.tool(
+        "edit_page",
+        {
+            "page_id": str(dataset.shared),
+            "old_text": "ALLOWED_SHARED_KNOWLEDGE",
+            "new_text": "Updated knowledge",
+        },
+    )
+    row = await pool.fetchrow("SELECT name,content_markdown FROM pages WHERE id=$1", dataset.shared)
+    assert row["name"] == "Human title"
+    assert row["content_markdown"] == "Updated knowledge"
+    assert shared.documents[str(dataset.shared)]["title"] == "Human title"
+
+
+@pytest.mark.asyncio
+async def test_small_edit_supports_existing_large_page_and_long_human_title(dataset, pool):
+    title = "H" * 250
+    content = "Existing detail.\n" * 10000 + "Unique ending."
+    await pool.execute(
+        "UPDATE pages SET name=$2,content_markdown=$3 WHERE id=$1", dataset.shared, title, content
+    )
+    shared = await scope(dataset, "shared")
+    await shared.tool(
+        "edit_page",
+        {
+            "page_id": str(dataset.shared),
+            "old_text": "Unique ending.",
+            "new_text": "Unique ending. New lesson.",
+        },
+    )
+    row = await pool.fetchrow("SELECT name,content_markdown FROM pages WHERE id=$1", dataset.shared)
+    assert row["name"] == title
+    assert row["content_markdown"] == content + " New lesson."
+
+
+@pytest.mark.asyncio
+async def test_editing_reserved_log_returns_recoverable_error(dataset, pool):
+    await pool.execute("UPDATE pages SET name='Changelog' WHERE id=$1", dataset.shared)
+    shared = await scope(dataset, "shared")
+    result = await shared.tool(
+        "edit_page",
+        {
+            "page_id": str(dataset.shared),
+            "old_text": "ALLOWED_SHARED_KNOWLEDGE",
+            "new_text": "Audit output",
+        },
+    )
+    assert "error" in result
+    assert (
+        await pool.fetchval("SELECT content_markdown FROM pages WHERE id=$1", dataset.shared)
+        == "ALLOWED_SHARED_KNOWLEDGE"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tool_name", ["edit_page", "write_page"])
+async def test_model_recovers_from_readonly_write_without_changing_shared_page(
+    dataset, pool, monkeypatch, sprite_exec, tool_name
+):
+    from anthropic.types import TextBlock, ToolUseBlock
+
+    private = await scope(dataset, "private", "private")
+    read = await private.tool("read_document", {"document_id": str(dataset.shared)})
+    assert read["writable"] is False
+    calls = 0
+
+    async def create(**kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            args = (
+                {"old_text": "ALLOWED_SHARED_KNOWLEDGE", "new_text": "PRIVATE detail"}
+                if tool_name == "edit_page"
+                else {"title": "Index", "content": "PRIVATE detail"}
+            )
+            return SimpleNamespace(
+                stop_reason="tool_use",
+                content=[
+                    ToolUseBlock(
+                        type="tool_use",
+                        id="denied",
+                        name=tool_name,
+                        input={"page_id": str(dataset.shared), **args},
+                    )
+                ],
+            )
+        if calls == 2:
+            result = kwargs["messages"][-1]["content"][0]
+            assert result["is_error"] and "outside" in result["content"]
+            return SimpleNamespace(
+                stop_reason="tool_use",
+                content=[
+                    ToolUseBlock(
+                        type="tool_use",
+                        id="allowed",
+                        name="edit_page",
+                        input={
+                            "page_id": str(dataset.pages["private"]),
+                            "old_text": "PRIVATE_WIKI_SECRET",
+                            "new_text": "PRIVATE_WIKI_SECRET with new detail",
+                        },
+                    )
+                ],
+            )
+        assert not kwargs["messages"][-1]["content"][0]["is_error"]
+        return SimpleNamespace(
+            stop_reason="end_turn", content=[TextBlock(type="text", text="Updated private wiki.")]
+        )
+
+    monkeypatch.setattr(
+        curation.llm,
+        "_get_client",
+        lambda: SimpleNamespace(messages=SimpleNamespace(create=create)),
+    )
+    assert await curation.run_scope(private, None) == "Updated private wiki."
+    assert calls == 3
+    assert (
+        await pool.fetchval("SELECT content_markdown FROM pages WHERE id=$1", dataset.shared)
+        == "ALLOWED_SHARED_KNOWLEDGE"
+    )
+    assert (
+        await pool.fetchval("SELECT count(*) FROM page_edits WHERE page_id=$1", dataset.shared) == 0
+    )
+    assert (
+        await pool.fetchval(
+            "SELECT content_markdown FROM pages WHERE id=$1", dataset.pages["private"]
+        )
+        == "PRIVATE_WIKI_SECRET with new detail"
+    )
+
+
+@pytest.mark.asyncio
+async def test_collision_cannot_adopt_a_page_created_after_snapshot(dataset, pool):
+    shared = await scope(dataset, "shared")
+    human_page = await pool.fetchval(
+        "INSERT INTO pages (owner_user_id,folder_id,name,content_markdown,created_by) "
+        "VALUES ($1,$2,'New human page','Human work',$1) RETURNING id",
+        dataset.owner,
+        shared.destination,
+    )
+    with pytest.raises(ValueError, match="created during curation"):
+        await shared.tool(
+            "write_page",
+            {
+                "page_id": None,
+                "title": "New human page",
+                "content": "Stale agent replacement",
+            },
+        )
+    assert human_page not in shared.writable
+    denied = await shared.tool(
+        "write_page",
+        {
+            "page_id": str(human_page),
+            "title": "New human page",
+            "content": "Still stale",
+        },
+    )
+    assert "error" in denied
+    assert (
+        await pool.fetchval("SELECT content_markdown FROM pages WHERE id=$1", human_page)
+        == "Human work"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "resumed", [False, True], ids=["partial-last-event", "partial-first-event"]
+)
+async def test_session_manifest_does_not_promote_event_offsets_to_document_bounds(
+    dataset, pool, monkeypatch, sprite_exec, resumed
+):
+    from anthropic.types import TextBlock, ToolUseBlock
+
+    from backend.services import scoped_curation_inputs
+
+    stamp = datetime.now(UTC) - timedelta(minutes=5)
+    until = stamp + timedelta(seconds=2)
+    texts = ["First complete event", 'Tool result: "bolt" \\ café\n' * 80, "Last complete event"]
+    await pool.execute("DELETE FROM history_events WHERE owner_user_id=$1", dataset.owner)
+    for index, text in enumerate(texts):
+        await pool.execute(
+            "INSERT INTO history_events (owner_user_id,created_by,agent_name,event_type,session_id,content,created_at) "
+            "VALUES ($1,$1,'test','user_message','private-job',$2,$3)",
+            dataset.owner,
+            text,
+            stamp + timedelta(seconds=index),
+        )
+    batch = await scoped_curation_inputs.load_batch(
+        dataset.owner,
+        stamp - timedelta(microseconds=1),
+        until,
+        internal=False,
+        generation=dataset.workspace["curation_generation"],
+        max_chars=2048,
+    )
+    assert len(batch.documents) == 2 and batch.cursor
+    if resumed:
+        batch = await scoped_curation_inputs.load_batch(
+            dataset.owner,
+            batch.through,
+            until,
+            internal=False,
+            generation=dataset.workspace["curation_generation"],
+            cursor=batch.cursor,
+            max_chars=2048,
+        )
+        assert len(batch.documents) == 2 and not batch.cursor
+    private = await curation.load_scope(
+        dataset.workspace,
+        "private",
+        dataset.users["private"]["wiki_folder_id"],
+        [dataset.users["private"]["id"]],
+        "agent-curate-session-chunks",
+        None,
+        until,
+        batch=batch,
+    )
+    requests = []
+
+    async def create(**kwargs):
+        requests.append(json.loads(json.dumps(kwargs)))
+        if len(requests) == 1:
+            return SimpleNamespace(
+                stop_reason="tool_use",
+                content=[
+                    ToolUseBlock(
+                        type="tool_use",
+                        id="read-session",
+                        name="read_document",
+                        input={"document_id": "session:private-job"},
+                    )
+                ],
+            )
+        return SimpleNamespace(
+            stop_reason="end_turn", content=[TextBlock(type="text", text="Read supplied events.")]
+        )
+
+    monkeypatch.setattr(
+        curation.llm,
+        "_get_client",
+        lambda: SimpleNamespace(messages=SimpleNamespace(create=create)),
+    )
+    await curation.run_scope(private, None)
+    manifest = json.loads(
+        requests[0]["messages"][0]["content"].split("New input documents: ", 1)[1]
+    )
+    read = json.loads(requests[1]["messages"][-1]["content"][0]["content"])
+    events = [json.loads(line) for line in read["content"].splitlines()]
+    assert len(manifest) == 1 and len(events) == 2
+    assert manifest[0]["characters"] == read["total_characters"] == len(read["content"])
+    assert "chunk" not in manifest[0]  # The merged document has no single event's bounds.
+    assert read["next_offset"] is None
+    expected_texts = texts[1:] if resumed else texts[:2]
+    for event, original in zip(events, expected_texts, strict=True):
+        offset = event["offset"]
+        assert event["total_characters"] == len(original)
+        assert event["content"] == original[offset : offset + len(event["content"])]
+    if resumed:
+        assert events[0]["offset"] > 0 and events[1]["content"] == texts[2]
+    else:
+        assert events[0]["content"] == texts[0]
+        assert len(events[1]["content"]) < events[1]["total_characters"]
+
+
+@pytest.mark.asyncio
+async def test_large_files_and_sources_resume_without_skipping_or_unbounded_input(dataset, pool):
+    from backend.services import scoped_curation_inputs
+
+    stamp = datetime.now(UTC) - timedelta(minutes=5)
+    file_text, source_text = "A" * 6000 + "FILE_END", "B" * 9000 + "SOURCE_END"
+    await pool.execute(
+        "UPDATE files SET extracted_text=$2,created_at=$3 WHERE id=$1",
+        dataset.private_file,
+        file_text,
+        stamp,
+    )
+    await pool.execute(
+        "UPDATE drive_documents SET content=$2,updated_at=$3 WHERE id=$1",
+        dataset.source_doc,
+        source_text,
+        stamp,
+    )
+    await pool.execute("DELETE FROM history_events WHERE owner_user_id=$1", dataset.owner)
+    since, cursor = stamp - timedelta(microseconds=1), {}
+    collected = {}
+    for _ in range(12):
+        batch = await scoped_curation_inputs.load_batch(
+            dataset.owner,
+            since,
+            datetime.now(UTC),
+            internal=False,
+            generation=dataset.workspace["curation_generation"],
+            cursor=cursor,
+            max_chars=2048,
+        )
+        assert sum(len(d["content"]) for d in batch.documents) <= 2048
+        private = await curation.load_scope(
+            dataset.workspace,
+            "private",
+            dataset.users["private"]["wiki_folder_id"],
+            [dataset.users["private"]["id"]],
+            "agent-curate-file-source-chunks",
+            since,
+            datetime.now(UTC),
+            batch=batch,
+        )
+        for doc in batch.documents:
+            collected[doc["document_id"]] = collected.get(doc["document_id"], "") + doc["content"]
+            read = await private.tool("read_document", {"document_id": doc["document_id"]})
+            assert read["content"] == doc["content"]
+            assert read["total_characters"] == len(doc["content"])
+            assert read["next_offset"] is None
+            assert private.documents[doc["document_id"]]["chunk"] == {
+                "offset": doc["offset"],
+                "end": doc["next_offset"],
+                "total_characters": doc["characters"],
+            }
+        if batch.cursor:
+            assert batch.through < stamp
+            assert batch.cursor != cursor
+        since, cursor = batch.through, batch.cursor
+        if not cursor:
+            break
+    assert not cursor and since >= stamp
+    assert collected == {
+        f"file:{dataset.private_file}": file_text,
+        f"source:{dataset.source_doc}": source_text,
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["exception", "empty_completion"])
+async def test_cursor_is_committed_only_after_all_scopes_succeed(
+    dataset, pool, monkeypatch, sprite_exec, failure
+):
+    from backend.services import agent_service, sprite_agent_service
+
+    await pool.execute(
+        "UPDATE files SET extracted_text=$2 WHERE id=$1", dataset.private_file, "X" * 10000
+    )
+    monkeypatch.setattr(curation, "_MAX_INPUT_CHARS", 2048)
+    agent = await agent_service.get_or_create_curator(dataset.owner, wiki="external")
+    await pool.execute("UPDATE agents SET curated_through=NULL WHERE id=$1", UUID(agent["id"]))
+    seen = []
+
+    async def completed(scope, instructions):
+        seen.append(scope)
+        return "Curated supplied chunk."
+
+    real_run_scope = curation.run_scope
+    monkeypatch.setattr(curation, "run_scope", completed)
+    agent = await agent_service.get_agent_by_id(UUID(agent["id"]))
+    await sprite_agent_service.run_scheduled(agent, "chunk-one")
+    before = await agent_service.get_agent_by_id(UUID(agent["id"]))
+    assert before["curation_cursor"]
+    assert "X" * 100 not in json.dumps([s.documents for s in seen if s.purpose == "shared"])
+
+    async def failed(*args):
+        raise RuntimeError("Model unavailable")
+
+    if failure == "empty_completion":
+
+        async def create(**kwargs):
+            return SimpleNamespace(stop_reason="end_turn", content=[])
+
+        monkeypatch.setattr(curation, "run_scope", real_run_scope)
+        monkeypatch.setattr(
+            curation.llm,
+            "_get_client",
+            lambda: SimpleNamespace(messages=SimpleNamespace(create=create)),
+        )
+    else:
+        monkeypatch.setattr(curation, "run_scope", failed)
+    with pytest.raises(ExceptionGroup) as errors:
+        await sprite_agent_service.run_scheduled(before, "chunk-two")
+    if failure == "empty_completion":
+        assert all(
+            isinstance(error, ValueError) and "no completion summary" in str(error)
+            for error in errors.value.exceptions
+        )
+    after = await agent_service.get_agent_by_id(UUID(agent["id"]))
+    assert (after["curated_through"], after["curation_cursor"]) == (
+        before["curated_through"],
+        before["curation_cursor"],
+    )
+
+
+@pytest.mark.asyncio
+async def test_same_timestamp_group_larger_than_event_limit_drains(dataset, pool, monkeypatch):
+    from backend.services import curation_service, scoped_curation_inputs
+
+    stamp = datetime.now(UTC) - timedelta(minutes=5)
+    await pool.execute("DELETE FROM history_events WHERE owner_user_id=$1", dataset.owner)
+    for index in range(7):
+        await pool.execute(
+            "INSERT INTO history_events (owner_user_id,created_by,agent_name,event_type,session_id,content,created_at) "
+            "VALUES ($1,$1,'test','user_message','private-job',$2,$3)",
+            dataset.owner,
+            f"message-{index}",
+            stamp,
+        )
+    monkeypatch.setattr(curation_service, "_MAX_EVENTS", 2)
+    since, cursor, seen = stamp - timedelta(microseconds=1), {}, []
+    for _ in range(4):
+        batch = await scoped_curation_inputs.load_batch(
+            dataset.owner,
+            since,
+            stamp,
+            internal=False,
+            generation=dataset.workspace["curation_generation"],
+            cursor=cursor,
+        )
+        seen.extend(d["key"] for d in batch.documents)
+        since, cursor = batch.through, batch.cursor
+    assert len(seen) == len(set(seen)) == 7
+    assert since == stamp and cursor == {}
+
+
+@pytest.mark.asyncio
+async def test_revised_large_document_restarts_its_partial_cursor(dataset, pool):
+    from backend.services import scoped_curation_inputs
+
+    stamp = datetime.now(UTC) - timedelta(minutes=5)
+    await pool.execute("DELETE FROM history_events WHERE owner_user_id=$1", dataset.owner)
+    await pool.execute(
+        "UPDATE files SET extracted_text=$2,created_at=$3 WHERE id=$1",
+        dataset.private_file,
+        "old" * 3000,
+        stamp,
+    )
+    batch = await scoped_curation_inputs.load_batch(
+        dataset.owner,
+        stamp - timedelta(microseconds=1),
+        stamp,
+        internal=False,
+        generation=dataset.workspace["curation_generation"],
+        max_chars=2048,
+    )
+    await pool.execute(
+        "UPDATE files SET extracted_text=$2 WHERE id=$1", dataset.private_file, "new" * 3000
+    )
+    revised = await scoped_curation_inputs.load_batch(
+        dataset.owner,
+        batch.through,
+        stamp,
+        internal=False,
+        generation=dataset.workspace["curation_generation"],
+        cursor=batch.cursor,
+        max_chars=2048,
+    )
+    assert revised.documents[0]["offset"] == 0
+    assert revised.documents[0]["content"].startswith("newnew")
+
+
+@pytest.mark.asyncio
+async def test_scoped_wiki_output_does_not_trigger_staleness_or_catchup(dataset, pool, monkeypatch):
+    from backend.services import agent_service, alert_service, scoped_curation_inputs
+    from backend.tasks import agent_schedules
+
+    old = datetime.now(UTC) - timedelta(days=4)
+    await pool.execute(
+        "UPDATE history_events SET created_at=$2 WHERE owner_user_id=$1", dataset.owner, old
+    )
+    await pool.execute("UPDATE files SET created_at=$2 WHERE owner_user_id=$1", dataset.owner, old)
+    await pool.execute(
+        "UPDATE drive_documents SET updated_at=$2 WHERE owner_user_id=$1", dataset.owner, old
+    )
+    agent = await agent_service.get_or_create_curator(dataset.owner, wiki="external")
+    await pool.execute(
+        "UPDATE agents SET curated_through=$2,last_run_outcome='ran' WHERE id=$1",
+        UUID(agent["id"]),
+        datetime.now(UTC) - timedelta(days=3),
+    )
+    await pool.execute("UPDATE pages SET updated_at=now() WHERE owner_user_id=$1", dataset.owner)
+    current = await agent_service.get_agent_by_id(UUID(agent["id"]))
+    assert not await scoped_curation_inputs.has_pending(current, dataset.workspace)
+
+    async def forbidden(*args):
+        pytest.fail("Curator's own wiki output must not page an operator")
+
+    monkeypatch.setattr(alert_service, "send_alert", forbidden)
+    assert await agent_schedules._alert_stale_curators() == 0
+
+
+@pytest.mark.asyncio
+async def test_truncated_full_replacement_retries_as_small_edit(
     dataset, pool, monkeypatch, sprite_exec
 ):
-    """`full_history` re-reads the whole corpus from `never` and stays
-    compare-and-set on the position the dispatcher loaded, so a backfill onto a lane
-    that already curated is an ordinary advance rather than a conflict. The fence
-    anchors on the loaded position, not on the position the override nulled for the
-    feed — anchored on the nulled one, a backfill could never write at all."""
-    from backend.services import agent_service
-    from backend.tasks.agent_schedules import _run_curator_now
+    from anthropic.types import TextBlock, ToolUseBlock
 
-    agent = await agent_service.get_or_create_curator(dataset.owner, wiki="external")
-    curator = UUID(agent["id"])
-    read = datetime.now(UTC) - timedelta(minutes=5)
-    await pool.execute("UPDATE agents SET curated_through=$2 WHERE id=$1", curator, read)
+    text = "Keep all existing knowledge.\n" * 2000 + "Unique ending."
+    await pool.execute("UPDATE pages SET content_markdown=$2 WHERE id=$1", dataset.shared, text)
+    requests = []
 
-    async def curated(scope, instructions, route=None):
-        return "Completed this isolated wiki."
+    async def create(**kwargs):
+        requests.append(json.loads(json.dumps(kwargs)))
+        turn = len(requests)
+        if turn <= 2:
+            return SimpleNamespace(
+                stop_reason="max_tokens" if turn == 1 else "tool_use",
+                content=[
+                    ToolUseBlock(
+                        type="tool_use",
+                        id=f"write-{turn}",
+                        name="write_page",
+                        input={
+                            "page_id": str(dataset.shared),
+                            "title": "Index",
+                            "content": "X" * 5000,
+                        },
+                    )
+                ],
+            )
+        if turn == 3:
+            result = kwargs["messages"][-1]["content"][0]
+            assert result["is_error"] and "4000 characters" in result["content"]
+            return SimpleNamespace(
+                stop_reason="tool_use",
+                content=[
+                    ToolUseBlock(
+                        type="tool_use",
+                        id="edit",
+                        name="edit_page",
+                        input={
+                            "page_id": str(dataset.shared),
+                            "old_text": "Unique ending.",
+                            "new_text": "Unique ending. New lesson.",
+                        },
+                    )
+                ],
+            )
+        return SimpleNamespace(
+            stop_reason="end_turn", content=[TextBlock(type="text", text="Done.")]
+        )
 
-    monkeypatch.setattr(curation, "run_scope", curated)
-    await _run_curator_now(curator, metered=False, full_history=True)
-
-    row = await pool.fetchrow(
-        "SELECT curated_through,curated_through_event_id,last_run_outcome,last_run_error "
-        "FROM agents WHERE id=$1",
-        curator,
+    monkeypatch.setattr(
+        curation.llm,
+        "_get_client",
+        lambda: SimpleNamespace(messages=SimpleNamespace(create=create)),
     )
-    assert row["curated_through"] > read  # the backfill landed, it was not refused
-    assert row["last_run_outcome"] == "ran", row["last_run_error"]
+    await curation.run_scope(await scope(dataset, "shared"), None)
+    assert str(dataset.shared) in requests[1]["messages"][-1]["content"]
+    assert "X" * 5000 not in json.dumps(requests[1])
+    assert (
+        await pool.fetchval("SELECT content_markdown FROM pages WHERE id=$1", dataset.shared)
+        == text + " New lesson."
+    )
+    assert (
+        await pool.fetchval("SELECT count(*) FROM page_edits WHERE page_id=$1", dataset.shared) == 1
+    )

@@ -7,6 +7,8 @@ from pydantic import BaseModel, Field, computed_field
 from .product_checkpoints import ProductCheckpoint
 from .services.share_mcp_urls import skill_mcp_url
 
+from .product_checkpoints import ProductCheckpoint
+
 # --- Users ---
 
 
