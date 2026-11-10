@@ -60,23 +60,6 @@ async def annotated_traces(client, labeler):
     return user, ids, config
 
 
-async def run_scoring_job(pool, run_id):
-    """Drive the scoring job body the way a worker leaves the run.
-
-    ``score_trace_async`` claims the run and ``_run_tracked`` then marks it running
-    unconditionally, so by the time ``jobs.run_scoring`` reads the row it is always
-    'running' — and its write transaction refuses a row that is not. A test calling
-    the job straight has to establish that state itself, otherwise the job raises
-    "Scoring run is no longer active" before it can score anything.
-    """
-    marked = await pool.execute(
-        "UPDATE rm_scoring_runs SET status='running',started_at=now() WHERE id=$1",
-        run_id,
-    )
-    assert marked == "UPDATE 1", "the scoring run must exist to be scored"
-    await jobs.run_scoring(run_id)
-
-
 async def test_step_scores_match_detail_summary_history_and_training(client, pool, labeler):
     user, ids, _ = await annotated_traces(client, labeler)
     tid = ids[0]  # question, accepted answer, closing note
@@ -281,7 +264,8 @@ async def test_training_uses_saved_annotations_and_preserves_both_signals_and_pa
         json={"reward_model_id": str(model_id)},
     )
     assert requested.status_code == 202, requested.text
-    await run_scoring_job(pool, UUID(requested.json()["id"]))
+    # Exercise the task's claim before handing the queued run to jobs.run_scoring.
+    await tasks.score_trace_async(UUID(requested.json()["id"]))
     assert (
         await pool.fetchval(
             "SELECT score FROM rm_trace_scores WHERE trace_id=$1 AND reward_model_id=$2",
@@ -312,7 +296,7 @@ async def test_training_uses_saved_annotations_and_preserves_both_signals_and_pa
         json={"reward_model_id": str(model_id)},
     )
     with pytest.raises(ValueError, match="Trace changed"):
-        await run_scoring_job(pool, UUID(requested.json()["id"]))
+        await jobs.run_scoring(UUID(requested.json()["id"]))
     listed = await client.get(
         "/api/v1/rm/traces", headers=user["headers"], params={"reward_model_id": str(model_id)}
     )

@@ -8,7 +8,7 @@ import uuid
 import pytest
 from sqlalchemy.ext.asyncio import create_async_engine
 
-from .migration_ids import module_for_slug
+from .shared_wiki_helpers import approve_fixture_pages
 from .test_developer_platform import _developer, _event, _mint_workspace_key, _push
 from .test_permissions import _auth, _register_with_email
 
@@ -61,7 +61,9 @@ async def test_archive_preserves_logs_and_removes_customer_access(client, pool):
         uuid.UUID(stranger["id"]),
     )
 
-    migration = importlib.import_module(module_for_slug("archive_external_curator_logs"))
+    migration = importlib.import_module(
+        "backend.migrations.versions.0203_archive_external_curator_logs"
+    )
     engine = create_async_engine(
         os.environ["TEST_DATABASE_URL"].replace("postgresql://", "postgresql+asyncpg://", 1)
     )
@@ -98,6 +100,10 @@ async def test_archive_preserves_logs_and_removes_customer_access(client, pool):
         cleaned["content_hash"] == hashlib.sha256(cleaned["content_markdown"].encode()).hexdigest()
     )
     assert cleaned["embed_stale"] is True
+
+    # Only the safe topic and sanitized index remain in the shared tree.
+    # Publication now requires an explicit review after the migration's edits.
+    await approve_fixture_pages(pool, workspace)
 
     for user in (None, "shop", "new-shop"):
         for script in (

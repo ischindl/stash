@@ -11,7 +11,9 @@ Single source of truth for the provider a backend-side completion runs on.
 Two providers answer, and a run picks one of them once: :func:`anthropic_route`
 for a backend that has its own key, :func:`local_route` for a stack that runs on
 an operator's own OpenAI-compatible box. Which one is configuration, never a
-retry — see the resolution policy in scoped_curation_service.require_route.
+retry. Which one a call takes is its caller's decision; scoped curation gates on
+configuration alone (scoped_curation_service.require_configured) and therefore
+always answers on the backend's own key.
 """
 
 from __future__ import annotations

@@ -1633,3 +1633,76 @@ async def test_a_failure_after_the_fence_publishes_neither_the_watermark_nor_the
     assert await curation_service.has_changes_since(uid, uid, read, wiki="internal"), (
         "the crashed run's window stopped being offered to the next one"
     )
+
+
+@pytest.mark.asyncio
+async def test_text_bounded_feed_eventually_covers_every_event(client, pool):
+    """A text budget slows the watermark but never strands an event.
+
+    Each pass must hand the curator at most `max_event_chars` of content and must
+    still move forward, so an oversized corpus drains run by run instead of
+    plateauing on the same first batch (#1272)."""
+    _, uid = await _register(client)
+    base = datetime(2026, 1, 1, tzinfo=UTC)
+    await pool.executemany(
+        "INSERT INTO history_events (owner_user_id,created_by,agent_name,event_type,session_id,content,created_at) "
+        "VALUES ($1,$1,'test','user_message','text-budget-test',$2,$3)",
+        [(uid, str(i) * 60, base + timedelta(minutes=i)) for i in range(5)],
+    )
+    since = base - timedelta(seconds=1)
+    target = base + timedelta(hours=1)
+    position = Position(since)
+    seen = []
+    passes = 0
+    while since < target:
+        through = await curation_service.complete_through(
+            uid, position, target, wiki="internal", max_event_chars=100
+        )
+        assert through.at > since
+        batch = await pool.fetch(
+            "SELECT content FROM history_events WHERE owner_user_id=$1 "
+            "AND created_at>$2 AND created_at<=$3 ORDER BY created_at,id",
+            uid,
+            since,
+            through.at,
+        )
+        assert sum(len(row["content"]) for row in batch) <= 100
+        seen.extend(row["content"] for row in batch)
+        since = through.at
+        position = through
+        passes += 1
+        assert passes <= 5
+    assert passes == 5
+    assert seen == [str(i) * 60 for i in range(5)]
+
+
+@pytest.mark.asyncio
+async def test_text_budget_keeps_an_oversized_first_timestamp_group(client, pool):
+    """The budget stops before an overflowing group, never inside it.
+
+    Events sharing one instant are all re-presented or none of them: a cut inside
+    a tie is what made the old watermark plateau, and an oversized first group must
+    not stall the run forever either (#1272)."""
+    _, uid = await _register(client)
+    base = datetime(2026, 1, 1, tzinfo=UTC)
+    await pool.executemany(
+        "INSERT INTO history_events (owner_user_id,created_by,agent_name,event_type,session_id,content,created_at) "
+        "VALUES ($1,$1,'test','user_message','text-budget-test',$2,$3)",
+        [
+            (uid, "large" * 100, base),
+            (uid, "same timestamp", base),
+            (uid, "next", base + timedelta(seconds=1)),
+        ],
+    )
+    target = base + timedelta(hours=1)
+    through = await curation_service.complete_through(
+        uid, Position(base - timedelta(seconds=1)), target, wiki="internal", max_event_chars=100
+    )
+    assert base <= through.at < base + timedelta(seconds=1)
+    remainder = await curation_service.changes_since(uid, uid, through, wiki="internal")
+    assert [event["content"] for event in remainder["history"]] == ["next"], (
+        "the watermark split the saturated timestamp group"
+    )
+    assert await curation_service.complete_through(
+        uid, through, target, wiki="internal", max_event_chars=100
+    ) == Position(at=target)

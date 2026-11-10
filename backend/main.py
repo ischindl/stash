@@ -22,10 +22,12 @@ from .routers import (
     agent_chat,
     agent_credentials,
     agent_docs,
+    agent_judge,
     agents,
     aggregate,
     analytics,
     batch,
+    behaviors,
     billing,
     bulk_export,
     clips,
@@ -33,15 +35,18 @@ from .routers import (
     demo,
     developer,
     discover,
+    evals,
     exports,
     files,
     files_tree,
+    intuition_mcp,
     intuitions,
     machine,
     marketing,
     mcp_servers,
     memory,
     mini_programs,
+    model_wizard,
     optimization,
     pins,
     publish,
@@ -58,6 +63,7 @@ from .routers import (
     tables,
     tasks,
     telegram,
+    test_sets,
     transcripts,
     trash,
     user_knowledge,
@@ -114,13 +120,17 @@ async def lifespan(app: FastAPI):
         await demo_service.seed_demo()
     except Exception:
         logger.exception("seed_demo failed at startup")
-    # The MCP session manager is process-wide: every share URL shares one
-    # server, so its task group has to outlive any single request.
-    async with share_mcp.session_runtime():
-        try:
+    try:
+        # Both MCP session managers are process-wide: every share URL shares one
+        # share-MCP server, and the intuition server runs one streamable-HTTP task
+        # group, so both task groups have to outlive any single request.
+        async with (
+            share_mcp.session_runtime(),
+            intuition_mcp.mcp.session_manager.run(),
+        ):
             yield
-        finally:
-            await close_db()
+    finally:
+        await close_db()
 
 
 def _rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded) -> JSONResponse:
@@ -188,6 +198,14 @@ app.include_router(optimization.router)
 app.include_router(rm_evaluators.router)
 app.include_router(workbench.router)
 app.include_router(intuitions.router)
+app.include_router(evals.router)
+app.include_router(behaviors.router)
+app.include_router(agent_judge.router)
+app.include_router(test_sets.router)
+app.include_router(model_wizard.router)
+app.include_router(model_wizard.public_router)
+# MCP over streamable HTTP at /mcp/intuitions (see routers/intuition_mcp.py).
+app.mount("/mcp", intuition_mcp.app)
 app.include_router(mcp_servers.router)
 app.include_router(publish.router)
 app.include_router(security_audit.router)

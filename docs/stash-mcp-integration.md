@@ -16,7 +16,7 @@ here drifts from it.
 Installing the Stash CLI puts a **`stash-mcp`** executable on your `PATH` (it ships in the same
 `stashai` package — there is nothing else to install). Running it starts a [Model Context
 Protocol](https://modelcontextprotocol.io) server that speaks the **stdio** transport and
-exposes the current **91 tools** listed in the [Tool reference](#tool-reference): search, the
+exposes the current **102 tools** listed in the [Tool reference](#tool-reference): search, the
 unified VFS, sources, files & pages, tables, skills, sessions, trash, sharing, publishing, and
 the reward-model loop (traces, intuitions, prompt optimization).
 
@@ -91,7 +91,7 @@ Two practical notes:
 
 ## Tool reference
 
-The 91 tools the server exposes, grouped by area. Every name below exists on the shipped
+The 102 tools the server exposes, grouped by area. Every name below exists on the shipped
 server, and the guard test compares this table against `cli/mcp_server.py` in both directions.
 
 ### Search and the VFS
@@ -222,6 +222,11 @@ server, and the guard test compares this table against `cli/mcp_server.py` in bo
 | `stash_import_traces` | Import agent trace JSON/JSONL for viewing, credit, and learning |
 | `stash_annotate_trace` | Add the user's feedback to a trace or action for reward-model training |
 | `stash_train_reward_model` | Queue asynchronous training from selected traces and their annotations |
+| `stash_reward_function_list` | Your reward functions — the judge evals of the Evals UI, with IDs, rubrics and readiness, not trained checkpoints |
+| `stash_reward_function_get` | A reward function's instructions, traits, current version and score endpoint — the version to pass when editing its rubric |
+| `stash_reward_function_create` | Save a ready-to-score reward function from explicit criteria: 1-12 unique traits, each with what counts as good and bad |
+| `stash_reward_function_set_rubric` | Replace a rubric with explicit user criteria, refusing a stale base version instead of overwriting newer edits |
+| `stash_reward_function_score` | Judge work with a saved reward function: a 0-1 score, per-trait grades, reasons and fixes, plus the logged call id |
 
 ### Intuitions
 
@@ -239,6 +244,12 @@ Personal judges the user trains from their own labels, so a decision can follow 
 | `stash_intuition_edit_draft` | Change draft-version fields; edited rubric questions are re-asked on train |
 | `stash_intuition_train` | Grade ungraded examples, refit the draft head, report held-out metrics |
 | `stash_intuition_promote` | Make the draft the active version (refused when the gate fails) |
+| `stash_intuition_run_outcome` | Report how the task ended, 0 failed to 1 succeeded, crediting every decision the model made during that run |
+| `stash_intuition_credit` | Whether the model's decisions inside runs predicted how those runs ended: success rate per decision, learned weights, held-out accuracy |
+| `stash_intuition_feedback` | Attach feedback to a served call days later — a person's correction, what actually happened, or another system's verdict |
+| `stash_intuition_monitoring` | How the model is doing in use: calls and failures per day, accuracy and calibration against feedback, drift versus its training examples |
+| `stash_intuition_label_queue` | Unreviewed calls ranked by how much labelling each would teach the model, with the reasons and the review call to send the label back |
+| `stash_intuition_improve` | Search for better rubric questions in the background, then read each candidate's held-out accuracy, the winner, and the regression gate |
 
 ### Prompt optimization
 

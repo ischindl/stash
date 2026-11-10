@@ -672,16 +672,24 @@ async def _close_run_sessions(
             )
 
 
-async def run_scheduled(agent: dict, run_stamp: str, read_position: Position) -> str:
+_WORKSPACE_UNSET = object()
+
+
+async def run_scheduled(
+    agent: dict,
+    run_stamp: str,
+    read_position: Position,
+    *,
+    workspace=_WORKSPACE_UNSET,
+    scoped_lock_held: bool = False,
+) -> str:
     """Run a scheduled agent headless — one turn into a fresh per-run session —
     and return the result text.
 
-    `read_position` is the pair the dispatcher loaded from this row: the position the
-    run reads from, and therefore the one its watermark commit fences against. It
-    travels as an argument because the row the run finishes on is not the row it
-    started from — a mid-run rewind or overlapping advance means the stored pair has
-    moved, and a commit that asked the database what it holds would fence on the very
-    value it is about to overwrite.
+    A curator's watermark commit fences on the position this row held when the run
+    began, not on whatever the row holds when it finishes — a mid-run rewind or an
+    overlapping advance means the stored pair has moved, and a commit that asked the
+    database what it holds now would fence on the very value it is about to overwrite.
 
     A developer-platform workspace's curator never reaches a sprite at all — it
     runs the backend's scoped curation, which is why the workspace is checked
@@ -699,43 +707,41 @@ async def run_scheduled(agent: dict, run_stamp: str, read_position: Position) ->
     """
     owner_user_id = UUID(str(agent["user_id"]))
     try:
-        return await _run_scheduled_turn(agent, run_stamp, read_position)
+        return await _run_scheduled_turn(
+            agent, run_stamp, read_position, workspace, scoped_lock_held
+        )
     finally:
         await _close_run_sessions(
             owner_user_id, agent["name"], scheduled_session_ids(agent, run_stamp)
         )
 
 
-async def _run_scheduled_turn(agent: dict, run_stamp: str, read_position: Position) -> str:
+async def _run_scheduled_turn(
+    agent: dict,
+    run_stamp: str,
+    read_position: Position,
+    workspace=_WORKSPACE_UNSET,
+    scoped_lock_held: bool = False,
+) -> str:
     """The dispatch itself; `run_scheduled` is what closes what this leaves behind."""
     from . import scoped_curation_service, user_service
 
     user_id = UUID(str(agent["user_id"]))
-    workspace = await scoped_curation_service.workspace_for_agent(agent)
+
+    if workspace is _WORKSPACE_UNSET:
+        workspace = await scoped_curation_service.workspace_for_agent(agent)
     if workspace is not None:
-        # One run per agent is the dispatcher's `agent_run_lock`, taken before
-        # this call; the sprite path gets this session lock from `run_chat`,
-        # which a scoped run does not go through. The lock's TTL is the run's whole
-        # wall rather than its budget: a lock that expired while a legitimate run was
-        # still inside its own ceiling would let a second dispatch join the session.
-        wall = scoped_curation_service.run_wall_timeout()
-        async with _turn_lock(f"{scheduled_session_prefix(agent)}{run_stamp}", wall):
+        # Scoped runs use fresh in-process model state. Their per-agent lock
+        # already serializes every run; a second session lock is unnecessary.
+        async with (
+            contextlib.nullcontext()
+            if scoped_lock_held
+            else _TurnLock(f"scoped-curator-{agent['id']}", settings.AGENT_TURN_TIMEOUT_SECONDS)
+        ):
             try:
-                # The run stops itself: `scoped_curation_service.run` checks its budget
-                # between slices and keeps every slice it committed, one that finished
-                # after the budget was spent included. That check can only run once the
-                # slice in flight returns, so a wall at the budget itself always fires
-                # first and discards the slice worth keeping — hence the one completion
-                # window of slack in `wall`, the longest a single request can hold a
-                # slice open. Reaching this wall therefore means a slice never returned
-                # at all — a model that stopped answering, which no between-slice check
-                # can see — and it is cancelled whole. Both exits raise the same message
-                # because the founder reads one failure, "ran out of time"; `__cause__`
-                # tells them apart, empty for the run's own stop and this `TimeoutError`
-                # for the wall. Pinned by that pair in `test_scoped_curation.py`.
                 return await asyncio.wait_for(
                     scoped_curation_service.run(agent, workspace, run_stamp, read_position),
-                    timeout=wall,
+                    timeout=settings.AGENT_TURN_TIMEOUT_SECONDS,
                 )
             except TimeoutError as exc:
                 raise RuntimeError("Scoped curation exceeded its run time limit") from exc

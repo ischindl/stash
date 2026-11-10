@@ -10,7 +10,7 @@ import type { EndUser } from "@/lib/types";
 export default function UserTable({ users, onChanged }: { users: EndUser[]; onChanged: () => void }) {
   if (users.length === 0) {
     return (
-      <p className="rounded border border-dashed border-border px-6 py-10 text-center text-[15px] leading-7 text-muted-foreground">
+      <p className="rounded border border-border px-6 py-10 text-center text-[15px] leading-7 text-muted-foreground">
         No users yet. Users appear automatically the first time your backend uploads a session
         with a new <Code>user_id</Code>.
       </p>
@@ -29,10 +29,10 @@ export default function UserTable({ users, onChanged }: { users: EndUser[]; onCh
               {user.name}
             </span>
             <span className="mt-0.5 block truncate font-mono text-[12px] text-muted-foreground">
-              {user.external_id} · {user.session_count} session
+              {user.external_id}, {user.session_count} session
               {user.session_count === 1 ? "" : "s"}
               {user.last_session_at &&
-                ` · last ${new Date(user.last_session_at).toLocaleDateString()}`}
+                `, last ${new Date(user.last_session_at).toLocaleDateString()}`}
             </span>
           </span>
           <WikiToggle user={user} onChanged={onChanged} />

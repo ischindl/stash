@@ -30,7 +30,6 @@ from backend.services import (
     sprite_agent_service,
 )
 from backend.services.curation_service import NEVER, Position, position_of
-from backend.tasks import agent_schedules
 
 from .test_curator import _auth, _push_events, _register
 from .test_developer_platform import _developer
@@ -978,10 +977,9 @@ async def test_a_project_curator_in_an_activated_workspace_keeps_its_own_lane(
 
     assert await scoped_curation_service.workspace_for_agent(agent) is None
 
-    # Its gate is the pinned box, not the backend's key. The resolver is spyred
-    # so no turn executes and the selection the run actually passed is recorded;
-    # replaying it through the REAL resolver puts the assertion on RunAuth bytes
-    # rather than on kwargs.
+    # Its gate is any runnable credential; which box the run then asks is the
+    # row's pin, applied where the run resolves its credential — so the pin is
+    # asserted on the turn the scheduler actually builds, not on the preflight.
     calls: list[dict] = []
     real = agent_auth.resolve
 
@@ -995,15 +993,32 @@ async def test_a_project_curator_in_an_activated_workspace_keeps_its_own_lane(
         )
 
     monkeypatch.setattr(agent_auth, "resolve", spy)
-    await agent_schedules._require_run_auth(scope, agent)
-    assert calls == [{"prefer_provider": "local", "model_id": "qwen", "credential_id": box}]
+    await scoped_curation_service.require_run_auth(agent)
+    assert calls == [{"prefer_provider": "local", "model_id": None, "credential_id": None}]
 
     monkeypatch.setattr(agent_auth, "resolve", real)
     auth = await agent_auth.resolve(scope, **calls[0])
     assert auth.endpoint == BOX  # the founder's own box, not api.anthropic.com
     assert auth.model == "qwen"
 
-    # And the turn it builds is the project prompt, not the scoped one.
+    # And the turn it builds carries the row's pin, so the run cannot drift onto a
+    # provider the row never chose.
+    built: dict = {}
+
+    async def capture_run_chat(user_id, owner_name, scope_user_id, session_id, message, **kwargs):
+        built.update(kwargs)
+        return "CURATED"
+
+    monkeypatch.setattr(sprite_agent_service, "run_chat", capture_run_chat)
+    outcome = await sprite_agent_service.run_scheduled(agent, "202601020304", position_of(agent))
+    assert outcome == "CURATED"
+    assert (built["model_provider"], built["model_id"], built["credential_id"]) == (
+        "local",
+        "qwen",
+        box,
+    ), "the lane runs on the endpoint and model its row names"
+
+    # And the prompt the run sends is the project prompt, not the scoped one.
     _, prompt = await sprite_agent_service.build_scheduled_turn(agent, "2026-01-02T03-04")
     assert "stash changes" in prompt
     assert f"--folder {rozvrh}" in prompt
@@ -1043,7 +1058,7 @@ async def test_the_two_scoped_lanes_stay_scoped_and_gated_on_a_provider(
         with pytest.raises(
             agent_auth.ProviderNotConfigured, match="Scoped curation requires the backend"
         ):
-            await agent_schedules._require_run_auth(scope, lane)
+            await scoped_curation_service.require_run_auth(lane)
 
     runs: list[tuple[str, str, str]] = []
 

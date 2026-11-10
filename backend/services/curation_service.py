@@ -937,12 +937,15 @@ async def complete_through(
     until: datetime,
     wiki: str,
     folder_id: UUID | None = None,
+    *,
+    max_event_chars: int | None = None,
 ) -> Position:
     """Where the curator's watermark may stand after one successful run.
 
-    The feed is complete through `until` unless it overflowed _MAX_EVENTS, in which
-    case it is complete through exactly the last event that fit: `Position(T_k,
-    id_k)`, standing INSIDE the saturated instant rather than a microsecond before
+    The feed is complete through `until` unless it overflowed _MAX_EVENTS or the
+    optional event-text budget, in which case it is complete through exactly the
+    last event that fit: `Position(T_k, id_k)`, standing INSIDE the saturated
+    instant rather than a microsecond before
     it. The old `-1µs` step is what made a tie a plateau — it landed behind the
     whole tie, so every run re-read the same first budget and the backlog never
     drained (STAS-235). A result is therefore always strictly ahead of the position
@@ -957,6 +960,16 @@ async def complete_through(
     events, has_more = await _feed_events(
         owner_user_id, position, until, _MAX_EVENTS, wiki, folder_id
     )
+    if max_event_chars is not None and events:
+        characters = 0
+        for kept, event in enumerate(events):
+            characters += len(event["content"] or "")
+            # Stop before the first group that overflows the budget. A timestamp
+            # group is never split, and an oversized first group never stalls the
+            # run forever, so the next pass receives the remainder (#1272).
+            if characters > max_event_chars and event["created_at"] > events[0]["created_at"]:
+                last = events[kept - 1]
+                return Position(at=last["created_at"], event_id=last["event_id"])
     if not has_more:
         return Position(at=until)
     return Position(at=events[-1]["created_at"], event_id=events[-1]["event_id"])

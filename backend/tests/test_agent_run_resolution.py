@@ -570,16 +570,18 @@ async def test_the_resolver_flips_a_started_lane_once_and_names_its_cause(pool):
 # --- the escape no in-process handler can catch (Step 5's reaper) ---
 
 
-async def test_reaper_resolves_only_lanes_past_the_run_lock_ttl(pool, monkeypatch, lane_locks):
+async def test_reaper_resolves_only_lanes_past_the_strike_age(pool, monkeypatch, lane_locks):
     fresh = await _lane()
     stranded = await _lane()
     finished = await _lane()
 
     await _stamp_run(fresh["id"], "started", age_seconds=60)
     await _stamp_run(
-        stranded["id"], "started", age_seconds=agent_schedules.AGENT_RUN_LOCK_TTL + 600
+        stranded["id"], "started", age_seconds=agent_schedules.REAP_STRIKE_AGE_SECONDS + 600
     )
-    await _stamp_run(finished["id"], "ran", age_seconds=agent_schedules.AGENT_RUN_LOCK_TTL + 600)
+    await _stamp_run(
+        finished["id"], "ran", age_seconds=agent_schedules.REAP_STRIKE_AGE_SECONDS + 600
+    )
     await lane_locks.set(f"agent-run:{stranded['id']}", "token-of-a-dead-worker", ex=1)
 
     alerts = _capture_alerts(monkeypatch)
@@ -650,7 +652,7 @@ async def test_reaper_resolves_a_lane_whose_owner_parked_it_mid_run(pool, monkey
     one lane it will never free."""
     stranded = await _lane()
     await _stamp_run(
-        stranded["id"], "started", age_seconds=agent_schedules.AGENT_RUN_LOCK_TTL + 600
+        stranded["id"], "started", age_seconds=agent_schedules.REAP_STRIKE_AGE_SECONDS + 600
     )
     await get_pool().execute("UPDATE agents SET run_mode = 'manual' WHERE id = $1", stranded["id"])
     await lane_locks.set(f"agent-run:{stranded['id']}", "token-of-a-dead-worker", ex=1)
@@ -674,7 +676,7 @@ async def test_reaper_resolves_a_lane_without_alerting_when_the_mode_is_disabled
     """
     stranded = await _lane()
     await _stamp_run(
-        stranded["id"], "started", age_seconds=agent_schedules.AGENT_RUN_LOCK_TTL + 600
+        stranded["id"], "started", age_seconds=agent_schedules.REAP_STRIKE_AGE_SECONDS + 600
     )
     await lane_locks.set(f"agent-run:{stranded['id']}", "token-of-a-dead-worker", ex=1)
     _disable_alerts(monkeypatch)
@@ -704,7 +706,7 @@ async def test_reaper_reports_a_configured_delivery_failure_after_resolving_the_
     alert, so the sweep frees the lane even when the page about it fails."""
     stranded = await _lane()
     await _stamp_run(
-        stranded["id"], "started", age_seconds=agent_schedules.AGENT_RUN_LOCK_TTL + 600
+        stranded["id"], "started", age_seconds=agent_schedules.REAP_STRIKE_AGE_SECONDS + 600
     )
     await lane_locks.set(f"agent-run:{stranded['id']}", "token-of-a-dead-worker", ex=1)
     _configure_alerts(monkeypatch)
@@ -723,22 +725,26 @@ async def test_reaper_reports_a_configured_delivery_failure_after_resolving_the_
     assert f"agent-run:{stranded['id']}" not in lane_locks.data
 
 
-def test_reaper_runs_on_beat_without_harness_limits():
+def test_reaper_runs_on_beat_as_a_sweep():
     # Nothing catches these escapes in-process, so the sweep has to be periodic:
-    # a beat entry is the only thing standing between a killed worker and a
-    # lane that reads as "running" forever.
+    # a beat entry is the only thing standing between a killed worker and a lane
+    # that reads as "running" forever.
     entries = celery.conf.beat_schedule
-    assert "reap-stranded-agent-runs" in entries
-    # It is a sweep, not a harness run: it must keep the global 1500/1800 ceiling
-    # so it can never hold a worker slot for 95 minutes.
-    assert agent_schedules.reap_stranded_runs.soft_time_limit is None
-    assert agent_schedules.reap_stranded_runs.time_limit is None
+    assert entries["reap-stranded-agent-runs"]["task"] == (
+        "backend.tasks.agent_schedules.reap_stranded_runs"
+    )
+    # It is a sweep, not a harness run: it declares no ceiling of its own, so it
+    # inherits the global one and can never hold a worker slot past a real run.
+    assert agent_schedules.reap_stranded_runs.soft_time_limit == celery.conf.task_soft_time_limit
+    assert agent_schedules.reap_stranded_runs.time_limit == celery.conf.task_time_limit
 
 
-def test_reaper_waits_out_the_lock_ttl_it_replaces():
-    # Until the lock's TTL elapses, `_run_in_flight` is right to treat the lane
-    # as busy; reaping any earlier would fail a run that is genuinely executing.
-    assert agent_schedules.REAP_STRIKE_AGE_SECONDS == agent_schedules.AGENT_RUN_LOCK_TTL
+def test_reaper_waits_out_the_ceiling_a_live_run_may_still_be_under():
+    # Until the longest legal task runtime elapses, a `started` lane may still
+    # have a live worker behind it; reaping any earlier would fail a run that is
+    # genuinely executing — the personal-wiki lane has no in-process wall, so the
+    # worker's own hard ceiling, not one lane's turn timeout, is the bound.
+    assert agent_schedules.REAP_STRIKE_AGE_SECONDS == celery.conf.task_time_limit
 
 
 # --- the evidence a bad turn loses (Step 3) ---

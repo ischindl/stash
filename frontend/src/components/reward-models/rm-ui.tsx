@@ -5,6 +5,9 @@ import { Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { RmJobStatus } from "@/lib/types";
 
+/** Compact actions use the same dimensions as the trace filter controls. */
+export const traceActionClass = "h-[26px] gap-1.5 rounded-[4px] border-border bg-background px-2 text-[11px] font-normal shadow-none [&_svg]:size-3";
+
 /** Page frame shared by the list pages: title, description, and an actions slot. */
 export function RmPage({
   title,
@@ -60,7 +63,7 @@ export function isActiveJob(status: RmJobStatus): boolean {
 
 export function EmptyState({ title, children }: { title: string; children?: ReactNode }) {
   return (
-    <div className="rounded-lg border border-dashed border-border bg-surface/40 px-6 py-10 text-center">
+    <div className="rounded-lg border border-border bg-surface/40 px-6 py-10 text-center">
       <p className="m-0 text-[13.5px] font-medium text-foreground">{title}</p>
       {children && <div className="mt-1.5 text-[12.5px] text-muted-foreground">{children}</div>}
     </div>

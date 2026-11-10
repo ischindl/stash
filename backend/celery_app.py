@@ -43,6 +43,11 @@ celery = Celery(
         "backend.tasks.reward_models",
         "backend.tasks.workbench",
         "backend.tasks.optimization",
+        "backend.tasks.intuitions",
+        "backend.tasks.behaviors",
+        "backend.tasks.agent_judge",
+        "backend.tasks.evals",
+        "backend.tasks.test_sets",
         "backend.integrations.google.exporters.slides",
         "backend.exports.pdf",
         "backend.exports.pptx",
@@ -78,6 +83,13 @@ celery.conf.update(
         "backend.tasks.reward_models.collect_examples": {"queue": "reward"},
         "backend.tasks.reward_models.train_evaluator": {"queue": "reward"},
         "backend.tasks.optimization.score_run": {"queue": "reward"},
+        "backend.tasks.intuitions.improve": {"queue": "heavy"},
+        "backend.tasks.intuitions.refine": {"queue": "heavy"},
+        "backend.tasks.behaviors.scan_models": {"queue": "heavy"},
+        "backend.tasks.behaviors.triage": {"queue": "heavy"},
+        "backend.tasks.agent_judge.investigate": {"queue": "heavy"},
+        "backend.tasks.evals.build_eval": {"queue": "heavy"},
+        "backend.tasks.test_sets.score_run": {"queue": "heavy"},
     },
     task_acks_late=True,
     task_reject_on_worker_lost=True,
@@ -86,17 +98,16 @@ celery.conf.update(
     # hides an in-flight message from every other worker for just
     # `visibility_timeout` — its 3600 s default. Once that window lapses the
     # broker re-queues the message of a task that is still alive, and the copy
-    # lands on a second worker mid-run. Harness agent runs (PI curation) may
-    # legally take HARNESS_TIME_LIMIT = 5700 s (`backend/tasks/agent_schedules.py`
-    # — kept as a literal here because importing that module into the Celery app
-    # would invert the import direction and cycle; the pin test
-    # `tests/test_celery_visibility_timeout.py` enforces the relationship), so the
-    # window has to outlive them. Accepted trade-off: a task whose worker died now
-    # requeues after 2 h instead of 1 h. That is deliberate — these are paid,
-    # non-idempotent harness turns, so a duplicate run is worse than a slow retry,
-    # and the contended-dispatch guard in `agent_schedules` is the safety net
-    # whichever way the broker delivers. Founder fingerprint: schedule 9f0cab42,
-    # 2026-10-01 — a requeue at the 60-minute mark landed inside a 5400 s run.
+    # lands on a second worker mid-run. The window therefore has to outlive the
+    # longest run a task may legally take, which is the global hard ceiling
+    # `task_time_limit` below: no task overrides it per-task any more. The pin
+    # test `tests/test_celery_visibility_timeout.py` enforces the relationship.
+    # Accepted trade-off: a task whose worker died now requeues after 2 h instead
+    # of 1 h. That is deliberate — these are paid, non-idempotent harness turns,
+    # so a duplicate run is worse than a slow retry, and the contended-dispatch
+    # guard in `agent_schedules` is the safety net whichever way the broker
+    # delivers. Founder fingerprint: schedule 9f0cab42, 2026-10-01 — a requeue at
+    # the 60-minute mark landed inside a 5400 s run.
     broker_transport_options={"visibility_timeout": 7200},
     # CPython never returns freed heap to the OS, so a child's RSS only
     # ratchets upward. Recycle any child above ~800MB after it finishes its
@@ -123,6 +134,15 @@ celery.conf.update(
         "shared-evaluator-reconcile": {
             "task": "backend.tasks.reward_models.reconcile",
             "schedule": 30.0,
+        },
+        "behaviors-reconcile": {
+            "task": "backend.tasks.behaviors.reconcile",
+            "schedule": 30.0,
+        },
+        # Restarts eval builds and channel reads a lost task left stuck.
+        "evals-sweep": {
+            "task": "backend.tasks.evals.sweep",
+            "schedule": 60.0,
         },
         "embedding-reconcile": {
             "task": "backend.tasks.embeddings.reconcile",
@@ -178,16 +198,6 @@ celery.conf.update(
             "task": "backend.tasks.agent_schedules.run_due",
             "schedule": 60.0,
         },
-        "agent-schedules-drain-curator-backlog": {
-            "task": "backend.tasks.agent_schedules.drain_curator_backlog",
-            # A curator lane with more material than one run fits is still behind
-            # after a successful run, so waiting for its nightly cron makes the
-            # backlog a multi-day queue. Five minutes is the cheapest interval
-            # that keeps a run's two lanes of capacity busy without overlapping
-            # dispatches: a run holds its agent lock for its whole duration, so a
-            # lane already running is stepped past by the next tick.
-            "schedule": 300.0,
-        },
         "reap-stranded-agent-runs": {
             "task": "backend.tasks.agent_schedules.reap_stranded_runs",
             # The backstop for a run whose worker died without resolving its lane
@@ -195,8 +205,8 @@ celery.conf.update(
             # run, so only a sweep can free the lane. Five minutes on the default
             # queue is the latency floor between a kill and a dispatchable lane —
             # the sweep is one indexed UPDATE, so the cadence costs nothing, and
-            # it must not be rarer than the strike age it enforces or every
-            # stranded lane waits that much longer to be freed.
+            # a slower one would mean every stranded lane waits that much longer
+            # to be freed.
             "schedule": 300.0,
         },
         "agent-schedules-alert-stale-curators": {

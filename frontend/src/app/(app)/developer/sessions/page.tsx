@@ -92,7 +92,7 @@ function Sessions() {
       ) : sessions === null ? (
         <p className="mt-4 text-[15px] text-muted-foreground">Loading…</p>
       ) : sessions.length === 0 ? (
-        <p className="mt-4 rounded border border-dashed border-border px-6 py-10 text-center text-[15px] leading-7 text-muted-foreground">
+        <p className="mt-4 rounded border border-border px-6 py-10 text-center text-[15px] leading-7 text-muted-foreground">
           No sessions yet. They appear as soon as your backend uploads one.
         </p>
       ) : (

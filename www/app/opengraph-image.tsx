@@ -1,6 +1,6 @@
 import { ImageResponse } from "next/og";
 
-export const alt = "Stash — agents that learn from the real world";
+export const alt = "Stash — verifiers for the next era of AI scaling";
 export const size = { width: 1200, height: 630 };
 export const contentType = "image/png";
 
@@ -17,7 +17,7 @@ export default function Image() {
           flexDirection: "column",
           justifyContent: "space-between",
           background: "#F7F4EE",
-                    padding: "72px 80px",
+          padding: "72px 80px",
         }}
       >
         <div
@@ -30,7 +30,6 @@ export default function Image() {
             fontWeight: 600,
           }}
         >
-          <div style={{ width: 26, height: 26, borderRadius: 13, background: "#FF5A36" }} />
           Stash
         </div>
 
@@ -43,7 +42,7 @@ export default function Image() {
               fontFamily: "monospace",
             }}
           >
-            memory infrastructure for agents
+            verifiers for non-deterministic domains
           </div>
           <div
             style={{
@@ -56,13 +55,13 @@ export default function Image() {
               color: "#16130F",
             }}
           >
-            Agents that learn from the&nbsp;
-            <span style={{ color: "#FF5A36" }}>real world.</span>
+            Verifiers for the next&nbsp;
+            <span style={{ color: "#FF5A36" }}>era of AI scaling.</span>
           </div>
         </div>
 
         <div style={{ fontSize: 26, color: "#7C7469" }}>
-          Open source · MIT licensed · Self-hostable
+          Builders and researchers · San Francisco
         </div>
       </div>
     ),

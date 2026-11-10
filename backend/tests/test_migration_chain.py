@@ -463,3 +463,21 @@ def test_every_booked_revision_resolves_as_an_ancestor_of_head():
         if revision not in ancestors:
             unresolvable.append(f"{revision} is booked but is not an ancestor of head {head}")
     assert not unresolvable, "\n".join(unresolvable)
+
+
+def test_eval_channels_follows_deployed_shared_wiki_reviews():
+    """Production applied the privacy migration as 0254 before evals merged.
+
+    Preserve that identity so upgrading the existing database creates the eval
+    tables instead of skipping them or replaying the privacy schema.
+    """
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+
+    cfg = Config()
+    cfg.set_main_option("script_location", str(VERSIONS.parent))
+    scripts = ScriptDirectory.from_config(cfg)
+    deployed = scripts.get_revision("0254")
+    assert Path(deployed.path).name == "0254_shared_wiki_reviews.py"
+    pending = list(scripts.iterate_revisions("0255", "0254"))
+    assert [Path(revision.path).name for revision in pending] == ["0255_eval_channels.py"]

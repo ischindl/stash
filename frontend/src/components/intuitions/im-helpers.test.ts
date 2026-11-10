@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { RubricQuestion } from "@/lib/intuition-api";
 import {
   describeFeature,
+  readableText,
   detectItemKeys,
   groupFeatures,
   invalidatedQuestions,
@@ -21,8 +22,8 @@ const rubric: RubricQuestion[] = [
 describe("describeFeature", () => {
   it("maps yes/no, choice, and score features to their question and option", () => {
     expect(describeFeature("answers_question", rubric)).toMatchObject({ questionId: "answers_question", option: null, optionLabel: "yes" });
-    expect(describeFeature("tone=warm", rubric)).toMatchObject({ questionId: "tone", option: "warm", optionLabel: "warm · Friendly" });
-    expect(describeFeature("length=2", rubric)).toMatchObject({ questionId: "length", option: "2", optionLabel: "2 · Too long" });
+    expect(describeFeature("tone=warm", rubric)).toMatchObject({ questionId: "tone", option: "warm", optionLabel: "warm, Friendly" });
+    expect(describeFeature("length=2", rubric)).toMatchObject({ questionId: "length", option: "2", optionLabel: "2, Too long" });
   });
 
   it("keeps unknown features readable", () => {
@@ -118,5 +119,19 @@ describe("metrics helpers", () => {
     expect(pYes({ true: 0.8, false: 0.2 })).toBe(0.8);
     expect(pYes({ false: 0.25 })).toBe(0.75);
     expect(pYes(undefined)).toBeNull();
+  });
+});
+
+describe("readableText", () => {
+  it("reads trace steps and messages as one line per turn", () => {
+    expect(readableText([
+      { role: "user", content: "Where is order 7755?" },
+      { role: "assistant", content: "", tool_name: "get_order", tool_input: { order_id: "7755" } },
+      { role: "tool", content: "{\"status\":\"shipped\"}" },
+    ])).toBe("user: Where is order 7755?\nassistant → get_order({\"order_id\":\"7755\"})\ntool: {\"status\":\"shipped\"}");
+  });
+  it("indents other structures and passes text through", () => {
+    expect(readableText({ a: 1 })).toBe("{\n  \"a\": 1\n}");
+    expect(readableText("hi")).toBe("hi");
   });
 });
