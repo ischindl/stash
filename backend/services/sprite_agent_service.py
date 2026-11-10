@@ -37,7 +37,7 @@ from . import (
     sprite_service,
 )
 from . import harness as harness_mod
-from .curation_service import CURATOR_SESSION_ID_PREFIX
+from .curation_service import CURATOR_SESSION_ID_PREFIX, Position
 
 logger = logging.getLogger(__name__)
 
@@ -676,7 +676,12 @@ _WORKSPACE_UNSET = object()
 
 
 async def run_scheduled(
-    agent: dict, run_stamp: str, *, workspace=_WORKSPACE_UNSET, scoped_lock_held: bool = False
+    agent: dict,
+    run_stamp: str,
+    read_position: Position,
+    *,
+    workspace=_WORKSPACE_UNSET,
+    scoped_lock_held: bool = False,
 ) -> str:
     """Run a scheduled agent headless — one turn into a fresh per-run session —
     and return the result text.
@@ -702,7 +707,9 @@ async def run_scheduled(
     """
     owner_user_id = UUID(str(agent["user_id"]))
     try:
-        return await _run_scheduled_turn(agent, run_stamp, workspace, scoped_lock_held)
+        return await _run_scheduled_turn(
+            agent, run_stamp, read_position, workspace, scoped_lock_held
+        )
     finally:
         await _close_run_sessions(
             owner_user_id, agent["name"], scheduled_session_ids(agent, run_stamp)
@@ -712,6 +719,7 @@ async def run_scheduled(
 async def _run_scheduled_turn(
     agent: dict,
     run_stamp: str,
+    read_position: Position,
     workspace=_WORKSPACE_UNSET,
     scoped_lock_held: bool = False,
 ) -> str:
@@ -732,7 +740,7 @@ async def _run_scheduled_turn(
         ):
             try:
                 return await asyncio.wait_for(
-                    scoped_curation_service.run(agent, workspace, run_stamp),
+                    scoped_curation_service.run(agent, workspace, run_stamp, read_position),
                     timeout=settings.AGENT_TURN_TIMEOUT_SECONDS,
                 )
             except TimeoutError as exc:

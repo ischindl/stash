@@ -24,6 +24,7 @@ from ..config import settings
 from ..database import get_pool
 from . import (
     agent_auth,
+    curation_service,
     files_tree_service,
     llm,
     memory_service,
@@ -137,7 +138,25 @@ def require_configured() -> None:
 
 
 async def workspace_for_agent(agent: dict) -> dict | None:
+    """The developer workspace whose scoped curation this curator must run under.
+
+    The answer is the curator's lane, not its owner's résumé: the External-wiki
+    curator and a workspace's own Memory curator are scoped because their inputs
+    cross people, and no credential the account connects can isolate them. A
+    project curator is scoped by neither — it reads one folder's feed and writes
+    one wiki folder, so it runs on the credential its row names even when the
+    workspace's scope account owns it. Activation gives that account an External
+    wiki, so deciding by owner would sweep the project lanes into the path their
+    rows can never run on: a scoped run has no credential of its own to name, so
+    it takes the provider the backend's configuration names.
+    """
     if not agent["is_curator"]:
+        return None
+    if agent.get("curator_folder_id") is not None:
+        # A folder-scoped curator has no External wiki to fold into and no customer
+        # inputs to isolate: its work set is its folder's feed and its folder's
+        # pages. Upstream's shape has no folder lane to exclude, so the guard is
+        # ours and reads the column ours added.
         return None
     row = await get_pool().fetchrow(
         "SELECT * FROM workspaces WHERE scope_user_id=$1 AND external_wiki_folder_id IS NOT NULL",
@@ -709,8 +728,18 @@ async def run_scope(scope: CurationScope, instructions: str | None) -> str:
     raise RuntimeError("Curator exhausted its tool turns before completing")
 
 
-async def run(agent: dict, workspace: dict, run_stamp: str) -> str:
-    """Each private run and the shared run start with completely fresh model state."""
+async def run(
+    agent: dict,
+    workspace: dict,
+    run_stamp: str,
+    read_position: curation_service.Position,
+) -> str:
+    """Each private run and the shared run start with completely fresh model state.
+
+    `read_position` is the pair the dispatcher loaded, not whatever the row holds
+    now: the completion below fences on it, so a mid-run rewind or an overlapping
+    run makes this one refuse loudly instead of stamping over the other.
+    """
     require_configured()
     owner = workspace["scope_user_id"]
     since = agent["curated_through"]
@@ -793,7 +822,7 @@ async def run(agent: dict, workspace: dict, run_stamp: str) -> str:
         await scopes[-1].check(conn)
         from . import agent_service, curation_service
 
-        read = curation_service.position_of(agent)
+        read = read_position
         advanced = await conn.execute(
             "UPDATE agents SET curated_through=$2, curated_through_event_id=NULL, "
             "curation_cursor=$3 "

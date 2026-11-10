@@ -358,12 +358,14 @@ async def _runnable_curator(scope_user_id: UUID, user_id: UUID) -> dict:
     await _require_active_workspace(scope_user_id)
     if not await permission_service.is_workspace_member(scope_user_id, user_id):
         raise HTTPException(status_code=403, detail="Not a workspace member")
-    # The row comes first because its pins are part of the answer: a keyless
-    # stack curates on the endpoint its row names, and a request that gated
-    # before reading the row could only ever ask the backend's key.
+    # Scoped curation runs on the provider the backend's configuration names, so
+    # the gate is that configuration and nothing per-row: a run that silently
+    # changed providers would also silently change whose servers hold the
+    # customers' transcripts. The row is still read first because the caller
+    # dispatches on its id.
     curator = await agent_service.get_or_create_curator(scope_user_id, wiki="external")
     try:
-        await scoped_curation_service.require_route(scope_user_id, curator)
+        scoped_curation_service.require_configured()
     except agent_auth.ProviderNotConfigured as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     return curator

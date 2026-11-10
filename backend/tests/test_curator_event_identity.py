@@ -16,7 +16,7 @@ from httpx import AsyncClient
 from backend.services import curation_service
 from backend.services.curation_service import Position
 
-from .test_curator import _auth, _file_session_into_folder, _push_events, _register
+from .test_curator import _auth, _push_events, _register
 from .test_curator_feed_scoping import (
     BASE,
     EXTERNAL,
@@ -46,6 +46,38 @@ def _turn(
         "session_id": session_id,
         "created_at": at.isoformat(),
     }
+
+
+async def _file_session_into_folder(
+    client: AsyncClient, key: str, uid: UUID, pool, session_id: str
+) -> str:
+    """Create the "Acme Corp" folder, push one event for `session_id`, and
+    file that session into the folder through the production assign route.
+    Returns the folder id."""
+    r = await client.post(
+        "/api/v1/me/session-folders", json={"name": "Acme Corp"}, headers=_auth(key)
+    )
+    assert r.status_code == 200
+    folder = r.json()
+
+    await _push_events(
+        client,
+        key,
+        [_turn(session_id, "filing the session", BASE, event_type="user_message")],
+    )
+    row_id = await pool.fetchval(
+        "SELECT id FROM sessions WHERE owner_user_id = $1 AND session_id = $2",
+        uid,
+        session_id,
+    )
+    r = await client.post(
+        "/api/v1/me/session-folders/assign",
+        json={"session_row_ids": [str(row_id)], "folder_id": str(folder["id"])},
+        headers=_auth(key),
+    )
+    assert r.status_code == 200
+    assert r.json() == {"ok": True, "moved": 1}
+    return folder["id"]
 
 
 async def _row_count(pool, owner_user_id: UUID) -> int:

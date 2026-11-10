@@ -463,6 +463,8 @@ def test_every_booked_revision_resolves_as_an_ancestor_of_head():
         if revision not in ancestors:
             unresolvable.append(f"{revision} is booked but is not an ancestor of head {head}")
     assert not unresolvable, "\n".join(unresolvable)
+
+
 def test_eval_channels_follows_deployed_shared_wiki_reviews():
     """Production applied the privacy migration as 0254 before evals merged.
 

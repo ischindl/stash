@@ -98,17 +98,16 @@ celery.conf.update(
     # hides an in-flight message from every other worker for just
     # `visibility_timeout` — its 3600 s default. Once that window lapses the
     # broker re-queues the message of a task that is still alive, and the copy
-    # lands on a second worker mid-run. Harness agent runs (PI curation) may
-    # legally take HARNESS_TIME_LIMIT = 5700 s (`backend/tasks/agent_schedules.py`
-    # — kept as a literal here because importing that module into the Celery app
-    # would invert the import direction and cycle; the pin test
-    # `tests/test_celery_visibility_timeout.py` enforces the relationship), so the
-    # window has to outlive them. Accepted trade-off: a task whose worker died now
-    # requeues after 2 h instead of 1 h. That is deliberate — these are paid,
-    # non-idempotent harness turns, so a duplicate run is worse than a slow retry,
-    # and the contended-dispatch guard in `agent_schedules` is the safety net
-    # whichever way the broker delivers. Founder fingerprint: schedule 9f0cab42,
-    # 2026-10-01 — a requeue at the 60-minute mark landed inside a 5400 s run.
+    # lands on a second worker mid-run. The window therefore has to outlive the
+    # longest run a task may legally take, which is the global hard ceiling
+    # `task_time_limit` below: no task overrides it per-task any more. The pin
+    # test `tests/test_celery_visibility_timeout.py` enforces the relationship.
+    # Accepted trade-off: a task whose worker died now requeues after 2 h instead
+    # of 1 h. That is deliberate — these are paid, non-idempotent harness turns,
+    # so a duplicate run is worse than a slow retry, and the contended-dispatch
+    # guard in `agent_schedules` is the safety net whichever way the broker
+    # delivers. Founder fingerprint: schedule 9f0cab42, 2026-10-01 — a requeue at
+    # the 60-minute mark landed inside a 5400 s run.
     broker_transport_options={"visibility_timeout": 7200},
     # CPython never returns freed heap to the OS, so a child's RSS only
     # ratchets upward. Recycle any child above ~800MB after it finishes its
@@ -198,6 +197,17 @@ celery.conf.update(
         "agent-schedules-run-due": {
             "task": "backend.tasks.agent_schedules.run_due",
             "schedule": 60.0,
+        },
+        "reap-stranded-agent-runs": {
+            "task": "backend.tasks.agent_schedules.reap_stranded_runs",
+            # The backstop for a run whose worker died without resolving its lane
+            # (hard timeout, OOM recycle, SIGKILL): nothing in that process can
+            # run, so only a sweep can free the lane. Five minutes on the default
+            # queue is the latency floor between a kill and a dispatchable lane —
+            # the sweep is one indexed UPDATE, so the cadence costs nothing, and
+            # a slower one would mean every stranded lane waits that much longer
+            # to be freed.
+            "schedule": 300.0,
         },
         "agent-schedules-alert-stale-curators": {
             "task": "backend.tasks.agent_schedules.alert_stale_curators",

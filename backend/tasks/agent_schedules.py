@@ -11,8 +11,9 @@ minutes and must not hold a default-queue slot. The agent's own turn lock
 from __future__ import annotations
 
 import logging
-from contextlib import nullcontext
+from collections.abc import Coroutine
 from datetime import UTC, datetime, timedelta
+from typing import Any
 from uuid import UUID
 
 from croniter import croniter
@@ -28,6 +29,15 @@ logger = logging.getLogger(__name__)
 # per-chain bound, executions share seven automatic continuations per 24h.
 CURATOR_CATCHUP_PASSES = 8
 
+# A lane whose `started` is older than the longest run a task may legally take has
+# no live worker behind it. Neither rescuer can catch a child killed by the hard
+# time limit, the memory-recycle, or a SIGKILL, so age is the only evidence left,
+# and it has to be measured against the ceiling a live run may still be under —
+# not against one lane's own wall: the developer-platform lane is bounded by its
+# turn timeout, the personal-wiki lane by this worker ceiling, and reaping on the
+# smaller of the two would fail a run that is genuinely executing.
+REAP_STRIKE_AGE_SECONDS = celery.conf.task_time_limit
+
 
 def _is_due(cron: str, last_run: datetime | None, now: datetime) -> bool:
     """True if a cron tick falls in (last_run, now]. Never fires on the very
@@ -41,6 +51,82 @@ def _is_due(cron: str, last_run: datetime | None, now: datetime) -> bool:
     return nxt <= now
 
 
+def _run_guarded(agent_uuid: UUID, metered: bool, run: Coroutine[Any, Any, None]) -> None:
+    """Run one of the two harness-run bodies, resolving the lane if the body
+    escapes it.
+
+    `mark_run` promises that every path after `started` resolves the outcome, and
+    the coroutine keeps that promise with its `except` and `finally`. Neither of
+    them can catch this class of exit: Celery's prefork pool raises
+    `SoftTimeLimitExceeded` from a SIGALRM handler, so the raise lands in the
+    loop machinery under `run_async` — outside every frame of the coroutine.
+    Measured on the founder stack on 2026-09-28: the RunFusion lane was stamped
+    `started` at 12:51:57Z, its soft limit fired at 14:21:57Z, and a dispatch at
+    14:03:19Z still deferred to it as a "curator run in flight" — the row stayed
+    `started` and the lock stayed held until its TTL.
+
+    So the guard sits outside `run_async`, and catches `BaseException` rather
+    than `Exception`: a deploy's `CancelledError` leaves through the same hole,
+    and the coroutine's `except Exception` cannot see it either. The exception is
+    re-raised untouched — what Celery logs, retries, and pages on is the worker's
+    own report of why the task died, and rewriting that would hide the timeout
+    that is the actual finding.
+
+    The escaped coroutine is not dead, only unscheduled: `run_until_complete`
+    returns with its task still pending, and the next task this child runs
+    resumes it — measured here, 2026-09-28: after the raise the task was still in
+    `asyncio.all_tasks(loop)` and completed ("body-completed", its `finally` run)
+    during the following unrelated `run_until_complete`. Two consequences are by
+    design rather than accidents. A resumed run that really does finish may stamp
+    `ran` over this guard's `failed`, which is the truth arriving late — the CAS
+    only protects the other direction, a lane already resolved by the run itself.
+    And the resumed run still holds its lane lock token: `_TurnLock.release`
+    compares tokens, so its late release cannot delete a key the guard already
+    dropped for the next dispatch.
+    """
+    try:
+        run_async(run)
+    except BaseException as exc:
+        _resolve_escaped_run(agent_uuid, exc, metered=metered)
+        raise
+
+
+def _resolve_escaped_run(agent_uuid: UUID, exc: BaseException, *, metered: bool) -> None:
+    """Record and unlock a run that is never going to resolve its own lane.
+
+    The write is the shared compare-and-set (`agent_service.resolve_started_runs`)
+    because the lane may already have resolved itself — a run that recorded `ran`
+    before the raise reached the loop, or a pre-STAS-317 row a contended dispatch
+    had already stamped as its skip — and neither may be stamped over as a failure.
+
+    Nothing here outranks the escaped exception. If the write fails, the lane is
+    left `started` for the stranded-run sweep, which exists for exactly that, and
+    the original exception still propagates. No alert goes out from here either:
+    the propagated exception is the worker's loud report, `alert_stale_curators`
+    pages if the outcome persists, and `send_alert` raising for missing Slack
+    credentials must not cost the lane its resolution.
+    """
+    from ..services import agent_service, sprite_agent_service
+
+    cause = f"agent run aborted before it resolved: {type(exc).__name__}: {exc}"
+    try:
+        flipped = run_async(
+            agent_service.resolve_started_runs([agent_uuid], cause, metered=metered)
+        )
+    except BaseException:
+        logger.exception(
+            "escaped agent run: could not resolve lane %s — the stranded-run sweep owns it",
+            agent_uuid,
+        )
+        return
+    try:
+        run_async(sprite_agent_service.drop_agent_run_lock(agent_uuid))
+    except BaseException:
+        logger.exception("escaped agent run: could not release lane %s's lock", agent_uuid)
+    if flipped:
+        logger.error("lane %s resolved by the run-escape guard: %s", agent_uuid, cause)
+
+
 @celery.task(name="backend.tasks.agent_schedules.run_due")
 def run_due() -> int:
     return run_async(_run_due())
@@ -48,7 +134,10 @@ def run_due() -> int:
 
 @celery.task(name="backend.tasks.agent_schedules.run_scheduled_agent")
 def run_scheduled_agent(agent_id: str, stamp: str) -> None:
-    run_async(_run_scheduled_agent(UUID(agent_id), stamp))
+    # The beat consumed the tick and metered the run before dispatching (`mark_run`
+    # in `_run_due`), so this body always owes a metered run.
+    agent_uuid = UUID(agent_id)
+    _run_guarded(agent_uuid, True, _run_scheduled_agent(agent_uuid, stamp))
 
 
 @celery.task(name="backend.tasks.agent_schedules.run_curator_now")
@@ -59,7 +148,12 @@ def run_curator_now(
     catchup_remaining: int = CURATOR_CATCHUP_PASSES - 1,
     catchup: bool = False,
 ) -> None:
-    run_async(_run_curator_now(UUID(agent_id), full_history, metered, catchup_remaining, catchup))
+    agent_uuid = UUID(agent_id)
+    _run_guarded(
+        agent_uuid,
+        metered,
+        _run_curator_now(agent_uuid, full_history, metered, catchup_remaining, catchup),
+    )
 
 
 async def _run_curator_now(
@@ -102,22 +196,29 @@ def _run_lock(agent: dict, workspace):
     from ..config import settings
     from ..services import sprite_agent_service
 
-    return (
-        sprite_agent_service._TurnLock(
+    if workspace is not None:
+        # The developer-platform lane: this key is the fence its commit re-enters
+        # under `scoped_lock_held`, so the name is upstream's and stays upstream's.
+        return sprite_agent_service._TurnLock(
             f"scoped-curator-{agent['id']}", settings.AGENT_TURN_TIMEOUT_SECONDS
         )
-        if workspace is not None
-        else nullcontext()
-    )
+    # The personal-wiki lane has no other single-flight guard: its turn lock is
+    # keyed by a per-run session id, so two runs of one agent never contend on it,
+    # and the watermark CAS only refuses the clobber — it cannot stop a second paid
+    # harness turn being spent on material the run in flight already read.
+    # Upstream's body reads as if a fence were here (`curator is busy; skipping`);
+    # this lock is that fence. Its TTL is the longest any task may legally take, so
+    # it is never released while its own run is still executing.
+    return sprite_agent_service.agent_run_lock(agent["id"], REAP_STRIKE_AGE_SECONDS)
 
 
-async def _run_turn(agent, stamp, workspace):
+async def _run_turn(agent, stamp, workspace, read):
     from ..services import sprite_agent_service
 
     if workspace is None:
-        return await sprite_agent_service.run_scheduled(agent, stamp)
+        return await sprite_agent_service.run_scheduled(agent, stamp, read)
     return await sprite_agent_service.run_scheduled(
-        agent, stamp, workspace=workspace, scoped_lock_held=True
+        agent, stamp, read, workspace=workspace, scoped_lock_held=True
     )
 
 
@@ -127,7 +228,9 @@ async def _pending_input(agent: dict, workspace) -> bool:
     if workspace is not None:
         return await scoped_curation_inputs.has_pending(agent, workspace)
     owner = UUID(str(agent["user_id"]))
-    return await curation_service.has_changes_since(owner, owner, agent["curated_through"])
+    return await curation_service.has_changes_since(
+        owner, owner, curation_service.position_of(agent), agent["curator_wiki"]
+    )
 
 
 async def _run_curator_locked(agent, workspace, full_history, metered, catchup_remaining, catchup):
@@ -151,25 +254,38 @@ async def _run_curator_locked(agent, workspace, full_history, metered, catchup_r
             return
         if not await agent_service.claim_catchup(agent_id, CURATOR_CATCHUP_PASSES - 1):
             return
+    # The compare-and-set anchor for mark_curated is the stored position this run
+    # actually loaded — captured BEFORE the full_history override below, which zeroes
+    # the feed's position but must not change what the run may write against.
+    read = curation_service.position_of(agent)
     if full_history:
-        agent = {**agent, "curated_through": None, "curation_cursor": {}}
+        agent = {
+            **agent,
+            "curated_through": None,
+            "curated_through_event_id": None,
+            "curation_cursor": {},
+        }
     now = datetime.now(UTC)
     await agent_service.mark_run(agent_id, metered=metered)
     try:
         # Seconds-resolution stamp so a manual run never shares a session with
         # the beat's minute-stamped run.
-        await _run_turn(agent, now.strftime("%Y%m%d%H%M%S"), workspace)
+        await _run_turn(agent, now.strftime("%Y%m%d%H%M%S"), workspace, read)
         if workspace is None:
+            # The boundary is computed from the position the run ACTUALLY read from,
+            # which the full_history override moved to `never`: a backfill counts the
+            # whole corpus as its backlog, so its overflow boundary sits under the
+            # stored cursor and the clamp keeps the cursor where an earlier run left
+            # it. The completion write is a compare-and-set on `read`, so an ingest
+            # rewind or an overlapping run cannot be written over.
             through = await curation_service.complete_through(
-                UUID(str(agent["user_id"])), agent["curated_through"], now
-            )
-            # The completion write is a compare-and-set on the position this run read,
-            # so an ingest rewind or an overlapping run cannot be written over.
-            await agent_service.mark_curated(
-                agent_id,
+                UUID(str(agent["user_id"])),
                 curation_service.position_of(agent),
-                curation_service.Position(through),
+                now,
+                agent["curator_wiki"],
+                agent.get("curator_folder_id"),
             )
+            await agent_service.mark_curated(agent_id, read, through)
         await agent_service.mark_run_succeeded(agent_id)
     except Exception as e:
         if workspace is not None and isinstance(e, sprite_agent_service.TurnInProgress):
@@ -407,25 +523,30 @@ async def _run_scheduled_locked(agent, stamp, workspace):
         return
     user_id = UUID(str(agent["user_id"]))
     now = datetime.now(UTC)
+    # The position this dispatch loaded IS the position its run reads from, so it is
+    # captured before the run starts: the lanes that commit outside the run fence
+    # their completion write on it, so the position written against and the position
+    # read cannot drift; a move under the run fails loudly.
+    read = curation_service.position_of(agent)
     try:
-        await _run_turn(agent, stamp, workspace)
+        await _run_turn(agent, stamp, workspace, read)
         if agent["is_curator"] and workspace is None:
             # `now` predates the run, so changes made during it stay ahead of
             # the watermark and are picked up next time. If the delta
             # overflowed the event cap, the watermark stops at the last event
             # that fit — the overflow drains on subsequent runs. Bookkeeping
             # failures share the run's try so they also record last_run_error
-            # and alert, instead of dying as a bare task error.
+            # and alert, instead of dying as a bare task error. The completion
+            # write is a compare-and-set on the position this run read, so an
+            # ingest rewind or an overlapping run cannot be written over.
             through = await curation_service.complete_through(
-                user_id, agent["curated_through"], now
+                user_id,
+                read,
+                now,
+                agent["curator_wiki"],
+                agent.get("curator_folder_id"),
             )
-            # The completion write is a compare-and-set on the position this run read,
-            # so an ingest rewind or an overlapping run cannot be written over.
-            await agent_service.mark_curated(
-                agent_id,
-                curation_service.position_of(agent),
-                curation_service.Position(through),
-            )
+            await agent_service.mark_curated(agent_id, read, through)
         await agent_service.mark_run_succeeded(agent_id)
     except Exception as e:
         if workspace is not None and isinstance(e, sprite_agent_service.TurnInProgress):
@@ -443,6 +564,72 @@ async def _run_scheduled_locked(agent, stamp, workspace):
             )
     else:
         await _dispatch_curator_catchup(agent, now, CURATOR_CATCHUP_PASSES - 1, workspace=workspace)
+
+
+@celery.task(name="backend.tasks.agent_schedules.reap_stranded_runs")
+def reap_stranded_runs() -> int:
+    return run_async(_reap_stranded_runs())
+
+
+async def _reap_stranded_runs() -> int:
+    """Resolve lanes whose run died without resolving them, and free their locks.
+
+    The in-process escape guard cannot catch every death: a child killed by the
+    hard time limit, the memory-recycle, or a SIGKILL never returns from
+    `run_async`, so nothing runs in it. This is the backstop for those, and it is
+    a beat sweep precisely because it must fire with nobody alive to call it.
+
+    The write is the same compare-and-set the guard uses — one statement for the
+    whole sweep rather than a write per lane, and a lane that resolved itself
+    between the read and the write is not touched. Locks are keyed by agent id,
+    so freeing them needs no second query either.
+
+    The allowance is deliberately not refunded: `mark_run` stores no metering
+    flag, so a sweep cannot tell a credit the run was charged for from one the
+    platform ran unmetered, and guessing would move a user's monthly allowance
+    either way. The sweep repairs the lane, not the accounting, and its alert says
+    so.
+
+    Selection does not condition on the lane being runnable. A curator its owner
+    paused between the beat's dispatch and the run's own gate is one of the lanes
+    this exists to free, and waiting for it to look runnable again waits forever.
+    Nor does it touch source sync lanes: those have their own termination path
+    (`tasks/sources.py`, test_sync_lane_termination.py), and a second owner would
+    only race it.
+    """
+    from ..database import get_pool
+    from ..services import agent_service, alert_service, sprite_agent_service
+
+    stale = await get_pool().fetch(
+        "SELECT id FROM agents"
+        " WHERE last_run_outcome = 'started'"
+        "   AND last_run_at < now() - make_interval(secs => $1)",
+        REAP_STRIKE_AGE_SECONDS,
+    )
+    if not stale:
+        return 0
+
+    cause = (
+        "agent run never resolved its lane: no worker was left alive behind it, "
+        "so the stranded-run sweep recorded it as failed"
+    )
+    flipped = await agent_service.resolve_started_runs(
+        [row["id"] for row in stale], cause, metered=False
+    )
+    for lane in flipped:
+        await sprite_agent_service.drop_agent_run_lock(lane["id"])
+    # The resolution and the lock drop above are already durable, so a mode that
+    # sends no operational alerts may not cost a lane its repair. The sweep's own
+    # summary line below is the record in that mode.
+    if alert_service.alerts_enabled():
+        for lane in flipped:
+            await alert_service.send_alert(
+                f"Stranded agent run resolved: lane {lane['id']} ({lane['name']}) held "
+                f"'started' past the {REAP_STRIKE_AGE_SECONDS}s run-lock TTL. Recorded as "
+                f"failed and its run lock released; allowance untouched. Cause: {cause}"
+            )
+    logger.error("stranded-run sweep resolved %d lane(s): %s", len(flipped), cause)
+    return len(flipped)
 
 
 # Pending input older than this is stale even when individual batches succeed.
@@ -510,9 +697,15 @@ async def _alert_stale_curators() -> int:
     # Asked before the call, never caught after it: a mode that sends no
     # operational alerts makes send_alert raise, and a raise here would
     # replace the failure this alert exists to report.
+    report = (
+        f"{len(stale)} Memory curator(s) stale >{STALE_CURATOR_HOURS}h with pending changes:\n"
+        + "\n".join(lines)
+    )
+    # The record comes first and in every mode: a watchdog that only speaks by
+    # delivering goes silent on exactly the installations that never deliver. The
+    # cause it names is already on the agent row (`mark_run_failed`), so the row
+    # needs no second write.
+    logger.error("stale curator watchdog: %s", report)
     if alert_service.alerts_enabled():
-        await alert_service.send_alert(
-            f"{len(stale)} Memory curator(s) stale >{STALE_CURATOR_HOURS}h with pending changes:\n"
-            + "\n".join(lines)
-        )
+        await alert_service.send_alert(report)
     return len(stale)

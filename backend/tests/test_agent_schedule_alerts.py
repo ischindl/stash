@@ -100,7 +100,10 @@ async def _failing_scheduled_run(
 
 
 @pytest.mark.asyncio
-async def test_queued_curator_does_not_run_after_pause(client, pool, monkeypatch):
+async def test_queued_curator_does_not_run_after_pause(client, pool, sprite_exec, monkeypatch):
+    # `sprite_exec` is requested for its fake Redis, not for a harness turn: the
+    # run fence this body takes is a Redis key, and this test never gets as far as
+    # executing anything.
     from backend.services import sprite_agent_service
 
     user_id = await _register(client)
@@ -301,7 +304,7 @@ async def test_scoped_curator_catchup_is_bounded_and_requires_progress(
 
 
 @pytest.mark.asyncio
-async def test_run_due_failure_sends_alert(client: AsyncClient, monkeypatch):
+async def test_run_due_failure_sends_alert(client: AsyncClient, sprite_exec, monkeypatch):
     from backend.services import agent_auth, sprite_agent_service
 
     user_id = await _register(client)
@@ -491,7 +494,7 @@ async def test_configured_destination_without_a_bot_install_names_its_own_cause(
 
 
 @pytest.mark.asyncio
-async def test_run_due_records_no_changes_skip(client: AsyncClient, monkeypatch):
+async def test_run_due_records_no_changes_skip(client: AsyncClient, sprite_exec, monkeypatch):
     from backend.services import agent_auth, curation_service
 
     user_id = await _register(client)
@@ -524,7 +527,9 @@ async def test_run_due_records_no_changes_skip(client: AsyncClient, monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_run_due_records_missing_credential_skip(client: AsyncClient, monkeypatch):
+async def test_run_due_records_missing_credential_skip(
+    client: AsyncClient, sprite_exec, monkeypatch
+):
     from backend.services import agent_auth
 
     user_id = await _register(client)
@@ -560,7 +565,7 @@ async def test_deleted_agent_run_is_a_quiet_no_op(client: AsyncClient, monkeypat
 @pytest.mark.asyncio
 @pytest.mark.parametrize("trigger", ["manual", "scheduled"])
 async def test_catchup_dispatch_failure_preserves_completed_batch_and_charge(
-    client, pool, monkeypatch, trigger
+    client, pool, sprite_exec, monkeypatch, trigger
 ):
     from backend.services import sprite_agent_service
 

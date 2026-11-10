@@ -10,7 +10,7 @@ import pytest
 import pytest_asyncio
 from pydantic import ValidationError
 
-from backend.services import end_user_service, source_service
+from backend.services import curation_service, end_user_service, source_service
 from backend.services import scoped_curation_service as curation
 
 from .conftest import unique_name
@@ -254,6 +254,22 @@ async def test_shared_reads_recheck_consent_even_without_a_generation_change(dat
         await shared.tool("search_documents", {"query": ""})
 
 
+async def _from_never(pool, agent: dict) -> dict:
+    """Stand a curator's row at 'never' and hand back the row as the database holds it.
+
+    A created curator seeds its delta watermark to a bounded backfill point, so a
+    test that means the bootstrap-from-real-history run has to move the row, not
+    only the dict it was handed: the completion fences its watermark advance on the
+    position the run read, and that position is the row's, never a local edit's.
+    """
+    agent_id = UUID(str(agent["id"]))
+    await pool.execute(
+        "UPDATE agents SET curated_through = NULL, curated_through_event_id = NULL WHERE id = $1",
+        agent_id,
+    )
+    return dict(await pool.fetchrow("SELECT * FROM agents WHERE id = $1", agent_id))
+
+
 @pytest.mark.asyncio
 async def test_separate_model_contexts_and_no_sprite_execution(
     dataset, pool, monkeypatch, sprite_exec
@@ -275,9 +291,12 @@ async def test_separate_model_contexts_and_no_sprite_execution(
 
     monkeypatch.setattr(curation, "run_scope", fake_run)
     monkeypatch.setattr(sprite_agent_service, "run_chat", forbidden)
-    agent = await agent_service.get_or_create_curator(dataset.owner, wiki="external")
-    agent["curated_through"] = None
-    await sprite_agent_service.run_scheduled(agent, "security-test")
+    agent = await _from_never(
+        pool, await agent_service.get_or_create_curator(dataset.owner, wiki="external")
+    )
+    await sprite_agent_service.run_scheduled(
+        agent, "security-test", curation_service.position_of(agent)
+    )
     assert len([p for p, _ in calls if p == "private"]) == 2
     assert len([p for p, _ in calls if p == "shared"]) == 1
     assert all("SECRET_TRANSCRIPT" not in text for p, text in calls if p == "shared")
@@ -300,9 +319,12 @@ async def test_internal_developer_curator_cannot_read_customer_inputs(
         return "No private developer changes."
 
     monkeypatch.setattr(curation, "run_scope", fake_run)
-    agent = await agent_service.get_or_create_curator(dataset.owner, wiki="internal")
-    agent["curated_through"] = None
-    await sprite_agent_service.run_scheduled(agent, "security-test")
+    agent = await _from_never(
+        pool, await agent_service.get_or_create_curator(dataset.owner, wiki="internal")
+    )
+    await sprite_agent_service.run_scheduled(
+        agent, "security-test", curation_service.position_of(agent)
+    )
     assert len(calls) == 1 and calls[0].purpose == "internal"
     assert sprite_exec.calls == [] and sprite_exec.writes == []
     with pytest.raises(PermissionError):
@@ -742,17 +764,20 @@ async def test_failed_shared_run_does_not_report_success_or_advance_watermark(
             raise
 
     monkeypatch.setattr(curation, "run_scope", fail_shared)
-    agent = await agent_service.get_or_create_curator(dataset.owner, wiki="external")
-    agent["curated_through"] = None
+    agent = await _from_never(
+        pool, await agent_service.get_or_create_curator(dataset.owner, wiki="external")
+    )
     before = await pool.fetchval(
-        "SELECT curated_through FROM agents WHERE id=$1", UUID(agent["id"])
+        "SELECT curated_through FROM agents WHERE id=$1", agent["id"]
     )
     with pytest.raises(ExceptionGroup) as failure:
-        await sprite_agent_service.run_scheduled(agent, "failed-test")
+        await sprite_agent_service.run_scheduled(
+            agent, "failed-test", curation_service.position_of(agent)
+        )
     assert any(isinstance(exc, PermissionError) for exc in failure.value.exceptions)
     assert private_cancelled == private_started and len(private_cancelled) == 2
     assert (
-        await pool.fetchval("SELECT curated_through FROM agents WHERE id=$1", UUID(agent["id"]))
+        await pool.fetchval("SELECT curated_through FROM agents WHERE id=$1", agent["id"])
         == before
     )
     assert (
@@ -1511,7 +1536,9 @@ async def test_cursor_is_committed_only_after_all_scopes_succeed(
     real_run_scope = curation.run_scope
     monkeypatch.setattr(curation, "run_scope", completed)
     agent = await agent_service.get_agent_by_id(UUID(agent["id"]))
-    await sprite_agent_service.run_scheduled(agent, "chunk-one")
+    await sprite_agent_service.run_scheduled(
+        agent, "chunk-one", curation_service.position_of(agent)
+    )
     before = await agent_service.get_agent_by_id(UUID(agent["id"]))
     assert before["curation_cursor"]
     assert "X" * 100 not in json.dumps([s.documents for s in seen if s.purpose == "shared"])
@@ -1533,7 +1560,9 @@ async def test_cursor_is_committed_only_after_all_scopes_succeed(
     else:
         monkeypatch.setattr(curation, "run_scope", failed)
     with pytest.raises(ExceptionGroup) as errors:
-        await sprite_agent_service.run_scheduled(before, "chunk-two")
+        await sprite_agent_service.run_scheduled(
+            before, "chunk-two", curation_service.position_of(before)
+        )
     if failure == "empty_completion":
         assert all(
             isinstance(error, ValueError) and "no completion summary" in str(error)
