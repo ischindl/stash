@@ -479,7 +479,15 @@ async def _dispatch_due_agent(agent, stamp, workspace):
     try:
         await scoped_curation_service.require_run_auth(agent, workspace=workspace)
     except (agent_auth.NeedsAuth, agent_auth.ProviderNotConfigured):
-        logger.info("agent schedule: no credential for agent %s — skipping", agent["id"])
+        # WARNING, not INFO: this skip recurs every tick forever, INFO drowns
+        # in a beat that ticks every minute, and `docker compose logs` is the
+        # first place a self-hoster looks. The row shows the same block.
+        logger.warning(
+            "agent schedule: no runnable model for agent %s — every tick will skip until "
+            "ANTHROPIC_API_KEY is set on the backend or a model endpoint is connected "
+            "under Settings → Cloud agent model",
+            agent["id"],
+        )
         await agent_service.mark_run_skipped(agent["id"], "no_credential")
         return 0
     # Cost gate: skip the curator (and the sprite wake) when nothing changed

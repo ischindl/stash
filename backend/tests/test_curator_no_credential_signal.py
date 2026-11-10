@@ -28,11 +28,26 @@ from httpx import AsyncClient
 
 from backend.config import settings
 from backend.database import get_pool
-from backend.services import agent_service, memory_service
+from backend.services import agent_service, memory_service, sprite_agent_service
 from backend.tasks import agent_schedules
 
+from .conftest import FakeRedis
 from .test_agent_schedule_alerts import _capture_alerts
 from .test_curator import _auth, _register
+
+
+@pytest.fixture(autouse=True)
+def _run_lock_broker(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An in-memory broker for the beat's per-agent run lock.
+
+    The beat takes `sprite_agent_service.agent_run_lock` before it reaches the
+    credential gate, so every test here needs *a* Redis; CI provisions none, and
+    the suite's only fake is `FakeRedis`. `sprite_exec` is the fixture upstream
+    asks for when it wants that fake, but it also hands the scope a Claude
+    credential — the exact state this file is about not having — so the lock is
+    faked on its own and the resolver stays untouched.
+    """
+    monkeypatch.setattr(sprite_agent_service, "_get_redis", lambda: FakeRedis())
 
 
 def _self_host_profile(monkeypatch: pytest.MonkeyPatch) -> None:
