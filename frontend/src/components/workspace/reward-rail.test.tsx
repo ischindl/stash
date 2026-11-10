@@ -65,9 +65,8 @@ afterEach(() => {
 describe("the reward rail gives the new-signup cohort a way into its files", () => {
   it("renders a clickable Files entry", () => {
     renderRail();
-    // RED today: PRIMARY is Traces / Reward models / Skills, so a brand-new
-    // account has no affordance for the file browser at all — /files exists for
-    // them only as a URL someone has to type.
+    // The rail is the only way a new-signup account reaches the file browser:
+    // /files has no other entry point, so the rail must carry the link itself.
     expect(screen.queryByRole("button", { name: "Files" })).toBeNull();
     expect(screen.getByRole("link", { name: "Files" })).toBeInTheDocument();
   });
@@ -84,9 +83,9 @@ describe("the reward rail gives the new-signup cohort a way into its files", () 
     renderRail();
     expect(screen.getAllByRole("link", { name: "Files" })).toHaveLength(1);
     const labels = screen.getAllByRole("link").map((link) => link.textContent?.trim());
-    // Upstream folded the standalone Skills entry into Monitoring, which still
-    // matches /skills; the rail's shape is asserted exactly, so it tracks that.
-    expect(labels).toEqual(["Traces", "Reward models", "Files", "Monitoring", "Settings"]);
+    // Upstream renamed the second entry to "Evals" and dropped "Monitoring"
+    // (#1244, #1252); our Files entry is the only delta the rail now carries.
+    expect(labels).toEqual(["Traces", "Evals", "Files", "Settings"]);
   });
 
   it.each(["/files", "/f/file-1", "/p/page-1", "/folders/folder-1", "/tables/table-1"])(
@@ -102,6 +101,6 @@ describe("the reward rail gives the new-signup cohort a way into its files", () 
     state.pathname = "/reward-models/models";
     renderRail();
     expect(screen.getByRole("link", { name: "Files" })).not.toHaveAttribute("aria-current");
-    expect(screen.getByRole("link", { name: "Reward models" })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("link", { name: "Evals" })).toHaveAttribute("aria-current", "page");
   });
 });

@@ -304,7 +304,7 @@ export default function SessionViewerPage({ sessionId }: { sessionId: string }) 
     <div className="relative flex min-h-0 flex-1">
       <ConversationScrollRail items={markers} scroller={scroller} />
       <div ref={scroller} className="scroll-thin min-w-0 flex-1 overflow-y-auto">
-        <div className="mx-auto grid max-w-[1100px] gap-7 px-12 pb-20 pt-7 lg:grid-cols-[minmax(0,1fr)_260px]">
+        <div className="mx-auto grid max-w-[1440px] gap-7 px-12 pb-20 pt-7 lg:grid-cols-[minmax(0,1fr)_260px]">
           <main className="min-w-0">
             {inDeveloperConsole && (
               <Link

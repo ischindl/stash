@@ -18,6 +18,8 @@ vi.mock("./workspace/account-menu", () => ({ default: () => <div>Account</div> }
 const user: User = {
   id: "sam", name: "sam", display_name: "Sam", email: "sam@ferganalabs.com",
   developer_platform_only: false, reward_models_enabled: true,
+  // The rail/agents gate is irrelevant to the checkpoint dialog this covers.
+  show_tools_and_chat: false,
   description: "", created_at: "2026-10-05", last_seen: "2026-10-05",
 };
 const trace: RmTraceSummary = {
