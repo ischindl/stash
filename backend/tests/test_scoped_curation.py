@@ -767,9 +767,7 @@ async def test_failed_shared_run_does_not_report_success_or_advance_watermark(
     agent = await _from_never(
         pool, await agent_service.get_or_create_curator(dataset.owner, wiki="external")
     )
-    before = await pool.fetchval(
-        "SELECT curated_through FROM agents WHERE id=$1", agent["id"]
-    )
+    before = await pool.fetchval("SELECT curated_through FROM agents WHERE id=$1", agent["id"])
     with pytest.raises(ExceptionGroup) as failure:
         await sprite_agent_service.run_scheduled(
             agent, "failed-test", curation_service.position_of(agent)
@@ -777,8 +775,7 @@ async def test_failed_shared_run_does_not_report_success_or_advance_watermark(
     assert any(isinstance(exc, PermissionError) for exc in failure.value.exceptions)
     assert private_cancelled == private_started and len(private_cancelled) == 2
     assert (
-        await pool.fetchval("SELECT curated_through FROM agents WHERE id=$1", agent["id"])
-        == before
+        await pool.fetchval("SELECT curated_through FROM agents WHERE id=$1", agent["id"]) == before
     )
     assert (
         await pool.fetchval(
