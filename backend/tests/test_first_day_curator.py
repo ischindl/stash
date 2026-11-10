@@ -55,10 +55,13 @@ def dispatched(monkeypatch):
     return calls
 
 
-async def _workspace_with_conversation(client: AsyncClient, *, include_internal=False) -> UUID:
+async def _workspace_with_conversation(
+    client: AsyncClient, *, include_internal: bool = False, include_customer: bool = True
+) -> UUID:
     api_key, _, workspace = await _developer(client)
     ws_key = await _mint_workspace_key(client, api_key, workspace)
-    await _push(client, ws_key, [_event("s-1", user_id="cust-1", user_name="Cust")])
+    if include_customer:
+        await _push(client, ws_key, [_event("s-1", user_id="cust-1", user_name="Cust")])
     if include_internal:
         await _push(client, ws_key, [_event("developer-own-conversation")])
     return UUID(workspace["scope_user_id"])
@@ -90,25 +93,49 @@ async def test_first_day_conversation_dispatches_unmetered_runs(
 
 
 @pytest.mark.asyncio
-async def test_external_curator_is_gated_by_its_own_scope(client: AsyncClient, pool, dispatched):
-    """Day-one dispatch asks each wiki separately, because each one is gated by
-    its own feed. A conversation from an opted-out customer is real activity for
-    the workspace's own Memory wiki and NO activity for the shared one, so only
-    the internal curator may be woken — an external curator roused for nothing
-    would burn the workspace's runs on an empty delta."""
-    scope_id = await _workspace_with_conversation(client)
-    opted_out = await pool.fetchrow(
-        "UPDATE end_users SET share_wiki = false WHERE external_id = 'cust-1'"
-        "  AND workspace_id = (SELECT id FROM workspaces WHERE scope_user_id = $1)"
-        "  AND share_wiki RETURNING id",
-        scope_id,
+@pytest.mark.parametrize(
+    ("conversation", "opt_out", "expected"),
+    [
+        # The developer's own conversation is the Memory wiki's material alone:
+        # an end-user event is not the developer's memory, and a developer event
+        # is no customer's material.
+        ("developer", False, {"internal"}),
+        ("customer", False, {"external"}),
+        # Withholding from the SHARED wiki does not withhold the customer's own
+        # private wiki, which this same external curator maintains —
+        # `scoped_curation_service.run` builds one private scope per end user,
+        # whether or not that user shares. The gate therefore still fires; what
+        # the withheld transcript can never reach is the shared wiki, and that
+        # boundary is `CurationScope.check`, measured in
+        # test_scoped_curation.py (revocation + protected-material cases).
+        ("customer", True, {"external"}),
+    ],
+    ids=["developer-own", "sharing-customer", "opted-out-customer"],
+)
+async def test_each_curator_is_gated_by_its_own_feed(
+    client: AsyncClient, pool, dispatched, conversation, opt_out, expected
+):
+    """Day-one dispatch asks each wiki separately because each one is gated by
+    its own feed: neither curator may be roused for the other's material."""
+    scope_id = await _workspace_with_conversation(
+        client,
+        include_internal=conversation == "developer",
+        include_customer=conversation == "customer",
     )
-    # Proves the fixture did what it claims — the user existed and WAS sharing,
-    # so the test cannot pass because the workspace never had an end user.
-    assert opted_out is not None, "cust-1 was not a sharing end user of this workspace"
+    if opt_out:
+        opted_out = await pool.fetchrow(
+            "UPDATE end_users SET share_wiki = false WHERE external_id = 'cust-1'"
+            "  AND workspace_id = (SELECT id FROM workspaces WHERE scope_user_id = $1)"
+            "  AND share_wiki RETURNING id",
+            scope_id,
+        )
+        # Proves the fixture did what it claims — the user existed and WAS
+        # sharing, so the case cannot pass because the workspace never had an
+        # end user to withhold.
+        assert opted_out is not None, "cust-1 was not a sharing end user of this workspace"
 
     await _first_day_curator_tick(scope_id)
-    assert await _dispatched_wikis(pool, dispatched) == {"internal"}
+    assert await _dispatched_wikis(pool, dispatched) == expected
 
 
 @pytest.mark.asyncio
