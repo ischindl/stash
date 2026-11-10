@@ -511,7 +511,23 @@ async def _run_scheduled_agent(agent_id: UUID, stamp: str) -> None:
             agent = await agent_service.get_agent_by_id(agent_id)
             await _run_scheduled_locked(agent, stamp, workspace)
     except sprite_agent_service.TurnInProgress:
-        await _skip_busy_curator(agent_id, metered=True)
+        if workspace is not None:
+            # Upstream's scoped lane: this dispatch metered and ran nothing, so its
+            # own credit comes back (`test_busy_scoped_curator_refunds_only_skipped_run`).
+            await _skip_busy_curator(agent_id, metered=True)
+            return
+        # The personal lane's fence is ours, and the rule that comes with it: a
+        # dispatch that never held the fence owns nothing to write, and the monthly
+        # credit is one of those writes. The beat charged this tick when it dispatched,
+        # and the run holding the fence is the one that spends it, so a refund here
+        # takes back the price of a curation that is happening right now. A broker
+        # requeue makes such a copy routine: measured on the founder stack 2026-10-01,
+        # a 3600-second visibility timeout re-delivered a dispatch whose original was
+        # 60 minutes into a 90-minute run.
+        logger.info(
+            "agent %s has a run in flight — this dispatch defers to it and writes nothing",
+            agent_id,
+        )
 
 
 async def _run_scheduled_locked(agent, stamp, workspace):
