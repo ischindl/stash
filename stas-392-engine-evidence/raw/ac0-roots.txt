@@ -1,0 +1,616 @@
+# STAS-392 — AC0 — the ground measured inside this run
+# generated: 2026-11-05T18:29:03Z
+# Every ref is named, never pinned to a SHA typed from a card body. A SHA in any
+# captured file is a label of a past state, never an input to a later step.
+
+## R1 — this card worktree
+
+  $ git rev-parse --short HEAD
+      f060ec539
+        rc=0
+
+  $ git branch --show-current
+      fusion/stas-392
+        rc=0
+
+  $ bash -c git status --porcelain | wc -l | sed 's/^/porcelain lines: /'
+      porcelain lines: 3
+        rc=0
+
+### ignore probe, in child-path form, so exclusion is proven not assumed
+  $ git check-ignore -v .engine/stas-392-engine/probe.txt
+      /home/schindler/git/stash/.git/info/exclude:33:/.engine/	.engine/stas-392-engine/probe.txt
+        rc=0
+
+  $ git check-ignore -v .fusion-tmp/stas-392/scratch/probe.txt
+      /home/schindler/git/stash/.git/info/exclude:34:/.fusion-tmp/	.fusion-tmp/stas-392/scratch/probe.txt
+        rc=0
+
+
+## R2 — provisioning the nested linked checkout of the engine repository
+
+A previous session registered this path and its directory was later cleaned, so
+the first add was refused as a stale registration. The override is scoped to this
+path on purpose: 'worktree prune' would have deleted STAS-391's own (also stale)
+registration entry, and this card does not move another card's artifacts.
+
+  $ git --git-dir=$HOME/git/Fusion/.git worktree add --detach "$PWD/.engine/stas-392-engine" refs/heads/main
+      Preparing worktree (detached HEAD 4fa1ea0e64)
+      fatal: '...stas-392/.engine/stas-392-engine' is a missing but already registered worktree;
+      use 'add -f' to override, or 'prune' or 'remove' to clear
+        rc=128
+
+Regeneration is idempotent, so the accepted form below is only re-run when the
+checkout is missing. It is the same command with -f, which was the fix:
+
+  $ git --git-dir=/home/schindler/git/Fusion/.git worktree add -f --detach /home/schindler/git/stash/.fusion/worktrees/stas-392/.engine/stas-392-engine refs/heads/main
+      Preparing worktree (detached HEAD 4fa1ea0e64)
+      fatal: '/home/schindler/git/stash/.fusion/worktrees/stas-392/.engine/stas-392-engine' already exists
+        rc=128
+
+
+### the forbidden form, recorded so a reviewer knows it was considered
+  --git-dir=<nested checkout>/.git is never used: its gitlink resolves through
+  the linked worktree and reports phantom mass deletions (family finding).
+
+## R2 — the ground read from inside the nested checkout
+
+  $ git -C .engine/stas-392-engine rev-parse --short refs/heads/main
+      4fa1ea0e64
+        rc=0
+
+  $ git -C .engine/stas-392-engine rev-parse refs/heads/main
+      4fa1ea0e64bccc32e2d3116c534706d1b953931c
+        rc=0
+
+  $ git -C .engine/stas-392-engine rev-parse HEAD
+      037a480cc562ef994aac0b19215613cb93e2b500
+        rc=0
+
+  $ git -C .engine/stas-392-engine status --porcelain
+      (no output)
+        rc=0
+
+## occupancy: derived live from worktree list, never assumed either way
+
+  $ git -C .engine/stas-392-engine worktree list --porcelain
+      worktree /home/schindler/git/Fusion
+      HEAD 4fa1ea0e64bccc32e2d3116c534706d1b953931c
+      branch refs/heads/main
+      
+      worktree /home/schindler/git/Fusion/.fusion/worktrees/rufu-195
+      HEAD db07e88d0a7567c57b0ee8147f5e0f2b692dc566
+      branch refs/heads/fusion/rufu-195
+      
+      worktree /home/schindler/git/Fusion/.fusion/worktrees/rufu-204
+      HEAD 186448e2e88129ab34465447cc88b8002ec310bb
+      branch refs/heads/fusion/rufu-204
+      
+      worktree /home/schindler/git/Fusion/.fusion/worktrees/rufu-217
+      HEAD 490baf16348946cd21d930a421592b8cb48c9517
+      branch refs/heads/fusion/rufu-217
+      
+      worktree /home/schindler/git/Fusion/.fusion/worktrees/rufu-250
+      HEAD 3c2f44b9ffcde0074b9322fd38dd5e525ca9a84f
+      branch refs/heads/fusion/rufu-250
+      
+      worktree /home/schindler/git/Fusion/.fusion/worktrees/rufu-252
+      HEAD 6ec6a28c4f5ceb17baec95238084e9c0db27180b
+      branch refs/heads/fusion/rufu-252
+      
+      worktree /home/schindler/git/Fusion/.fusion/worktrees/rufu-253
+      HEAD e5646f68fecaaa46648408a68b5ee67fa2901f17
+      branch refs/heads/fusion/rufu-253
+      
+      worktree /home/schindler/git/Fusion/.fusion/worktrees/rufu-262
+      HEAD e5646f68fecaaa46648408a68b5ee67fa2901f17
+      branch refs/heads/fusion/rufu-262
+      
+      worktree /home/schindler/git/Fusion/.fusion/worktrees/rufu-265
+      HEAD 5424f676c4505c6a865c1e4ce4db4e9670555e15
+      branch refs/heads/fusion/rufu-265
+      
+      worktree /home/schindler/git/Fusion/.fusion/worktrees/rufu-342
+      HEAD cdef171e7a8ab25753bad258994a2c816f553d78
+      branch refs/heads/fusion/rufu-342
+      
+      worktree /home/schindler/git/Fusion/.fusion/worktrees/rufu-343
+      HEAD 894be5276edcfa645b206acd65fdc8e1d8f7dbf3
+      branch refs/heads/fusion/rufu-343
+      
+      worktree /home/schindler/git/Fusion/.fusion/worktrees/rufu-408
+      HEAD c7d02a3e5499726565524677c99eb5689cb1b5be
+      branch refs/heads/fusion/rufu-408
+      
+      worktree /home/schindler/git/Fusion/.fusion/worktrees/rufu-430
+      HEAD f78b3e9156d45c8aec7e8d17b056483bc99a01f4
+      branch refs/heads/fusion/rufu-430
+      
+      worktree /home/schindler/git/Fusion/.fusion/worktrees/rufu-447
+      HEAD 6b13b0cc787bb8dc606f4fc429ae7a5242247476
+      branch refs/heads/fusion/rufu-447
+      
+      worktree /home/schindler/git/Fusion/.fusion/worktrees/rufu-455
+      HEAD 029e40425ae8d87f95c26256ce133ade06cb88db
+      branch refs/heads/fusion/rufu-455
+      
+      worktree /home/schindler/git/Fusion/.fusion/worktrees/rufu-469
+      HEAD d9103b17a36d85cba6707da602b1d0e2ef84f5fd
+      branch refs/heads/fusion/rufu-469
+      
+      worktree /home/schindler/git/Fusion/.fusion/worktrees/rufu-685
+      HEAD 1e3265e24bff716ba27f10142ef0be13b7e566e1
+      branch refs/heads/fusion/rufu-685
+      
+      worktree /home/schindler/git/Fusion/.fusion/worktrees/rufu-756
+      HEAD a2ee31720809d12bcd3a2e74c05b8b61cdaa989a
+      branch refs/heads/fusion/rufu-756
+      
+      worktree /home/schindler/git/Fusion/.fusion/worktrees/rufu-768
+      HEAD 1e3265e24bff716ba27f10142ef0be13b7e566e1
+      branch refs/heads/fusion/rufu-768
+      
+      worktree /home/schindler/git/Fusion/.fusion/worktrees/rufu-791
+      HEAD 16d2379014e372dffdcd206754140eb64102765c
+      branch refs/heads/fusion/rufu-791
+      
+      worktree /home/schindler/git/Fusion/.fusion/worktrees/rufu-799
+      HEAD 05a0e0c78675464c200f798f84c2dbc060f7e19e
+      branch refs/heads/fusion/rufu-799
+      
+      worktree /home/schindler/git/Fusion/.fusion/worktrees/rufu-813
+      HEAD 4fa1ea0e64bccc32e2d3116c534706d1b953931c
+      branch refs/heads/fusion/rufu-813
+      
+      worktree /home/schindler/git/Fusion/.fusion/worktrees/rufu-871
+      HEAD 0a3cd0bad8a20d60ab093f8eff83d37b8b2593dd
+      branch refs/heads/fusion/rufu-871
+      
+      worktree /home/schindler/git/Fusion/.fusion/worktrees/rufu-877
+      HEAD 814709352e38da8047320114ca29e6058b62953e
+      branch refs/heads/fusion/rufu-877
+      
+      worktree /home/schindler/git/Fusion/.fusion/worktrees/rufu-879
+      HEAD 0a3cd0bad8a20d60ab093f8eff83d37b8b2593dd
+      branch refs/heads/fusion/rufu-879
+      
+      worktree /home/schindler/git/Fusion/.fusion/worktrees/rufu-885
+      HEAD 8584c966f9361eb254fc00ad78ec572d0d3b49f2
+      branch refs/heads/fusion/rufu-885
+      
+      worktree /home/schindler/git/Fusion/.fusion/worktrees/rufu-887
+      HEAD 6aff48faff9e20312e804cee57c90f75e4de9241
+      branch refs/heads/fusion/rufu-887
+      
+      worktree /home/schindler/git/Fusion/.fusion/worktrees/rufu-888
+      HEAD bff234b429c2c204e6028621a78f935e4ca484d7
+      branch refs/heads/fusion/rufu-888
+      
+      worktree /home/schindler/git/Fusion/.fusion/worktrees/rufu-889
+      HEAD 4fa1ea0e64bccc32e2d3116c534706d1b953931c
+      branch refs/heads/fusion/rufu-889
+      
+      worktree /home/schindler/git/Fusion/.worktrees/misty-pine
+      HEAD 2b33ec8d5e0301f78d20eebf247bb5d0141cc167
+      branch refs/heads/fusion/rufu-131
+      
+      worktree /home/schindler/git/fusion-sso
+      HEAD 8adef1b12adf74815f6f47e2f018c036605eda13
+      branch refs/heads/sso/dsnet-session-login
+      
+      worktree /home/schindler/git/fusion-worktrees/bwo-sweep
+      HEAD ef2ad9007bf00b480e3e0165ca4d390088083f2c
+      branch refs/heads/pr/branch-write-origin-sweep
+      
+      worktree /home/schindler/git/fusion-worktrees/ds-rtm3-deploy
+      HEAD 5bae09721466adca77c1840ecb47b255ffeafd9a
+      branch refs/heads/ds/rtm3-deploy
+      
+      worktree /home/schindler/git/fusion-worktrees/ds-rtm3-deploy-dev
+      HEAD 71a925081790a2a71e35a880130dc80ad9acabd2
+      branch refs/heads/ds/rtm3-deploy-dev
+      
+      worktree /home/schindler/git/fusion-worktrees/fix-zero-step-plan-gate
+      HEAD d8dab5aaee8a90c153884e88765d2ad6fe7cc871
+      branch refs/heads/fix/zero-step-plan-gate
+      
+      worktree /home/schindler/git/fusion-worktrees/fusion-rufu-627
+      HEAD 23ec69d76a90d0cf6f36b75b752e3f8cf9c08ed7
+      branch refs/heads/fusion/rufu-627
+      
+      worktree /home/schindler/git/fusion-worktrees/fusion-rufu-707
+      HEAD e2d54baf29799fb33bae6fcbeb2c7b47818912b4
+      branch refs/heads/fusion/rufu-707
+      
+      worktree /home/schindler/git/fusion-worktrees/pr-lcm
+      HEAD 8d054404f3313f75e42cafdf398315e2f28566cf
+      branch refs/heads/pr/lcm
+      
+      worktree /home/schindler/git/fusion-worktrees/pr-stash
+      HEAD 01dc4fd5ec1175f14aa8e76ecf98385cc9363d4e
+      branch refs/heads/pr/stash-integration
+      
+      worktree /home/schindler/git/fusion-worktrees/pr-stash-memory
+      HEAD f1f21ccc94a17411de6f0d3ab75ee538e9c925c9
+      branch refs/heads/pr/stash-memory
+      
+      worktree /home/schindler/git/fusion-worktrees/rebase-3493-lcm
+      HEAD 6d4226b117865743f89362b0720399ac0996cf71
+      detached
+      
+      worktree /home/schindler/git/fusion-worktrees/rebase-3522-stas103
+      HEAD 15edb7f7a0dc07a53401a7cce8b8d03ea3a0ed51
+      detached
+      
+      worktree /home/schindler/git/fusion-worktrees/rtm3-078-sso
+      HEAD 505ebe5c31526a5f3553c4e1135f7cc0f2c9a82f
+      branch refs/heads/rtm3-0.78-sso
+      
+      worktree /home/schindler/git/fusion-worktrees/rtm3-rebase-main
+      HEAD d1a13b2069628b8d5dd5c35a2c80ccee548e1f42
+      branch refs/heads/ds/rtm3-deploy-rebased-20261026
+      
+      worktree /home/schindler/git/fusion-worktrees/rufu-200-empty-checkout-lease
+      HEAD 0d550fbe95bef06ecb11499a83a07cfd24796f39
+      branch refs/heads/rufu-200-empty-checkout-lease
+      
+      worktree /home/schindler/git/fusion-worktrees/stas-103-prompt-return
+      HEAD c8299c06312cb7bd43b66d30984b8b6014150d34
+      branch refs/heads/pr/stas-103-prompt-return
+      
+      worktree /home/schindler/git/fusion-worktrees/vllm-114-proof
+      HEAD 2b14f9b0972a2908636c76a34b1a7dfd9cbcecf5
+      detached
+      
+      worktree /home/schindler/git/kb-worktrees/archive-readopt-20261005
+      HEAD 05a8f1ec2be03dd32348fbc60544c412819ba1e5
+      branch refs/heads/archive-readopt-20261005
+      
+      worktree /home/schindler/git/kb-worktrees/emptiness-invalidation
+      HEAD e0c4d4de5296638902f8a66aecf5d1b8c6a20db3
+      branch refs/heads/fix/emptiness-proof-invalidation
+      
+      worktree /home/schindler/git/kb-worktrees/fix-inreview-stall-badge-copy
+      HEAD 83e8f5f18ac4e14e5400b13715cce2d7c5d34a4c
+      branch refs/heads/fix-inreview-stall-badge-copy
+      
+      worktree /home/schindler/git/kb-worktrees/integrate-gitlab
+      HEAD 50c17da76062245884cbf579c11accaca2c682e0
+      branch refs/heads/fix/rufu-858-log-shape-tripwire
+      
+      worktree /home/schindler/git/kb-worktrees/integrate-origin
+      HEAD c53eb7402da2871bbd8d51550771c7bf588d7f9a
+      branch refs/heads/ds/integrate-origin
+      
+      worktree /home/schindler/git/kb-worktrees/lease-split
+      HEAD 2cf4c8d9b0b7462a133a0f47a1c4402a357cc397
+      branch refs/heads/pr/lease-hold
+      
+      worktree /home/schindler/git/kb-worktrees/merge-origin-20261013
+      HEAD f2db5023812480b6e4b60d00263d7e7c8c056209
+      branch refs/heads/merge/origin-main-20261013
+      
+      worktree /home/schindler/git/kb-worktrees/merge-origin-20261013-b
+      HEAD 417a61ebf5a2b64949c6bd8c094905ec2756a55f
+      branch refs/heads/merge/origin-main-20261013b
+      
+      worktree /home/schindler/git/kb-worktrees/merge-origin-20261015
+      HEAD f134800008e86f1968a671713872e85dade77784
+      branch refs/heads/merge-origin-20261015
+      
+      worktree /home/schindler/git/kb-worktrees/modelcfg-split
+      HEAD 0622ac7b070faea6a23598d529bec1eb7bc56cde
+      branch refs/heads/pr/model-provider-metadata
+      
+      worktree /home/schindler/git/kb-worktrees/planner-split
+      HEAD df5e73c227279d9a0e7f67eecef33e32b832df14
+      branch refs/heads/pr/planner-robust
+      
+      worktree /home/schindler/git/kb-worktrees/pr-board-perf
+      HEAD 7381fc19727f74716901c656fd0c960f8089bdf3
+      branch refs/heads/pr/board-read-perf
+      
+      worktree /home/schindler/git/kb-worktrees/pr-files-upload
+      HEAD 5be3361706fde0d80d1c734c130926e60d0af51c
+      branch refs/heads/pr/files-browser-upload
+      
+      worktree /home/schindler/git/kb-worktrees/pr-lcm-v2
+      HEAD 38e28af426064596b7c397987085d3e8b7958894
+      branch refs/heads/pr/lcm-v2
+      
+      worktree /home/schindler/git/kb-worktrees/pr-noninteractive
+      HEAD 7c5d52be752bed7080f0e42b38615b23b9347232
+      branch refs/heads/pr/noninteractive-git-floor
+      
+      worktree /home/schindler/git/kb-worktrees/pr3619
+      HEAD 79725069664c7593c6b1693c6d9c51c2681f031f
+      branch refs/heads/pr-3619
+      
+      worktree /home/schindler/git/kb-worktrees/pr3619-rebase
+      HEAD 1847a8404f67bdf0c8ce9a400c7706b2073520f6
+      branch refs/heads/rebase/pr3619
+      
+      worktree /home/schindler/git/kb-worktrees/pr3626-rebase
+      HEAD 944f5607c84f57b6a9959b0801cb14c1c98be958
+      branch refs/heads/rebase/chat-guard
+      
+      worktree /home/schindler/git/kb-worktrees/pr3627-rebase
+      HEAD f701aa08cf1d09c5203a3a242f2759ea0114c0fc
+      branch refs/heads/rebase/chat-gate
+      
+      worktree /home/schindler/git/kb-worktrees/prod-deploy
+      HEAD 4fa1ea0e64bccc32e2d3116c534706d1b953931c
+      branch refs/heads/prod-deploy
+      
+      worktree /home/schindler/git/kb-worktrees/read-queue-coverage
+      HEAD 71b94c521d2c301bf3375db5022045c205d756ec
+      branch refs/heads/perf/read-queue-coverage
+      
+      worktree /home/schindler/git/kb-worktrees/rtm3-linear
+      HEAD 9e145fd48cf96f028fff685fa52af896258d6e00
+      branch refs/heads/ds/rtm3-deploy-clean
+      
+      worktree /home/schindler/git/kb-worktrees/rtm3-priv-deploy
+      HEAD 2b10a1bcaaa36edc793563786b6e244e18f900d3
+      branch refs/heads/ds/rtm3-priv-deploy
+      
+      worktree /home/schindler/git/kb-worktrees/rtm3-priv-merge-main
+      HEAD 9a4daf4c4ea0a2bc1b46f24e9e66c8b73412bc7b
+      branch refs/heads/ds/rtm3-priv-deploy-20261001
+      
+      worktree /home/schindler/git/kb-worktrees/rufu-565-build-cache-poison
+      HEAD 4f3f8a8e648de8960db1573c07cafe546a79b6ad
+      branch refs/heads/rufu-565-build-cache-poison
+      
+      worktree /home/schindler/git/kb-worktrees/rufu-595-project-root-memo
+      HEAD 85edcdb3a57068d18e30e2c0059b3fa64dace5e9
+      branch refs/heads/rufu-595-project-root-memo
+      
+      worktree /home/schindler/git/kb-worktrees/rufu-615-log-projections
+      HEAD c4ad2268f474f9ac876cf6590dabc38cf2fdc812
+      branch refs/heads/fusion/rufu-615-log-projections
+      
+      worktree /home/schindler/git/kb-worktrees/rufu-615-migration-restack
+      HEAD 2b3766a36ca9db71690e1e1f7b041eaeb9887d90
+      branch refs/heads/rufu-615-migration-restack
+      
+      worktree /home/schindler/git/kb-worktrees/rufu-616-suspend-defer
+      HEAD 33ad8d81d3feeb867a97570263f646c8d7b372e2
+      branch refs/heads/rufu-616-suspend-defer
+      
+      worktree /home/schindler/git/kb-worktrees/rufu-679-dispatch-lease
+      HEAD 8f734ee83d3b88cc7ff0becfba41a783cae240c0
+      branch refs/heads/rufu-679-dispatch-lease
+      
+      worktree /home/schindler/git/kb-worktrees/rufu-682-capability-refusal
+      HEAD 4e27a99be00de7a47ea3f8319c2654c7ae21b3fa
+      branch refs/heads/rufu-682-capability-decline-refusal
+      
+      worktree /home/schindler/git/kb-worktrees/rufu-690-archive-presence
+      HEAD 14ba495cb4d7da97e26d77bb1bc27265cb841a1c
+      branch refs/heads/rufu-690-archive-presence
+      
+      worktree /home/schindler/git/kb-worktrees/rufu-698-budget-fit
+      HEAD 490fd96320ffef657316b5b9108f4d06b5bf42c2
+      branch refs/heads/rufu-698-budget-fit
+      
+      worktree /home/schindler/git/kb-worktrees/rufu-756
+      HEAD 4fa1ea0e64bccc32e2d3116c534706d1b953931c
+      branch refs/heads/rufu-756-lane-role-log-projection
+      
+      worktree /home/schindler/git/kb-worktrees/rufu-768-attempt-counter
+      HEAD bcb5792a3c2ffd5e536b65b7e2f9b9cae989ab15
+      branch refs/heads/rufu-768-plan-review-attempt-counter
+      
+      worktree /home/schindler/git/kb-worktrees/rufu-772-trim-hardening
+      HEAD 3292cf80236b270109b5d90e022e7496abc5425d
+      branch refs/heads/rufu-772-json-string-trim-hardening
+      
+      worktree /home/schindler/git/kb-worktrees/rufu-773-error-site
+      HEAD d180504a633add4101f3648d73ceb462cbd6e429
+      branch refs/heads/rufu-773-error-site-capture
+      
+      worktree /home/schindler/git/kb-worktrees/rufu-805-heartbeat-workspace
+      HEAD bb83130d5cdd69d6ba3ab65f7258ff9d58630a84
+      branch refs/heads/rufu-805-heartbeat-workspace
+      
+      worktree /home/schindler/git/kb-worktrees/rufu-812-plan-review-consumer
+      HEAD b3c182ce0623b276147f7b78d75981fed28573f3
+      branch refs/heads/rufu-812-plan-review-consumer
+      
+      worktree /home/schindler/git/kb-worktrees/rufu-823-scheduler-inflight
+      HEAD 05f905d0cca5740f765a8006afda675aad4117ce
+      branch refs/heads/rufu-828-scheduler-inflight
+      
+      worktree /home/schindler/git/kb-worktrees/rufu-829-pass-stall-audit
+      HEAD 64c7fadedbe3c4d95ab026a868f0261605ea4fc3
+      branch refs/heads/rufu-830-pass-stall-audit
+      
+      worktree /home/schindler/git/kb-worktrees/rufu-862
+      HEAD ccb43ac1671631b775b9ff2db5759f356b96b724
+      branch refs/heads/fix/rufu-862-capacity-refusal-rotation
+      
+      worktree /home/schindler/git/kb-worktrees/rufu-883
+      HEAD 6aff48faff9e20312e804cee57c90f75e4de9241
+      branch refs/heads/rufu-883-sampler-comment-projection
+      
+      worktree /home/schindler/git/kb-worktrees/sync-upstream-20260913
+      HEAD 913d6076a47f2b53335445cc97194e0b8e79ac5d
+      branch refs/heads/sync/upstream-2026-09-13
+      
+      worktree /home/schindler/git/stash/.fusion/worktrees/stas-246/engine
+      HEAD 4ab32dab9b476061578428426f7ddaedba043b37
+      branch refs/heads/fusion/stas-246-trunk-refresh
+      
+      worktree /home/schindler/git/stash/.fusion/worktrees/stas-262/.engine/stas-262-a2check
+      HEAD 05d3c3231f18515c4d31f2f3af1740e51a256631
+      detached
+      
+      worktree /home/schindler/git/stash/.fusion/worktrees/stas-262/.engine/stas-262-engine
+      HEAD 04694a4f3e5a654f47ad71d45a73eb7d6d19a45a
+      branch refs/heads/fusion/stas-262-trunk-merge
+      
+      worktree /home/schindler/git/stash/.fusion/worktrees/stas-273/.engine/stas-273-engine
+      HEAD 4361e0322ec04bf6d089b28aae418743f06fed52
+      branch refs/heads/fusion/stas-273-worktree-lifecycle-preservation
+      
+      worktree /home/schindler/git/stash/.fusion/worktrees/stas-282/.engine/stas-282-engine
+      HEAD 85784df04c424b4f64dfec0a6b1f078c0c709726
+      branch refs/heads/fusion/stas-282-premise-evaluation-tree
+      
+      worktree /home/schindler/git/stash/.fusion/worktrees/stas-391/.engine/stas-391-engine
+      HEAD eb20a6bfc583786b8c31cfe4f677237ebae54e10
+      branch refs/heads/fusion/stas-391-empty-tool-result-announcement
+      prunable gitdir file points to non-existent location
+      
+      worktree /home/schindler/git/stash/.fusion/worktrees/stas-392/.engine/stas-392-engine
+      HEAD 037a480cc562ef994aac0b19215613cb93e2b500
+      branch refs/heads/fusion/stas-392-empty-tool-result-announcement
+        rc=0
+
+### reduced: who holds each ref in play (holder = a live checkout, prunable = a
+### registration whose directory is gone; a held branch cannot be moved by git)
+
+  refs/heads/main -> holder=/home/schindler/git/Fusion
+  refs/heads/fusion/stas-391-empty-tool-result-announcement -> holder=/home/schindler/git/stash/.fusion/worktrees/stas-391/.engine/stas-391-engine
+  PRUNABLE: prunable gitdir file points to non-existent location
+  refs/heads/fusion/stas-392-empty-tool-result-announcement -> holder=/home/schindler/git/stash/.fusion/worktrees/stas-392/.engine/stas-392-engine
+
+## the 391 ref name is discovered, not assumed
+
+  $ git -C .engine/stas-392-engine for-each-ref --format=%(refname) %(objectname:short) refs/heads/fusion/
+      refs/heads/fusion/rufu-131 2b33ec8d5e
+      refs/heads/fusion/rufu-195 db07e88d0a
+      refs/heads/fusion/rufu-204 186448e2e8
+      refs/heads/fusion/rufu-217 490baf1634
+      refs/heads/fusion/rufu-225 15d85e19e2
+      refs/heads/fusion/rufu-227 35505eb05f
+      refs/heads/fusion/rufu-236 9eac87f35e
+      refs/heads/fusion/rufu-241 aa3f4a2a8b
+      refs/heads/fusion/rufu-243 817f24c5a6
+      refs/heads/fusion/rufu-247 058a63d095
+      refs/heads/fusion/rufu-250 3c2f44b9ff
+      refs/heads/fusion/rufu-252 6ec6a28c4f
+      refs/heads/fusion/rufu-253 e5646f68fe
+      refs/heads/fusion/rufu-262 e5646f68fe
+      refs/heads/fusion/rufu-265 5424f676c4
+      refs/heads/fusion/rufu-267-salvage 1b0cab50a3
+      refs/heads/fusion/rufu-278 6efff2d2c9
+      refs/heads/fusion/rufu-291 fca3534631
+      refs/heads/fusion/rufu-342 cdef171e7a
+      refs/heads/fusion/rufu-343 894be5276e
+      refs/heads/fusion/rufu-351 a83b3b13d9
+      refs/heads/fusion/rufu-408 c7d02a3e54
+      refs/heads/fusion/rufu-413 3a837d51e9
+      refs/heads/fusion/rufu-414 c35226fa3a
+      refs/heads/fusion/rufu-430 f78b3e9156
+      refs/heads/fusion/rufu-447 6b13b0cc78
+      refs/heads/fusion/rufu-450 bff4679657
+      refs/heads/fusion/rufu-455 029e40425a
+      refs/heads/fusion/rufu-469 d9103b17a3
+      refs/heads/fusion/rufu-473 ddbc84c4eb
+      refs/heads/fusion/rufu-476 16d2379014
+      refs/heads/fusion/rufu-477 730d235040
+      refs/heads/fusion/rufu-615-log-projections c4ad2268f4
+      refs/heads/fusion/rufu-627 23ec69d76a
+      refs/heads/fusion/rufu-685 1e3265e24b
+      refs/heads/fusion/rufu-702 04b07030be
+      refs/heads/fusion/rufu-707 e2d54baf29
+      refs/heads/fusion/rufu-756 a2ee317208
+      refs/heads/fusion/rufu-768 1e3265e24b
+      refs/heads/fusion/rufu-791 16d2379014
+      refs/heads/fusion/rufu-793-admission-honesty eca47cfda0
+      refs/heads/fusion/rufu-799 05a0e0c786
+      refs/heads/fusion/rufu-813 4fa1ea0e64
+      refs/heads/fusion/rufu-871 0a3cd0bad8
+      refs/heads/fusion/rufu-877 814709352e
+      refs/heads/fusion/rufu-879 0a3cd0bad8
+      refs/heads/fusion/rufu-885 8584c966f9
+      refs/heads/fusion/rufu-887 6aff48faff
+      refs/heads/fusion/rufu-888 bff234b429
+      refs/heads/fusion/rufu-889 4fa1ea0e64
+      refs/heads/fusion/stas-205-review-lane-dispatch 6ab78105c7
+      refs/heads/fusion/stas-246-trunk-refresh 4ab32dab9b
+      refs/heads/fusion/stas-260-extension-boot-race 63b1d8dea8
+      refs/heads/fusion/stas-262-trunk-merge 04694a4f3e
+      refs/heads/fusion/stas-273-worktree-lifecycle-preservation 4361e0322e
+      refs/heads/fusion/stas-276-room-wake-executability c62a0c63eb
+      refs/heads/fusion/stas-282-premise-evaluation-tree 85784df04c
+      refs/heads/fusion/stas-286-cross-repo-provisioning edb5583462
+      refs/heads/fusion/stas-291 c9c6ece3ce
+      refs/heads/fusion/stas-297-room-wake-followups 0aeb071829
+      refs/heads/fusion/stas-299-selfheal-lifecycle dc40314375
+      refs/heads/fusion/stas-305-heartbeat-done-cap 2a31613789
+      refs/heads/fusion/stas-318-schema-skew 0d51e73466
+      refs/heads/fusion/stas-330-wake-comment-delta-consumption 0c2fe67fe4
+      refs/heads/fusion/stas-343-admission-honesty 2ae2cd7298
+      refs/heads/fusion/stas-361-replan-cap-truth a324a562c1
+      refs/heads/fusion/stas-370-post-merge-landing-observability 3324238f35
+      refs/heads/fusion/stas-382-reseed-cycle-rearm 0db7438466
+      refs/heads/fusion/stas-388-tool-result-authority 6a59cf4d51
+      refs/heads/fusion/stas-389-tool-channel-authority 22f6d6c5b1
+      refs/heads/fusion/stas-390-tool-channel-authority e6b1fe4c7f
+      refs/heads/fusion/stas-391-empty-tool-result-announcement eb20a6bfc5
+      refs/heads/fusion/stas-392-empty-tool-result-announcement 037a480cc5
+        rc=0
+
+### filtered to stas-39
+refs/heads/fusion/stas-390-tool-channel-authority e6b1fe4c7f
+refs/heads/fusion/stas-391-empty-tool-result-announcement eb20a6bfc5
+refs/heads/fusion/stas-392-empty-tool-result-announcement 037a480cc5
+
+## dependency of every test run: the package's own vitest binary
+
+  $ bash -c ls .engine/stas-392-engine/packages/pi-claude-cli/node_modules/.bin/vitest
+      .engine/stas-392-engine/packages/pi-claude-cli/node_modules/.bin/vitest
+        rc=0
+
+The install at the nested root (node_modules was absent before it):
+
+  $ pnpm install --frozen-lockfile --ignore-scripts
+      Done in 2.6s using pnpm v10.33.0
+        rc=0
+  --ignore-scripts is disclosed: it skips postinstall native builds. The vitest
+  lane this card runs needs no native module, which is why the flag is affordable.
+
+## AC1 census — is the invariant on the trunk?
+
+### refs/heads/main
+  $ git -C .engine/stas-392-engine grep -c neutraliseStructureTokens refs/heads/main -- packages/pi-claude-cli/src
+      (no output)
+        rc=1
+
+### refs/heads/fusion/stas-390-tool-channel-authority
+  $ git -C .engine/stas-392-engine grep -c neutraliseStructureTokens refs/heads/fusion/stas-390-tool-channel-authority -- packages/pi-claude-cli/src
+      refs/heads/fusion/stas-390-tool-channel-authority:packages/pi-claude-cli/src/tool-result-authority.ts:2
+        rc=0
+
+### refs/heads/fusion/stas-391-empty-tool-result-announcement
+  $ git -C .engine/stas-392-engine grep -c neutraliseStructureTokens refs/heads/fusion/stas-391-empty-tool-result-announcement -- packages/pi-claude-cli/src
+      (no output)
+        rc=1
+
+## Gate V — which emptiness vocabulary does the ground hold?
+
+Per-symbol counts over packages/pi-claude-cli, all three refs.
+
+SYMBOL                       main       390        391       
+neutraliseStructureTokens    0          2          0         
+ENVELOPE_DELIMITER           0          2          0         
+ROLE_KEY                     0          8          0         
+ZERO_BYTES_NOTICE            2          2          4         
+EMPTY_NOTICES                0          0          0         
+emptinessOf                  0          0          0         
+DeliveredText                0          0          0         
+no-content-blocks            0          0          0         
+
+Verdict is written in findings.md; the literals this card asserts come from the
+measured ground, printed here so the reading is checkable:
+
+  $ git -C .engine/stas-392-engine grep -n zero-bytes\|ZERO_BYTES_NOTICE refs/heads/main -- packages/pi-claude-cli
+      refs/heads/main:packages/pi-claude-cli/src/__tests__/tool-result-authority.test.ts:123:      expect(prompt).toContain('delivered="zero-bytes"');
+      refs/heads/main:packages/pi-claude-cli/src/tool-result-authority.ts:44:const ZERO_BYTES_NOTICE =
+      refs/heads/main:packages/pi-claude-cli/src/tool-result-authority.ts:112:  if (text.length === 0) attributes.push('delivered="zero-bytes"');
+      refs/heads/main:packages/pi-claude-cli/src/tool-result-authority.ts:117:    text.length === 0 ? ZERO_BYTES_NOTICE : text,
+        rc=0
+

@@ -1,0 +1,83 @@
+# STAS-393 - AC1/AC2/AC5 - the landing window, printed in the tick the message went out
+# generated: 2026-11-11T01:46:24Z
+# produced by stas-393-engine-evidence/generate.sh (capture: window)
+## AC2 - the fast-forward predicate at the delivered tip
+
+  $ git -C /home/schindler/git/stash/.fusion/worktrees/stas-393/.engine/stas-393-engine rev-list --left-right --count refs/heads/main...refs/heads/fusion/stas-393-tool-result-stack
+      0	3
+        rc=0
+
+  $ git -C /home/schindler/git/stash/.fusion/worktrees/stas-393/.engine/stas-393-engine merge-base --is-ancestor refs/heads/main refs/heads/fusion/stas-393-tool-result-stack
+      (no output)
+        rc=0
+
+  $ git -C /home/schindler/git/stash/.fusion/worktrees/stas-393/.engine/stas-393-engine log --oneline refs/heads/main..refs/heads/fusion/stas-393-tool-result-stack
+      f91fd759ce STAS-391: announce an empty tool-result content array instead of crashing prompt assembly
+      e94c723089 STAS-389: prove frame and role authority are gone, per surface, red then green
+      7d96302d68 STAS-389: stop a tool result from writing its own frame or a role key
+        rc=0
+
+  $ git -C /home/schindler/git/stash/.fusion/worktrees/stas-393/.engine/stas-393-engine diff --shortstat refs/heads/main...refs/heads/fusion/stas-393-tool-result-stack
+       3 files changed, 333 insertions(+), 22 deletions(-)
+        rc=0
+
+## conflict predicate at the delivered tip
+      b258d410704d5ec0dbd6e28caf2ff55880ba98da
+        rc=0
+      CONFLICT line count = 0
+      stderr empty (0 bytes)
+
+## AC1 - the neutraliser census, delivered tip beside trunk
+
+  $ git -C /home/schindler/git/stash/.fusion/worktrees/stas-393/.engine/stas-393-engine grep -c neutraliseStructureTokens refs/heads/fusion/stas-393-tool-result-stack -- packages/pi-claude-cli/src
+      refs/heads/fusion/stas-393-tool-result-stack:packages/pi-claude-cli/src/tool-result-authority.ts:2
+        rc=0
+
+  $ git -C /home/schindler/git/stash/.fusion/worktrees/stas-393/.engine/stas-393-engine grep -c neutraliseStructureTokens refs/heads/main -- packages/pi-claude-cli/src
+      (no output)
+        rc=1
+      (the trunk-level predicate belongs to the operator's merge, which this card
+       may not perform; AC1 is asserted at the delivered tip and never at trunk)
+
+## the trunk ref this card never wrote - run start beside run end
+      run start : c025edb9edf4a5eba16b03279ac9c5ba7805a4ef  2026-11-11T01:30:43Z
+
+  $ git -C /home/schindler/git/stash/.fusion/worktrees/stas-393/.engine/stas-393-engine rev-parse refs/heads/main
+      c025edb9edf4a5eba16b03279ac9c5ba7805a4ef
+        rc=0
+
+## the instrument deviation, refusal quoted verbatim
+      fn_send_message(recipient="agent-94d01490", body=<the announcement below>)
+      -> Tool fn_send_message not found
+      The identical bytes went out in the same tick as a card log entry and as the
+      registered artifact titled for the CEO, id 56b4aa74-27ef-4599-82ba-ba28f1497c31.
+      The prints above are the same commands re-run now; the announcement itself went
+      out at 2026-11-11T01:38:41Z against trunk c025edb9edf4a5eba16b03279ac9c5ba7805a4ef
+      and its raw tick prints are kept unchanged in raw/window-tick.txt.
+
+## the announced bytes, verbatim from window-message.txt
+      sha256:5a3c16ad1f253c919ca2827647122dba7093d1a9a7dc4c8db85d6c52844fcd6e
+      bytes: 1993
+
+STAS-393: okno na manualný fast-forward je otvorené, merané v tomto ticku.
+
+Vetva: fusion/stas-393-tool-result-stack
+Tip: f91fd759ce33acc957ed1eb10df9143934ab2985
+Trunk pod ňou: refs/heads/main = c025edb9edf4a5eba16b03279ac9c5ba7805a4ef (premerané 01:38:42Z; začiatok behu = koniec behu)
+
+Merané v tom istom ticku (repa Fusion, linked worktree .engine/stas-393-engine):
+- rev-list --left-right --count main...vetva = 0 3
+- merge-base --is-ancestor main <tip> rc=0
+- log --oneline main..<tip>: f91fd759ce (STAS-391 oznámenie) / e94c723089 / 7d96302d68 (STAS-389, neutralizátor pod oznámením)
+- diff --shortstat main...<tip> = 3 files changed, 333 insertions(+), 22 deletions(-)
+- merge-tree --write-tree --name-only rc=0, 0 riadok CONFLICT, stderr prázdny
+- AC1: git grep -c neutraliseStructureTokens <tip> = 2, na trunku 0 (rc=1)
+- red-green na novej báze: GREEN na f91fd759ce = Test Files 2 passed (2), Tests 23 passed (23), 0 skipped; RED (len produktový modul vrátený na trunk) = Test Files 2 failed (2), Tests 10 failed | 13 passed (23)
+- suita balíka pi-claude-cli: before 15/376/0 failing, after 16/387/0 failing, množina zlyhaní zhodná obojsmerne
+
+Pristátie jedným príkazom, z checkoutu enginu na refs/heads/main, po čerstvom overení trunku (git rev-parse refs/heads/main):
+  git merge --ff-only fusion/stas-393-tool-result-stack
+
+Rail merguje 2-4x denne, okno sa zavrie v rádoch hodín; merge spustite teraz. Invariant je na trunku účinný až keď tento príkaz prebehol - táto karta do refs/heads/main nezapísala, netlačila, neotvorila PR. Rada: tri commity idú v poradí neutralizátor, jeho testy, oznámenie; nikdy nie samotné oznámenie.
+
+Nástroj: fn_send_message nie je na povrchu tejto executorskej relácie, dôkaz je v logu karty. Detaily a dôkazy: adresár stas-393-engine-evidence na lane fusion/stas-393 (generate.sh vie všetky merania zopakovať), artifacty e8dfed1d-5376-4ab4-923b-844db3165906 a 9d917e80-4041-4fb6-b4e6-565a2eecdb5f.

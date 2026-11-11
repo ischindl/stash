@@ -1,0 +1,115 @@
+########## BLOCK (a) - the trunk in BOTH repositories and STAS-395's branch ##########
+  engine repo  refs/heads/main = ee995fcc85013a990752307d0f253e9d6fe5ebf4
+    last read by this card (Step 3 re-read, Step 5 print) = ee995fcc85013a990752307d0f253e9d6fe5ebf4
+    equal : YES
+  stash  repo  refs/heads/main = de5515fd113e485c05e4d745e992c641aa69511c
+    last read by this card (Step 0, this card's own HEAD and baseCommitSha) = de5515fd113e485c05e4d745e992c641aa69511c
+    equal : YES
+
+  git reflog show refs/heads/main   [engine repo]
+    ee995fcc85 refs/heads/main@{0}: cherry-pick: fix(RUFU-871): read project runtime flags under a transaction-local RLS bypass
+    f1247e8aef refs/heads/main@{1}: cherry-pick: feat(RUFU-871): make the project card's runtime control a real toggle
+    e4a8f4f1de refs/heads/main@{2}: cherry-pick: feat(RUFU-871): project combo shows each project's state by colour and icon
+    6c50ce0cae refs/heads/main@{3}: cherry-pick: fix(RUFU-871): resolve project runtime state from one batched central settings read
+    42f9762e1c refs/heads/main@{4}: commit: fix(RUFU-871): an unreadable project runtime no longer reports as loaded
+    50cb123e8f refs/heads/main@{5}: cherry-pick: test(RUFU-871): pin the runtime-off entry ordering, label, focus safety, and reachability
+    70749fcdee refs/heads/main@{6}: cherry-pick: feat(RUFU-871): show and clear the runtime-off state on the project surfaces
+    caec591ea5 refs/heads/main@{7}: cherry-pick: feat(RUFU-871): project runtime state in the projects projection and display order
+    1d4bcc6184 refs/heads/main@{8}: cherry-pick: feat(RUFU-871): expose the runtime-off switch as an API, a UI control, and tests
+    27df926690 refs/heads/main@{9}: cherry-pick: feat(RUFU-871): per-project runtime OFF switch gated at the engine lane arms
+    7c14f53184 refs/heads/main@{10}: cherry-pick: perf(RUFU-871): memoize the prompt-override read behind the selection memo TTL
+    13a22722b3 refs/heads/main@{11}: revert: Revert "perf(RUFU-871): memoize the prompt-override read and invalidate IR caches on prompt edits"
+    2ff1bf52e1 refs/heads/main@{12}: cherry-pick: perf(RUFU-871): memoize the prompt-override read and invalidate IR caches on prompt edits
+    3a3da429b2 refs/heads/main@{13}: cherry-pick: docs(RUFU-871): name the real owner of the fusionBranchContext derivation
+    6467f9924f refs/heads/main@{14}: cherry-pick: fix(RUFU-871): correct the i18n call shape in the refused-save toast
+stas-396-evidence/raw/guardrails.sh: line 28: 0: command not found
+  entries in that reflog naming STAS-396 = 
+  -> this card authored no trunk reflog entry; it never wrote, moved or deleted main.
+
+  STAS-395 branch tip now     = e038ea90e247532e4cdc84af33657fb5337adb7f
+  first printed by this card  = e038ea90e247532e4cdc84af33657fb5337adb7f
+  unchanged : YES
+  (re-discovered live, not carried over:)  e038ea90e247532e4cdc84af33657fb5337adb7f commit	refs/heads/stas-395-measure-same-agent-duplicate-intake
+
+########## BLOCK (b) - nothing was pushed anywhere ##########
+  fork	https://github.com/ischindl/Fusion.git (fetch)
+  fork	https://github.com/ischindl/Fusion.git (push)
+  gitlab	https://gitlab.digitalsystems.eu/fusion/RunFusion.git (fetch)
+  gitlab	https://gitlab.digitalsystems.eu/fusion/RunFusion.git (push)
+  lan	http://192.168.12.60:6610/fusion.git (fetch)
+  lan	http://192.168.12.60:6610/fusion.git (push)
+  origin	https://github.com/Runfusion/Fusion.git (fetch)
+  origin	https://github.com/Runfusion/Fusion.git (push)
+  origin-ssh	git@github.com:Runfusion/Fusion.git (fetch)
+  origin-ssh	git@github.com:Runfusion/Fusion.git (push)
+
+  git ls-remote lan refs/heads/stas-394-fix-title-idempotence
+    rc = 0   (read outside any pipe; 0 = the remote answered)
+    refs matching this branch, verbatim:
+      1677ee018a5d3aee0e74c0669676a1db40c690c5	refs/heads/stas-394-fix-title-idempotence
+  git ls-remote origin refs/heads/stas-394-fix-title-idempotence
+    rc = 0   (read outside any pipe; 0 = the remote answered)
+    refs matching this branch: NONE (empty answer -> this remote carries no such ref)
+  git ls-remote fork refs/heads/stas-394-fix-title-idempotence
+    rc = 0   (read outside any pipe; 0 = the remote answered)
+    refs matching this branch: NONE (empty answer -> this remote carries no such ref)
+  git ls-remote gitlab refs/heads/stas-394-fix-title-idempotence
+    rc = 0   (read outside any pipe; 0 = the remote answered)
+    refs matching this branch: NONE (empty answer -> this remote carries no such ref)
+  git ls-remote origin-ssh refs/heads/stas-394-fix-title-idempotence
+    rc = 128   (read outside any pipe; 0 = the remote answered)
+    probe outcome: READ FAILED -> git@github.com: Permission denied (publickey).
+
+  local remote-tracking refs matching the branch (for comparison with the live reads):
+    1677ee018a5d3aee0e74c0669676a1db40c690c5 commit	refs/remotes/lan/stas-394-fix-title-idempotence
+  that tracking ref's reflog, verbatim:
+    1677ee018a refs/remotes/lan/stas-394-fix-title-idempotence@{0}: update by push
+  live lan value         = 1677ee018a5d3aee0e74c0669676a1db40c690c5
+  the entry the closed card disclosed = 1677ee018a via an 'update by push' at 19:52:09 +0100
+  SAME ENTRY (mirror still at 1677ee018a, no new one) : YES
+  THIS CARD PUSHED NOTHING anywhere; the only remote operation performed here is ls-remote.
+
+########## BLOCK (c) - the six lineage titles, re-census'd by key-level read ##########
+prefix literal = 'Fix: '   baseline = Step 0's raw/lineage-census.txt
+id          lay step0  verdict  column     remainder sha256
+STAS-296      3     3  IDENTICAL  done       2b55badcc3805b3d27087320604cc1f609e09afc853fcab27c21e39ef8630ef8
+STAS-352      4     4  IDENTICAL  done       2b55badcc3805b3d27087320604cc1f609e09afc853fcab27c21e39ef8630ef8
+STAS-354      5     5  IDENTICAL  done       2b55badcc3805b3d27087320604cc1f609e09afc853fcab27c21e39ef8630ef8
+STAS-355      6     6  IDENTICAL  done       2b55badcc3805b3d27087320604cc1f609e09afc853fcab27c21e39ef8630ef8
+STAS-356      7     7  IDENTICAL  done       2b55badcc3805b3d27087320604cc1f609e09afc853fcab27c21e39ef8630ef8
+STAS-357      8     8  IDENTICAL  todo       2b55badcc3805b3d27087320604cc1f609e09afc853fcab27c21e39ef8630ef8
+records whose title MOVED = 0  (must be 0; a moved title is reported, never repaired)
+  lineage recheck rc = 0
+  note: a parked record's whole-file bytes are legitimately rewritten by the running
+  daemon's own bookkeeping; the TITLE is the guardrail, and a moved title is reported
+  immediately and never repaired here.
+
+########## BLOCK (d) - the STAS-395 gap table ##########
+  four refs under census:
+    R1 old branch tip   = 1677ee018a5d3aee0e74c0669676a1db40c690c5
+    R2 trunk tip        = ee995fcc85013a990752307d0f253e9d6fe5ebf4
+    R3 delivered tip    = cfe6daa16d9833c11031ae01dd97d5fef5b04928   (refs/heads/stas-394-fix-title-idempotence, after this card's swap)
+    R4 STAS-395 tip     = e038ea90e247532e4cdc84af33657fb5337adb7f
+
+  pattern          ref              git grep -c count
+  composeFixTitle  R1               13 hits across 7 non-test file(s)
+  composeFixTitle  R2               0 hits across 0 non-test file(s)
+  composeFixTitle  R3               13 hits across 7 non-test file(s)
+  composeFixTitle  R4               0 hits across 0 non-test file(s)
+  sourceParentTaskId: lineageParentTaskId R1               2 hits across 2 non-test file(s)
+  sourceParentTaskId: lineageParentTaskId R2               0 hits across 0 non-test file(s)
+  sourceParentTaskId: lineageParentTaskId R3               2 hits across 2 non-test file(s)
+  sourceParentTaskId: lineageParentTaskId R4               0 hits across 0 non-test file(s)
+
+  per-file detail for the producer write at each ref:
+    R1:
+      1677ee018a5d3aee0e74c0669676a1db40c690c5:packages/core/src/async-stores/async-mission-store.ts:3202:            ? { source: { sourceType: "unknown" as const, sourceParentTaskId: lineageParentTaskId } }
+      1677ee018a5d3aee0e74c0669676a1db40c690c5:packages/core/src/missions/mission-store.ts:4688:            ? { source: { sourceType: "unknown" as const, sourceParentTaskId: lineageParentTaskId } }
+    R2:
+    R3:
+      cfe6daa16d9833c11031ae01dd97d5fef5b04928:packages/core/src/async-stores/async-mission-store.ts:3202:            ? { source: { sourceType: "unknown" as const, sourceParentTaskId: lineageParentTaskId } }
+      cfe6daa16d9833c11031ae01dd97d5fef5b04928:packages/core/src/missions/mission-store.ts:4688:            ? { source: { sourceType: "unknown" as const, sourceParentTaskId: lineageParentTaskId } }
+    R4:
+
+  git merge-base --is-ancestor refs/heads/stas-394-fix-title-idempotence refs/heads/stas-395-... -> rc = 1
+    rc=1 means the delivered branch is NOT an ancestor of STAS-395's base

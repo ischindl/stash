@@ -1,0 +1,106 @@
+# STAS-395 AC4 - the test can fail
+
+Every number here was printed by a run in this session. The probe was performed in the nested
+engine worktree at the delivered tip, with the test already committed, so the restore is a plain
+`git checkout HEAD -- <path>` of the one production file and no `git stash` was used anywhere.
+
+## The call-site disambiguation, measured first
+
+The lane has two production call sites. Before mutating, the probe established which one a real
+store's `createTask` actually reaches, because neutralising the wrong one would prove nothing.
+
+| mutation applied (working tree, uncommitted) | run result |
+|---|---|
+| call site at `packages/core/src/task-store/task-creation.ts:1504` (`_resolveSameAgentDuplicateIntake`, the `createTaskImpl` arm) commented out | `Test Files 1 passed (1)` / `Tests 6 passed (6)` / rc=0 |
+| call site at `packages/core/src/task-store/task-creation.ts:1072` (`_resolveSameAgentDuplicateIntakeBackend`, the backend arm) commented out | `Test Files 1 failed (1)` / `Tests 3 failed | 3 passed (6)` / rc=1 |
+
+Measured fact: the load-bearing call site for this card is `:1072`. The `:1504` arm sits inside
+`createTaskImpl` and does not reach the lane for a store built the way the harness and production
+build it. The inherited claim that both call sites are on the path is half wrong: both exist, only
+`:1072` is exercised by this card's test. Both delegate to the same resolver, printed at
+`lane-and-harness.txt` section [6] and confirmed at `task-creation.ts:1621-1623` and
+`task-mutation-ops.ts:219-222`.
+
+## Neutralised run
+
+Raw capture: `stas-395-evidence/raw/step4-mutation-call-site-1072-neutralised.txt`
+
+```
+ Test Files  1 failed (1)
+      Tests  3 failed | 3 passed (6)
+```
+
+failing_test_count = 3 (required: at least 1)
+
+The first failure message, verbatim:
+
+```
+ FAIL  src/__tests__/postgres/same-agent-duplicate-intake-real-store.pg.test.ts > same-agent duplicate intake on a real store (STAS-395) > populated sourceParentTaskId with an empty sourceAgentId flags the new card and leaves it in place
+AssertionError: expected undefined to be 'KB-001' // Object.is equality
+
+- Expected:
+"KB-001"
+
++ Received:
+undefined
+
+ ❯ src/__tests__/postgres/same-agent-duplicate-intake-real-store.pg.test.ts:189:53
+    187|
+    188|     const after = await readRow(created.id);
+    189|     expect(after?.source_metadata?.nearDuplicateOf).toBe(sibling.id);
+```
+
+The three cases that went red are exactly the three whose expectation is that the lane *did*
+something: the two flag-the-sibling cases and the resurrection-block case. The three that stayed
+green are the three whose expectation is that nothing is written - the control, the empty-agentId
+tombstone drop, and the different-creating-agent case - which is why those three cannot carry the
+falsifiability on their own and why the AC4 probe is mandatory rather than decorative.
+
+## Restored run
+
+```
+$ git checkout HEAD -- packages/core/src/task-store/task-creation.ts
+restore_rc=0
+```
+
+Raw capture: `stas-395-evidence/raw/step4-mutation-restored-run.txt`
+
+```
+ Test Files  1 passed (1)
+      Tests  6 passed (6)
+```
+
+```
+failing count after restore = 0
+git status --porcelain        = 0 lines
+git rev-parse HEAD            = e038ea90e247532e4cdc84af33657fb5337adb7f
+```
+
+## Delivered commit scope
+
+```
+$ git diff --name-only f1247e8aef367c248ebb0b9d339bf0b9bd0a6421 e038ea90e247532e4cdc84af33657fb5337adb7f
+packages/core/src/__tests__/postgres/same-agent-duplicate-intake-real-store.pg.test.ts
+
+delivered file count = 1
+production files inside the delivered commit = 0
+```
+
+## One caveat a reader must not have to discover later
+
+The repository's own gates do not cover the delivered path, and this card did not edit them:
+
+- `pnpm exec eslint <the new file>` prints `File ignored because of a matching ignore pattern`
+  (rc=0). `eslint.config.mjs` globally ignores `packages/!(dashboard)/**/__tests__/**`.
+- `packages/core/tsconfig.json` excludes `src/**/*.test.ts` and `src/__test-utils__/**/*`, so
+  `pnpm --filter @fusion/core typecheck` never opens the new file. It passes anyway: rc=0 at the
+  tip, capture `stas-395-evidence/raw/core-typecheck-at-tip.txt`.
+- To get real type coverage over the new file a scoped program was assembled in the scratch
+  checkout, pointed at only this test file, and deleted afterwards. It reports 0 errors in the new
+  file; the 14 errors it does print all belong to `src/__test-utils__/pg-timeout-boundary-observer.ts`
+  (8) and `src/__test-utils__/pg-teardown-diagnostics.ts` (6), which the package's own
+  configuration deliberately excludes and which this card never touches. Capture:
+  `stas-395-evidence/raw/test-file-typecheck-probe.txt`.
+- The three tracked-file gate scripts that do see this file pass at the tip, each rc=0:
+  `check-nonlatin-tracked-text.mjs`, `check-no-comment-assertions-in-tests.mjs`,
+  `check-mock-completeness.mjs`. Capture: `stas-395-evidence/raw/static-gates.txt`.

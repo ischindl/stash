@@ -1,0 +1,2 @@
+✅ @fusion/dashboard mock completeness: all hardcoded mocks cover source imports.
+✅ @fusion/engine mock completeness: all hardcoded mocks cover source imports.

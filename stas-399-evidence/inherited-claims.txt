@@ -1,0 +1,102 @@
+STAS-399 Step 0 - INHERITED CLAIMS (claims, NOT measurements; every one is re-measured in Step 2)
+measured_at_this_step: 2026-11-10T01:33:02Z (date -u)
+provenance: Original Description + PROMPT.md Surface Enumeration. Nothing below was measured by this
+session at Step 0. Each is labelled CLAIM and carries the Step that must confirm or refute it.
+
+================================================================================
+BLOCK A - the five claims AC1 requires re-measured (Step 2, each as command/expected/actual/verdict)
+================================================================================
+A(i)   CLAIM: the inline-memory clamp is `MAX_MEMORY_LENGTH = 50_000` at
+       packages/core/src/agents/agent-instructions.ts lines 76-92, function `trimAndClamp`, in the
+       Fusion engine repo /home/schindler/git/Fusion (NOT stash code).
+A(ii)  CLAIM: the notice a real composed prompt carries today is count-only, verbatim:
+       "_Workspace memory: kept the newest 49750 of 146678 chars within the 50000-char inline memory
+       budget, so 44 of 62 older sections (96928 chars) are NOT in this prompt._ The newest entries
+       are always kept; read the omitted ones with fn_memory_search, then fn_memory_get._"
+       Sub-claim under test: it names NO dropped heading. Expected answer: no.
+A(iii) CLAIM: the CEO scope .fusion/agent-memory/agent-94d01490/MEMORY.md measures 53,651 chars
+       against the 50,000 clamp; the clamp drops 2 sections = 5,823 chars from every engine lane;
+       engine lanes (triage/executor/reviewer/merger/heartbeat) carry NO chat cap, while the chat lane
+       has its own memoryCapChars = 8,000 and shows only a heading index there.
+       Measurement rule: chars via python len(), never a byte count read as chars.
+A(iv)  CLAIM: STAS-340 (CEO ruling 2026-07-13 -> dated 2026-10-13 in the card) set a 32 KB soft
+       target and a 64 KB hard ceiling for all agent scopes. Sub-claim to test: whether either number
+       exists anywhere in engine CODE, or only in prose. If prose only, the honest verdict printed is
+       "prose policy only".
+A(v)   CLAIM: placement arithmetic on that corpus - section sum 53,327 chars, at least 3,651 must go;
+       cheapest single drop is a 3,833-char section; the pair 1,628 + 2,608 = 4,236. Therefore "no
+       zero-loss placement exists". To be re-derived section by section in Step 2.
+
+================================================================================
+BLOCK B - the numerals carried in, all as CLAIMS, none used before being printed
+================================================================================
+B1  50 000      engine inline memory clamp (claimed char-based, String.length)
+B2  32 KB       claimed soft consolidation target
+B3  64 KB       claimed hard ceiling per agent policy (STAS-340)
+B4  53 651      claimed char length of the CEO scope file
+B5  5 823       claimed chars lost from each engine lane
+B6  53 327      claimed sum of section lengths in that corpus
+B7  3 833       claimed cheapest single droppable section
+B8  1 628       claimed first half of the cheapest pair
+B9  2 608       claimed second half of the cheapest pair
+B10 8 000       claimed chat-lane memoryCapChars
+B11 800         claimed MAX_INDEX_BYTES in the heading-index module
+B12 10 000      claimed MAX_SOUL_LENGTH
+B13 65 536      the 64 KB candidate number this card must price but not adopt
+Note on units as carried in: 32 KB / 64 KB are stated in KILOBYTES by policy prose while the clamp is
+stated in CHARACTERS. 64 KB = 65,536 which is greater than 50,000; that inequality is the whole
+conflict and is itself unverified until B1 and B3 are both printed from real sources.
+
+================================================================================
+BLOCK C - the two contradictions this spec carries, known unresolved at dispatch
+================================================================================
+C1  WHICH PACKAGE HOLDS THE CLAMP. The Original Description says packages/core/src/agents/;
+    the Surface Enumeration says the readable-but-stale copy in this workspace has it at
+    packages/engine/src/agents/agent-instructions.ts, and also notes the package and the algorithm
+    "disagree before the card even starts". Unresolved at dispatch. Step 2 prints which is true on
+    trunk by git grep.
+C2  CHARACTERS OR BYTES. The Original Description calls the clamp character-based (50 000 zn). The
+    Surface Enumeration records a sibling module whose clamp is clampUtf8 and is byte-based, and states
+    the inherited asymmetry plainly: "the parser speaks lines and headings, the clamp speaks
+    characters, clampUtf8 speaks bytes". Unresolved at dispatch. Step 2 prints the unit at EVERY site
+    in the chain, not one blended figure.
+
+================================================================================
+BLOCK D - dependency-install question for THIS repository, answered explicitly
+================================================================================
+No install performed in the stash repository by this card, and none needed: this card authors no
+runnable code here. What lands in this repository is a tracked evidence directory of .txt captures
+only (stas-399-evidence/), which no tool executes. The engine workspace install (pnpm install, marker
+node_modules/.modules.yaml) belongs to Step 1 and happens inside the nested engine checkout.
+Observed at Step 0: the worktree was already brought up by the engine's own dependency step with
+`uv sync --frozen` (task log 2026-11-10T01:29:07Z, python-uv, 1785 ms); this session added nothing.
+
+================================================================================
+BLOCK E - worktree / card record state at Step 0 (so a park can be told from a stall later)
+================================================================================
+worktree HEAD          c9f1061da0cc34a0851f5a4d407eb146be93eeb2
+worktree branch        fusion/stas-399
+porcelain lines filtered of untracked   0
+porcelain lines total                    0
+.engine/ excluded from this repo's status  YES
+  evidence: git check-ignore -v .engine/ ->
+  /home/schindler/git/stash/.git/info/exclude:33:/.engine/	.engine/   (rc=0)
+card column            in-progress
+card dependencies      [] (none; confirmed in task.json)
+card lineage-parent    field absent in task.json (no sourceParentTaskId key present)
+card awaitingApprovalReason  absent from task.json (no such key) => not awaiting approval
+card baseCommitSha     c9f1061da0cc34a0851f5a4d407eb146be93eeb2
+card assigned agent    agent-ff03cfcc
+engine branch name free for this card    checked in Step 1 against the ENGINE repo's refs/heads/
+  (the one 399 hit printed at Step 0 is refs/heads/fusion/stas-399 in the STASH repo, which is this
+   worktree's own branch, not an engine ref, and is not the delivered name)
+
+PLAN REVIEW NOTE inherited at Step 0 (verdict APPROVE_WITH_NOTES, finding id
+ac2-length-invariant-scope): the reviewer holds that AC2's "composed length <= clamp" cannot hold
+literally for the WHOLE prompt because the clamp is per-source - trimAndClamp is called once for
+`memory` and once for `workspaceMemory` - so the composed prompt legitimately carries two clamped
+sources plus identity/soul/instruction headers. This session adopts that reading explicitly rather
+than silently: the length invariant this card pins is PER CLAMPED SOURCE (each rendered memory
+source, notice included, must be <= the clamp), and the whole-prompt length is PRINTED but is not
+asserted against the single-source clamp. The alternative reading (whole prompt <= 50 000) would
+require cutting a budget, which the Do-NOT list forbids. Disagreement printed, not averaged.

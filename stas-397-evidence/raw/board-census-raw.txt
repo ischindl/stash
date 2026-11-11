@@ -1,0 +1,110 @@
+repo_root=/home/schindler/git/stash
+tasks_dir_exists=True
+
+=== worktree directory listing (root .fusion/worktrees) ===
+.ai-merge
+.engine
+.fusion-worktree-locks
+stas-184
+stas-185
+stas-186
+stas-189
+stas-190
+stas-198
+stas-201
+stas-215
+stas-217
+stas-232
+stas-235
+stas-239
+stas-246
+stas-248
+stas-252
+stas-262
+stas-265
+stas-271
+stas-273
+stas-278
+stas-282
+stas-285
+stas-357
+stas-363
+stas-374
+stas-376
+stas-384
+stas-385
+stas-393
+stas-397
+worktree_dir_count=33
+
+=== on-disk settings record (worktree capacity) ===
+globalMaxConcurrent=4
+maxConcurrent=2
+maxTriageConcurrent=2
+maxWorktrees=4
+mergeIntegrationWorktree=reuse-task-worktree
+recycleWorktrees=False
+researchMaxConcurrentRuns=3
+showWorktreeGrouping=False
+worktreeCopyFiles=[]
+worktreeNaming=random
+worktreeRebaseBeforeMerge=True
+worktreeRebaseLocalBase=True
+worktreeRebaseRemote=
+
+=== per-card census ===
+id | warn | log_refusal_rows | agent_log_refusal_lines | column | status | awaiting | latest_warn | title
+STAS-363 | 837 | 837 | 0 | todo | queued | None | 2026-11-08T06:19:37.759Z | Trunk: absorbovať živý origin/main do lokálnej main (AC STAS-316 nedrž
+STAS-359 | 751 | 751 | 0 | todo | awaiting-approval | plan-review-replan-cap | 2026-11-01T19:33:52.196Z | Workflow import rejects every built-in-sized IR: 100 KiB parser cap
+STAS-360 | 659 | 659 | 0 | done | None | None | 2026-11-05T17:14:16.924Z | Share popover renders off-screen at narrow viewports (folder share pan
+STAS-329 | 308 | 308 | 0 | done | None | None | 2026-10-15T07:46:39.248Z | Meranie: curator suite green na current main (CEO directive 10746b3c) 
+STAS-353 | 297 | 297 | 0 | in-progress | blocked | None | 2026-10-31T21:18:22.252Z | ⛔ DO NOT EXECUTE — SUPERSEDOVANÉ: /tmp inode ceiling nesie STAS-377 (e
+STAS-341 | 288 | 288 | 0 | done | None | None | 2026-10-16T02:27:02.811Z | Fix: 5 testových zlyhaní na main z zastaraných ciest migrácií po prečí
+STAS-376 | 137 | 137 | 0 | todo | awaiting-approval | plan-review-replan-cap | 2026-11-08T06:19:49.946Z | Duplicate replay re-pushes do not re-pin the curator watermark; founde
+STAS-357 | 135 | 135 | 0 | todo | awaiting-approval | plan-review-replan-cap | 2026-11-08T06:19:33.205Z | Fix: Fix: Fix: Fix: Fix: Fix: Fix: Fix: Folder-share→agent MCP access 
+STAS-384 | 82 | 82 | 0 | todo | awaiting-approval | plan-review-replan-cap | 2026-11-08T06:19:56.231Z | TaskStore index: otvorene karty miznu z dosky aj z auto-claim scanu (d
+STAS-385 | 79 | 79 | 0 | todo | awaiting-approval | plan-review-replan-cap | 2026-11-08T06:20:00.571Z | Overovací prostredie: primary checkout je 106 commitov za main a edita
+STAS-209 | 48 | 48 | 0 | done | None | None | 2026-09-17T06:09:00.820Z | Curator digest pair: digest_provider on a key provider + digest_model_
+STAS-393 | 48 | 48 | 0 | todo | awaiting-approval | plan-review-replan-cap | 2026-11-08T06:20:05.503Z | Restack the engine tool-result stack (STAS-389 + STAS-391) onto the li
+STAS-270 | 44 | 44 | 0 | done | None | None | 2026-10-04T20:35:55.382Z | 
+STAS-374 | 34 | 34 | 0 | todo | awaiting-approval | plan-review-replan-cap | 2026-11-08T06:19:44.578Z | Absorb upstream: merge origin/main into our main, upstream-wins on the
+STAS-158 | 26 | 26 | 0 | done | None | None | 2026-08-31T14:15:35.690Z | Restore Pi CLI installer wiring on main
+STAS-258 | 23 | 23 | 0 | done | None | None | 2026-09-24T08:38:02.301Z | Close the write half of the isError invariant: mutating tools must fai
+STAS-156 | 21 | 21 | 0 | done | None | None | 2026-08-31T07:07:18.214Z | Content complete but UNLANDED on the canonical trunk
+STAS-362 | 19 | 18 | 0 | in-progress | paused | None | 2026-11-04T00:53:48.766Z | ⛔ DO NOT EXECUTE — SUPERSEDOVANÉ operátorom: absorpciu origin/main nes
+STAS-237 | 13 | 13 | 0 | done | None | None | 2026-09-22T13:57:07.249Z | 
+STAS-261 | 12 | 12 | 0 | done | None | None | 2026-09-23T18:57:49.849Z | 
+STAS-184 | 6 | 6 | 0 | done | None | None | 2026-09-04T14:14:53.794Z | FOUNDER DIRECTIVE 2026-09-04 12:53Z + DESIGN RULING
+STAS-185 | 5 | 5 | 0 | done | None | None | 2026-09-05T10:10:00.133Z | Why this matters: the curator backfill the founder is
+STAS-157 | 3 | 3 | 0 | done | None | None | 2026-08-31T10:06:56.133Z | Pin mcp upper bound (<2) in pyproject.toml + regenerate uv.lock
+STAS-222 | 3 | 3 | 0 | done | None | None | 2026-09-17T13:19:38.455Z | 
+STAS-225 | 3 | 3 | 0 | done | None | None | 2026-09-17T17:16:46.326Z | 
+STAS-262 | 3 | 3 | 0 | done | None | None | 2026-09-25T21:21:22.750Z | 
+STAS-167 | 2 | 2 | 0 | done | None | None | 2026-09-01T19:55:14.230Z | Prove the AXI CLI contract holds green on current trunk under the pinn
+STAS-240 | 2 | 2 | 0 | done | None | None | 2026-09-23T08:06:05.106Z | 
+STAS-298 | 2 | 2 | 0 | done | None | None | 2026-10-08T15:34:54.092Z | Prove the pi MCP consumer leg E2E against a local trunk-built stack (p
+STAS-381 | 2 | 2 | 0 | done | None | None | 2026-11-04T04:09:37.630Z | Landing-rail: re-base a pristátie dodávok, čo skončili done/in-review 
+STAS-390 | 2 | 2 | 0 | done | None | None | 2026-11-05T11:28:20.327Z | Engine trunk landing: rebaz oboch tool-channel línií na živý hrot + su
+STAS-394 | 2 | 0 | 0 | done | None | None | 2026-11-07T19:31:34.408Z | Engine: idempotent follow-up title composition - "Fix: " prefix accumu
+STAS-147 | 1 | 1 | 0 | done | None | None | 2026-08-30T10:15:38.874Z | Remove the remaining runtime-only dead CSS from www/app/globals.css (c
+STAS-166 | 1 | 1 | 0 | done | None | None | 2026-09-01T14:08:02.193Z | Route app loggers to stderr at app startup (single root StreamHandler)
+STAS-199 | 1 | 1 | 0 | todo | needs-replan | None | 2026-09-06T23:31:45.398Z | Duplicate replay re-pushes do not re-pin the curator watermark; founde
+STAS-232 | 1 | 1 | 0 | done | None | None | 2026-09-19T19:03:02.584Z | 
+STAS-246 | 1 | 1 | 0 | done | None | None | 2026-09-22T23:52:48.758Z | 
+STAS-256 | 1 | 1 | 0 | done | None | None | 2026-09-23T09:24:55.209Z | Follow-up from STAS-251's code review (read-path half of the same fals
+STAS-316 | 1 | 1 | 0 | done | None | None | 2026-10-03T21:24:27.879Z | RE-EXECUTE release unblock: merge LIVE origin/main into trunk + fold a
+STAS-331 | 1 | 1 | 0 | done | None | None | 2026-10-15T23:05:50.296Z | Defekt enginu (repo Fusion, /home/schindler/git/Fusion — NIE stash kód
+STAS-371 | 1 | 1 | 0 | done | None | None | 2026-11-03T00:57:49.031Z | Absorb upstream: renumber our alembic tail onto upstream head
+STAS-382 | 1 | 1 | 0 | done | None | None | 2026-11-04T06:34:14.436Z | Engine: re-seed strop je opakovane nabiciteľný — plánovacia lane sa pr
+STAS-388 | 1 | 1 | 0 | done | None | None | 2026-11-04T23:00:53.679Z | Tool-result channel authority invariant: re-derive the engine chokepoi
+STAS-389 | 1 | 1 | 0 | done | None | None | 2026-11-05T03:02:37.186Z | Nástrojový kanál: nulová autorita výstupu nástroja nad obálkou a rolam
+STAS-132 | 0 | 1 | 0 | done | None | None |  | Make backend app-logger records visible in container logs
+STAS-137 | 0 | 3 | 0 | done | None | None |  | Port the Pi CLI installer wiring onto the origin/main trunk
+STAS-138 | 0 | 1 | 0 | done | None | None |  | Hand-off of STAS-137 review's two pi-scope non-blocking
+STAS-140 | 0 | 1 | 0 | done | None | None |  | Fix test hermeticity in plugins/tests/test_ensure_cli.py
+STAS-144 | 0 | 1 | 0 | done | None | None |  | Remove dead collab-service leftovers from ARCHITECTURE.md, render.yaml
+STAS-146 | 0 | 1 | 0 | done | None | None |  | Remove dead editor styling text from the landing page stylesheet
+cards_scanned=302
+cards_with_warning=44
+total_warning_rows=3908
+total_log_refusal_rows=3913

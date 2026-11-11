@@ -1,0 +1,49 @@
+### STAS-399 AC4: reconciling "the evicted set is identical with no marker" against "the notice is paid for out of the same budget"
+
+The two requirements cannot both hold literally, and this print states which one the card keeps and what the
+other one costs. Numbers are read from ac4-base-vs-tip-eviction.txt (same fixtures, same run, base module =
+`git show HEAD:...agent-instructions.ts` captured before any edit).
+
+fixture                          base_dropped  tip_dropped  extra  extra_victim_chars  tip_notice_chars  base_render  tip_render
+56 x 1011 (AC2 shape)                    8           9        1        1,026                   467           50,166       49,342
+300 x 200 tiny (elision shape)          90          95        5        ~1,035 total            976           50,901       50,419
+58 x 1011 (AC4-default shape)           10          11        1        1,026                   502           50,216       49,424
+rule + 43 ticks + 3 bulk (AC5 shape)    11          12        1        1,028                   510           50,837       50,055
+heading-less blob                        0           0        0        0                       261           50,900       49,876
+single giant section                     0           0        0        0                       366           50,903       49,981
+
+WHAT IS PROVABLY UNCHANGED (the compatibility proof AC4 actually demands)
+1. ORDERING. `base_is_ordered_prefix_of_tip=true` for all six fixtures: base's evicted list is a prefix, in
+   the same order, of tip's evicted list. The rule that picks the NEXT victim is the same rule. With no
+   marker anywhere, no section that the positional rule would have kept is sacrificed in preference to one
+   it would have sacrificed: the in-repo assertion
+   `dropped == specs.slice(0, dropped.length)` (guard file, "leaves the evicted set identical to the
+   positional rule") pins exactly this and is green.
+2. NO NEW CODEPATH. One ordering function runs for marked and unmarked files alike; there is no branch keyed
+   on "file has no marker", so there is no second truncation behaviour to diverge.
+
+WHAT CHANGED, AND WHY IT MUST
+3. SIZE. The tip sacrifices strictly more content, by enough to pay for the notice: every extra victim costs
+   the notice reserve. 1,026 for one 1,011-body section, ~1,035 for five 200-body sections, 0 where nothing
+   is nameable (heading-less blob, single giant section). 1,024 = MEMORY_CLAMP_NOTICE_BUDGET_CHARS.
+4. WHY THE SPEC'S LITERAL "set difference 0 and 0" IS NOT SHIPPABLE. D1 states: "The notice text is counted
+   against the memory budget, never added on top of it - if adding the notice pushes more content out than
+   it reports, the fix is worse than the defect, and AC2 pins that." AC2's length invariant
+   (`notice + body <= MAX_MEMORY_LENGTH` for the clamped source) forces the content budget down by the
+   reserve, and a smaller content budget sacrifices at least one more section. AC4's literal set-equality and
+   AC2's length invariant are therefore mutually exclusive for an over-budget corpus. The card keeps AC2/D1
+   (the operator's explicit decision) and satisfies AC4 as "same order, same victims first, the extra victims
+   are exactly the report's price and every one of them is named".
+5. THE DECISION IS NOT SILENT. Every extra victim appears in the notice by heading, in eviction order, so a
+   reader of the prompt can see the report's own cost. Before the card the notice added 265 chars on top of
+   49,262 chars of content (notice-cost-base.txt) - the budget was already being spent, it just was not
+   announced. Note `base_render` / `tip_render` in the table are the whole clamped source as rendered into the
+   prompt, so they include the `## Agent Memory` framing (~640 chars for these fixtures) and are NOT directly
+   comparable to the 50,000 clamp; the clamp-bounded quantity is notice + body, asserted in the guard file as
+   `body.length + line.length <= MAX_MEMORY_LENGTH` (printed by the test as `[AC2-length]`).
+
+PRICE, STATED PLAINLY FOR A REVIEWER
+6. Reporting the drops costs at most ~1,024 chars of memory per clamped source per wake - about one average
+   `## ` section - and buys every dropped heading by name plus which rule chose them. A source that fits in
+   budget pays nothing at all, and its render carries no notice (asserted by the "emits no notice at all when
+   nothing was dropped" test).

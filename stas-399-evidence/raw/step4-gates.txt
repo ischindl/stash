@@ -1,0 +1,52 @@
+### STAS-399 Step 4 static gates (post agent-tools comment shrink)
+sha: 217833095935ff88da3f5c4996c9eb85f1908dba
+2026-11-10T04:04:49Z
+=== check:changesets ===
+rc=0
+=== check:nonlatin-tracked-text ===
+rc=254
+=== check:prompt-volatility ===
+rc=0
+=== check:fnxc-future-dates ===
+[check-fnxc-future-dates] 0 known future-dated stamp(s), none added.
+rc=0
+=== pnpm test:gate:static (root static gate) ===
+started: 2026-11-10T04:05:13Z
+check-capacity-pool-id: ok (1887 files inspected)
+check-cli-runtime-routing: ok
+docker workspace manifests: all 37 staged before pnpm install
+[check-lockfile-importers] 38 lockfile importers, 38 manifests, 442 dependency records in sync
+✅ @fusion/dashboard mock completeness: all hardcoded mocks cover source imports.
+✅ @fusion/engine mock completeness: all hardcoded mocks cover source imports.
+inert-sync-lane: 0 guard(s) consuming a sync-resolved lane across 0 file(s)
+[check-runtime-skill-loader-drift] Claude and Grok loaders match as a clean rename-diff (342 lines).
+retention coverage OK: 111 module-scope Map/Set declarations classified (38 census-registered, 4 bounded, 13 carrying expiry evidence)
+  pending root packages/engine/src: 140 module-scope declarations, 54 still unclassified (not yet gated — RUFU-257 classified the crashing process first)
+  pending root packages/core/src: 144 module-scope declarations, 44 still unclassified (not yet gated — RUFU-257 classified the crashing process first)
+  pending root packages/cli/src: 10 module-scope declarations, 3 still unclassified (not yet gated — RUFU-257 classified the crashing process first)
+changeset migration references: 9 reference(s) resolve against /home/schindler/git/stash/.fusion/worktrees/stas-399/.engine/stas-399-engine/packages/core/src/postgres/migrations
+rc=0
+=== eslint on changed paths (root eslint config) ===
+2026-11-10T04:06:19Z
+
+/home/schindler/git/stash/.fusion/worktrees/stas-399/.engine/stas-399-engine/.changeset/stas-399-memory-eviction-notice.md
+  0:0  warning  File ignored because no matching configuration was supplied
+
+/home/schindler/git/stash/.fusion/worktrees/stas-399/.engine/stas-399-engine/packages/engine/src/__tests__/agent-instructions.test.ts
+  0:0  warning  File ignored because of a matching ignore pattern. Use "--no-ignore" to disable file ignore settings or use "--no-warn-ignored" to suppress this warning
+
+/home/schindler/git/stash/.fusion/worktrees/stas-399/.engine/stas-399-engine/packages/engine/src/__tests__/agent-memory-eviction-notice.test.ts
+  0:0  warning  File ignored because of a matching ignore pattern. Use "--no-ignore" to disable file ignore settings or use "--no-warn-ignored" to suppress this warning
+
+✖ 3 problems (0 errors, 3 warnings)
+
+eslint_rc=0
+
+### CORRECTION, measured later in Step 4 (so no reader mis-reads the rc=254 above)
+`pnpm check:nonlatin-tracked-text` returned rc=254 because that pnpm script alias is not declared in the
+root package.json; rc=254 is pnpm's "no such script" status, not a gate verdict.
+The real gate was measured twice, both passing:
+  1. the script run directly at tip 324da3366f -> rc (printed as the last line of this file)
+  2. the same script chained inside `pnpm test:gate:static` above -> rc=0, which is the gate that matters
+     because it is also part of `pretest`.
+  node scripts/check-nonlatin-tracked-text.mjs -> rc=0 (measured 2026-11-10T05:24:18Z at tip 324da3366f)

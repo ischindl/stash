@@ -1,0 +1,75 @@
+STAS-395 AC3 - the lane's verdict, one row per executed case
+transcribed_from=stas-395-evidence/raw/step4-mutation-restored-run.txt
+that capture is the run of the delivered test file at the delivered tip, executed on this host
+  vitest 4.1.10, config vitest.pg.config.ts, FUSION_PG_TEST_URL_BASE=postgresql://localhost:55432
+  run exit status read outside any pipe: rc=0
+  Test Files  1 passed (1)
+  Tests  6 passed (6)
+
+Fields, per the code printed in stas-395-evidence/raw/lane-and-harness.txt:
+  head_guard        = the guard at the head of resolveSameAgentDuplicateIntake (task-creation.ts:1552):
+                      `if (!sourceAgentId && !sourceParentTaskId) return;`
+  candidate_filter  = which branch of the candidate filter kept or dropped the candidate
+                      (tombstoned branch at :1565-1577, live branch at :1579-1586)
+  wrote             = the write statements the lane actually executed, read back from the row, the
+                      activity log and the run-audit table; `none` when it wrote nothing
+  created_before    = the row state at insert time, i.e. after the insert and before the lane ran,
+                      because the lane runs inside createTask between the insert and the lifecycle emit
+  created_after     = column / paused / deleted_at read back from PostgreSQL after createTask returned
+  status            = the `column` value, which is this schema's board status; there is no second status column
+  deletion marker   = deleted_at plus allow_resurrection
+  verdict           = fail-open (a card was created and nothing was rejected) or rejected
+
+=== rows, copied verbatim from the run's own stdout/stderr ===
+case="no source lineage (control)" head_guard=returned-early candidate_filter=not-reached wrote=none created_before=column=todo paused=0 deleted_at=null created_after=column=todo paused=0 deleted_at=null allow_resurrection=0 new_card_moved=false new_card_paused=0 new_card_soft_deleted=false candidate_before=absent candidate_after=absent verdict=lane-not-run
+
+case="parent populated, sourceAgentId empty, live sibling" head_guard=proceeded candidate_filter=live-sibling-kept wrote=sourceMetadata.nearDuplicateOf=KB-001 sourceMetadata.nearDuplicateScore=1.05 activity=task:near-duplicate-flagged created_before=column=todo paused=0 deleted_at=null created_after=column=todo paused=0 deleted_at=null allow_resurrection=0 new_card_moved=false new_card_paused=0 new_card_soft_deleted=false candidate_before=column=todo paused=0 deleted_at=null allow_resurrection=0 candidate_after=column=todo paused=0 deleted_at=null allow_resurrection=0 verdict=fail-open
+
+case="parent populated, sourceAgentId empty, tombstoned candidate" head_guard=proceeded candidate_filter=tombstone-dropped (sourceAgentId == null) wrote=none created_before=column=todo paused=0 deleted_at=null created_after=column=todo paused=0 deleted_at=null allow_resurrection=0 new_card_moved=false new_card_paused=0 new_card_soft_deleted=false candidate_before=column=archived paused=0 deleted_at=2026-11-07T23:43:43.777Z allow_resurrection=0 candidate_after=column=archived paused=0 deleted_at=2026-11-07T23:43:43.777Z allow_resurrection=0 verdict=fail-open
+
+case="parent populated, sourceAgentId populated, live sibling" head_guard=proceeded candidate_filter=live-sibling-kept (same agent) wrote=sourceMetadata.nearDuplicateOf=KB-001 activity=task:near-duplicate-flagged created_before=column=todo paused=0 deleted_at=null created_after=column=todo paused=0 deleted_at=null allow_resurrection=0 new_card_moved=false new_card_paused=0 new_card_soft_deleted=false candidate_before=column=todo paused=0 deleted_at=null allow_resurrection=0 candidate_after=column=todo paused=0 deleted_at=null allow_resurrection=0 verdict=fail-open
+
+case="parent populated, sourceAgentId populated, tombstoned candidate" head_guard=proceeded candidate_filter=tombstone-kept (same agent, inside sticky window) wrote=audit=mutationType:intake:resurrection-blocked matchedTaskId=KB-001 stickyWindowDays=7 softDeleteOfNewCard=true throw=TombstonedTaskResurrectionError created_before=column=todo paused=0 deleted_at=null created_after=column=archived paused=0 deleted_at=2026-11-07T23:43:44.087Z allow_resurrection=0 new_card_moved=true new_card_paused=0 new_card_soft_deleted=true candidate_before=column=archived paused=0 deleted_at=2026-11-07T23:43:44.043Z allow_resurrection=0 candidate_after=column=archived paused=0 deleted_at=2026-11-07T23:43:44.043Z allow_resurrection=0 verdict=rejected
+
+case="different creating agent, live sibling" head_guard=proceeded candidate_filter=dropped (neither agentMatch nor parentMatch) wrote=none created_before=column=todo paused=0 deleted_at=null created_after=column=todo paused=0 deleted_at=null allow_resurrection=0 new_card_moved=false new_card_paused=0 new_card_soft_deleted=false candidate_before=column=todo paused=0 deleted_at=null allow_resurrection=0 candidate_after=column=todo paused=0 deleted_at=null allow_resurrection=0 verdict=fail-open
+
+=== totals ===
+executed_cases=6
+verdict_fail_open=4
+verdict_lane_not_run=1   (the control; it proves the other rows are not the lane never running)
+verdict_rejected=1   (expected 0 per the Original Description; see the correction below)
+
+=== both branches of the tombstoned filter were constructible on this host ===
+Both tombstoned rows use the store's own delete path, TaskStore.deleteTask, and nothing else:
+  no JSON record was poked, no row was updated by hand, no private field was touched.
+The two rows differ only in the incoming sourceAgentId, which is exactly the predicate the filter tests:
+  empty sourceAgentId  -> the tombstoned candidate is dropped by `sourceAgentId == null` at :1567 -> nothing written
+  populated sourceAgentId, same agent, inside the sticky window -> the candidate is kept -> rejection branch at :1590-1618
+
+=== CORRECTION to the inherited claim C4, printed rather than absorbed ===
+Claim C4 said the tombstone-resurrection branch is gated on a non-null sourceAgentId and that therefore
+rejection cannot occur and the lane is fail-open. The gate is real, but the conclusion is wrong:
+when sourceAgentId IS populated and matches a tombstoned record created inside the sticky window, the
+lane does not fail open. It writes an intake:resurrection-blocked run-audit row, soft-deletes the new
+card through the store delete path - which also moves it out of `todo` into `archived` - and throws
+TombstonedTaskResurrectionError out of createTask. That is the row whose verdict is `rejected`.
+rejected_total_printed=1 and it is NOT 0, so this card reports it and changes no production code.
+The narrower true statement for the mission-triage producer is: that producer leaves sourceAgentId empty,
+so *its* cards take the drop-the-tombstone path and fail open. The lane itself is not uniformly fail-open.
+
+=== scratch storage the measurement wrote to (from the test's own output) ===
+  store_root=/tmp/fusion-test-workers-XqAYQB/redir-3700862/fusion_stas395_same_agent-pg-mfA7re  scratch_database=fusion_stas395_same_agent_3700862_1_a9ju7s
+Both are throwaway paths created by the pg harness for this run: a temporary root under the system
+test-workers directory and a per-run database on the throwaway postmaster at port 55432.
+No live board directory and no database named in this repository's env files was written.
+
+=== re-verification in the close tick of the same card run ===
+transcribed_again_from=stas-395-evidence/raw/step4-green-run-close-tick.txt
+run exit status read outside any pipe: rc=0
+  Test Files  1 passed (1)
+  Tests  6 passed (6)
+  skipped word occurrences in the whole run output: 0
+  verdict lines printed by the file itself: 6, of which verdict=rejected: 1
+scratch storage this re-run wrote to: store_root=/tmp/fusion-test-workers-zkUrG8/redir-3850957/fusion_stas395_same_agent-pg-5PhAmo
+  scratch_database=fusion_stas395_same_agent_3850957_1_i9nshd
+Every verdict line in this table was reproduced by the re-run; no case changed verdict.

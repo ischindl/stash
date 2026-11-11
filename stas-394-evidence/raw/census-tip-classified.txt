@@ -1,0 +1,87 @@
+census input : raw/census-tip-nontest.txt   hits=62
+source read  : /home/schindler/git/stash/.fusion/worktrees/stas-394/.engine/stas-394-engine  (tracked files at the delivered tip)
+
+== comment prose in source: docstring or quoted log text, never composed
+   13 hits in 12 file(s): packages/core/src/async-stores/async-approval-request-store.ts, packages/core/src/plugins/pi-extensions.ts, packages/core/src/task-store/moves.ts, packages/core/src/task-store/remediation-step-ops.ts, packages/core/src/task-store/task-artifacts-ops.ts, packages/dashboard/app/components/TaskCard.tsx, packages/dashboard/app/lib/step-display.ts, packages/dashboard/src/github.ts, packages/engine/src/agent-heartbeat.ts, packages/engine/src/auth/auth-storage.ts, packages/engine/src/executor/append-review-remediation-steps.ts, plugins/fusion-plugin-dependency-graph/src/DependencyGraph.tsx
+     packages/core/src/async-stores/async-approval-request-store.ts:277: * Fix: re-read via the tx handle, re-validate, then a GUARDED update
+     packages/core/src/plugins/pi-extensions.ts:129: * Fix: resolve the linked-worktree relationship directly from git's own on-disk
+     packages/core/src/task-store/moves.ts:1025:        Fix: UNION the legacy targets with the workflow-resolved adjacency for legacy sources. This
+     packages/core/src/task-store/remediation-step-ops.ts:65:    in-progress", immediately followed by "Ignored post-completion in-progress for step 6 (Fix: ...)"
+     packages/core/src/task-store/task-artifacts-ops.ts:660:Fix: an identical newest entry is not written again (the poll re-raises the same sentence, not a new
+     packages/dashboard/app/components/TaskCard.tsx:2749:   * Fix: a known per-task override renders immediately (it's synchronous,
+     packages/dashboard/app/lib/step-display.ts:18:Fix: every surface that displays a step number must derive it from this single helper,
+     packages/dashboard/src/github.ts:4685:    // Fix: read the authoritative Actor `__typename` (User | Bot | Organization | Mannequin) via
+     packages/engine/src/agent-heartbeat.ts:8355:         * `zombie-timer-rearmed` symptom). Fix: when an agent is no longer
+     packages/engine/src/agent-heartbeat.ts:8386:         * self-heal within minutes just by virtue of ticking often). Fix: when a timer entry IS present
+     packages/engine/src/auth/auth-storage.ts:510:    pi >=0.80.8 moved session request auth from `ModelRegistry.getApiKeyAndHeaders` (which called fusion's `getApiK
+     packages/engine/src/executor/append-review-remediation-steps.ts:370:      in-progress for step 12 (Fix: ...)" with no reopen entry anywhere before it.
+     plugins/fusion-plugin-dependency-graph/src/DependencyGraph.tsx:255:  Fix: only fit once the graph is actually fittable — viewport measured (width/height > 0) AN
+
+== composer: the single production owner of the literal (string + its own doc)
+   2 hits in 1 file(s): packages/core/src/tasks/fix-title.ts
+     packages/core/src/tasks/fix-title.ts:6: * string reaches operators. It is exported from here alone; every site that wants a `Fix: ` title
+     packages/core/src/tasks/fix-title.ts:9:export const FIX_TITLE_PREFIX = "Fix: " as const;
+
+== identifier syntax: a member named …Fix followed by a TypeScript colon, not a string
+   16 hits in 12 file(s): packages/engine/src/errors/retry-burned-logger.ts, packages/engine/src/executor/append-review-remediation-steps.ts, packages/engine/src/executor/bounce-verification-failure.ts, packages/engine/src/executor/execute-workflow-graph.ts, packages/engine/src/executor/handle-graph-failure.ts, packages/engine/src/executor/recover-failed-pre-merge-step.ts, packages/engine/src/executor/request-pre-merge-optional-step-fix.ts, packages/engine/src/executor/review-arbitration.ts, packages/engine/src/executor/review-convergence-ladder.ts, packages/engine/src/executor/run-implementation.ts, packages/engine/src/project-engine.ts, packages/engine/src/workflows/workflow-graph-task-runner.ts
+     packages/engine/src/errors/retry-burned-logger.ts:34:  postReviewFix: "postReviewFixCount",
+     packages/engine/src/executor/append-review-remediation-steps.ts:34:  sendTaskBackForFix: (...args: any[]) => Promise<void>;
+     packages/engine/src/executor/bounce-verification-failure.ts:70:  sendTaskBackForFix: (
+     packages/engine/src/executor/execute-workflow-graph.ts:167:  requestPreMergeOptionalStepFix: AnyFn;
+     packages/engine/src/executor/execute-workflow-graph.ts:1272:        requestPreMergeOptionalStepFix: (taskId, info) => deps.requestPreMergeOptionalStepFix(taskId
+     packages/engine/src/executor/handle-graph-failure.ts:166:  requestPreMergeOptionalStepFix: AnyFn;
+     packages/engine/src/executor/handle-graph-failure.ts:169:  routeRetryableRemediationGraphFailureToPreMergeFix: AnyFn;
+     packages/engine/src/executor/recover-failed-pre-merge-step.ts:62:  sendTaskBackForFix: (
+     packages/engine/src/executor/request-pre-merge-optional-step-fix.ts:197:  sendTaskBackForFix: (
+     packages/engine/src/executor/review-arbitration.ts:31:  sendTaskBackForFix: (
+     packages/engine/src/executor/review-convergence-ladder.ts:48:  sendTaskBackForFix: (
+     packages/engine/src/executor/run-implementation.ts:296:  attemptExecutorVerificationFix: AnyFn;
+     packages/engine/src/executor/run-implementation.ts:357:  sendTaskBackForFix: AnyFn;
+     packages/engine/src/executor/run-implementation.ts:1762:                        sendTaskBackForFix: deps.sendTaskBackForFix,
+     packages/engine/src/project-engine.ts:2844:      requestTargetedFix: async (task, decision) => {
+     packages/engine/src/workflows/workflow-graph-task-runner.ts:457:        requestPreMergeOptionalStepFix: this.deps.requestPreMergeOptionalStepFix,
+
+== markdown: historical release notes and reviewer-persona instructions
+   22 hits in 6 file(s): packages/cli/CHANGELOG.md, packages/dashboard/CHANGELOG.md, plugins/fusion-plugin-compound-engineering/src/agents/ce-agent-native-reviewer.md, plugins/fusion-plugin-compound-engineering/src/agents/ce-coherence-reviewer.md, plugins/fusion-plugin-compound-engineering/src/agents/ce-design-implementation-reviewer.md, plugins/fusion-plugin-compound-engineering/src/skills/ce-code-review/references/personas/agent-native-reviewer.md
+     packages/cli/CHANGELOG.md:9036:  dev: pi >=0.80.8 moved session auth from `ModelRegistry.getApiKeyAndHeaders` (fusion's `getApiKey`) to `ModelRuntime.getAuth` -
+     packages/cli/CHANGELOG.md:13854:  Fix: introduce a `resolveScopedChatStore(projectId)` helper inside
+     packages/cli/CHANGELOG.md:13866:  Fix: introduce `fetchAllMessagesInChat()` that paginates through the API's
+     packages/cli/CHANGELOG.md:13988:  Fix: `TaskStore.moveTaskInternal` now treats `queued`/`blockedBy`/`overlapBlockedBy` as todo-only dispatch state and scrubs th
+     packages/cli/CHANGELOG.md:14187:  Fix: claim the executing slot synchronously immediately after the `has()` check, release it on the heartbeat-defer early retur
+     packages/cli/CHANGELOG.md:14227:  Fix: at the top of the per-task reclaim loop, check `activeSessionRegistry.isPathActive(task.worktree)` and `continue` for any
+     packages/cli/CHANGELOG.md:14264:- 97d92da: Fix: ntfy notifications for `in-review` and merged task events now fire even when notification settings were enabled 
+     packages/cli/CHANGELOG.md:14273:- be6279f: Fix: ntfy 'merged' notifications now fire for every merge-success path (auto-finalize no-op merges, mergeConfirmed fa
+     packages/cli/CHANGELOG.md:14315:- 7ff4279: Fix: chat and chat-rooms composer now grows to always show entered text.
+     packages/cli/CHANGELOG.md:14700:- b3f9a8a: Fix: enabling GitHub tracking on a task imported from GitHub now creates a tracking issue instead of silently skippin
+     packages/cli/CHANGELOG.md:14791:- d899443: Fix: clear task-level pause on `fn_task_done` so explicit agent completions cannot strand tasks in a `paused` state. 
+     packages/cli/CHANGELOG.md:15065:- d90d665: Fix: dependency graph plugin failed to load because its plugin entry imported React/dashboard modules. Split the plug
+     packages/cli/CHANGELOG.md:15092:- d90d665: Fix: dashboard board silently dropped tasks when an SSE `task:created` event was missed (e.g., during reconnect or sl
+     packages/dashboard/CHANGELOG.md:2065:  Fix: keep the store reference and call `storeWithRunAudit.getRunAuditEvents(...)` as a method so `this` is preserved, mat
+     plugins/fusion-plugin-compound-engineering/src/agents/ce-agent-native-reviewer.md:167:1. **[Issue]** -- `file:line` -- [Description]. Fix: [How]
+     plugins/fusion-plugin-compound-engineering/src/agents/ce-coherence-reviewer.md:38:- **Header/body count mismatch.** Section header claims a count (e.g., "6 requ
+     plugins/fusion-plugin-compound-engineering/src/agents/ce-coherence-reviewer.md:39:- **Cross-reference to a named section that does not exist.** Text says "see U
+     plugins/fusion-plugin-compound-engineering/src/agents/ce-coherence-reviewer.md:40:- **Terminology drift between two interchangeable synonyms.** Two words used f
+     plugins/fusion-plugin-compound-engineering/src/agents/ce-coherence-reviewer.md:43:- **Missing list entry derivable from elsewhere in the document.** A list clai
+     plugins/fusion-plugin-compound-engineering/src/agents/ce-design-implementation-reviewer.md:54:     - Fix: [Specific CSS/code change needed]
+     plugins/fusion-plugin-compound-engineering/src/agents/ce-design-implementation-reviewer.md:59:     - Fix: [Detailed correction steps]
+     plugins/fusion-plugin-compound-engineering/src/skills/ce-code-review/references/personas/agent-native-reviewer.md:159:1. **[Issue]** -- `file:line` -- [Descript
+
+== repo script: console / repair-hint text printed to a developer, never a card title
+   5 hits in 5 file(s): scripts/check-changeset-migration-references.mjs, scripts/check-inert-sync-lane-conversions.mjs, scripts/check-lockfile-importers.mjs, scripts/check-mock-completeness.mjs, scripts/check-pre-json-anchor.mjs
+     scripts/check-changeset-migration-references.mjs:65:  console.error(`  Fix: rename the reference to the file actually present in packages/core/src/postgres/migr
+     scripts/check-inert-sync-lane-conversions.mjs:445:  console.error("\nFix: resolve asynchronously (thread the lane in from a caller that already awaited a store 
+     scripts/check-lockfile-importers.mjs:220:    "fails unrelated cards' squash merges on the File Scope guard. Fix: run `pnpm install` and commit",
+     scripts/check-mock-completeness.mjs:280:      `Fix: add the missing export(s) to each vi.mock("${cfg.moduleName}") factory,\n` +
+     scripts/check-pre-json-anchor.mjs:84:        `    Fix: git checkout <last chore(release) tag> -- .changeset/pre.json`,
+
+== string literal in production source: needs an explicit verdict
+   2 hits in 2 file(s): packages/engine/src/spec-validation/external-integration-evidence.ts, packages/engine/src/spec-validation/task-document-references.ts
+     packages/engine/src/spec-validation/external-integration-evidence.ts:168:      "    Fix: add canonical upstream repo/docs/release URL evidence, CLI name in back
+     packages/engine/src/spec-validation/task-document-references.ts:133:    lines.push("    Fix: either remove these references, list the file under File Scope as a
+
+== stylesheet comment
+   2 hits in 2 file(s): packages/dashboard/app/components/AgentDetailView.css, packages/dashboard/app/components/MemoryView.css
+     packages/dashboard/app/components/AgentDetailView.css:79:Fix: allow the header to wrap, let the identity block shrink (`flex: 1 1 auto; min-width: 0`) so the na
+     packages/dashboard/app/components/MemoryView.css:100:Fix: scope the working-tab layout under `.memory-working-tab` so these rules out-specify the SettingsModal.
+
+accounted=62 of 62

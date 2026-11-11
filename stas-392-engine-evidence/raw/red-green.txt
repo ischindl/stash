@@ -1,0 +1,245 @@
+# STAS-392 — AC5 — two fresh red-greens on the new ground, one per layer
+# generated: 2026-11-05T18:30:26Z
+# Neither run is recycled from STAS-390 or STAS-391; both were measured on a base
+# this card does not share. Evidence is admissible only for the tip it names.
+
+# LAYER 1 — the channel invariant at the delivered 390 tip
+admissible for: refs/heads/fusion/stas-390-tool-channel-authority = e6b1fe4c7f4bafa36727e33e8df7c400e87c6a91
+
+The checkout is switched to this layer's own branch first, so the test files running
+are the ones this layer ships — measuring layer 1 while a later layer's tests are in the
+tree would count their failures too, and the two layers would not be separable.
+
+checked out for layer 1: fusion/stas-390-tool-channel-authority = e6b1fe4c7f4bafa36727e33e8df7c400e87c6a91
+
+  $ (cd packages/pi-claude-cli && NO_COLOR=1 ./node_modules/.bin/vitest run both test files, branch tip)
+RUN  <vitest> <package-dir>
+✓ src/__tests__/tool-channel-authority.test.ts > a tool result cannot write the frame it is delivered in (AC2) > cannot terminate its own envelope, because on 2026-11-05 a payload holding the closing tag twice and the opening tag once turned one authored close tag into three and put the text after it outside any frame 
+✓ src/__tests__/tool-channel-authority.test.ts > a tool result cannot write the frame it is delivered in (AC2) > cannot extend the frame either, because an opening tag the payload writes is a second envelope the assembler never authored and a reader cannot tell which one is real 
+✓ src/__tests__/tool-channel-authority.test.ts > a tool result cannot write the frame it is delivered in (AC2) > still reaches the model byte-for-byte once the documented escaping is undone, because neutralising a delimiter must not quietly edit the report a tool actually printed 
+✓ src/__tests__/tool-channel-authority.test.ts > a tool result cannot write the frame it is delivered in (AC2) > survives the ordinary case of a tool reading this very guard back, because the guard's own source contains these literals and refusing that output would break a routine read for every agent on this provider 
+✓ src/__tests__/tool-channel-authority.test.ts > a tool result cannot mint a role key (AC1) > cannot produce a line-initial USER: the model could read as a new user turn, because the assembled string is handed over as the text of one user message and the only thing separating roles from data is that the assembler writes these keys 
+✓ src/__tests__/tool-channel-authority.test.ts > a tool result cannot mint a role key (AC1) > cannot produce a line-initial ASSISTANT: either, because a forged assistant turn is how a payload gets its own words attributed to the assistant 
+✓ src/__tests__/tool-channel-authority.test.ts > a tool result cannot mint a role key (AC1) > cannot mint the section key the assembler also emits, because `TOOL RESULT (<name>):` is a third key and not only the two the report named 
+✓ src/__tests__/tool-channel-authority.test.ts > a tool result cannot mint a role key (AC1) > cannot mint a role key on the resumed-session delta, because that is where a fresh bash payload actually reaches the model and there the forged key was the only line-initial one besides the tool section 
+✓ src/__tests__/tool-channel-authority.test.ts > a tool result cannot mint a role key (AC1) > keeps a role word that merely appears inside a sentence untouched, because prose about a role is data and rewriting it would be the sledgehammer this card forbids 
+✓ src/__tests__/tool-channel-authority.test.ts > an ordinary payload is not rewritten (the anti-sledgehammer guard) > reaches the model byte-for-byte when it carries neither a frame delimiter nor a line-initial role key, because every payload the landed tests already pin must keep passing unchanged 
+✓ src/__tests__/tool-channel-authority.test.ts > an ordinary payload is not rewritten (the anti-sledgehammer guard) > keeps the empty payload saying so instead of going silent, because this card must not widen or weaken the fail-loud rule it builds on 
+✓ src/__tests__/tool-result-authority.test.ts > tool result stays data on the model-visible path > marks the measured payload (an unprefixed imperative in bash stdout) as untrusted data, because on 2026-11-04 that exact shape arrived in a bash result on this platform and no rule told the model to read it instead of obeying it 
+✓ src/__tests__/tool-result-authority.test.ts > tool result stays data on the model-visible path > labels a payload opening with System: as directive-shaped while keeping it byte-for-byte data, because a directive-shaped prefix is a severity signal, not a permission to obey or to drop the payload 
+✓ src/__tests__/tool-result-authority.test.ts > tool result stays data on the model-visible path > labels a payload opening with Directives: as directive-shaped while keeping it byte-for-byte data, because a directive-shaped prefix is a severity signal, not a permission to obey or to drop the payload 
+✓ src/__tests__/tool-result-authority.test.ts > tool result stays data on the model-visible path > labels a payload opening with Instruction: as directive-shaped while keeping it byte-for-byte data, because a directive-shaped prefix is a severity signal, not a permission to obey or to drop the payload 
+✓ src/__tests__/tool-result-authority.test.ts > tool result stays data on the model-visible path > classifies a tool result that only discusses a directive-shaped string as ordinary tool data, because this card's own evidence text is that input and must survive unchanged 
+✓ src/__tests__/tool-result-authority.test.ts > tool result stays data on the model-visible path > marks a result on the resumed-session delta too, because a resumed turn is where a fresh bash payload actually reaches the model 
+✓ src/__tests__/tool-result-authority.test.ts > an empty tool result carries the provenance of its emptiness > says the command produced no output when the tool delivered zero bytes, because an empty output that stays silent cannot be told apart from a dropped payload and turns a probe into a false negative 
+✓ src/__tests__/tool-result-authority.test.ts > an empty tool result carries the provenance of its emptiness > refuses to render a payload that was never delivered, because the empty string this site used to return made 'nothing was delivered' read as 'the command printed nothing' 
+✓ src/__tests__/tool-result-authority.test.ts > an empty tool result carries the provenance of its emptiness > cannot print the same bytes for the two empty states, because that equality is the false negative this card was written to remove 
+✓ src/__tests__/tool-result-authority.test.ts > the marking fails loud instead of passing raw text through > propagates a failure inside the marking step to the caller, because a guard that swallowed its own error would send unmarked payload text to the model 
+✓ src/__tests__/tool-result-authority.test.ts > the invariant lives in exactly one production module > is the only production source stating the zero-authority rule, because the same sentence written into a second layer is two rules that can disagree 
+✓ src/__tests__/tool-result-authority.test.ts > the invariant lives in exactly one production module > owns the directive-shape label list alone, because a second copy of the predicate is a second definition of what counts as a directive 
+Test Files  2 passed (2)
+Tests  23 passed (23)
+        rc=0
+
+## RED: only the production module checked out at the freshly measured trunk
+The test files are never checked out — packages/pi-claude-cli/src/__tests__/tool-channel-authority.test.ts does not exist at trunk, and
+restoring it would delete the assertion and leave a run with no test file.
+
+  $ git -C .engine/stas-392-engine checkout refs/heads/main -- packages/pi-claude-cli/src/tool-result-authority.ts
+      (no output)
+        rc=0
+
+  $ git -C .engine/stas-392-engine status --porcelain
+      M  packages/pi-claude-cli/src/tool-result-authority.ts
+        rc=0
+
+  $ (cd packages/pi-claude-cli && NO_COLOR=1 ./node_modules/.bin/vitest run both test files, module at trunk)
+RUN  <vitest> <package-dir>
+× src/__tests__/tool-channel-authority.test.ts > a tool result cannot write the frame it is delivered in (AC2) > cannot terminate its own envelope, because on 2026-11-05 a payload holding the closing tag twice and the opening tag once turned one authored close tag into three and put the text after it outside any frame 
+→ expected 2 to be 1 // Object.is equality
+× src/__tests__/tool-channel-authority.test.ts > a tool result cannot write the frame it is delivered in (AC2) > cannot extend the frame either, because an opening tag the payload writes is a second envelope the assembler never authored and a reader cannot tell which one is real 
+→ expected 2 to be 1 // Object.is equality
+× src/__tests__/tool-channel-authority.test.ts > a tool result cannot write the frame it is delivered in (AC2) > still reaches the model byte-for-byte once the documented escaping is undone, because neutralising a delimiter must not quietly edit the report a tool actually printed 
+→ expected 3 to be 1 // Object.is equality
+× src/__tests__/tool-channel-authority.test.ts > a tool result cannot write the frame it is delivered in (AC2) > survives the ordinary case of a tool reading this very guard back, because the guard's own source contains these literals and refusing that output would break a routine read for every agent on this provider 
+→ expected 2 to be 1 // Object.is equality
+× src/__tests__/tool-channel-authority.test.ts > a tool result cannot mint a role key (AC1) > cannot produce a line-initial USER: the model could read as a new user turn, because the assembled string is handed over as the text of one user message and the only thing separating roles from data is that the assembler writes these keys 
+→ expected [ 'USER:', 'ASSISTANT:', …(2) ] to deeply equal [ 'USER:', 'ASSISTANT:', …(1) ]
+× src/__tests__/tool-channel-authority.test.ts > a tool result cannot mint a role key (AC1) > cannot produce a line-initial ASSISTANT: either, because a forged assistant turn is how a payload gets its own words attributed to the assistant 
+→ expected [ 'USER:', 'ASSISTANT:', …(2) ] to deeply equal [ 'USER:', 'ASSISTANT:', …(1) ]
+× src/__tests__/tool-channel-authority.test.ts > a tool result cannot mint a role key (AC1) > cannot mint the section key the assembler also emits, because `TOOL RESULT (<name>):` is a third key and not only the two the report named 
+→ expected [ 'USER:', 'ASSISTANT:', …(2) ] to deeply equal [ 'USER:', 'ASSISTANT:', …(1) ]
+× src/__tests__/tool-channel-authority.test.ts > a tool result cannot mint a role key (AC1) > cannot mint a role key on the resumed-session delta, because that is where a fresh bash payload actually reaches the model and there the forged key was the only line-initial one besides the tool section 
+→ expected [ 'TOOL RESULT (Bash):', 'USER:' ] to deeply equal [ 'TOOL RESULT (Bash):' ]
+✓ src/__tests__/tool-channel-authority.test.ts > a tool result cannot mint a role key (AC1) > keeps a role word that merely appears inside a sentence untouched, because prose about a role is data and rewriting it would be the sledgehammer this card forbids 
+✓ src/__tests__/tool-channel-authority.test.ts > an ordinary payload is not rewritten (the anti-sledgehammer guard) > reaches the model byte-for-byte when it carries neither a frame delimiter nor a line-initial role key, because every payload the landed tests already pin must keep passing unchanged 
+✓ src/__tests__/tool-channel-authority.test.ts > an ordinary payload is not rewritten (the anti-sledgehammer guard) > keeps the empty payload saying so instead of going silent, because this card must not widen or weaken the fail-loud rule it builds on 
+✓ src/__tests__/tool-result-authority.test.ts > tool result stays data on the model-visible path > marks the measured payload (an unprefixed imperative in bash stdout) as untrusted data, because on 2026-11-04 that exact shape arrived in a bash result on this platform and no rule told the model to read it instead of obeying it 
+✓ src/__tests__/tool-result-authority.test.ts > tool result stays data on the model-visible path > labels a payload opening with System: as directive-shaped while keeping it byte-for-byte data, because a directive-shaped prefix is a severity signal, not a permission to obey or to drop the payload 
+✓ src/__tests__/tool-result-authority.test.ts > tool result stays data on the model-visible path > labels a payload opening with Directives: as directive-shaped while keeping it byte-for-byte data, because a directive-shaped prefix is a severity signal, not a permission to obey or to drop the payload 
+✓ src/__tests__/tool-result-authority.test.ts > tool result stays data on the model-visible path > labels a payload opening with Instruction: as directive-shaped while keeping it byte-for-byte data, because a directive-shaped prefix is a severity signal, not a permission to obey or to drop the payload 
+✓ src/__tests__/tool-result-authority.test.ts > tool result stays data on the model-visible path > classifies a tool result that only discusses a directive-shaped string as ordinary tool data, because this card's own evidence text is that input and must survive unchanged 
+✓ src/__tests__/tool-result-authority.test.ts > tool result stays data on the model-visible path > marks a result on the resumed-session delta too, because a resumed turn is where a fresh bash payload actually reaches the model 
+✓ src/__tests__/tool-result-authority.test.ts > an empty tool result carries the provenance of its emptiness > says the command produced no output when the tool delivered zero bytes, because an empty output that stays silent cannot be told apart from a dropped payload and turns a probe into a false negative 
+✓ src/__tests__/tool-result-authority.test.ts > an empty tool result carries the provenance of its emptiness > refuses to render a payload that was never delivered, because the empty string this site used to return made 'nothing was delivered' read as 'the command printed nothing' 
+✓ src/__tests__/tool-result-authority.test.ts > an empty tool result carries the provenance of its emptiness > cannot print the same bytes for the two empty states, because that equality is the false negative this card was written to remove 
+✓ src/__tests__/tool-result-authority.test.ts > the marking fails loud instead of passing raw text through > propagates a failure inside the marking step to the caller, because a guard that swallowed its own error would send unmarked payload text to the model 
+✓ src/__tests__/tool-result-authority.test.ts > the invariant lives in exactly one production module > is the only production source stating the zero-authority rule, because the same sentence written into a second layer is two rules that can disagree 
+✓ src/__tests__/tool-result-authority.test.ts > the invariant lives in exactly one production module > owns the directive-shape label list alone, because a second copy of the predicate is a second definition of what counts as a directive 
+Test Files  1 failed | 1 passed (2)
+Tests  8 failed | 15 passed (23)
+        rc=1
+
+## restore, then the restore proof (empty porcelain)
+
+  $ git -C .engine/stas-392-engine checkout HEAD -- packages/pi-claude-cli/src/tool-result-authority.ts
+      (no output)
+        rc=0
+
+  $ git -C .engine/stas-392-engine status --porcelain
+      (no output)
+        rc=0
+
+  $ (cd packages/pi-claude-cli && NO_COLOR=1 ./node_modules/.bin/vitest run both test files, restored)
+RUN  <vitest> <package-dir>
+✓ src/__tests__/tool-channel-authority.test.ts > a tool result cannot write the frame it is delivered in (AC2) > cannot terminate its own envelope, because on 2026-11-05 a payload holding the closing tag twice and the opening tag once turned one authored close tag into three and put the text after it outside any frame 
+✓ src/__tests__/tool-channel-authority.test.ts > a tool result cannot write the frame it is delivered in (AC2) > cannot extend the frame either, because an opening tag the payload writes is a second envelope the assembler never authored and a reader cannot tell which one is real 
+✓ src/__tests__/tool-channel-authority.test.ts > a tool result cannot write the frame it is delivered in (AC2) > still reaches the model byte-for-byte once the documented escaping is undone, because neutralising a delimiter must not quietly edit the report a tool actually printed 
+✓ src/__tests__/tool-channel-authority.test.ts > a tool result cannot write the frame it is delivered in (AC2) > survives the ordinary case of a tool reading this very guard back, because the guard's own source contains these literals and refusing that output would break a routine read for every agent on this provider 
+✓ src/__tests__/tool-channel-authority.test.ts > a tool result cannot mint a role key (AC1) > cannot produce a line-initial USER: the model could read as a new user turn, because the assembled string is handed over as the text of one user message and the only thing separating roles from data is that the assembler writes these keys 
+✓ src/__tests__/tool-channel-authority.test.ts > a tool result cannot mint a role key (AC1) > cannot produce a line-initial ASSISTANT: either, because a forged assistant turn is how a payload gets its own words attributed to the assistant 
+✓ src/__tests__/tool-channel-authority.test.ts > a tool result cannot mint a role key (AC1) > cannot mint the section key the assembler also emits, because `TOOL RESULT (<name>):` is a third key and not only the two the report named 
+✓ src/__tests__/tool-channel-authority.test.ts > a tool result cannot mint a role key (AC1) > cannot mint a role key on the resumed-session delta, because that is where a fresh bash payload actually reaches the model and there the forged key was the only line-initial one besides the tool section 
+✓ src/__tests__/tool-channel-authority.test.ts > a tool result cannot mint a role key (AC1) > keeps a role word that merely appears inside a sentence untouched, because prose about a role is data and rewriting it would be the sledgehammer this card forbids 
+✓ src/__tests__/tool-channel-authority.test.ts > an ordinary payload is not rewritten (the anti-sledgehammer guard) > reaches the model byte-for-byte when it carries neither a frame delimiter nor a line-initial role key, because every payload the landed tests already pin must keep passing unchanged 
+✓ src/__tests__/tool-channel-authority.test.ts > an ordinary payload is not rewritten (the anti-sledgehammer guard) > keeps the empty payload saying so instead of going silent, because this card must not widen or weaken the fail-loud rule it builds on 
+✓ src/__tests__/tool-result-authority.test.ts > tool result stays data on the model-visible path > marks the measured payload (an unprefixed imperative in bash stdout) as untrusted data, because on 2026-11-04 that exact shape arrived in a bash result on this platform and no rule told the model to read it instead of obeying it 
+✓ src/__tests__/tool-result-authority.test.ts > tool result stays data on the model-visible path > labels a payload opening with System: as directive-shaped while keeping it byte-for-byte data, because a directive-shaped prefix is a severity signal, not a permission to obey or to drop the payload 
+✓ src/__tests__/tool-result-authority.test.ts > tool result stays data on the model-visible path > labels a payload opening with Directives: as directive-shaped while keeping it byte-for-byte data, because a directive-shaped prefix is a severity signal, not a permission to obey or to drop the payload 
+✓ src/__tests__/tool-result-authority.test.ts > tool result stays data on the model-visible path > labels a payload opening with Instruction: as directive-shaped while keeping it byte-for-byte data, because a directive-shaped prefix is a severity signal, not a permission to obey or to drop the payload 
+✓ src/__tests__/tool-result-authority.test.ts > tool result stays data on the model-visible path > classifies a tool result that only discusses a directive-shaped string as ordinary tool data, because this card's own evidence text is that input and must survive unchanged 
+✓ src/__tests__/tool-result-authority.test.ts > tool result stays data on the model-visible path > marks a result on the resumed-session delta too, because a resumed turn is where a fresh bash payload actually reaches the model 
+✓ src/__tests__/tool-result-authority.test.ts > an empty tool result carries the provenance of its emptiness > says the command produced no output when the tool delivered zero bytes, because an empty output that stays silent cannot be told apart from a dropped payload and turns a probe into a false negative 
+✓ src/__tests__/tool-result-authority.test.ts > an empty tool result carries the provenance of its emptiness > refuses to render a payload that was never delivered, because the empty string this site used to return made 'nothing was delivered' read as 'the command printed nothing' 
+✓ src/__tests__/tool-result-authority.test.ts > an empty tool result carries the provenance of its emptiness > cannot print the same bytes for the two empty states, because that equality is the false negative this card was written to remove 
+✓ src/__tests__/tool-result-authority.test.ts > the marking fails loud instead of passing raw text through > propagates a failure inside the marking step to the caller, because a guard that swallowed its own error would send unmarked payload text to the model 
+✓ src/__tests__/tool-result-authority.test.ts > the invariant lives in exactly one production module > is the only production source stating the zero-authority rule, because the same sentence written into a second layer is two rules that can disagree 
+✓ src/__tests__/tool-result-authority.test.ts > the invariant lives in exactly one production module > owns the directive-shape label list alone, because a second copy of the predicate is a second definition of what counts as a directive 
+Test Files  2 passed (2)
+Tests  23 passed (23)
+        rc=0
+
+# LAYER 2 — the announcement layer at the delivered 392 tip
+admissible for: refs/heads/fusion/stas-392-empty-tool-result-announcement = 037a480cc562ef994aac0b19215613cb93e2b500
+checked out for layer 2: fusion/stas-392-empty-tool-result-announcement = 037a480cc562ef994aac0b19215613cb93e2b500
+ground the RED restores to: refs/heads/fusion/stas-390-tool-channel-authority = e6b1fe4c7f4bafa36727e33e8df7c400e87c6a91 (the neutraliser-carrying ground)
+
+  $ (cd packages/pi-claude-cli && NO_COLOR=1 ./node_modules/.bin/vitest run both test files, branch tip)
+RUN  <vitest> <package-dir>
+✓ src/__tests__/tool-channel-authority.test.ts > a tool result cannot write the frame it is delivered in (AC2) > cannot terminate its own envelope, because on 2026-11-05 a payload holding the closing tag twice and the opening tag once turned one authored close tag into three and put the text after it outside any frame 
+✓ src/__tests__/tool-channel-authority.test.ts > a tool result cannot write the frame it is delivered in (AC2) > cannot extend the frame either, because an opening tag the payload writes is a second envelope the assembler never authored and a reader cannot tell which one is real 
+✓ src/__tests__/tool-channel-authority.test.ts > a tool result cannot write the frame it is delivered in (AC2) > still reaches the model byte-for-byte once the documented escaping is undone, because neutralising a delimiter must not quietly edit the report a tool actually printed 
+✓ src/__tests__/tool-channel-authority.test.ts > a tool result cannot write the frame it is delivered in (AC2) > survives the ordinary case of a tool reading this very guard back, because the guard's own source contains these literals and refusing that output would break a routine read for every agent on this provider 
+✓ src/__tests__/tool-channel-authority.test.ts > a tool result cannot mint a role key (AC1) > cannot produce a line-initial USER: the model could read as a new user turn, because the assembled string is handed over as the text of one user message and the only thing separating roles from data is that the assembler writes these keys 
+✓ src/__tests__/tool-channel-authority.test.ts > a tool result cannot mint a role key (AC1) > cannot produce a line-initial ASSISTANT: either, because a forged assistant turn is how a payload gets its own words attributed to the assistant 
+✓ src/__tests__/tool-channel-authority.test.ts > a tool result cannot mint a role key (AC1) > cannot mint the section key the assembler also emits, because `TOOL RESULT (<name>):` is a third key and not only the two the report named 
+✓ src/__tests__/tool-channel-authority.test.ts > a tool result cannot mint a role key (AC1) > cannot mint a role key on the resumed-session delta, because that is where a fresh bash payload actually reaches the model and there the forged key was the only line-initial one besides the tool section 
+✓ src/__tests__/tool-channel-authority.test.ts > a tool result cannot mint a role key (AC1) > keeps a role word that merely appears inside a sentence untouched, because prose about a role is data and rewriting it would be the sledgehammer this card forbids 
+✓ src/__tests__/tool-channel-authority.test.ts > an ordinary payload is not rewritten (the anti-sledgehammer guard) > reaches the model byte-for-byte when it carries neither a frame delimiter nor a line-initial role key, because every payload the landed tests already pin must keep passing unchanged 
+✓ src/__tests__/tool-channel-authority.test.ts > an ordinary payload is not rewritten (the anti-sledgehammer guard) > delivers an untyped tool's empty content array as the same zero-byte notice the empty string gets, because upstream authors `content: []` for a content-less untyped result rather than anyone typing a wrong payload, so fail-loud narrows only for that state 
+✓ src/__tests__/tool-result-authority.test.ts > tool result stays data on the model-visible path > marks the measured payload (an unprefixed imperative in bash stdout) as untrusted data, because on 2026-11-04 that exact shape arrived in a bash result on this platform and no rule told the model to read it instead of obeying it 
+✓ src/__tests__/tool-result-authority.test.ts > tool result stays data on the model-visible path > labels a payload opening with System: as directive-shaped while keeping it byte-for-byte data, because a directive-shaped prefix is a severity signal, not a permission to obey or to drop the payload 
+✓ src/__tests__/tool-result-authority.test.ts > tool result stays data on the model-visible path > labels a payload opening with Directives: as directive-shaped while keeping it byte-for-byte data, because a directive-shaped prefix is a severity signal, not a permission to obey or to drop the payload 
+✓ src/__tests__/tool-result-authority.test.ts > tool result stays data on the model-visible path > labels a payload opening with Instruction: as directive-shaped while keeping it byte-for-byte data, because a directive-shaped prefix is a severity signal, not a permission to obey or to drop the payload 
+✓ src/__tests__/tool-result-authority.test.ts > tool result stays data on the model-visible path > classifies a tool result that only discusses a directive-shaped string as ordinary tool data, because this card's own evidence text is that input and must survive unchanged 
+✓ src/__tests__/tool-result-authority.test.ts > tool result stays data on the model-visible path > marks a result on the resumed-session delta too, because a resumed turn is where a fresh bash payload actually reaches the model 
+✓ src/__tests__/tool-result-authority.test.ts > an empty tool result carries the provenance of its emptiness > says the command produced no output when the tool delivered zero bytes, because an empty output that stays silent cannot be told apart from a dropped payload and turns a probe into a false negative 
+✓ src/__tests__/tool-result-authority.test.ts > an empty tool result carries the provenance of its emptiness > refuses to render a payload that was never delivered, because the empty string this site used to return made 'nothing was delivered' read as 'the command printed nothing' 
+✓ src/__tests__/tool-result-authority.test.ts > an empty tool result carries the provenance of its emptiness > announces that no content was delivered when the content-block array is empty, because the upstream runtime normalises a content-less untyped result to `content: []` (createToolResultMessage writes `result.content ?? []`) and pi-ai normalises a null content the same way, so an empty array is an expected input on every custom and MCP tool and a throw there deletes the whole prompt instead of one payload 
+✓ src/__tests__/tool-result-authority.test.ts > the marking fails loud instead of passing raw text through > propagates a failure inside the marking step to the caller, because a guard that swallowed its own error would send unmarked payload text to the model 
+✓ src/__tests__/tool-result-authority.test.ts > the invariant lives in exactly one production module > is the only production source stating the zero-authority rule, because the same sentence written into a second layer is two rules that can disagree 
+✓ src/__tests__/tool-result-authority.test.ts > the invariant lives in exactly one production module > owns the directive-shape label list alone, because a second copy of the predicate is a second definition of what counts as a directive 
+Test Files  2 passed (2)
+Tests  23 passed (23)
+        rc=0
+
+## RED: only the production module at the ground SHA, every test file left at the tip
+
+  $ git -C .engine/stas-392-engine checkout refs/heads/fusion/stas-390-tool-channel-authority -- packages/pi-claude-cli/src/tool-result-authority.ts
+      (no output)
+        rc=0
+
+  $ git -C .engine/stas-392-engine status --porcelain
+      M  packages/pi-claude-cli/src/tool-result-authority.ts
+        rc=0
+
+  $ (cd packages/pi-claude-cli && NO_COLOR=1 ./node_modules/.bin/vitest run both test files, module at ground)
+RUN  <vitest> <package-dir>
+✓ src/__tests__/tool-channel-authority.test.ts > a tool result cannot write the frame it is delivered in (AC2) > cannot terminate its own envelope, because on 2026-11-05 a payload holding the closing tag twice and the opening tag once turned one authored close tag into three and put the text after it outside any frame 
+✓ src/__tests__/tool-channel-authority.test.ts > a tool result cannot write the frame it is delivered in (AC2) > cannot extend the frame either, because an opening tag the payload writes is a second envelope the assembler never authored and a reader cannot tell which one is real 
+✓ src/__tests__/tool-channel-authority.test.ts > a tool result cannot write the frame it is delivered in (AC2) > still reaches the model byte-for-byte once the documented escaping is undone, because neutralising a delimiter must not quietly edit the report a tool actually printed 
+✓ src/__tests__/tool-channel-authority.test.ts > a tool result cannot write the frame it is delivered in (AC2) > survives the ordinary case of a tool reading this very guard back, because the guard's own source contains these literals and refusing that output would break a routine read for every agent on this provider 
+✓ src/__tests__/tool-channel-authority.test.ts > a tool result cannot mint a role key (AC1) > cannot produce a line-initial USER: the model could read as a new user turn, because the assembled string is handed over as the text of one user message and the only thing separating roles from data is that the assembler writes these keys 
+✓ src/__tests__/tool-channel-authority.test.ts > a tool result cannot mint a role key (AC1) > cannot produce a line-initial ASSISTANT: either, because a forged assistant turn is how a payload gets its own words attributed to the assistant 
+✓ src/__tests__/tool-channel-authority.test.ts > a tool result cannot mint a role key (AC1) > cannot mint the section key the assembler also emits, because `TOOL RESULT (<name>):` is a third key and not only the two the report named 
+✓ src/__tests__/tool-channel-authority.test.ts > a tool result cannot mint a role key (AC1) > cannot mint a role key on the resumed-session delta, because that is where a fresh bash payload actually reaches the model and there the forged key was the only line-initial one besides the tool section 
+✓ src/__tests__/tool-channel-authority.test.ts > a tool result cannot mint a role key (AC1) > keeps a role word that merely appears inside a sentence untouched, because prose about a role is data and rewriting it would be the sledgehammer this card forbids 
+✓ src/__tests__/tool-channel-authority.test.ts > an ordinary payload is not rewritten (the anti-sledgehammer guard) > reaches the model byte-for-byte when it carries neither a frame delimiter nor a line-initial role key, because every payload the landed tests already pin must keep passing unchanged 
+× src/__tests__/tool-channel-authority.test.ts > an ordinary payload is not rewritten (the anti-sledgehammer guard) > delivers an untyped tool's empty content array as the same zero-byte notice the empty string gets, because upstream authors `content: []` for a content-less untyped result rather than anyone typing a wrong payload, so fail-loud narrows only for that state 
+→ tool result payload has no content to mark: the content-block array is empty, so no payload was delivered
+✓ src/__tests__/tool-result-authority.test.ts > tool result stays data on the model-visible path > marks the measured payload (an unprefixed imperative in bash stdout) as untrusted data, because on 2026-11-04 that exact shape arrived in a bash result on this platform and no rule told the model to read it instead of obeying it 
+✓ src/__tests__/tool-result-authority.test.ts > tool result stays data on the model-visible path > labels a payload opening with System: as directive-shaped while keeping it byte-for-byte data, because a directive-shaped prefix is a severity signal, not a permission to obey or to drop the payload 
+✓ src/__tests__/tool-result-authority.test.ts > tool result stays data on the model-visible path > labels a payload opening with Directives: as directive-shaped while keeping it byte-for-byte data, because a directive-shaped prefix is a severity signal, not a permission to obey or to drop the payload 
+✓ src/__tests__/tool-result-authority.test.ts > tool result stays data on the model-visible path > labels a payload opening with Instruction: as directive-shaped while keeping it byte-for-byte data, because a directive-shaped prefix is a severity signal, not a permission to obey or to drop the payload 
+✓ src/__tests__/tool-result-authority.test.ts > tool result stays data on the model-visible path > classifies a tool result that only discusses a directive-shaped string as ordinary tool data, because this card's own evidence text is that input and must survive unchanged 
+✓ src/__tests__/tool-result-authority.test.ts > tool result stays data on the model-visible path > marks a result on the resumed-session delta too, because a resumed turn is where a fresh bash payload actually reaches the model 
+✓ src/__tests__/tool-result-authority.test.ts > an empty tool result carries the provenance of its emptiness > says the command produced no output when the tool delivered zero bytes, because an empty output that stays silent cannot be told apart from a dropped payload and turns a probe into a false negative 
+✓ src/__tests__/tool-result-authority.test.ts > an empty tool result carries the provenance of its emptiness > refuses to render a payload that was never delivered, because the empty string this site used to return made 'nothing was delivered' read as 'the command printed nothing' 
+× src/__tests__/tool-result-authority.test.ts > an empty tool result carries the provenance of its emptiness > announces that no content was delivered when the content-block array is empty, because the upstream runtime normalises a content-less untyped result to `content: []` (createToolResultMessage writes `result.content ?? []`) and pi-ai normalises a null content the same way, so an empty array is an expected input on every custom and MCP tool and a throw there deletes the whole prompt instead of one payload 
+→ tool result payload has no content to mark: the content-block array is empty, so no payload was delivered
+✓ src/__tests__/tool-result-authority.test.ts > the marking fails loud instead of passing raw text through > propagates a failure inside the marking step to the caller, because a guard that swallowed its own error would send unmarked payload text to the model 
+✓ src/__tests__/tool-result-authority.test.ts > the invariant lives in exactly one production module > is the only production source stating the zero-authority rule, because the same sentence written into a second layer is two rules that can disagree 
+✓ src/__tests__/tool-result-authority.test.ts > the invariant lives in exactly one production module > owns the directive-shape label list alone, because a second copy of the predicate is a second definition of what counts as a directive 
+Test Files  2 failed (2)
+Tests  2 failed | 21 passed (23)
+        rc=1
+
+## restore, then the restore proof (empty porcelain)
+
+  $ git -C .engine/stas-392-engine checkout HEAD -- packages/pi-claude-cli/src/tool-result-authority.ts
+      (no output)
+        rc=0
+
+  $ git -C .engine/stas-392-engine status --porcelain
+      (no output)
+        rc=0
+
+  $ (cd packages/pi-claude-cli && NO_COLOR=1 ./node_modules/.bin/vitest run both test files, restored)
+RUN  <vitest> <package-dir>
+✓ src/__tests__/tool-channel-authority.test.ts > a tool result cannot write the frame it is delivered in (AC2) > cannot terminate its own envelope, because on 2026-11-05 a payload holding the closing tag twice and the opening tag once turned one authored close tag into three and put the text after it outside any frame 
+✓ src/__tests__/tool-channel-authority.test.ts > a tool result cannot write the frame it is delivered in (AC2) > cannot extend the frame either, because an opening tag the payload writes is a second envelope the assembler never authored and a reader cannot tell which one is real 
+✓ src/__tests__/tool-channel-authority.test.ts > a tool result cannot write the frame it is delivered in (AC2) > still reaches the model byte-for-byte once the documented escaping is undone, because neutralising a delimiter must not quietly edit the report a tool actually printed 
+✓ src/__tests__/tool-channel-authority.test.ts > a tool result cannot write the frame it is delivered in (AC2) > survives the ordinary case of a tool reading this very guard back, because the guard's own source contains these literals and refusing that output would break a routine read for every agent on this provider 
+✓ src/__tests__/tool-channel-authority.test.ts > a tool result cannot mint a role key (AC1) > cannot produce a line-initial USER: the model could read as a new user turn, because the assembled string is handed over as the text of one user message and the only thing separating roles from data is that the assembler writes these keys 
+✓ src/__tests__/tool-channel-authority.test.ts > a tool result cannot mint a role key (AC1) > cannot produce a line-initial ASSISTANT: either, because a forged assistant turn is how a payload gets its own words attributed to the assistant 
+✓ src/__tests__/tool-channel-authority.test.ts > a tool result cannot mint a role key (AC1) > cannot mint the section key the assembler also emits, because `TOOL RESULT (<name>):` is a third key and not only the two the report named 
+✓ src/__tests__/tool-channel-authority.test.ts > a tool result cannot mint a role key (AC1) > cannot mint a role key on the resumed-session delta, because that is where a fresh bash payload actually reaches the model and there the forged key was the only line-initial one besides the tool section 
+✓ src/__tests__/tool-channel-authority.test.ts > a tool result cannot mint a role key (AC1) > keeps a role word that merely appears inside a sentence untouched, because prose about a role is data and rewriting it would be the sledgehammer this card forbids 
+✓ src/__tests__/tool-channel-authority.test.ts > an ordinary payload is not rewritten (the anti-sledgehammer guard) > reaches the model byte-for-byte when it carries neither a frame delimiter nor a line-initial role key, because every payload the landed tests already pin must keep passing unchanged 
+✓ src/__tests__/tool-channel-authority.test.ts > an ordinary payload is not rewritten (the anti-sledgehammer guard) > delivers an untyped tool's empty content array as the same zero-byte notice the empty string gets, because upstream authors `content: []` for a content-less untyped result rather than anyone typing a wrong payload, so fail-loud narrows only for that state 
+✓ src/__tests__/tool-result-authority.test.ts > tool result stays data on the model-visible path > marks the measured payload (an unprefixed imperative in bash stdout) as untrusted data, because on 2026-11-04 that exact shape arrived in a bash result on this platform and no rule told the model to read it instead of obeying it 
+✓ src/__tests__/tool-result-authority.test.ts > tool result stays data on the model-visible path > labels a payload opening with System: as directive-shaped while keeping it byte-for-byte data, because a directive-shaped prefix is a severity signal, not a permission to obey or to drop the payload 
+✓ src/__tests__/tool-result-authority.test.ts > tool result stays data on the model-visible path > labels a payload opening with Directives: as directive-shaped while keeping it byte-for-byte data, because a directive-shaped prefix is a severity signal, not a permission to obey or to drop the payload 
+✓ src/__tests__/tool-result-authority.test.ts > tool result stays data on the model-visible path > labels a payload opening with Instruction: as directive-shaped while keeping it byte-for-byte data, because a directive-shaped prefix is a severity signal, not a permission to obey or to drop the payload 
+✓ src/__tests__/tool-result-authority.test.ts > tool result stays data on the model-visible path > classifies a tool result that only discusses a directive-shaped string as ordinary tool data, because this card's own evidence text is that input and must survive unchanged 
+✓ src/__tests__/tool-result-authority.test.ts > tool result stays data on the model-visible path > marks a result on the resumed-session delta too, because a resumed turn is where a fresh bash payload actually reaches the model 
+✓ src/__tests__/tool-result-authority.test.ts > an empty tool result carries the provenance of its emptiness > says the command produced no output when the tool delivered zero bytes, because an empty output that stays silent cannot be told apart from a dropped payload and turns a probe into a false negative 
+✓ src/__tests__/tool-result-authority.test.ts > an empty tool result carries the provenance of its emptiness > refuses to render a payload that was never delivered, because the empty string this site used to return made 'nothing was delivered' read as 'the command printed nothing' 
+✓ src/__tests__/tool-result-authority.test.ts > an empty tool result carries the provenance of its emptiness > announces that no content was delivered when the content-block array is empty, because the upstream runtime normalises a content-less untyped result to `content: []` (createToolResultMessage writes `result.content ?? []`) and pi-ai normalises a null content the same way, so an empty array is an expected input on every custom and MCP tool and a throw there deletes the whole prompt instead of one payload 
+✓ src/__tests__/tool-result-authority.test.ts > the marking fails loud instead of passing raw text through > propagates a failure inside the marking step to the caller, because a guard that swallowed its own error would send unmarked payload text to the model 
+✓ src/__tests__/tool-result-authority.test.ts > the invariant lives in exactly one production module > is the only production source stating the zero-authority rule, because the same sentence written into a second layer is two rules that can disagree 
+✓ src/__tests__/tool-result-authority.test.ts > the invariant lives in exactly one production module > owns the directive-shape label list alone, because a second copy of the predicate is a second definition of what counts as a directive 
+Test Files  2 passed (2)
+Tests  23 passed (23)
+        rc=0
+

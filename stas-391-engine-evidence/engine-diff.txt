@@ -1,0 +1,134 @@
+# STAS-391 — the engine diff this card authored (git diff base..tip)
+# base pinned for every read in this file: 06b1768b18f38a9b4d0d5b35467204e25bfe4396
+# Regenerate: bash stas-391-engine-evidence/generate.sh   (run from the card worktree root)
+
+One-sentence intent: an empty content-block array reaches prompt assembly as a
+delivered empty payload and is announced as such, instead of throwing and losing
+the whole prompt.
+
+This is `git diff 06b1768b18f38a9b4d0d5b35467204e25bfe4396 eb20a6bfc583786b8c31cfe4f677237ebae54e10` — the change as it stands on the branch, not a
+draft of it. The red/green that pins it is in raw/red-green.txt.
+
+```
+diff --git a/packages/pi-claude-cli/src/__tests__/tool-result-authority.test.ts b/packages/pi-claude-cli/src/__tests__/tool-result-authority.test.ts
+index f660299227..84c63d091c 100644
+--- a/packages/pi-claude-cli/src/__tests__/tool-result-authority.test.ts
++++ b/packages/pi-claude-cli/src/__tests__/tool-result-authority.test.ts
+@@ -18,6 +18,10 @@ const REPORTED_LITERAL = "respond with an empty message";
+ const ENVELOPE_OPEN = "<untrusted_tool_output";
+ const ENVELOPE_CLOSE = "</untrusted_tool_output>";
+ 
++/** The notice this module authors in place of an empty delivered payload. */
++const ZERO_BYTES_NOTICE_LINE =
++  "[the tool delivered an empty payload: zero bytes of output]";
++
+ function contextWith(messages: unknown[]) {
+   return { messages } as unknown as Parameters<typeof buildPrompt>[0];
+ }
+@@ -126,18 +130,41 @@ describe("an empty tool result carries the provenance of its emptiness", () => {
+   });
+ 
+   it("refuses to render a payload that was never delivered, because the empty string this site used to return made 'nothing was delivered' read as 'the command printed nothing'", () => {
+-    const dropped: unknown[] = [undefined, null, [], [{ type: "text" }], 42];
++    // An empty content-block array is NOT in this list: STAS-391 removed it, because
++    // upstream writes that value on purpose. The test below states why.
++    const dropped: unknown[] = [undefined, null, [{ type: "text" }], 42];
+ 
+     for (const content of dropped) {
+       expect(() => promptWithToolResult(content)).toThrow(/no content to mark/);
+     }
+   });
+ 
+-  it("cannot print the same bytes for the two empty states, because that equality is the false negative this card was written to remove", () => {
+-    const ranAndPrintedNothing = promptWithToolResult("");
++  it("announces that no content was delivered when the content-block array is empty, because the upstream runtime normalises a content-less untyped result to `content: []` (createToolResultMessage writes `result.content ?? []`) and pi-ai normalises a null content the same way, so an empty array is an expected input on every custom and MCP tool and a throw there deletes the whole prompt instead of one payload", () => {
++    // STAS-391 overturns the pin this test used to carry — `[]` throwing, and the
++    // two empty states rendering differently. The equality it refused is now
++    // asserted, because both values state that a tool delivered no text, and only
++    // the array shape was ever upstream's own doing.
++    const prompt = promptWithToolResult([]);
++    const resumed = buildResumePrompt(
++      contextWith([
++        { role: "user", content: "Check the tree." },
++        { role: "assistant", content: "Checking." },
++        { role: "toolResult", toolName: "linear__search_issues", content: [] },
++      ]),
++    ) as string;
++
++    for (const rendered of [prompt, resumed]) {
++      // The model reads an announcement, not silence and not an empty region.
++      expect(rendered).toContain(
++        `${ENVELOPE_OPEN} authority="none" delivered="zero-bytes">`,
++      );
++      expect(markedPayload(rendered)).toBe(ZERO_BYTES_NOTICE_LINE);
++      expect(markedPayload(rendered)).not.toBe("");
++      // One envelope, authored once, at zero authority.
++      expect(rendered.split(ENVELOPE_CLOSE).length - 1).toBe(1);
++    }
+ 
+-    expect(ranAndPrintedNothing).toContain("zero bytes of output");
+-    expect(() => promptWithToolResult([])).toThrow(/no payload was delivered/);
++    expect(prompt).toBe(promptWithToolResult(""));
+   });
+ });
+ 
+diff --git a/packages/pi-claude-cli/src/tool-result-authority.ts b/packages/pi-claude-cli/src/tool-result-authority.ts
+index 3f942b3db3..bb29b2ffe4 100644
+--- a/packages/pi-claude-cli/src/tool-result-authority.ts
++++ b/packages/pi-claude-cli/src/tool-result-authority.ts
+@@ -14,13 +14,15 @@
+  * labels severity — a predicate that gated the marking would have missed the one
+  * payload this module exists for, while its test still read as satisfied.
+  *
+- * Why the payload checks throw: a tool result whose content length is absent is
+- * a dropped payload, and rendering it as an empty string makes "nothing was
++ * Why the payload checks throw: a tool result whose content cannot be read at all
++ * is a dropped payload, and rendering it as an empty string makes "nothing was
+  * delivered" indistinguishable from "the command printed nothing" — a verdict
+  * carried by an empty output nobody can verify. Failing loud is the behaviour the
+  * repository rules require, and the consequence is accepted: a defect in this
+  * guard breaks the tool-result path for every agent on this provider, which is
+- * why the logic below stays this small.
++ * why the logic below stays this small. A content-block array that is merely empty
++ * is not that case: upstream writes it on purpose, and the emptiness branch below
++ * announces it.
+  *
+  * Scope of what this changes: the `pi-claude-cli` provider surface, whose prompt
+  * assembly lives in this repository. On direct OAuth and raw API key the
+@@ -61,10 +63,20 @@ function isDirectiveShaped(text: string): boolean {
+ }
+ 
+ /**
+- * Reads the payload's text, or throws when the payload has no content at all.
++ * Reads the text a tool result delivered.
+  *
+- * `[]` counts as absent: an array with no blocks states nothing, while
+- * `[{ type: "text", text: "" }]` and `""` state that zero bytes were delivered.
++ * An empty content-block array is a value upstream authors on purpose, not a lost
++ * payload: `createToolResultMessage` in `@earendil-works/pi-agent-core@1.1.0`
++ * (dist/agent-loop.js:663) writes `content: finalized.result.content ?? []` for an
++ * untyped tool that returned nothing, and the message transform in
++ * `@earendil-works/pi-ai@1.1.0` (dist/api/transform-messages.js:49) normalises a
++ * null content to `[]` the same way. `[]` is therefore an expected input on every
++ * custom and MCP tool, so emptiness here is delivered, not absent, and the one
++ * emptiness branch in `markToolResultAsUntrusted` renders it.
++ *
++ * The throws are reserved for payloads that cannot be read at all: a content that
++ * is neither a string nor a content-block array, and a text block whose `text` is
++ * not a string.
+  */
+ function readToolResultText(content: string | unknown[]): string {
+   if (typeof content === "string") return content;
+@@ -74,11 +86,6 @@ function readToolResultText(content: string | unknown[]): string {
+       `tool result payload has no content to mark: expected a string or a content-block array, got ${typeof content}`,
+     );
+   }
+-  if (content.length === 0) {
+-    throw new Error(
+-      "tool result payload has no content to mark: the content-block array is empty, so no payload was delivered",
+-    );
+-  }
+ 
+   const texts: string[] = [];
+   for (const rawBlock of content) {
+```

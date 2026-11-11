@@ -1,0 +1,87 @@
+STAS-395 close summary - what the same-agent duplicate-intake lane actually does, and what this card did not do
+
+1. THE BASE THE MEASUREMENT WAS TAKEN ON
+base=f1247e8aef367c248ebb0b9d339bf0b9bd0a6421 (feat(RUFU-871): make the project card's runtime control
+  a real toggle), reached through one nested linked worktree at .engine/stas-395-engine.
+trunk at close=ee995fcc85013a990752307d0f253e9d6fe5ebf4; the base is an ancestor of trunk (rc=0) and
+  trunk sits exactly 1 commit past the base. Trunk moved once during this card's run and that move
+  touched 0 commits on this card's test path.
+producer state at the base, printed, not assumed: the write of source.sourceParentTaskId IS present in
+  the base tree - 23 non-test assignment lines, the refine producer at
+  packages/core/src/task-store/follow-up-ops.ts holding 1 of them (raw/lane-and-harness.txt section [15]).
+  STAS-394's own commit 1677ee018a is NOT in this base
+  (git merge-base --is-ancestor 1677ee018a f1247e8ae -> rc=1): the measurement therefore ran in the
+  world where the producer exists, without smuggling in STAS-394's unmerged title composer.
+
+2. THE LANE AS LOCALISED AT THAT BASE
+definition: packages/core/src/task-store/task-creation.ts:1549 resolveSameAgentDuplicateIntake
+head guard:  :1552  if (!sourceAgentId && !sourceParentTaskId) return;
+call sites:  :1072  await store._resolveSameAgentDuplicateIntakeBackend(task, input)   [load-bearing]
+             :1504  await store._resolveSameAgentDuplicateIntake(task, input)          [not on this path]
+  Only :1072 is exercised by a real store built the way production builds it: neutralising :1504 left
+  all 6 tests green, neutralising :1072 turned 3 red (mutation-probe.txt).
+tombstoned filter: :1565-1577, dropping a tombstoned candidate when sourceAgentId == null, when the
+  candidate's agent differs, when the deletion time is unparseable, or outside the sticky window.
+rejection branch: :1590-1618. flag function: packages/core/src/duplicates/duplicate-intake.ts:309-337,
+  which writes a log entry, a task:near-duplicate-flagged activity row and a sourceMetadataPatch with
+  nearDuplicateOf plus nearDuplicateScore.
+symbol census at the base: 33 hit lines over 9 tracked files, so both definition and call sites exist
+  (AC0/AC1; the 2026-11-07 reviewer coordinates were re-printed, not trusted).
+
+3. THE HARNESS AND WHAT EXECUTED HERE
+verdict H2, decided by measurement: H1 is impossible because reads.ts:456 dereferences store.asyncLayer!
+  while store.ts:996 defaults it to null, so a plain JSON store enters the resolver and fails open
+  inside its own try on a null-layer TypeError; no plain core test injects a real layer.
+The store built the way production builds it - pg-test-harness.ts:1127 new TaskStore(rootDir, undefined,
+  { asyncLayer: layer }) - is the deliverable harness, run against the throwaway postmaster at
+  postgresql://localhost:55432 under the documented route (docs/testing.md, heading "Local PostgreSQL
+  test server provisioning"), with per-run scratch databases.
+executed here = 6 tests, skipped = 0, re-run in the close tick with exit status 0.
+
+4. THE TWO FILTER BRANCHES AND THE REJECTED COUNT
+Both branches were constructible through the store's own deleteTask path - no poked JSON, no hand-set field:
+  empty sourceAgentId + tombstoned candidate  -> the candidate is dropped by sourceAgentId == null,
+                                                 nothing is written, the new card stays in `todo`: fail-open
+  populated sourceAgentId + tombstoned candidate inside the sticky window -> the candidate is kept, the
+                                                 lane writes an intake:resurrection-blocked audit row,
+                                                 soft-deletes the new card through the store delete path
+                                                 (which also moves it out of `todo` into `archived`) and
+                                                 throws TombstonedTaskResurrectionError: rejected
+totals printed: fail-open 4, control (lane never ran) 1, rejected 1.
+rejected_total=1 is NOT the 0 this card's Original Description predicted. The gate the reviewer named is
+  real; the conclusion drawn from it is wrong. The narrower true statement is about the producer, not the
+  lane: mission-triage follow-ups leave sourceAgentId empty, so *those* cards take the drop-the-tombstone
+  arm and fail open. No production code was changed on this card.
+
+5. THE NUMBERS THAT PROVE THE TEST CAN FAIL
+call site :1072 neutralised in the working tree -> Test Files 1 failed, Tests 3 failed | 3 passed, rc=1;
+  first failure verbatim: AssertionError: expected undefined to be 'KB-001' at
+  same-agent-duplicate-intake-real-store.pg.test.ts:189.
+git checkout HEAD -- packages/core/src/task-store/task-creation.ts -> restore rc=0, Tests 6 passed, 0
+  failures, git status --porcelain 0 lines. No stash was used anywhere on this host.
+delivered diff name-only base..tip = 1 file, 0 production files.
+
+6. THE DELIVERY
+delivered ref = refs/heads/stas-395-measure-same-agent-duplicate-intake, discovered with for-each-ref.
+tip = e038ea90e247532e4cdc84af33657fb5337adb7f - the SHA the green captures name, carried by the bundle
+  whose head and prerequisite (f1247e8ae) both verify at rc=0, base64 round-trip byte-identical.
+Attached to this card: the encoded bundle, the series patch and the commit list, under .txt suffixes
+  because the attachment surface refuses .bundle/.b64/.patch; sha256 of both copies printed.
+Evidence commit in this repository: 2b2ba54f0 on fusion/stas-395, working tree 0 porcelain lines.
+Landing predicates, bundle prints, the LAN mirror disclosure (its reflog line reads "update by push";
+  this card ran no push) and the operator's remaining leg are in window-announcement.txt and in this
+  card's log.
+
+7. WHAT IS NOT TRUE AFTER THIS CARD
+The lane is not fixed. Its behaviour is byte-identical to what it was before this card: this card edited
+  no production file - the only production file touched was neutralised in a working tree and restored
+  inside the same probe, and the delivered commit holds one test file and zero production files.
+The test is not live in the running board. Nothing was rebuilt, restarted or redeployed; the running
+  daemon was not touched and the running build exposes no revision on any agent-readable surface, so
+  "running build unidentifiable" is inherited verbatim and this card produces no observable change
+  either way. The assertion guards the lane only once it is landed and built.
+A live-board end-to-end observation of the lane firing stays out of scope by policy, not oversight -
+  it would need a rebuilt and restarted engine daemon, which no agent may restart. The real-store test
+  is the admissible substitute, and it is what this card delivered.
+No board record was written, retitled or moved by this card. No push, no pull request, no merge, no
+  rebase, and no ref other than the newly named delivery branch was created.

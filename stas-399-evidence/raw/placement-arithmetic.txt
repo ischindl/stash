@@ -1,0 +1,72 @@
+### STAS-399 Step 5: the operator's placement arithmetic, run on the CEO scope's SHAPE (never its content)
+
+Source of the shape: claims-recheck.txt section A(v), which measured the corpus named in the Original
+Description section by section (`python3` over the file, chars and BYTES printed apart). This file reuses
+those measured numbers and reads no memory file. No content is copied: only section COUNT, per-section
+CHAR length, and which positions carry named rules.
+
+SHAPE AS MEASURED (chars are the engine parser's own per-section line lengths)
+  trimmed corpus            53,639 chars   (55,686 BYTES -- a different unit, never quotable as one figure)
+  preamble                  317 chars over 7 lines  (always kept by the clamp)
+  sections                  11, sum of section line-chars 53,306
+  clamp                     50,000 CHARS (MAX_MEMORY_LENGTH)
+  shed requirement          53,639 - 50,000 = 3,639 chars must leave the render
+
+  #   line-chars  what lives there (heading topic, from A(v))
+  1        2,596  Current open loops
+  2        3,214  Sweep-authority / `.engine/` working rule / FF-is-my-lever  <-- NAMED RULES
+  3        3,832  Post-merge CI evidence gate
+  4        3,552  Fabrication family
+  5        4,523  Policy walls & purge discipline
+  6        6,749  Capacity knob & probe hygiene
+  7        5,938  Release path & trunk measurement
+  8        7,798  Durable operating rules
+  9        1,627  MEMORY BUDGET (CEO ruling)                                  <-- NAMED RULES
+ 10        8,076  Dispatch-starvation taxonomy
+ 11        5,401  Planning lane  (the NEWEST section: never a candidate, RUFU-443 contract)
+
+ARITHMETIC, model stated
+  Model: shedding a set of sections removes their line-chars plus the blank-line separator each one taken
+  with it, so a placement's cost is (sum of its line-chars) + (one separator per dropped block). Costs below
+  are the line-char sums, which is the comparison's decisive term; separator deltas are 1-2 chars and cannot
+  change any ordering conclusion here. The engine's own arithmetic is exact (prefix sums over line lengths,
+  `renderedAfter()`), and its behaviour on this shape is measured in the guard test, not modelled here.
+
+  (a) POSITIONAL, i.e. what runs today: keep preamble + the newest contiguous suffix that fits.
+      Drops #1 + #2 = 2,596 + 3,214 = 5,810 line-chars. Keeps #3..#11.
+      THE EVICTED SET CONTAINS SECTION #2, the section holding the named rules the Original Description
+      lists (AC-poison vector, `.engine/` is-working-surface, staged-index FF-blocker, shape-3 trio).
+      Measured, not asserted: claims-recheck A(v) "TODAY'S RULE EVICTS A NAMED RULE. Confirmed".
+
+  (b) CAN ANY SINGLE DROP FIT? The cheapest single section is #9 at 1,627 chars, below the 3,639 required.
+      NO. Claim (v) "no zero-loss placement exists" is CONFIRMED: the corpus is above the clamp by
+      construction, so any solution must choose its victim deliberately. A cheaper-looking placement is not
+      reachable by better luck in the file; it has to be an instruction.
+
+  (c) CHEAPEST LEGAL PAIR, ignoring what the sections hold: #9 + #1 = 1,627 + 2,596 = 4,223 chars
+      (claim (v) measured 1,628 + 2,608 = 4,236 before the corpus was rewritten). This placement is NOT
+      EXPRESSIBLE by the positional rule, which can only drop a contiguous oldest prefix -- and it spends the
+      MEMORY BUDGET ruling.
+
+  (d) CHEAPEST LEGAL PLACEMENT THAT KEEPS BOTH NAMED-RULE SECTIONS (#2 and #9), expressible as a declaration:
+      mark #1 and #4 `sacrifice-first` -> victims in file order = #1 then #4 = 2,596 + 3,552 = 6,148 chars.
+      Price versus today: 6,148 - 5,810 = 338 chars MORE shed, i.e. roughly a third of the 1,024-char notice
+      reserve, and in exchange the section the operator measured as lost stays in the prompt.
+      (A(v) printed "333 more chars / 6,076" for this placement; the table it printed above that line sums
+      #1 + #4 to 6,148, so the earlier figure is a transcription slip. Corrected here rather than repeated.)
+
+  (e) THE CHOICE IS NOW THE AGENT'S, AND IT IS VISIBLE. (a) is an accident of file position. (d) is one
+      heading token on two lines. Both are reported by name in the notice, with the rule that chose them
+      printed as `declared sacrifice-first order` or `the positional rule (no sacrifice-first marker in this
+      file)`, so a reviewer can tell the two apart from the prompt alone.
+
+MEASURED PROMPT-ASSEMBLY PROOF (same shape class, run through the real composition entry point; printed by
+the guard test with logs unsilenced -- see ac-prints-from-test.txt):
+  [AC4-declared] dropped=["Bulk capture A sacrifice-first","Bulk capture B sacrifice-first","Bulk capture C
+                  sacrifice-first"]   -> 3 declared victims, 0 unmarked victims, named rule KEPT in the prompt
+  [AC5-probe]    lenBefore=50047 lenAfter=48221 ruleAbsentUnderPositional=true rulePresentUnderDeclared=true
+                  RULE = "staged-index FF-blocker: never fast-forward a dirty index"
+                  same corpus, same lengths, one difference: three bulk sections declare `sacrifice-first`.
+  rules recovered by the declared order            = 1
+  rules recovered by editing any memory file       = 0  (this card edits no memory file; see the diff counts
+                                                            printed in delivery-envelope.txt, both zero)

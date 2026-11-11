@@ -1,0 +1,38 @@
+=== AC8: the ATTACHED bundle base64, re-verified from the attachment on disk ===
+  attachment path = /home/schindler/git/stash/.fusion/tasks/STAS-396/attachments/1794098814623-stas-394-from-trunk.bundle.base64.txt
+  decoded bytes = 47495
+  cmp vs the bundle built here rc = 0 (0 = identical bytes)
+  list-heads: cfe6daa16d9833c11031ae01dd97d5fef5b04928 refs/heads/stas-394-fix-title-idempotence
+  sha256 of decoded attachment = b489eb75183b368bbcad048ac41354d36eb1d717221a010620fe5aa0cd55c0c4
+  other attachments now on this card:
+    1794098814623-stas-394-from-trunk.bundle.base64.txt
+    1794098826934-stas-394-from-trunk.commits.txt
+    1794098831387-stas-394-from-trunk.patches.txt
+
+=== AC7: the four things that are NOT true, each as a measurement ===
+  1. trunk does NOT contain the fix:
+       git merge-base --is-ancestor refs/heads/stas-394-fix-title-idempotence refs/heads/main -> rc = 1
+       (rc=1: NOT landed. refs/heads/main = ee995fcc85013a990752307d0f253e9d6fe5ebf4)
+  2. the running board still composes follow-up titles the old way - nothing was rebuilt
+     and no daemon was restarted by this card, and no agent-readable surface exposes which
+     revision is running, so no claim about the running build is made in either direction.
+  3. STAS-357's leading Fix: layers read 8 at close, the same count Step 0 and AC6(c)
+     recorded: an idempotent composer repairs titles composed in the future and no card
+     here edits an existing record, so those layers survive BY DESIGN, not by omission.
+  4. the closed card's mergedAt names a commit in the WRONG repository:
+       engine: git --git-dir=/home/schindler/git/Fusion/.git cat-file -t de5515fd1 -> fatal: Not a valid object name de5515fd1
+       stash : git --git-dir=/home/schindler/git/stash/.git cat-file -t de5515fd1 -> commit
+     confirmed here, not repaired: STAS-394 is closed and its record is out of scope.
+
+=== AC8: the stash side, measured, and the NO-OP sentinel ===
+NO-OP: stash-side product diff is empty - tracked-tree changes 0 lines, product files outside stas-396-evidence/ 0, HEAD ec9061fa0850f84bf455f0383ae496c84c563aeb unchanged on branch fusion/stas-396; the only stash-side commits are this card's evidence captures; the only engine-side artefact is the join commit cfe6daa16d9833c11031ae01dd97d5fef5b04928 on refs/heads/stas-394-fix-title-idempotence, moved by compare-and-swap from 1677ee018a5d3aee0e74c0669676a1db40c690c5
+
+=== final state, printed at close ===
+  engine refs/heads/main                            = ee995fcc85013a990752307d0f253e9d6fe5ebf4
+  engine refs/heads/refs/heads/stas-394-fix-title-idempotence = cfe6daa16d9833c11031ae01dd97d5fef5b04928
+  engine refs/stas-396* refs remaining              = 0
+  engine refs/heads/stas-395-...                    = e038ea90e247532e4cdc84af33657fb5337adb7f
+  stash  refs/heads/main                            = de5515fd113e485c05e4d745e992c641aa69511c
+  stash  HEAD / branch                              = ec9061fa0850f84bf455f0383ae496c84c563aeb / fusion/stas-396
+  engine worktree entries                           = 133
+  scratch checkout HEAD / porcelain                 = cfe6daa16d9833c11031ae01dd97d5fef5b04928 / 0 lines

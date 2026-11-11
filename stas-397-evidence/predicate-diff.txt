@@ -1,0 +1,139 @@
+STAS-397 — Step 4 capture: the one predicate, and the machinery it retired
+===========================================================================
+
+Engine checkout `.engine/stas-397-engine` (linked worktree of /home/schindler/git/Fusion). Every
+number below is `git show` / `git grep` against an explicit rev — never a filesystem walk.
+
+  base (live trunk when the branch was cut and re-based onto) : 46b94afa0c50d942cb312b59ac69619fb348b5dd
+  production edit                                             : 35f1406dc08e29f827e2f3a01103e8341ebcd0ee
+  parent of the production edit                               : 0e408011138bbe7599134cc65803296fe9c15388  (the guard commit)
+
+The parent pointer is printed because the red-before-green order is a fact of git history, not a
+narrative: the guard commit is the direct parent of the edit, so no production code existed at the
+moment the guard was proved red.
+
+The edit's own file list (`git show --stat 35f1406dc0`):
+
+  ...defensive-removal-preservation.real-git.test.ts   77 +++++++---     (pin: the refusal for an ignored-only tree -> the release)
+  .../__tests__/worktree-acquisition-pinned.test.ts     4 +-             (pin: dropped the `regenerable-ignored` argv row)
+  packages/engine/src/__tests__/worktree-backend.test.ts 153 ++++++----- (pins: classify table, probe table, 5 removal tests)
+  packages/engine/src/__tests__/worktree-doc-accuracy.test.ts 10 +-      (pin: emitter floor 2 -> 1)
+  packages/engine/src/util/run-audit.ts                  15 +-           (audit literal pair replaced by the discard record)
+  packages/engine/src/worktree/worktree-backend.ts      160 +++++------- (the predicate and the gate)
+  6 files changed, 218 insertions(+), 201 deletions(-)
+
+
+1. THE PREDICATE, VERBATIM ON BOTH SIDES
+----------------------------------------
+BEFORE (46b94afa0c, worktree-backend.ts:1296-1308) — four classes, and the last two turn on
+which build tool produced a directory:
+
+    export function classifyWorktreeRemovalContent(
+      porcelain: string,
+      options?: { provenScratchRootEntries?: ReadonlySet<string> },
+    ): WorktreeRemovalContentClassification {
+      const entries = porcelain.split(/\r?\n/).filter((line) => line.trim().length > 0);
+      if (entries.length === 0) return "clean";
+      if (entries.some((line) => !line.startsWith("!! "))) return "deliverable";
+      return entries.every((entry) => isRegenerableIgnoredPorcelainEntry(entry, options?.provenScratchRootEntries))
+        ? "regenerable-ignored"
+        : "ignored-only";
+    }
+
+AFTER (3ab0e55698, worktree-backend.ts:1269-1281) — three classes, one question, no name list and
+no child probe anywhere in the function:
+
+    export type WorktreeRemovalContentClassification = "clean" | "ignored-only" | "deliverable";
+
+    export function classifyWorktreeRemovalContent(porcelain: string): WorktreeRemovalContentClassification {
+      const entries = porcelain.split(/\r?\n/).filter((line) => line.trim().length > 0);
+      if (entries.length === 0) return "clean";
+      if (entries.some((line) => !line.startsWith("!! "))) return "deliverable";
+      return "ignored-only";
+    }
+
+A non-ignored entry is occupancy and reaches `deliverable`; an ignored entry can never reach it.
+`ignored-only` now states only that there is ignored content to RECORD, never content to preserve.
+The probe command vector is unchanged (`status --porcelain=v1 --ignored=matching
+--untracked-files=normal`), so `--ignored=matching` survives as a probe and stops being a verdict.
+
+
+2. THE GATE, VERBATIM ON BOTH SIDES
+-----------------------------------
+BEFORE (46b94afa0c, worktree-backend.ts:1743-1756) — the site the sweep dies on. An `ignored-only`
+tree without a durable landing proof throws, and the sweep's reason (`SelfHealingBranchConflict`)
+is not in POST_LANDING_PROOF_REASONS, so no caller on the failing path may ever supply that proof:
+
+    if (contentClassification === "ignored-only" && !input.postLandingProof) {
+      await input.audit?.git({ type: "worktree:removal-preserved", ... classification: "ignored-only" ... })
+      throw new WorktreeContentPreservationError(input.worktreePath);
+    }
+
+AFTER (3ab0e55698, worktree-backend.ts:1703-1736) — the gate asks one question. `deliverable` and an
+unreadable tree still throw and stay preserved; `ignored-only` passes through, carrying the ignored
+paths it collected:
+
+    let contentClassification: WorktreeRemovalContentClassification | undefined;
+    let contentEntryCount = 0;
+    let discardedIgnoredPaths: string[] = [];
+    if (requiresCleanWorktree) {
+      try {
+        const contentProbe = await assertCleanForDefensiveRemoval(input.rootDir, input.worktreePath);
+        contentClassification = contentProbe.classification;
+        contentEntryCount = contentProbe.entryCount;
+        discardedIgnoredPaths = contentProbe.ignoredPaths;
+      } catch (error) {
+        ... audit "worktree:removal-preserved" with classification deliverable|unverifiable ...
+        throw error;
+      }
+    }
+
+and the discard is recorded only once the removal actually happened (worktree-backend.ts:1742-1763),
+so a discarded tree is named, not merely counted:
+
+    type: "worktree:removal-discarded-ignored-content"
+    metadata: { taskId, reason, entryCount, discardedIgnoredPaths,
+                landingProofSource: input.postLandingProof?.source, landedSha: input.postLandingProof?.landedSha }
+
+Nothing forceful was added on any path: ALLOWED_FORCE_REASONS is untouched by this card, and the
+defensive reasons still remove without `--force` (the guard test proves the native removal accepts
+an ignored-bearing tree on its own — raw/native-remove-probe.txt, NATIVE_REMOVE_RC=0).
+
+
+3. MACHINERY DELETED, WITH COUNTS
+---------------------------------
+Occurrence totals are the census in raw/ac5-counts.txt (summed over packages + plugins + scripts).
+The two columns marked "files at base / tip" were re-measured this tick with
+`git grep -c <symbol> <rev> -- packages plugins scripts | wc -l`, so retirement is verified twice.
+
+  symbol / literal                                  occurrences   files base / tip   disposition
+  REGENERABLE_IGNORED_DIR_NAMES                        2 -> 0        1 / 0          deleted (the basename allowlist)
+  FUSION_SCRATCH_REGENERABLE_CHILDREN                  3 -> 0        1 / 0          deleted (the scratch child map)
+  isRegenerableScratchDirectory                        5 -> 0        2 / 0          deleted (the child probe)
+  isRegenerableIgnoredPorcelainEntry                   2 -> 0        1 / 0          deleted (the allowlist matcher)
+  "regenerable-ignored"                               21 -> 10       —              engine+plugins+scripts 3 -> 2, both comments
+  worktree:removal-discarded-regenerable-content        5 -> 1       —              the 1 is run-audit.ts's retirement note
+  worktree:post-landing-ignored-content-discarded       3 -> 1       —              same
+  worktree:removal-discarded-ignored-content            0 -> 10      —              the single discard record
+  WorktreeContentPreservationError                     11 -> 10      —              -1: the ignored-only throw is gone
+  "uncommitted or ignored content present"              7 -> 10      —              kept for `deliverable`; extra hits are this card's tests
+
+  KEPT, with the second responsibility named in one line:
+  POST_LANDING_PROOF_REASONS (2 -> 2)                  — it is the contract of the discard record's
+                                                         proof metadata (which landing produced it),
+                                                         not an escape hatch from the predicate.
+  InvalidPostLandingProofUsageError (5 -> 5, files 2/2) — it still rejects a proof passed with a
+                                                         reason that may not carry one; that
+                                                         validation is independent of this gate.
+  postLandingProof (19 -> 17)                          — still names the landing on the discard
+                                                         record; the 2 lost uses were the gate and
+                                                         its refusal branch.
+  `--ignored=matching` probe                           — KEPT deliberately: it is now the source of
+                                                         the paths the discard record names.
+
+Cross-package residue, printed and NOT edited (outside File Scope): packages/core still declares the
+`regenerable-ignored` union member in `src/types/merge/worktree-content.ts:19,27,50` and lists it in
+`src/merge/zero-commit-landing-proof.ts:54,64`, with two core tests asserting that table. No engine
+code can produce that member after this card, so it is unreachable rather than half-live; deleting a
+declared union member is a cross-package API change with its own test surface and belongs in its own
+card. Reported here rather than smuggled into this diff.

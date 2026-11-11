@@ -1,0 +1,134 @@
+STAS-396 STEP 0 - CARD BASELINE, INHERITED CLAIMS, PROVENANCE OF THE FALSE LANDING
+every value below was printed inside this run (AC0); nothing below is an input
+measured in the engine repository - this step needed no engine access at all.
+
+==========================================================================================
+1. R1 - THIS CARD'S LANE (the STASH repository worktree), baseline before any write
+==========================================================================================
+lane path                     : /home/schindler/git/stash/.fusion/worktrees/stas-396
+git rev-parse HEAD            : de5515fd113e485c05e4d745e992c641aa69511c   [STASH repo]
+git rev-parse --abbrev-ref    : fusion/stas-396
+git status --porcelain        : 0 lines at run start (pristine lane)
+git rev-parse --git-common-dir: /home/schindler/git/stash/.git  (so this lane shares the
+                                stash repo's common dir, incl. its single stash list)
+repo                          : STASH repo (joinstash.ai product), NOT the engine repo.
+                                The engine repo referenced by this card lives separately
+                                at $HOME/git/Fusion and is a different repository object.
+
+==========================================================================================
+2. THIS CARD'S OWN RECORD STATE (key-level JSON read, so a later park is separable
+   from a stall)  -  .fusion/tasks/STAS-396/task.json
+==========================================================================================
+column                     = 'in-progress'
+dependencies               = []                      <- NO edge parks this card
+sourceParentTaskId         = ABSENT
+awaitingApprovalReason     = ABSENT (no key in the record contains 'approval'; the only
+                             'hold'-ish key is sessionContentionHoldCount)
+workflowIrPin              = '9af4c19a:97310'   node='execute'   column='in-progress'
+enabledWorkflowSteps       = ['plan-review', 'code-review', 'post-merge-verification']
+branch                     = 'fusion/stas-396'
+baseBranch / baseCommitSha = 'main' / de5515fd113e485c05e4d745e992c641aa69511c [STASH repo]
+assignedAgentId            = 'agent-ff03cfcc'
+currentStep                = 0     step statuses = [in-progress, pending x7]
+Consequence: this card is executing, not parked. If it later parks, the true hold reason
+is that record's awaitingApprovalReason, printed verbatim - not a coarse stall signature.
+
+==========================================================================================
+3. PROVENANCE OF THE FALSE LANDING - STAS-394's closed record, key-level read
+   .fusion/tasks/STAS-394/task.json
+==========================================================================================
+top-level key 'mergedAt' present in the record? False. The value the card's description
+calls "its mergedAt SHA" lives at mergeDetails.commitSha; mergeDetails.mergedAt is a
+TIMESTAMP, not a SHA. Both are printed verbatim so the field being corrected is named:
+
+  branch                            = 'fusion/stas-394'          [STASH repo branch name]
+  mergeDetails.commitSha            = de5515fd113e485c05e4d745e992c641aa69511c
+  mergeDetails.landedBranchTipSha   = 399aaf05d3516b937180d36cbf5367fecebb0f90
+  mergeDetails.mergedAt             = 2026-11-07T20:09:30.365Z
+  mergeDetails.mergeTargetBranch    = 'main'
+  mergeDetails.mergeTargetSource    = 'task-base-branch'
+  mergeDetails.mergeConfirmed       = True
+  mergeDetails.filesChanged         = 53      insertions = 4884   deletions = 0
+  mergeDetails.mergeCommitMessage   = 'STAS-394: land the evidence for the idempotent
+                                       follow-up title composer'
+  mergeDetails.landedFiles          = every entry begins 'stas-394-evidence/'
+
+READ OF THAT EVIDENCE, stated as a measurement and not as a repair: the landing record's
+commitSha de5515fd1... equals this card's own HEAD above, i.e. it is a commit in the STASH
+repository whose landedFiles are all card evidence files. The engine-side artefact
+STAS-394 actually delivered - a branch in the separate engine repository - is not named by
+mergeDetails at all. That is why the board's landing bookkeeping reads as if the work had
+landed while the engine trunk never received the fix. This card CONFIRMS that and repairs
+nothing (STAS-394 is closed and out of scope; see guardrails-and-gap.txt).
+
+==========================================================================================
+4. AC6(c) BASELINE - THE SIX LINEAGE RECORDS, census'd by the same key-level read
+   helper: raw/lineage_census.py   (reads task.json as JSON; a daemon rewriting other
+   bytes of the same file cannot perturb the guardrail being measured)
+==========================================================================================
+prefix literal = 'Fix: '  counted as exact leading occurrences
+
+id           leading-Fix-layers   column   sha256 of the remainder after the layers
+STAS-296       3                  done     2b55badcc3805b3d27087320604cc1f609e09afc853fcab27c21e39ef8630ef8
+STAS-352       4                  done     2b55badcc3805b3d27087320604cc1f609e09afc853fcab27c21e39ef8630ef8
+STAS-354       5                  done     2b55badcc3805b3d27087320604cc1f609e09afc853fcab27c21e39ef8630ef8
+STAS-355       6                  done     2b55badcc3805b3d27087320604cc1f609e09afc853fcab27c21e39ef8630ef8
+STAS-356       7                  done     2b55badcc3805b3d27087320604cc1f609e09afc853fcab27c21e39ef8630ef8
+STAS-357       8                  todo     2b55badcc3805b3d27087320604cc1f609e09afc853fcab27c21e39ef8630ef8
+
+remainder (identical bytes in all six): Folder-share<U+2192>agent MCP access + skill
+"Publish & share" working E2E
+This table is the pair (layers, remainder hash) per record that AC6(c) compares against.
+STAS-357's eight leading layers are the reproduction artifact of the defect this card's
+branch fixes; no step here edits any of these six records.
+
+==========================================================================================
+5. INHERITED CLAIMS - CLAIMS UNDER TEST, NOT INPUTS (AC0)
+   Every line in this section is quoted from the card's own Original Description block or
+   from STAS-394's registered captures, dated 2026-11-07. Each MUST be re-measured in a
+   later step of this run, and none may be used as an operand. If a re-measurement
+   disagrees, the re-measurement wins and the disagreement is printed.
+==========================================================================================
+[from the Original Description block, "CEO-measured predicates, 2026-11-07T21:45Z"]
+  C1  engine refs/heads/main = f1247e8aef                    [re-measure: Step 1, Step 3]
+  C2  refs/heads/main was 42f9762e1c two hours earlier        [re-measure: Step 6 reflog]
+  C3  drift grew 1 -> 4 -> 7 commits during that day          [re-measure: Step 6 reflog]
+  C4  merge-base --is-ancestor <branch> refs/heads/main rc=1  [re-measure: Step 1, both dirs]
+  C5  rev-list --left-right --count main...<branch> = 7 1     [re-measure: Step 1]
+  C6  merge-tree --write-tree --name-only rc=0, 0 CONFLICT    [re-measure: Step 1, Step 7]
+  C7  11 paths changed on the branch                         [re-measure: Step 1]
+  C8  trunk touched 0 of those paths since merge-base         [re-measure: Step 1]
+  C9  LAN mirror carries the branch at 1677ee018a via an 'update by push' at
+      19:52:09 +0100                                          [re-measure: Step 6]
+[from STAS-394's registered captures, dated 2026-11-07]
+  C10 branch name = refs/heads/stas-394-fix-title-idempotence  [discover live via for-each-ref]
+  C11 branch tip = 1677ee018a5d3aee0e74c0669676a1db40c690c5    [re-measure: Step 1]
+  C12 branch base = merge-base = 1d4bcc61847562837b44854bccea95b783d8b943  [re-measure: Step 1]
+  C13 delivery = 1 commit, 11 files, 244 insertions, 5 deletions  [re-measure: Step 1]
+  C14 affected package = @fusion/core, test script
+      'vitest run --silent=passed-only --reporter=dot', invoked
+      'pnpm --filter @fusion/core test'                        [re-derive from package.json]
+  C15 green-set baseline at the branch tip = 263 failing files / 7012 passing tests,
+      failing-file set sha256 22e759745a...                     [re-measure: Step 2, Step 4]
+  C16 @fusion/core typecheck rc=0, @fusion/engine typecheck rc=0, root static gate rc=0
+      (20 validators at that tip)                              [re-derive, re-measure]
+  C17 190 of the 263 failing files are *.pg.test.ts gated on Postgres 28P01
+      'password authentication failed'; 73 named non-Postgres failures
+      [re-measure the split, do not absorb it into a total]
+  C18 composer symbol composeFixTitle / constant FIX_TITLE_PREFIX, path named by that card
+      as packages/core/src/tasks/fix-title.ts                   [authority = the branch's own
+      changed-path list, re-printed in Step 1, not this remembered name]
+  C19 engine trunk at STAS-394 close = 42f9762e1c8c8bacd1f7e7a976b7fbb536feaa85 [historical]
+
+==========================================================================================
+6. DEPENDENCY-INSTALL DECISION FOR *THIS* REPOSITORY (stash)
+==========================================================================================
+Decision: NO dependency install in this repository. Reason, measured: this card authors
+zero product files in the stash repo - its File Scope is stas-396-evidence/** only - so no
+stash-side package manifest changes and no new dependency enters this tree. The lane was
+pristine (porcelain 0 lines) and is left with only untracked evidence under
+stas-396-evidence/. There is no acquired-task-worktree dependency tool exposed on this
+executor surface (no such tool is in this session's tool list), so the decision is recorded
+here, in this step's capture, which is the alternative the step names.
+The dependency install that DOES matter is the engine scratch checkout's, and it is a
+separate decision taken in Step 1 with the engine repository's own documented command.

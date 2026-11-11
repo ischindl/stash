@@ -1,0 +1,126 @@
+STAS-395 AC6 delivery envelope, re-printed in the close tick (nothing inherited, nothing memorised)
+measured_by=raw/ac6_close_tick.py
+$ git rev-parse refs/heads/main
+  rc=0
+  | ee995fcc85013a990752307d0f253e9d6fe5ebf4
+$ git log -1 --format=%h %s refs/heads/main
+  rc=0
+  | ee995fcc85 fix(RUFU-871): read project runtime flags under a transaction-local RLS bypass
+trunk_sha_this_tick=ee995fcc85013a990752307d0f253e9d6fe5ebf4
+delivery_base_sha=f1247e8aef367c248ebb0b9d339bf0b9bd0a6421
+$ git merge-base --is-ancestor f1247e8aef367c248ebb0b9d339bf0b9bd0a6421 refs/heads/main
+  rc=0
+  | (no output)
+$ git rev-list --count f1247e8aef367c248ebb0b9d339bf0b9bd0a6421..refs/heads/main
+  rc=0
+  | 1
+
+=== every ref anywhere in the repository carrying this card's id (heads AND remote-tracking) ===
+$ git for-each-ref --format=%(refname) %(objectname:short) %(subject) --sort=-refname
+  rc=0
+  | refs/tmp/prlcm 7032633e53 Merge branch 'main' into pr/lcm
+  | refs/tmp/main-head 7fb48a7810 fix(RUFU-135): let the pre-overflow gate detect stale recorded usage via a fresh measurement
+  | refs/tmp/main ad13ed32d9 RUFU-483: raise the runtime PostgreSQL pool default to 10 and expose pool occupancy
+  | refs/tags/v0.9.4 26a286973a chore(release): v0.9.4
+  | refs/tags/v0.9.3 2abc68635f chore(release): v0.9.3
+  | refs/tags/v0.9.2 d2b688ed14 chore(release): v0.9.2
+  | refs/tags/v0.9.1 ba2cb2bd72 chore(release): v0.9.1
+  | refs/tags/v0.9.0 061a7dce35 chore(release): v0.9.0
+  | refs/tags/v0.8.4 262c6d8a4a chore(release): v0.8.4
+  | refs/tags/v0.8.3 4446a58b05 chore(release): v0.8.3
+  | refs/tags/v0.8.2 2fd840def5 chore(release): v0.8.2
+  | refs/tags/v0.8.1 765e41838c chore(release): v0.8.1
+  | ... 2550 more lines
+card_refs_total=2
+card_refs_under_refs_heads=1  (AC6 predicate: exactly one)
+  CARD REF: refs/remotes/lan/stas-395-measure-same-agent-duplicate-intake e038ea90e2 test(STAS-395): describe the prior stubbing in prose, keeping the mock census at zero
+  CARD REF: refs/heads/stas-395-measure-same-agent-duplicate-intake e038ea90e2 test(STAS-395): describe the prior stubbing in prose, keeping the mock census at zero
+delivered_ref_discovered_live=refs/heads/stas-395-measure-same-agent-duplicate-intake
+
+=== DISCLOSURE: a remote-tracking mirror for this branch exists; this card never pushed ===
+mirror_ref=refs/remotes/lan/stas-395-measure-same-agent-duplicate-intake
+$ git reflog show --format=%gd %h %gs refs/remotes/lan/stas-395-measure-same-agent-duplicate-intake
+  rc=0
+  | lan/stas-395-measure-same-agent-duplicate-intake@{0} e038ea90e2 update by push
+$ git config --get remote.lan.url
+  rc=0
+  | http://192.168.12.60:6610/fusion.git
+  git config remote.* for every remote, printed so the operator can see which remote a mirror would use:
+$ git remote -v
+  rc=0
+  | fork	https://github.com/ischindl/Fusion.git (fetch)
+  | fork	https://github.com/ischindl/Fusion.git (push)
+  | gitlab	https://gitlab.digitalsystems.eu/fusion/RunFusion.git (fetch)
+  | gitlab	https://gitlab.digitalsystems.eu/fusion/RunFusion.git (push)
+  | lan	http://192.168.12.60:6610/fusion.git (fetch)
+  | lan	http://192.168.12.60:6610/fusion.git (push)
+  | origin	https://github.com/Runfusion/Fusion.git (fetch)
+  | origin	https://github.com/Runfusion/Fusion.git (push)
+  | origin-ssh	git@github.com:Runfusion/Fusion.git (fetch)
+  | origin-ssh	git@github.com:Runfusion/Fusion.git (push)
+  this card ran no push, no fetch and no prune; the mirror's own reflog subject names its writer.
+
+$ git rev-parse refs/heads/stas-395-measure-same-agent-duplicate-intake
+  rc=0
+  | e038ea90e247532e4cdc84af33657fb5337adb7f
+$ git log --format=%h %ci %s f1247e8aef367c248ebb0b9d339bf0b9bd0a6421..refs/heads/stas-395-measure-same-agent-duplicate-intake
+  rc=0
+  | e038ea90e2 2026-11-07 23:46:10 +0100 test(STAS-395): describe the prior stubbing in prose, keeping the mock census at zero
+  | bc8c9da52d 2026-11-07 23:45:31 +0100 test(STAS-395): print one observed-verdict line per executed case
+  | 054df66fe7 2026-11-07 23:43:32 +0100 test(STAS-395): print the scratch store root and database per case
+  | f9ea6e9054 2026-11-07 22:46:48 +0100 test(STAS-395): measure the same-agent duplicate-intake lane on a real store
+$ git rev-list --left-right --count refs/heads/main...refs/heads/stas-395-measure-same-agent-duplicate-intake
+  rc=0
+  | 1	4
+$ git merge-tree --write-tree --name-only refs/heads/main refs/heads/stas-395-measure-same-agent-duplicate-intake
+  rc=0
+  | 4632368f2320007374ffcff21016a9cc2c33d4a1
+merge_tree_return_code=0
+merge_tree_conflict_lines=0
+$ git merge-base refs/heads/main refs/heads/stas-395-measure-same-agent-duplicate-intake
+  rc=0
+  | f1247e8aef367c248ebb0b9d339bf0b9bd0a6421
+$ git diff --name-only f1247e8aef367c248ebb0b9d339bf0b9bd0a6421 refs/heads/main -- packages/core/src/__tests__/postgres/same-agent-duplicate-intake-real-store.pg.test.ts
+  rc=0
+  | (no output)
+$ git diff --name-only f1247e8aef367c248ebb0b9d339bf0b9bd0a6421 refs/heads/stas-395-measure-same-agent-duplicate-intake
+  rc=0
+  | packages/core/src/__tests__/postgres/same-agent-duplicate-intake-real-store.pg.test.ts
+
+=== collision probe against the STAS-394 branch, discovered live, never assumed ===
+$ git for-each-ref --format=%(refname) %(objectname:short) %(subject) refs/heads/stas-394-fix-title-idempotence
+  rc=0
+  | refs/heads/stas-394-fix-title-idempotence 1677ee018a fix(STAS-394): compose fix titles idempotently and record fix ancestry in lineage
+$ git merge-base refs/heads/stas-395-measure-same-agent-duplicate-intake refs/heads/stas-394-fix-title-idempotence
+  rc=0
+  | 1d4bcc61847562837b44854bccea95b783d8b943
+$ git rev-list --left-right --count refs/heads/stas-395-measure-same-agent-duplicate-intake...refs/heads/stas-394-fix-title-idempotence
+  rc=0
+  | 11	1
+$ git merge-tree --write-tree --name-only refs/heads/stas-395-measure-same-agent-duplicate-intake refs/heads/stas-394-fix-title-idempotence
+  rc=0
+  | 99c49199b7c0e8231d9e76570bdc7bc68843414b
+merge_tree_vs_stas394_return_code=0
+merge_tree_vs_stas394_conflict_lines=0
+files_this_card_changed=1
+files_stas394_changed_over_its_merge_base=11
+shared_files_touched_by_both=0  (the number that says the two lines do not fight)
+
+=== bundle state, re-verified in this tick against the same tip ===
+$ git bundle list-heads /home/schindler/git/stash/.fusion/worktrees/stas-395/stas-395-evidence/stas-395-delivery.bundle
+  rc=0
+  | e038ea90e247532e4cdc84af33657fb5337adb7f refs/heads/stas-395-measure-same-agent-duplicate-intake
+$ git bundle verify /home/schindler/git/stash/.fusion/worktrees/stas-395/stas-395-evidence/stas-395-delivery.bundle
+  rc=0
+  | The bundle contains this ref:
+  | e038ea90e247532e4cdc84af33657fb5337adb7f refs/heads/stas-395-measure-same-agent-duplicate-intake
+  | The bundle requires this ref:
+  | f1247e8aef367c248ebb0b9d339bf0b9bd0a6421 
+  | The bundle uses this hash algorithm: sha1
+$ git merge-base --is-ancestor f1247e8aef367c248ebb0b9d339bf0b9bd0a6421 refs/heads/main
+  rc=0
+  | (no output)
+
+$ git status --porcelain
+  rc=0
+  | (no output)

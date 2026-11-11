@@ -1,0 +1,213 @@
+packages/cli/CHANGELOG.md:9036:  dev: pi >=0.80.8 moved session auth from `ModelRegistry.getApiKeyAndHeaders` (fusion's `getApiKey`) to `ModelRuntime.getAuth` -> pi-ai `resolveProviderAuth`, which reads `credentials.read("anthropic")` and refreshes OAuth via `credentials.modify("anthropic")`. Fusion stores the subscription login under `anthropic-subscription` (no raw `anthropic` row), so the refresh saw `current === undefined` and auth resolved to undefined. Fix: `createFusionCredentialStore.read("anthropic")` now resolves through `getApiKey("anthropic")` (handles refresh + raw/legacy/subscription/fallback precedence) and returns a ready `api_key` credential; pi-ai routes it as OAuth by the `sk-ant-oat` token prefix. Also add "not configured" to `isRetryableModelSelectionError` so an unresolved provider triggers the configured fallback model instead of hard-failing.
+packages/cli/CHANGELOG.md:13854:  Fix: introduce a `resolveScopedChatStore(projectId)` helper inside
+packages/cli/CHANGELOG.md:13866:  Fix: introduce `fetchAllMessagesInChat()` that paginates through the API's
+packages/cli/CHANGELOG.md:13988:  Fix: `TaskStore.moveTaskInternal` now treats `queued`/`blockedBy`/`overlapBlockedBy` as todo-only dispatch state and scrubs them on every transition into `in-review`. Failed/awaiting-\* statuses are unaffected.
+packages/cli/CHANGELOG.md:14187:  Fix: claim the executing slot synchronously immediately after the `has()` check, release it on the heartbeat-defer early return. Closes the race window entirely.
+packages/cli/CHANGELOG.md:14227:  Fix: at the top of the per-task reclaim loop, check `activeSessionRegistry.isPathActive(task.worktree)` and `continue` for any task whose worktree is currently bound to a live executor/merger/step session. The reclaim retries on the next sweep when the session has finished and the worktree is genuinely free.
+packages/cli/CHANGELOG.md:14264:- 97d92da: Fix: ntfy notifications for `in-review` and merged task events now fire even when notification settings were enabled after the engine started.
+packages/cli/CHANGELOG.md:14273:- be6279f: Fix: ntfy 'merged' notifications now fire for every merge-success path (auto-finalize no-op merges, mergeConfirmed fast-path, PR-strategy merges, and self-healing finalize).
+packages/cli/CHANGELOG.md:14315:- 7ff4279: Fix: chat and chat-rooms composer now grows to always show entered text.
+packages/cli/CHANGELOG.md:14700:- b3f9a8a: Fix: enabling GitHub tracking on a task imported from GitHub now creates a tracking issue instead of silently skipping. The board task card shows the tracking-issue link unless it points at the exact same `owner/repo#number` as the imported source issue.
+packages/cli/CHANGELOG.md:14791:- d899443: Fix: clear task-level pause on `fn_task_done` so explicit agent completions cannot strand tasks in a `paused` state. Hard-pause gating for deferred completion handoff now keys off `globalPause` only.
+packages/cli/CHANGELOG.md:15065:- d90d665: Fix: dependency graph plugin failed to load because its plugin entry imported React/dashboard modules. Split the plugin into a server-pure metadata entry and a separate `./dashboard-view` subpath so the bundled-install loader can register it without crashing.
+packages/cli/CHANGELOG.md:15092:- d90d665: Fix: dashboard board silently dropped tasks when an SSE `task:created` event was missed (e.g., during reconnect or sleep/wake). The `task:moved`, `task:updated`, and `task:merged` handlers in `useTasks` used `prev.map(...)` and skipped tasks not already in local state, so subsequent updates were no-ops. Handlers now upsert, matching `task:created`, so out-of-order or post-reconnect events make the task visible instead of dropping it.
+packages/core/src/__tests__/board-feed-payload-projection.test.ts:77:        postReviewFix: 1,
+packages/core/src/__tests__/no-commits-finalize-guard.test.ts:204:      steps: [{ name: "Fix: inverted condition", status: "skipped", remediation: { wave: 1, gate: "Code Review", gateStepId: "code-review", detail: "inverted condition" } }],
+packages/core/src/__tests__/no-selection-default-workflow-move.test.ts:34:Fix: one authority — `resolveDefaultWorkflowIr()` — shared by the async move
+packages/core/src/__tests__/postgres/review-remediation-budget-fence.pg.test.ts:36:      steps: [...(current.steps ?? []), { name: "Fix: review finding", status: "pending" as const }],
+packages/core/src/__tests__/remediation-append-reopens-step-ledger.test.ts:52:    name: `Fix: ${detail}`,
+packages/core/src/__tests__/remediation-append-reopens-step-ledger.test.ts:124:    const result = await appendRemediationStepsImpl(store, "FN-270", [{ name: "Fix: bare", status: "pending" } as TaskStep]);
+packages/core/src/__tests__/remediation-step-placement.test.ts:15:const fix = step("Fix: handle missing workspace checkout", "pending");
+packages/core/src/__tests__/remediation-step-placement.test.ts:85:      step("Fix: wave one", "done"),
+packages/core/src/__tests__/remediation-step-placement.test.ts:88:    const plan = planRemediationPlacement(existing, [step("Fix: wave two", "pending")]);
+packages/core/src/__tests__/remediation-steps.test.ts:54:      ["Fix: missing undefined case", "pending"],
+packages/core/src/__tests__/remediation-steps.test.ts:63:    expect(result.appended.map((entry) => entry.name)).toEqual(["Fix: missing undefined case"]);
+packages/core/src/__tests__/remediation-steps.test.ts:78:      expect(name).toMatch(/^Fix: /);
+packages/core/src/__tests__/remediation-steps.test.ts:86:      .toBe("Fix: Short headline");
+packages/core/src/__tests__/remediation-steps.test.ts:88:      .toBe("Fix: Long reviewer explanation");
+packages/core/src/__tests__/remediation-steps.test.ts:89:    expect(formatRemediationStepName({ name: "Legacy label" })).toBe("Fix: Legacy label");
+packages/core/src/__tests__/remediation-steps.test.ts:90:    expect(formatRemediationStepName({})).toBe("Fix: review finding");
+packages/core/src/__tests__/remediation-steps.test.ts:93:    expect(multiLine).toBe("Fix: Short headline for operators");
+packages/core/src/__tests__/retry-storm-error.test.ts:13:  postReviewFix: 0,
+packages/core/src/__tests__/retry-summary.test.ts:32:      postReviewFix: 0,
+packages/core/src/__tests__/retry-summary.test.ts:63:      postReviewFix: 6,
+packages/core/src/__tests__/review-revision-wait.test.ts:132:      notes: "Fix: lockfile drift in plugin workspaces. Fix: add the regression test. Fix: stale doc.",
+packages/core/src/__tests__/step-ledger-seal-self-narration.test.ts:40:    const refusal = `${STEP_LEDGER_REFUSAL_MARKER_PREFIX} in-progress for step 12 (Fix: x) — implementation ended at "${DONE}" and no new implementation session has started`;
+packages/core/src/__tests__/step-ledger-seal-self-narration.test.ts:49:    const inner = `${STEP_LEDGER_REFUSAL_MARKER_PREFIX} in-progress for step 12 (Fix: x) — implementation ended at "${DONE}" and no new implementation session has started`;
+packages/core/src/__tests__/step-ledger-seal-self-narration.test.ts:50:    const outer = `${STEP_LEDGER_REFUSAL_MARKER_PREFIX} in-progress for step 12 (Fix: x) — implementation ended at "${inner}" and no new implementation session has started`;
+packages/core/src/async-stores/async-approval-request-store.ts:277: * Fix: re-read via the tx handle, re-validate, then a GUARDED update
+packages/core/src/async-stores/async-mission-store.ts:2477:        title: title ?? `Fix: ${source.title}`,
+packages/core/src/missions/mission-store.ts:3501:   * @param title - Optional title for the fix feature (defaults to "Fix: {sourceTitle}")
+packages/core/src/missions/mission-store.ts:3599:      title: title ?? `Fix: ${sourceFeature.title}`,
+packages/core/src/plugins/pi-extensions.ts:129: * Fix: resolve the linked-worktree relationship directly from git's own on-disk
+packages/core/src/task-store/moves.ts:1025:        Fix: UNION the legacy targets with the workflow-resolved adjacency for legacy sources. This
+packages/core/src/task-store/remediation-step-ops.ts:65:    in-progress", immediately followed by "Ignored post-completion in-progress for step 6 (Fix: ...)"
+packages/core/src/task-store/task-artifacts-ops.ts:660:Fix: an identical newest entry is not written again (the poll re-raises the same sentence, not a new
+packages/core/src/tasks/remediation-steps.ts:23:  return `Fix: ${detail || "review finding"}`;
+packages/dashboard/CHANGELOG.md:2065:  Fix: keep the store reference and call `storeWithRunAudit.getRunAuditEvents(...)` as a method so `this` is preserved, matching the pattern used by other routes that read run-audit events.
+packages/dashboard/app/__tests__/workflow-selection-cross-surface.test.tsx:323:    const quickFix: BoardWorkflowDefinition = { id: "builtin:quick-fix", name: "Quick Fix", columns: [], selectable: true };
+packages/dashboard/app/components/AgentDetailView.css:79:Fix: allow the header to wrap, let the identity block shrink (`flex: 1 1 auto; min-width: 0`) so the name ellipsizes, and let the action cluster wrap below the identity at narrow widths instead of overlaying it. Buttons stay reachable; title/badges stay fully visible at every width.
+packages/dashboard/app/components/MemoryView.css:100:Fix: scope the working-tab layout under `.memory-working-tab` so these rules out-specify the SettingsModal.css copies regardless of import order, and let the editor block size to its content (flex:0 0 auto). The tab itself (`.memory-working-tab`, overflow-y:auto) is the sole scroll owner, so every block flows in a clean intrinsic-height vertical stack and the tab scrolls instead of any box overflowing onto the next.
+packages/dashboard/app/components/TaskCard.tsx:2749:   * Fix: a known per-task override renders immediately (it's synchronous,
+packages/dashboard/app/components/__tests__/TaskCard.cursor.test.tsx:307:      postReviewFix: 0,
+packages/dashboard/app/components/__tests__/TaskCard.footer-alignment.test.tsx:82:    verification: 0, postReviewFix: 0, mergeConflict: 0, branchConflict: 0,
+packages/dashboard/app/lib/step-display.ts:18:Fix: every surface that displays a step number must derive it from this single helper,
+packages/dashboard/app/utils/__tests__/taskProgress.test.ts:519:        { name: "Fix: repair retry guard", status: "done" },
+packages/dashboard/app/utils/__tests__/taskProgress.test.ts:526:      { id: "step-1", name: "Fix: repair retry guard", status: "done" },
+packages/dashboard/app/utils/__tests__/taskProgress.test.ts:532:    const remediationName = "Fix: concise retry guard headline";
+packages/dashboard/src/github.ts:4685:    // Fix: read the authoritative Actor `__typename` (User | Bot | Organization | Mannequin) via
+packages/engine/src/__tests__/_plan-review-outcome-states.ts:184:    sendTaskBackForFix: async () => undefined,
+packages/engine/src/__tests__/auth-storage.test.ts:426:    // `anthropic` row, so the refresh callback saw `current === undefined` and bailed. Fix: read("anthropic")
+packages/engine/src/__tests__/authoritative-gate-result-routing.test.ts:246:      requestPreMergeOptionalStepFix: async (_taskId, context) => { requested.push(context); return true; },
+packages/engine/src/__tests__/authoritative-gate-result-routing.test.ts:270:      requestPreMergeOptionalStepFix: async (_taskId, context) => { requested.push(context); return true; },
+packages/engine/src/__tests__/code-review-bounded-named-remediation.test.ts:131:        name: "Fix: Earlier review item",
+packages/engine/src/__tests__/code-review-bounded-named-remediation.test.ts:226:      sendTaskBackForFix: harness.sendTaskBackForFix,
+packages/engine/src/__tests__/code-review-bounded-named-remediation.test.ts:242:      sendTaskBackForFix: harness.sendTaskBackForFix,
+packages/engine/src/__tests__/code-review-bounded-named-remediation.test.ts:265:        sendTaskBackForFix: harness.sendTaskBackForFix,
+packages/engine/src/__tests__/code-review-bounded-named-remediation.test.ts:267:      sendTaskBackForFix: harness.sendTaskBackForFix,
+packages/engine/src/__tests__/code-review-bounded-named-remediation.test.ts:459:      name: "Fix: Turn Code Review feedback into actionable fixes",
+packages/engine/src/__tests__/code-review-bounded-named-remediation.test.ts:501:          sendTaskBackForFix: harness.sendTaskBackForFix,
+packages/engine/src/__tests__/code-review-bounded-named-remediation.test.ts:504:      sendTaskBackForFix: harness.sendTaskBackForFix,
+packages/engine/src/__tests__/code-review-bounded-named-remediation.test.ts:574:          sendTaskBackForFix: harness.sendTaskBackForFix,
+packages/engine/src/__tests__/code-review-bounded-named-remediation.test.ts:577:      sendTaskBackForFix: harness.sendTaskBackForFix,
+packages/engine/src/__tests__/code-review-bounded-named-remediation.test.ts:618:          sendTaskBackForFix: exhaustedHarness.sendTaskBackForFix,
+packages/engine/src/__tests__/code-review-bounded-named-remediation.test.ts:620:      sendTaskBackForFix: exhaustedHarness.sendTaskBackForFix,
+packages/engine/src/__tests__/code-review-remediation-reopens-ledger.test.ts:99:    sendTaskBackForFix: async () => undefined,
+packages/engine/src/__tests__/executor-step-session.test.ts:928:      sendTaskBackForFix: (
+packages/engine/src/__tests__/executor-step-session.test.ts:1125:          name: "Fix: Documentation & Delivery",
+packages/engine/src/__tests__/fix-steps-from-failed-gates.test.ts:379:      name: "Fix: t",
+packages/engine/src/__tests__/human-merge-approval-flow.test.ts:200:      "Fix: Remplacer le drawer mobile",
+packages/engine/src/__tests__/human-merge-approval-flow.test.ts:201:      "Fix: Couvrir les deux points de rupture",
+packages/engine/src/__tests__/merge-pause-abort-recovery.test.ts:172:        isBenignManualMergeHoldPauseAbort, isReentrantPausedAbortedInFlightNode: vi.fn().mockResolvedValue(false), isRemediationGraphNode: vi.fn(), isRequiredArtifactRecoveryProtected: vi.fn(), isRetryableBenignMergePauseAbort, parkCompletedBlockedTask: vi.fn(), persistTokenUsage: vi.fn(), reenterPausedAbortedWorkflowNode: vi.fn(), resolveResumeLanes: vi.fn().mockResolvedValue(lanes), routeGraphFailureToExecutionResume: vi.fn(), routeGraphMergeFailureToRetry: vi.fn(), requestPreMergeOptionalStepFix: vi.fn(), routeImplementationIncompleteMergeGraphFailure, routeResetParsePinMismatchToRetry: vi.fn(), routeRetryableRemediationGraphFailureToPreMergeFix: vi.fn(), routeUnusableWorktreeGraphFailureToRecovery: vi.fn().mockResolvedValue(false), safeLogEntry: vi.fn(),
+packages/engine/src/__tests__/no-merge-workflow-completion.test.ts:30:Fix: `advanceNoMergeWorkflowToCompleteColumn` in executor.ts, on the
+packages/engine/src/__tests__/plan-review-dependency-gate.test.ts:358:      sendTaskBackForFix: vi.fn(async () => undefined),
+packages/engine/src/__tests__/plan-review-dependency-gate.test.ts:376:      requestPreMergeOptionalStepFix: (taskId, info) => requestPreMergeOptionalStepFix(
+packages/engine/src/__tests__/plan-review-exclusive-outcomes.test.ts:52:  requestFix: ReturnType<typeof vi.fn>;
+packages/engine/src/__tests__/plan-review-exclusive-outcomes.test.ts:117:    requestPreMergeOptionalStepFix: requestFix,
+packages/engine/src/__tests__/plan-review-exclusive-outcomes.test.ts:377:      sendTaskBackForFix: vi.fn(async () => undefined),
+packages/engine/src/__tests__/planner-recovery-controller-human-control.test.ts:44:    requestTargetedFix: vi.fn().mockResolvedValue(undefined),
+packages/engine/src/__tests__/planner-recovery-controller.test.ts:151:    const keys = Object.keys({ injectGuidance: undefined, retryStep: undefined, requestTargetedFix: undefined } satisfies Required<PlannerRecoveryHandlers>);
+packages/engine/src/__tests__/recover-approved-intake-post-u11.test.ts:25:  (c) Fix: resolve the INTAKE column from the task's own workflow.
+packages/engine/src/__tests__/reliability-interactions/mission-stranded-feature-retriage.test.ts:155:      title: "Fix: Fix: Mobile read/browse MVP",
+packages/engine/src/__tests__/reliability-interactions/mission-stranded-feature-retriage.test.ts:224:    let features = [feature({ id: "F-USER-FIX", title: "Fix: login redirect loop", status: "triaged", taskId: undefined })];
+packages/engine/src/__tests__/reliability-interactions/mission-stranded-feature-retriage.test.ts:235:        tasks.push({ id: taskId, title: "Fix: login redirect loop", missionId: "M-001", sliceId: "SL-001", column: "todo", status: "queued" });
+packages/engine/src/__tests__/reliability-interactions/mission-stranded-feature-retriage.test.ts:259:      title: "Fix: Mobile read/browse MVP",
+packages/engine/src/__tests__/reliability-interactions/mission-stranded-feature-retriage.test.ts:274:        tasks.push({ id: taskId, title: "Fix: Mobile read/browse MVP", missionId: "M-001", sliceId: "SL-001", column: "todo", status: "queued" });
+packages/engine/src/__tests__/reliability-interactions/mission-stranded-feature-retriage.test.ts:343:    const tasks = [{ id: "FN-GENERATED-DONE", title: "Fix: completed generated remediation", missionId: "M-001", sliceId: "SL-001", column: "done", status: "queued" }];
+packages/engine/src/__tests__/reliability-interactions/mission-stranded-feature-retriage.test.ts:346:      title: "Fix: completed generated remediation",
+packages/engine/src/__tests__/reliability-interactions/mission-stranded-feature-retriage.test.ts:373:      title: "Fix: already validated remediation",
+packages/engine/src/__tests__/reliability-interactions/mission-stranded-feature-retriage.test.ts:384:      title: "Fix: already validated remediation",
+packages/engine/src/__tests__/reliability-interactions/reclaim-defers-on-active-session.test.ts:16: * Fix: at the top of the per-task loop, skip tasks whose worktree is currently in
+packages/engine/src/__tests__/review-arbitration.test.ts:199:      sendTaskBackForFix: vi.fn(),
+packages/engine/src/__tests__/review-arbitration.test.ts:280:      sendTaskBackForFix: harness.sendTaskBackForFix,
+packages/engine/src/__tests__/review-arbitration.test.ts:314:      sendTaskBackForFix: harness.sendTaskBackForFix,
+packages/engine/src/__tests__/review-arbitration.test.ts:342:    await expect(runReviewArbitration({ store, getRunContextFor: () => undefined, sendTaskBackForFix: vi.fn() }, task, "code-review", "Code Review", "feedback", 2, 3))
+packages/engine/src/__tests__/review-gated-remediation-steps.test.ts:21:      name: "Fix: wrong guard",
+packages/engine/src/__tests__/review-gated-remediation-steps.test.ts:44:      name: "Fix: Preserve the fallback detail",
+packages/engine/src/__tests__/review-gated-remediation-steps.test.ts:59:    expect(result.steps.map((step) => step.name)).toEqual(["Fix: first headline", "Fix: second headline"]);
+packages/engine/src/__tests__/review-gated-remediation-steps.test.ts:74:      name: "Fix: workspace guard",
+packages/engine/src/__tests__/review-gated-remediation-steps.test.ts:99:    expect(fallback.steps[0].name).toBe("Fix: Fix failing buildCommand");
+packages/engine/src/__tests__/review-gated-remediation-steps.test.ts:148:      { store: store as never, readTaskArtifact: async () => task.prompt, sendTaskBackForFix: vi.fn(async () => undefined) },
+packages/engine/src/__tests__/review-gated-remediation-steps.test.ts:209:      name: "Fix: Turn Code Review feedback into actionable fixes",
+packages/engine/src/__tests__/review-gated-remediation-steps.test.ts:221:        name: "Fix: fix guard",
+packages/engine/src/__tests__/review-gated-step-preservation.test.ts:14:      getLiveTask: async () => task([{ name: "Fix: guard", status: "pending", remediation: { wave: 1, gate: "Code Review", gateStepId: "code-review", detail: "guard" } }]),
+packages/engine/src/__tests__/review-gated-step-preservation.test.ts:29:        steps: [{ name: "Fix: guard", status: "pending", remediation: { wave: 1, gate: "Code Review", gateStepId: "code-review", detail: "guard" } }],
+packages/engine/src/__tests__/review-gated-step-preservation.test.ts:60:        name: "Fix: guard",
+packages/engine/src/__tests__/review-ladder-entry-points.test.ts:462:      sendTaskBackForFix: (...args: Parameters<typeof sendTaskBackForFix> extends [unknown, ...infer Rest] ? Rest : never) =>
+packages/engine/src/__tests__/review-ladder-entry-points.test.ts:528:    await expect(routeReviewConvergenceLadder({ store, getRunContextFor: () => undefined, sendTaskBackForFix: vi.fn() } as any, row.id, {
+packages/engine/src/__tests__/review-ladder-entry-points.test.ts:782:      sendTaskBackForFix: send,
+packages/engine/src/__tests__/review-revise-continues-to-review.test.ts:187:      { name: "Fix: Dated Live timestamps are truncated", status: "pending" },
+packages/engine/src/__tests__/review-revise-continues-to-review.test.ts:191:  const inner = `${STEP_LEDGER_REFUSAL_MARKER_PREFIX} in-progress for step ${fixIndex} (Fix: Dated Live timestamps are truncated) — implementation ended at "Task marked done by agent" and no new implementation session has started`;
+packages/engine/src/__tests__/review-revise-continues-to-review.test.ts:197:      action: `${STEP_LEDGER_REFUSAL_MARKER_PREFIX} in-progress for step ${fixIndex} (Fix: Dated Live timestamps are truncated) — implementation ended at "${inner}" and no new implementation session has started`,
+packages/engine/src/__tests__/review-revise-resumes-fix-step.test.ts:147:    sendTaskBackForFix: async () => undefined,
+packages/engine/src/__tests__/review-revise-resumes-fix-step.test.ts:216:    const inner = `${STEP_LEDGER_REFUSAL_MARKER_PREFIX} in-progress for step ${fixIndex} (Fix: narrow timestamps) — implementation ended at "${COMPLETION_MARKER}" and no new implementation session has started`;
+packages/engine/src/__tests__/review-revise-resumes-fix-step.test.ts:217:    const outer = `${STEP_LEDGER_REFUSAL_MARKER_PREFIX} in-progress for step ${fixIndex} (Fix: narrow timestamps) — implementation ended at "${inner}" and no new implementation session has started`;
+packages/engine/src/__tests__/review-revise-resumes-fix-step.test.ts:223:        { name: "Fix: narrow timestamps", status: "pending" },
+packages/engine/src/__tests__/review-revise-resumes-fix-step.test.ts:240:      steps: [{ name: "Fix: stale projection", status: "in-progress" }],
+packages/engine/src/__tests__/review-revision-remediation-before-move.test.ts:126:    { store: store as never, readTaskArtifact: vi.fn(async () => "## File Scope\n- `packages/engine/src/self-healing.ts`\n"), sendTaskBackForFix: sendBack },
+packages/engine/src/__tests__/review-revision-remediation-before-move.test.ts:169:      sendTaskBackForFix: harness.sendBack,
+packages/engine/src/__tests__/review-revision-remediation-before-move.test.ts:200:      sendTaskBackForFix: harness.sendBack,
+packages/engine/src/__tests__/review-revision-remediation-before-move.test.ts:208:        name: "Fix: Turn Code Review feedback into actionable fixes",
+packages/engine/src/__tests__/review-revision-remediation-before-move.test.ts:238:      sendTaskBackForFix: harness.sendBack,
+packages/engine/src/__tests__/review-revision-remediation-before-move.test.ts:248:        name: "Fix: Turn Code Review feedback into actionable fixes",
+packages/engine/src/__tests__/review-revision-remediation-before-move.test.ts:270:      sendTaskBackForFix: harness.sendBack,
+packages/engine/src/__tests__/review-revision-stall-park.test.ts:169:        notes: "Fix: lockfile drift in plugin workspaces. Fix: add the regression test. Fix: stale doc.",
+packages/engine/src/__tests__/review-revision-stall-park.test.ts:213:        notes: "Fix: lockfile drift in plugin workspaces.",
+packages/engine/src/__tests__/review-revision-stall-park.test.ts:402:        notes: "Fix: lockfile drift in plugin workspaces. Fix: add the regression test.",
+packages/engine/src/__tests__/review-unchanged-tree-loop.test.ts:252:        name: "Fix: Repair the guard",
+packages/engine/src/__tests__/run-audit-sink-health-review-convergence.test.ts:87:      store, sendTaskBackForFix: vi.fn(async () => {}),
+packages/engine/src/__tests__/run-audit-sink-health-review-convergence.test.ts:120:        store, sendTaskBackForFix: vi.fn(async () => {}),
+packages/engine/src/__tests__/run-audit-sink-health-review-convergence.test.ts:254:      store, sendTaskBackForFix: vi.fn(async () => {}),
+packages/engine/src/__tests__/scheduler-workflow-selection-read-once-per-tick.test.ts:11:Fix: a fresh per-tick/per-event `selectionCache` (Map<taskId, selection>) is shared by every
+packages/engine/src/__tests__/self-healing-collateral-archived-review-gate.test.ts:54:    steps: [{ name: "Fix: reconciliation stalls", status: "done", remediation: { wave: 1, gate: "Code Review", gateStepId: "code-review", detail: "…" } }],
+packages/engine/src/__tests__/self-healing.test.ts:7212:          notes: "Fix: lockfile drift in plugin workspaces. Fix: add the regression test.",
+packages/engine/src/__tests__/self-healing.test.ts:7264:          notes: "Fix: lockfile drift in plugin workspaces.",
+packages/engine/src/__tests__/step-session-executor.test.ts:808:          name: "Fix: repair retry guard",
+packages/engine/src/__tests__/step-session-executor.test.ts:823:    expect(result).toContain("### Appended Step: Fix: repair retry guard");
+packages/engine/src/__tests__/step-session-executor.test.ts:837:        { name: "Fix: repair retry guard", status: "done" },
+packages/engine/src/__tests__/step-session-executor.test.ts:858:        name: "Fix: must not mask authored numbering",
+packages/engine/src/__tests__/step-session-executor.test.ts:1071:        { name: "Fix: repair retry guard", status: "done" },
+packages/engine/src/__tests__/unrun-pre-merge-gate-wedge.test.ts:47:    isLiveSharedBranchGroupMember: async () => false, prepareGraphNodeExecution: noop, readTaskArtifact: async () => "artifact", recoverMissingRequiredArtifacts: noop, requestPreMergeOptionalStepFix: noop, completePlanReviewNoOp: noop, holdPlanReviewNoOpContinuation: noop, runGraphCustomNode: noop, terminateAllChildren: noop,
+packages/engine/src/__tests__/verification-failure-named-remediation.test.ts:58:    sendTaskBackForFix: vi.fn(async () => undefined),
+packages/engine/src/__tests__/verification-failure-named-remediation.test.ts:309:      sendTaskBackForFix: vi.fn(async () => undefined),
+packages/engine/src/__tests__/verification-failure-named-remediation.test.ts:387:    expect(live.steps).toContainEqual(expect.objectContaining({ name: "Fix: Fix failing Verification (test)", status: "pending" }));
+packages/engine/src/__tests__/workflow-graph-optional-group.test.ts:333:      requestPreMergeOptionalStepFix: requestFix,
+packages/engine/src/__tests__/workflow-graph-optional-group.test.ts:371:      requestPreMergeOptionalStepFix: requestFix,
+packages/engine/src/__tests__/workflow-graph-optional-group.test.ts:392:      requestPreMergeOptionalStepFix: requestFix,
+packages/engine/src/__tests__/workflow-graph-optional-group.test.ts:419:        ...(requestFix ? { requestPreMergeOptionalStepFix: requestFix } : {}),
+packages/engine/src/__tests__/workflow-graph-optional-group.test.ts:494:      requestPreMergeOptionalStepFix: requestFix,
+packages/engine/src/__tests__/workflow-graph-optional-group.test.ts:509:      requestPreMergeOptionalStepFix: requestFix,
+packages/engine/src/__tests__/workflow-graph-optional-group.test.ts:519:      requestPreMergeOptionalStepFix: requestFix,
+packages/engine/src/__tests__/workflow-graph-optional-group.test.ts:530:      requestPreMergeOptionalStepFix: requestFix,
+packages/engine/src/__tests__/workflow-graph-optional-group.test.ts:578:      requestPreMergeOptionalStepFix: requestFix,
+packages/engine/src/__tests__/workflow-graph-optional-group.test.ts:615:      requestPreMergeOptionalStepFix: requestFix,
+packages/engine/src/__tests__/workflow-graph-optional-group.test.ts:651:      requestPreMergeOptionalStepFix: requestFix,
+packages/engine/src/__tests__/workflow-graph-optional-group.test.ts:674:      requestPreMergeOptionalStepFix: requestFix,
+packages/engine/src/__tests__/workflow-graph-optional-group.test.ts:737:      requestPreMergeOptionalStepFix: requestFix,
+packages/engine/src/__tests__/workflow-graph-optional-group.test.ts:797:      requestPreMergeOptionalStepFix: requestFix,
+packages/engine/src/__tests__/workflow-graph-optional-group.test.ts:855:      requestPreMergeOptionalStepFix: requestFix,
+packages/engine/src/__tests__/workflow-graph-optional-group.test.ts:1042:        requestPreMergeOptionalStepFix: requestFix,
+packages/engine/src/__tests__/workflow-graph-optional-group.test.ts:1075:        requestPreMergeOptionalStepFix: exhaustedRequestFix,
+packages/engine/src/__tests__/workflow-graph-optional-group.test.ts:1111:        requestPreMergeOptionalStepFix: requestFix,
+packages/engine/src/__tests__/workflow-graph-optional-group.test.ts:1175:        requestPreMergeOptionalStepFix: stepwiseRequestFix,
+packages/engine/src/__tests__/workflow-graph-optional-group.test.ts:1376:      requestPreMergeOptionalStepFix: requestFix,
+packages/engine/src/__tests__/workspace-code-review-revise-remediation.test.ts:41:    sendTaskBackForFix: vi.fn(async () => undefined),
+packages/engine/src/__tests__/workspace-code-review-revise-remediation.test.ts:188:        name: `Fix: prior wave ${wave}`,
+packages/engine/src/__tests__/workspace-code-review-revise-remediation.test.ts:262:      name: `Fix: ${reportedFinding.title}`,
+packages/engine/src/agent-heartbeat.ts:8355:         * `zombie-timer-rearmed` symptom). Fix: when an agent is no longer
+packages/engine/src/agent-heartbeat.ts:8386:         * self-heal within minutes just by virtue of ticking often). Fix: when a timer entry IS present
+packages/engine/src/auth/auth-storage.ts:510:    pi >=0.80.8 moved session request auth from `ModelRegistry.getApiKeyAndHeaders` (which called fusion's `getApiKey(provider)`) to `ModelRuntime.getAuth` -> pi-ai `resolveProviderAuth`, which reads the credential store directly (`credentials.read(provider.id)`) and, for an OAuth credential, refreshes it ITSELF via `credentials.modify(provider.id, ...)`. That refresh path is broken for Anthropic: fusion persists the subscription login under `anthropic-subscription` (there is NO raw `anthropic` row), so `modify("anthropic")` reads `current === undefined`, the refresh callback bails, and `resolveStoredOAuth` returns undefined -> the task fails with `Provider is not configured: anthropic` (then falls back). The status card still shows "connected" because status uses a different path (hasVisibleAnthropicCredential). Fix: resolve Anthropic auth through fusion's `getApiKey("anthropic")`, the battle-tested path that already handles token refresh + the raw-key/legacy-oauth/subscription/fallback precedence (see resolveAnthropicRuntimeApiKey), and hand pi-ai a ready-to-use api_key credential. pi-ai's anthropic-messages layer routes by token prefix — `sk-ant-oat*` -> OAuth Bearer + Claude Code identity headers, otherwise x-api-key — so a subscription OAuth token still runs as OAuth, and returning it as `api_key` deliberately bypasses pi-ai's own (broken-for-us) OAuth refresh-via-modify. Other OAuth providers (openai-codex, github-copilot) are stored under their own provider id, so read/modify share an id and pi-ai's refresh works — only Anthropic needs this indirection.
+packages/engine/src/errors/retry-burned-logger.ts:34:  postReviewFix: "postReviewFixCount",
+packages/engine/src/executor/append-review-remediation-steps.ts:34:  sendTaskBackForFix: (...args: any[]) => Promise<void>;
+packages/engine/src/executor/append-review-remediation-steps.ts:370:      in-progress for step 12 (Fix: ...)" with no reopen entry anywhere before it.
+packages/engine/src/executor/bounce-verification-failure.ts:70:  sendTaskBackForFix: (
+packages/engine/src/executor/execute-workflow-graph.ts:167:  requestPreMergeOptionalStepFix: AnyFn;
+packages/engine/src/executor/execute-workflow-graph.ts:1272:        requestPreMergeOptionalStepFix: (taskId, info) => deps.requestPreMergeOptionalStepFix(taskId, task, info),
+packages/engine/src/executor/handle-graph-failure.ts:166:  requestPreMergeOptionalStepFix: AnyFn;
+packages/engine/src/executor/handle-graph-failure.ts:169:  routeRetryableRemediationGraphFailureToPreMergeFix: AnyFn;
+packages/engine/src/executor/recover-failed-pre-merge-step.ts:62:  sendTaskBackForFix: (
+packages/engine/src/executor/request-pre-merge-optional-step-fix.ts:197:  sendTaskBackForFix: (
+packages/engine/src/executor/review-arbitration.ts:31:  sendTaskBackForFix: (
+packages/engine/src/executor/review-convergence-ladder.ts:48:  sendTaskBackForFix: (
+packages/engine/src/executor/run-implementation.ts:296:  attemptExecutorVerificationFix: AnyFn;
+packages/engine/src/executor/run-implementation.ts:357:  sendTaskBackForFix: AnyFn;
+packages/engine/src/executor/run-implementation.ts:1762:                        sendTaskBackForFix: deps.sendTaskBackForFix,
+packages/engine/src/project-engine.ts:2735:      requestTargetedFix: async (task, decision) => {
+packages/engine/src/spec-validation/external-integration-evidence.ts:168:      "    Fix: add canonical upstream repo/docs/release URL evidence, CLI name in backticks, and checksum or explicit upstream-pending-verification marker.",
+packages/engine/src/spec-validation/task-document-references.ts:133:    lines.push("    Fix: either remove these references, list the file under File Scope as a (new) artifact, or add a step that creates it before it is read.");
+packages/engine/src/workflows/human-merge-approval-boundary.ts:319:    name: `Fix: ${step.title}`,
+packages/engine/src/workflows/workflow-graph-task-runner.ts:457:        requestPreMergeOptionalStepFix: this.deps.requestPreMergeOptionalStepFix,
+plugins/fusion-plugin-compound-engineering/src/agents/ce-agent-native-reviewer.md:167:1. **[Issue]** -- `file:line` -- [Description]. Fix: [How]
+plugins/fusion-plugin-compound-engineering/src/agents/ce-coherence-reviewer.md:38:- **Header/body count mismatch.** Section header claims a count (e.g., "6 requirements") and the enumerated body list has a different count (5 items). The body is authoritative unless the document explicitly identifies a missing item. Fix: correct the header to match the list.
+plugins/fusion-plugin-compound-engineering/src/agents/ce-coherence-reviewer.md:39:- **Cross-reference to a named section that does not exist.** Text says "see Unit 7" / "per Section 4.2" / "as described in the Rollout section" and that target is not defined anywhere in the document. Fix: delete the reference or fix it to point at an existing target.
+plugins/fusion-plugin-compound-engineering/src/agents/ce-coherence-reviewer.md:40:- **Terminology drift between two interchangeable synonyms.** Two words used for the same concept in the same document (`data store` and `database`; `token` and `credential` used for the same API-key concept; `pipeline` and `workflow` for the same thing). Pick the dominant term and normalize the minority occurrences. Fix: replace minority occurrences with the dominant term.
+plugins/fusion-plugin-compound-engineering/src/agents/ce-coherence-reviewer.md:43:- **Missing list entry derivable from elsewhere in the document.** A list claims (or is treated as) exhaustive but omits an item the document explicitly establishes elsewhere as a peer of the listed items. Fix: add the omitted entry, copying its name/details from the source.
+plugins/fusion-plugin-compound-engineering/src/agents/ce-design-implementation-reviewer.md:54:     - Fix: [Specific CSS/code change needed]
+plugins/fusion-plugin-compound-engineering/src/agents/ce-design-implementation-reviewer.md:59:     - Fix: [Detailed correction steps]
+plugins/fusion-plugin-compound-engineering/src/skills/ce-code-review/references/personas/agent-native-reviewer.md:159:1. **[Issue]** -- `file:line` -- [Description]. Fix: [How]
+plugins/fusion-plugin-dependency-graph/src/DependencyGraph.tsx:255:  Fix: only fit once the graph is actually fittable — viewport measured (width/height > 0) AND
+scripts/check-changeset-migration-references.mjs:65:  console.error(`  Fix: rename the reference to the file actually present in packages/core/src/postgres/migrations/.`);
+scripts/check-inert-sync-lane-conversions.mjs:445:  console.error("\nFix: resolve asynchronously (thread the lane in from a caller that already awaited a store read),");
+scripts/check-lockfile-importers.mjs:220:    "fails unrelated cards' squash merges on the File Scope guard. Fix: run `pnpm install` and commit",
+scripts/check-mock-completeness.mjs:280:      `Fix: add the missing export(s) to each vi.mock("${cfg.moduleName}") factory,\n` +
+scripts/check-pre-json-anchor.mjs:84:        `    Fix: git checkout <last chore(release) tag> -- .changeset/pre.json`,

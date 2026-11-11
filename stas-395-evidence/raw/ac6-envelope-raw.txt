@@ -1,0 +1,353 @@
+STAS-395 AC6 delivery envelope - every ref, SHA and count printed inside this run
+$ git log -1 --format=%h %s refs/heads/main
+  rc=0
+  | ee995fcc85 fix(RUFU-871): read project runtime flags under a transaction-local RLS bypass
+
+$ git for-each-ref --format=%(refname) %(objectname:short) %(subject) refs/heads/
+  rc=0
+  | refs/heads/archive-readopt-20261005 05a8f1ec2b feat(RUFU-564): re-adopt upstream's archived-lane resolution at every call site
+  | refs/heads/backup/clean-rebase-before-squash-20260805-135712 e0f3cee4b0 docs(memory-backend-integration): document TencentDB recall behavior (persona L3 vs L1/L0)
+  | refs/heads/backup/clean-rebase-pre-rebase-20260805-1139 02eed3b262 docs(memory-backend-integration): document TencentDB recall behavior (persona L3 vs L1/L0)
+  | refs/heads/backup/clean-rebase-pre-rebase-20260810-232218 3bd3f0563b fix(core): align SCHEMA_BASELINE_VERSION to 0052 so clean-rebase can open DB at migration 0052
+  | refs/heads/backup/clean-rebase-rebased-20260805-1141 e0f3cee4b0 docs(memory-backend-integration): document TencentDB recall behavior (persona L3 vs L1/L0)
+  | refs/heads/backup/clean-rebase-v2-pre-rebase-2026-08-18 92551ac31b fix(rebase): advance SCHEMA_BASELINE_VERSION to 0061 for RUFU-068 memory_focus migration (FN-9059 claimed 0060)
+  | refs/heads/backup/clean-rebase-v2-pre-rebase-20260819 763da26276 fix(RUFU-068): wire chat routes to engine ChatStore and resolve Stash secret by row UUID
+  | refs/heads/backup/clean-rebase-v2-pre-reset-20260909 fb518bd15d perf(RUFU-202): stop the hold-release sweep from deriving UI signals or fetching task logs
+  | refs/heads/backup/clean-rebase-v2-pre-rufu-139 ef2c72664c fix(RUFU-136): client-side idempotency for chat Stash backfill
+  | refs/heads/backup/clean-rebase-v2-pre-rufu073-20260812-233613 481e4342c6 docs(roadmap): add core product roadmap M2 (roadmap.md + index pointer)
+  | refs/heads/backup/main-pre-origin-reconcile-20260805-1121 b306f4591a RUFU-031: fix scripts custom-workflow release-check seams to existing standalone tests
+  | refs/heads/backup/main-pre-rebase-2026-08-17 b59aa13b1b RUFU-116: add mission:event emission to unlinkFeatureFromTask
+  | refs/heads/backup/main-pre-rebase-20260819 d9a0c59a62 RUFU-129: land upstream main through v0.77.0-beta.3 with dev-tunnel, terminal-resume, and metrics hardening
+  | refs/heads/backup/main-pre-rebase-20260820 f66c2ec66b RUFU-126: add opt-in vector (semantic) search path to Stash memory recall
+  | refs/heads/backup/old-clean-rebase-77d8c8dde 77d8c8ddee fix(STAS-032): restore findPendingPreMergeStep + fn_workflow_step_resume skill docs after rebase
+  | refs/heads/backup/pr-lcm-3493-remote-20260911 7032633e53 Merge branch 'main' into pr/lcm
+  | refs/heads/backup/pr-lcm-local-stale-20260911 2851820ca4 fix(stash): adopt RUFU-157 quarantine-ledger checker so const-array quarantines verify
+  | refs/heads/backup/pr3619-0091 12064d94b8 fix(core): repair the mangled identity assertions and settle the ledger at 0091
+  | refs/heads/backup/rufu-072-local dbf986d0a7 build(RUFU-072): complete Step 3 — quarantine task-wedge-notification run-time OOM per AGENTS.md
+  | refs/heads/backup/rufu-104-pre-reset-20260816-192119 ef7e4cffed chore(release): v0.77.0-beta.1
+  | refs/heads/backup/rufu-121-pre-reset-20260820 05e3c6082b FN-9144: Preserve test velocity measurement verdicts
+  | refs/heads/backup/rufu-139-bootstrap d6903e1077 chore(RUFU-139): import dependency content from main
+  | refs/heads/backup/rufu-139-bootstrap-2026-08-20 f277ce79de chore(RUFU-139): import dependency content from main
+  | refs/heads/backup/rufu-450-pre-rebase bff4679657 docs(RUFU-450): complete Step 4 — verification, consumers and docs
+  | refs/heads/backup/stas-205-prereplay-89f8100b 89f8100b15 docs(STAS-205): document review-lane dispatch invariant, CLI path, and heartbeat correction
+  | refs/heads/chk3619 760f68fbda docs(engine,core): complete FNXC stamp format on the ledger comments; record the P1 zombie-session rationale
+  | refs/heads/chk3624 546c4efe11 feat(settings): operator language directive for agent-generated text
+  | refs/heads/chk3626 944f5607c8 fix(chat): keep the tier-3 changeset summary within the 120-char release-notes budget
+  | refs/heads/chk3627 f701aa08cf fix(chat): honour generation fence after the compaction gate and expose bound-agent memory recall
+  | refs/heads/chk3628 bc8ccc97ce Merge origin/main (007ec83a9d) into pr/chat-context-docs: keep both doc additions
+  | refs/heads/chk3630 df5dead930 chore(census): drop the stale mailbox archived-folder allowances
+  | refs/heads/chk3632 1d014a3d3e fix(chat): stop persisted replies from inheriting interrupted ghost slices
+  | refs/heads/chore/commit-capture-warning-assertion 106b337599 test(RUFU-235): assert both merge-base probe warnings on HEAD fallback
+  | refs/heads/chore/rufu-250-merge-wip d1a33c4770 WIP SNAPSHOT of RUFU-250 origin/main merge - NOT a resolution. Merge input (MERGE_HEAD) was 29d81f6277e8f3485ff058d1ce4f539331fa5c0a, base was 3c2f44b9ffcde0074b9322fd38dd5e525ca9a84f (local main tip). 17 conflicted files still contain conflict markers; 0 were deletion-resolved. Rebuild state: git merge --no-commit 29d81f6277e8f3485ff058d1ce4f539331fa5c0a from 3c2f44b9ffcde0074b9322fd38dd5e525ca9a84f. Resolved files are authoritative, unresolved ones are NOT. Do NOT merge this branch.
+  | refs/heads/counters-aggregate b053248c09 fix(RUFU-591): count queued cards in SQL instead of hydrating the board
+  | refs/heads/ds/integrate-origin c53eb7402d merge: origin/main (5bdc9ea113) into main — mission-reconciliation fence, detached-turn busy fix, scroll-flake record
+  | refs/heads/ds/rtm3-deploy 5bae097214 ci(gitlab): api/web pipeline sources only — push no longer spawns a build
+  | refs/heads/ds/rtm3-deploy-clean 9e145fd48c feat(docker): record the built revision in the image label
+  | refs/heads/ds/rtm3-deploy-clean-rufu707 2bf0e6ab4c fix(RUFU-452): open the episode only for a gate that spent its budget
+  | refs/heads/ds/rtm3-deploy-dev 71a9250817 feat(docker): pin JDK 21 (Temurin) and Maven 3.9.9 into the runner
+  | refs/heads/ds/rtm3-deploy-rebased-20261026 d1a13b2069 feat(docker): record the built revision in the image label
+  | refs/heads/ds/rtm3-priv-deploy 2b10a1bcaa docs(deploy): the shared OAuth app is reused, not duplicated
+  | refs/heads/ds/rtm3-priv-deploy-20261001 9a4daf4c4e merge: main 02e7fb13ba (RUFU-430 production fixes) for rtm3 redeploy
+  | refs/heads/fix-inreview-stall-badge-copy 83e8f5f18a fix(UI): a review card that never retried stops reporting a stalled merge retry
+  | refs/heads/fix-post-merge-reseed-bound feedf74ac3 fix(RUFU-370): a post-merge gate that can never run hands the card to the operator
+  | refs/heads/fix-review-dispatch-stall-park 8340f30453 fix(RUFU-380): an engine stall park must not disqualify the card from its own review
+  | refs/heads/fix-review-stall-escalated-notice ff4a9b185b fix(RUFU-371): a review escalated to a human reaches the operator
+  | refs/heads/fix/RUFU-570-workspace-git-identity 652b1c8de7 fix(RUFU-570): re-root workspace premise paths at the member repo
+  | refs/heads/fix/chat-new-chat-catalog-race 48a74f433a fix(dashboard): New Chat resolves the default model past a cold catalog
+  | refs/heads/fix/emptiness-proof-invalidation e0c4d4de52 fix(RUFU-487): drop checkout-emptiness proofs on card move instead of aging them out
+  | refs/heads/fix/merge-queue-order-and-hollow-acquire f2492f3078 fix(engine): attribute commits by any task-id prefix, not only FN-
+  | refs/heads/fix/pg-0000-fixture-queue-surface 01959433b2 test(core): keep the tasks "column" surface in the 0000 upgrade fixture
+  | refs/heads/fix/post-merge-resume-reason 6cece227ad fix(FN-9442): name the refusal the idle-seed primitive actually returned
+  | refs/heads/fix/rufu-502-post-merge-reseed-budget a3a5a2f55d fix(RUFU-502): stop a missing durable row from cancelling the whole recovery pass
+  | refs/heads/fix/rufu-504-workspace-commit-free-landing 3c2e68ebd7 fix(RUFU-504): record a proven zero-diff workspace review as commit-free delivery, not a failure
+  | refs/heads/fix/rufu-519-submodule-workspace dea3106a90 fix(RUFU-519): measure a workspace member only in that member's own repository
+  | refs/heads/fix/rufu-858-log-shape-tripwire 50c17da760 fix(RUFU-858): repair non-array tasks.log rows at store open instead of failing later reads
+  | refs/heads/fix/rufu-858-task-log-shape 254d4c56ca fix(RUFU-858): refuse to write a jsonb scalar into tasks.log
+  | refs/heads/fix/rufu-862-capacity-refusal-rotation ccb43ac167 fix(RUFU-862): a shared-capacity refusal must vacate the whole due window, not one row
+  | refs/heads/fix/workspace-partial-land-stall-park 1da1e59381 fix(engine): an engine-authored stall park is not an operator stop
+  | refs/heads/fix/workspace-root-member-acquire 65b0dec011 fix(RUFU-391): let the park-clear outcome be read where it is written
+  | refs/heads/fix/zero-step-plan-gate d8dab5aaee engine: reject step-less plans at plan time and recover them at the parse failure
+  | refs/heads/fusion/rufu-131 2b33ec8d5e chore(RUFU-131): import dependency content from main
+  | refs/heads/fusion/rufu-195 db07e88d0a test(RUFU-195): re-record lifecycle-column baseline — cites FN-295/FN-303
+  | refs/heads/fusion/rufu-204 186448e2e8 fix(RUFU-204): mirror log-id guard export into core gate barrel
+  | refs/heads/fusion/rufu-217 490baf1634 docs(RUFU-217): document verdict-less gate rerun, parity, and deploy-count restart
+  | refs/heads/fusion/rufu-225 15d85e19e2 fix(RUFU-225): drop unused api imports left by the FN-470 actions move
+  | refs/heads/fusion/rufu-227 35505eb05f test: update stale assertions for the pause wire-gate and declared moveSource
+  | refs/heads/fusion/rufu-236 9eac87f35e RUFU-249: pin the per-ref merge-base warning contract in base-commit-capture test
+  | refs/heads/fusion/rufu-241 aa3f4a2a8b RUFU-237: stop graph-failure sink from re-failing a delivered card
+  | refs/heads/fusion/rufu-243 817f24c5a6 feat(settings): operator language directive for agent-generated text
+  | refs/heads/fusion/rufu-247 058a63d095 RUFU-245: anchor fresh task branches to the local default branch and refuse diverged-base acquisition
+  | refs/heads/fusion/rufu-250 3c2f44b9ff RUFU-246: escalate repeated plan-premise refusals to a terminal park
+  | refs/heads/fusion/rufu-252 6ec6a28c4f fix(RUFU-252): retire the mirror's attach marker with its own stream
+  | refs/heads/fusion/rufu-253 e5646f68fe RUFU-252: mirror foreign chat generations into the planner tab and bridge late-created chat stores
+  | refs/heads/fusion/rufu-262 e5646f68fe RUFU-252: mirror foreign chat generations into the planner tab and bridge late-created chat stores
+  | refs/heads/fusion/rufu-265 5424f676c4 docs(RUFU-265): document skill catalog generation and drift enforcement
+  | refs/heads/fusion/rufu-267-salvage 1b0cab50a3 test(RUFU-267): refresh durable-write inventory lineHints after main sync
+  | refs/heads/fusion/rufu-278 6efff2d2c9 refactor(RUFU-278): route the two fail-soft lanes through the shared preservation predicate
+  | refs/heads/fusion/rufu-291 fca3534631 feat(RUFU-291): complete Step 4 — dispatch the post-merge gate, bound to 3 strikes
+  | refs/heads/fusion/rufu-313 6031d25137 feat(RUFU-871): measure the transcript bytes the census priced at 96 per session
+  | refs/heads/fusion/rufu-340 9eeb68368f fix(RUFU-340): bound spill deletion per file, key references by digest, resolve after paging
+  | refs/heads/fusion/rufu-342 cdef171e7a merge: integrate gitlab/main fix line onto main (RUFU-855)
+  | refs/heads/fusion/rufu-343 e5fbc45cde test(RUFU-343): carry the observation-derived sentence and the RUFU-448 store surfaces
+  | refs/heads/fusion/rufu-351 8d74cfc1b8 test(RUFU-351): pin the witness-less legacy lane instead of widening it
+  | refs/heads/fusion/rufu-408 c49b56feee test(RUFU-408): pin the shipped finalization bound and the observed stuck shape
+  | refs/heads/fusion/rufu-413 3a837d51e9 feat(RUFU-413): complete Step 5 — the park clear lifts the engine park and only the engine park
+  | refs/heads/fusion/rufu-414 c35226fa3a fix(core): release a landed card whose post-merge gate never ran
+  | refs/heads/fusion/rufu-430 f78b3e9156 RUFU-372: name the binding capacity gate and stop seam parks from claiming capacity
+  | refs/heads/fusion/rufu-450 bff4679657 docs(RUFU-450): complete Step 4 — verification, consumers and docs
+  | refs/heads/fusion/rufu-455 cbc543bb5c fix(RUFU-455): order the getTaskPresence fixture row by code-unit sort
+  | refs/heads/fusion/rufu-469 d9103b17a3 docs(RUFU-469): document the delivered release face and add the changeset
+  | refs/heads/fusion/rufu-473 2338a83a1b test(RUFU-473): assert merge-blocked-by-policy code at task-lifecycle diagnosis seam
+  | refs/heads/fusion/rufu-476 c0398ab893 RUFU-405: repoint the two guards the upstream merge orphaned onto the contract that survived
+  | refs/heads/fusion/rufu-477 b491580ff5 test(RUFU-477): run the quarantine ledger check in every agent-run lane
+  | refs/heads/fusion/rufu-496 e023227c79 test(RUFU-496): complete Step 7 - retire every fixture that encoded the old canStart
+  | refs/heads/fusion/rufu-615-log-projections c4ad2268f4 docs(RUFU-615): say what provablyComplete actually does, and name RUFU-636
+  | refs/heads/fusion/rufu-627 23ec69d76a test(RUFU-627): add the bounded heap-floor probe for the board list read
+  | refs/heads/fusion/rufu-685 1e3265e24b RUFU-385: test(RUFU-385): repair test expectations orphaned by light boot, board feed, and Alpha/priority removals
+  | refs/heads/fusion/rufu-702 04b07030be fix(RUFU-702): stop inference naming a task branch the integration branch on any board
+  | refs/heads/fusion/rufu-707 e2d54baf29 fix(RUFU-452): open the episode only for a gate that spent its budget
+  | refs/heads/fusion/rufu-756 a2ee317208 feat(RUFU-372): make a capacity suspend name the gate and how full it was
+  | refs/heads/fusion/rufu-768 1e3265e24b RUFU-385: test(RUFU-385): repair test expectations orphaned by light boot, board feed, and Alpha/priority removals
+  | refs/heads/fusion/rufu-791 16d2379014 RUFU-373: stop charging withheld overlap waits to the acquisition strike budget
+  | refs/heads/fusion/rufu-793-admission-honesty eca47cfda0 fix(STAS-343): show a gate refusal on the card instead of calling it Ready
+  | refs/heads/fusion/rufu-799 05a0e0c786 Merge upstream main eb7eef49d5: Bump @vitejs/plugin-react 4.7.0 to 6.0.5 (#3466)
+  | refs/heads/fusion/rufu-813 4fa1ea0e64 perf(RUFU-756): stop the overseer sweep from loading the log column it never reads
+  | refs/heads/fusion/rufu-871 0a3cd0bad8 RUFU-381: name the real cause of a no-verdict review-gate failure and quote its re-run budget
+  | refs/heads/fusion/rufu-877 814709352e RUFU-398: make the in-review stall-deadlock park self-describing about its episode
+  | refs/heads/fusion/rufu-879 0a3cd0bad8 RUFU-381: name the real cause of a no-verdict review-gate failure and quote its re-run budget
+  | refs/heads/fusion/rufu-885 8584c966f9 RUFU-448: write the park-clear history line before the clear and isolate per-card failures
+  | refs/heads/fusion/rufu-887 6aff48faff test(RUFU-883): teach the pg parity matrix the `comments` member it could not know about
+  | refs/heads/fusion/rufu-888 bff234b429 RUFU-456: expose the post-merge evidence contract in the workflow editor and Settings
+  | refs/heads/fusion/rufu-889 81ea3a41ba fix(RUFU-871): stop the retention census truncating sources and polluting its refusal log
+  | refs/heads/fusion/rufu-891 81ea3a41ba fix(RUFU-871): stop the retention census truncating sources and polluting its refusal log
+  | refs/heads/fusion/rufu-892 43726e7ce4 fix(RUFU-871): fold Reliability merge-attempts in SQL instead of hydrating 50k audit rows
+  | refs/heads/fusion/rufu-893 ae3c260cdf fix(RUFU-871): stop the overseer re-posting identical steering guidance every tick
+  | refs/heads/fusion/rufu-896 9f23bbcbcb perf(RUFU-584): make the lane-role board read exclude the log column by default
+  | refs/heads/fusion/rufu-898 ae3c260cdf fix(RUFU-871): stop the overseer re-posting identical steering guidance every tick
+  | refs/heads/fusion/rufu-900 81ea3a41ba fix(RUFU-871): stop the retention census truncating sources and polluting its refusal log
+  | refs/heads/fusion/rufu-901 6031d25137 feat(RUFU-871): measure the transcript bytes the census priced at 96 per session
+  | refs/heads/fusion/rufu-902 6031d25137 feat(RUFU-871): measure the transcript bytes the census priced at 96 per session
+  | refs/heads/fusion/rufu-903 49de25e27a fix(RUFU-871): route the usage poll through the one cached gh probe
+  | refs/heads/fusion/stas-205-review-lane-dispatch 6ab78105c7 fix(stas-205): reconcile review-lane gates with the clean-rebase-v2 deploy line
+  | refs/heads/fusion/stas-246-trunk-refresh 4ab32dab9b STAS-246: document that a trunk ref advance and its checkout now move together
+  | refs/heads/fusion/stas-260-extension-boot-race 63b1d8dea8 docs(260): document the extension store resolution and abandoned-boot rule
+  | refs/heads/fusion/stas-262-trunk-merge 04694a4f3e feat(STAS-262): reconcile 251-to-259 isError lineage into main
+  | refs/heads/fusion/stas-273-worktree-lifecycle-preservation 4361e0322e docs(changeset): STAS-273 worktree lifecycle preservation
+  | refs/heads/fusion/stas-276-room-wake-executability c62a0c63eb docs(STAS-276): document non-member room notices and add the release changeset
+  | refs/heads/fusion/stas-282-premise-evaluation-tree 85784df04c STAS-282 docs: state the landed-delivery form of premise attribution
+  | refs/heads/fusion/stas-286-cross-repo-provisioning edb5583462 STAS-286 step 7: document the per-card target repository declaration
+  | refs/heads/fusion/stas-291 c9c6ece3ce docs(core): write down the claim a disk slot accepts and the partition a scan reads
+  | refs/heads/fusion/stas-297-room-wake-followups 0aeb071829 docs(STAS-297): complete Step 6 — release changeset for the mention-reachability fix
+  | refs/heads/fusion/stas-299-selfheal-lifecycle dc40314375 STAS-299: pin the one place allowed to read a timeout sentence
+  | refs/heads/fusion/stas-305-heartbeat-done-cap 2a31613789 fix(STAS-305): cap repeated heartbeat done signals and fail the run loud
+  | refs/heads/fusion/stas-318-schema-skew 0d51e73466 docs(STAS-318): changeset names the checkout-root proof in the handoff
+  | refs/heads/fusion/stas-330-wake-comment-delta-consumption 0c2fe67fe4 docs(STAS-330): state the run-open consumption seam and the dormant steering-lane guard
+  | refs/heads/fusion/stas-343-admission-honesty 2ae2cd7298 test(STAS-367): teach the CLI barrel mocks the zero-started exports
+  | refs/heads/fusion/stas-361-replan-cap-truth a324a562c1 test(stas-361 step 6): prove the drop survives an upgrade, a lying ledger, an old backup, and self-heal
+  | refs/heads/fusion/stas-370-post-merge-landing-observability 3324238f35 STAS-370: the two GitLab fixtures were asserting the pre-landing-fact contract
+  | refs/heads/fusion/stas-382-reseed-cycle-rearm 0db7438466 docs(STAS-382): tell the truth about the ceiling in the operator docs
+  | refs/heads/fusion/stas-388-tool-result-authority 6a59cf4d51 STAS-388: stop calling content:[] a dropped payload, and close the envelope a payload could write
+  | refs/heads/fusion/stas-389-tool-channel-authority 22f6d6c5b1 STAS-389: prove frame and role authority are gone, per surface, red then green
+  | refs/heads/fusion/stas-390-tool-channel-authority e6b1fe4c7f STAS-389: prove frame and role authority are gone, per surface, red then green
+  | refs/heads/fusion/stas-391-empty-tool-result-announcement eb20a6bfc5 STAS-391: announce an empty tool-result content array instead of crashing prompt assembly
+  | refs/heads/fusion/stas-392-empty-tool-result-announcement 037a480cc5 STAS-391: announce an empty tool-result content array instead of crashing prompt assembly
+  | refs/heads/integrate-origin-2026-09-29 81d90b1064 fix(UI): a review card that never retried stops reporting a stalled merge retry
+  | refs/heads/integrate/gitlab-only-fixes 467da01eae merge: integrate gitlab-only board-monitor and scheduler fixes onto main
+  | refs/heads/integration/fn9442-reseed e51916dd17 fix(FN-9442): keep RUFU-306/370/430 discipline on upstream's post-merge resume
+  | refs/heads/integration/upstream-20261001 c70d9dab44 docs(solutions): record the 16 GB launch-environment heap ceiling and how to verify it
+  | refs/heads/integration/upstream-b2 9e4ef6a467 test(FN-9446): keep our planning-retry-hold assertions; upstream's strengthened copy asserts behavior this fork does not have
+  | refs/heads/layer/main 19814793f4 merge: layer origin/main (007ec83a9d) under our main (4ee4b4e798)
+  | refs/heads/main ee995fcc85 fix(RUFU-871): read project runtime flags under a transaction-local RLS bypass
+  | refs/heads/merge-origin-20261015 f134800008 merge: origin/main 0981a5aff2 into main (FN-9550..FN-9553)
+  | refs/heads/merge/origin-main-20261013 f2db502381 Merge origin/main into main (fork re-base onto upstream)
+  | refs/heads/merge/origin-main-20261013b 417a61ebf5 Merge origin/main into main (FN-9547 heartbeat telemetry sync)
+  | refs/heads/merge/upstream-59524b 4d7efff3bb merge: origin/main 59524b0457 (WIP, gates red — do not deploy)
+  | refs/heads/merge/upstream-beta7 3984cff8c9 Merge remote-tracking branch 'origin/main' (v0.78.0-beta.7) into main
+  | refs/heads/origin-sync-20261005 9ecab8cae6 Merge remote-tracking branch 'origin/main' into main (origin-sync 2026-10-05)
+  | refs/heads/perf-board-feed-compaction 80a67a940c perf(RUFU-378): board feeds ship the row the board renders
+  | refs/heads/perf/board-workflows-partial-scope ce7b3a7aee perf(RUFU-479): repair lane metadata for named cards without a whole-board scan
+  | refs/heads/perf/bootstrap-request-priority 99652503d8 perf(RUFU-479): queue dashboard reads so the board paints ahead of chrome fetches
+  | refs/heads/perf/diff-stats-single-flight c630c0c576 fix(RUFU-479): coalesce identical diff-stats polls into one git lane
+  | refs/heads/perf/read-queue-coverage 71b94c521d perf(RUFU-479): route the remaining direct dashboard GETs through the read queue
+  | refs/heads/perf/trusted-refs-probe ed7da82585 perf(RUFU-481): resolve trusted integration refs with one listing and a short memo
+  | refs/heads/pr-3619 7972506966 test(cli): pin the FN-9425 rescue in the quarantine lockstep guard
+  | refs/heads/pr/board-read-perf 7381fc1972 perf(core): build the knowledge graph in a forked child, not in the dashboard process
+  | refs/heads/pr/branch-write-origin-sweep ef2ad9007b fix(core): make isTaskReadyForMerge's lane forwarding visible to the ratchet
+  | refs/heads/pr/chat-compaction-gate 8b5b2b018a fix(chat): persist the tier-3 truncation disclosure across content-less cancellation
+  | refs/heads/pr/chat-context-docs bc8ccc97ce Merge origin/main (007ec83a9d) into pr/chat-context-docs: keep both doc additions
+  | refs/heads/pr/chat-guard-estimator fd8268c8d2 fix(chat): keep the tier-3 changeset summary within the 120-char release-notes budget
+  | refs/heads/pr/chat-stream-first-chunk-once 487d4222f1 fix(chat): stop persisted replies from inheriting interrupted ghost slices
+  | refs/heads/pr/docs-vision-roadmap 04a4e906b1 RUFU-108: record implementation-owner status for HITL roadmap feature F-MSL72J08
+  | refs/heads/pr/files-browser-upload 5be3361706 feat(dashboard): upload files from the Files browser
+  | refs/heads/pr/fleet-view bfca2a906b RUFU-105: wire F1 Fleet view into the dashboard as a first-class lazy view
+  | refs/heads/pr/lcm 8d054404f3 fix(CLI): declare setTimeout in the node-pty fetch script globals
+  | refs/heads/pr/lcm-rebase-96b5903 96b5903945 fix: repair rebase -Xtheirs losses against bcf353de48 (i18n keys, memory settings UI, guard allowlist)
+  | refs/heads/pr/lcm-v2 38e28af426 fix(engine): restore chat-context-guard exports lost to the RUFU-118 pick's staged markers
+  | refs/heads/pr/lease-hold 2cf4c8d9b0 RUFU-226: exempt shared barrel exports from file-scope overlap serialization
+  | refs/heads/pr/lifecycle-ratchet-drift-0917 9c34746ab6 chore(census): drop the stale mailbox archived-folder allowances
+  | refs/heads/pr/model-provider-metadata 0622ac7b07 RUFU-137: add per-model contextWindow/maxTokens resolution to pi-llama-cpp local models
+  | refs/heads/pr/noninteractive-git-floor 7c5d52be75 fix(engine,core,plugins): floor every autonomous git lane with non-interactive env and reap orphaned git children
+  | refs/heads/pr/operator-language 62b9d05c92 feat(settings): operator language directive for agent-generated text
+  | refs/heads/pr/planner-robust df5e73c227 RUFU-237: stop graph-failure sink from re-failing a delivered card
+  | refs/heads/pr/review-lane-ledger ce80d1aac0 Merge origin/main (007ec83a9d) into pr/review-lane-ledger: ledger re-issues at 0088
+  | refs/heads/pr/rufu-170-mobile-scroll 66e8b9bb61 fix(dashboard): tokenize mobile dropdown caps and drop 100vh fallback (RUFU-170)
+  | refs/heads/pr/stas-103-prompt-return c8299c0631 fix(core): return the persisted prompt from updateTask (STAS-103)
+  | refs/heads/pr/stash-integration 01dc4fd5ec feat(stash): follow-up to #3494 — CLI chat memory recall, migration repair, i18n/UI completions
+  | refs/heads/pr/stash-memory f1f21ccc94 fix(i18n): add settings.memory stash-backend keys to secondary locales (RUFU-121/122 parity)
+  | refs/heads/pr3493-head 7032633e53 Merge branch 'main' into pr/lcm
+  | refs/heads/preserve/stash0-stas-259-wip 452f48fdf9 On fusion/stas-259-read-path-iserror: stas-259 wip
+  | refs/heads/prod-deploy 8893eb84da chore(RUFU-871): reconcile prod-deploy with main (no more cherry-picks)
+  | refs/heads/rebase-stas103 15edb7f7a0 fix(core): forward-repair declaredSymbols when PROMPT.md restore fails (STAS-103)
+  | refs/heads/rebase/chat-gate f701aa08cf fix(chat): honour generation fence after the compaction gate and expose bound-agent memory recall
+  | refs/heads/rebase/chat-guard 944f5607c8 fix(chat): keep the tier-3 changeset summary within the 120-char release-notes budget
+  | refs/heads/rebase/pr3619 1847a8404f docs(engine,core): complete FNXC stamp format on the ledger comments; record the P1 zombie-session rationale
+  | refs/heads/rescue-rufu-298 4b474c0d1d docs(RUFU-298): date the pending-classify backlog and prove which drift guard redness is main's
+  | refs/heads/rtm3-0.78-sso 505ebe5c31 fix(docker): ship postgresql-client in the runner image (embedded backup was dead)
+  | refs/heads/rufu-194/n3-backup 7ee3b9ed48 test(RUFU-194): align the observed-flake register lockstep with the merged numbering
+  | refs/heads/rufu-194/pr-lcm 059a910317 test(RUFU-194): retire the last head-only test-check signatures in grafted chat tests
+  | refs/heads/rufu-194/pre-rebase-backup fe14d131f6 test(RUFU-194): align the observed-flake register lockstep with the merged numbering
+  | refs/heads/rufu-200-empty-checkout-lease 0d550fbe95 fix(RUFU-200): reclaim a dormant file-scope lease whose checkout carries no work
+  | refs/heads/rufu-281-rebase 4915ee9954 test(RUFU-281): derive the write-tool disposition inventory
+  | refs/heads/rufu-321-planning-gate-retry c9209a15c9 RUFU-322: background HybridExecutor boot and gate isolation transitions on readiness
+  | refs/heads/rufu-338-stale-base-0e04126 0e04126cb5 feat(RUFU-338): explain the publish decision instead of only answering it
+  | refs/heads/rufu-429-post-merge-shape 7faa5e05e4 fix(core): do not require post-merge evidence a workspace lane cannot produce
+  | refs/heads/rufu-430-post-merge-evidence-contract e0a6680b80 docs(engine): correct the causal claim about the lost RUFU-430 audit row
+  | refs/heads/rufu-442-431-suspend-bound 25a952a214 fix(RUFU-442): bound the suspend notice by a window, not by state that churns
+  | refs/heads/rufu-449-no-verdict-budget 676a3de19c fix(engine): bound the failed-no-verdict review re-seed with the shared rerun budget
+  | refs/heads/rufu-451-zero-commit-land-park 9ac84f3561 fix(engine): stop parking a zero-commit workspace card as failed (RUFU-451)
+  | refs/heads/rufu-565-build-cache-poison 4f3f8a8e64 fix(RUFU-565): an unreadable git scan is unknown, not an empty tree
+  | refs/heads/rufu-584-lane-role-log-default 9f23bbcbcb perf(RUFU-584): make the lane-role board read exclude the log column by default
+  | refs/heads/rufu-584-review-sweep-batch-resolution d5a3feaa10 perf(RUFU-584): resolve the review sweep's workflows once per pass, not once per card
+  | refs/heads/rufu-584-triage-selection-prefill 5017fb0a85 perf(RUFU-584): prefill workflow selections for planning discovery, one batch per pass
+  | refs/heads/rufu-585-board-ir b9e7799780 fix(RUFU-585): bound board workflow fan-out instead of awaiting per item
+  | refs/heads/rufu-595-project-root-memo 85edcdb3a5 perf(RUFU-595): memoise project-root resolution instead of spawning git per call
+  | refs/heads/rufu-615-migration-restack 2b3766a36c fix(RUFU-615): restack migrations onto upstream slots with ours appended
+  | refs/heads/rufu-616-suspend-defer 33ad8d81d3 docs(RUFU-616): changeset for the capacity-suspend deferral
+  | refs/heads/rufu-679-dispatch-lease 8f734ee83d fix(RUFU-679): lease the planning-continuation dispatch claim
+  | refs/heads/rufu-682-capability-decline-refusal 4e27a99be0 docs(RUFU-682): correct the refusal format and re-arm levers against the shipped behavior
+  | refs/heads/rufu-690-archive-presence 14ba495cb4 fix(RUFU-690): a deleted card is not vanished work, and only unexplained loss pages
+  | refs/heads/rufu-698-budget-fit 490fd96320 docs(RUFU-698): record measured per-reservation slot cost with its measurement class
+  | refs/heads/rufu-756-lane-role-log-projection 4fa1ea0e64 perf(RUFU-756): stop the overseer sweep from loading the log column it never reads
+  | refs/heads/rufu-768-plan-review-attempt-counter bcb5792a3c fix(RUFU-768): bound planning re-seed cycles so a card that crashes at Plan Review parks instead of looping forever
+  | refs/heads/rufu-772-json-string-trim-hardening 3292cf8023 fix(RUFU-771): refuse non-string entries in persisted review and workspace JSON instead of crashing on trim
+  | refs/heads/rufu-773-error-site-capture d180504a63 fix(RUFU-773): name the throw site in verdict-less workflow node failures
+  | refs/heads/rufu-805-heartbeat-workspace bb83130d5c feat(RUFU-805): complete Step 6 — changeset
+  | refs/heads/rufu-812-plan-review-consumer b3c182ce06 fix(RUFU-812): stamp capacity-refused continuations so the drain window rotates
+  | refs/heads/rufu-828-scheduler-inflight 05f905d0cc feat(RUFU-828): name the board and the leg in the stuck-pass watchdog warning
+  | refs/heads/rufu-830-pass-stall-audit 64c7fadedb feat(RUFU-830): record a forced-open scheduler stall as a durable audit row
+  | refs/heads/rufu-871-board-payload 49de25e27a fix(RUFU-871): route the usage poll through the one cached gh probe
+  | refs/heads/rufu-871-board-payload2 37eac0196b docs(RUFU-871): name the real owner of the fusionBranchContext derivation
+  | refs/heads/rufu-871-board-workflows c0f4d24d38 fix(RUFU-871): describe board workflows from the catalog row instead of one read per workflow
+  | refs/heads/rufu-871-core-retention-census 688790c85e fix(RUFU-871): stop the retention census from truncating and polluting its own refusal log
+  | refs/heads/rufu-871-overrides-memo2 23d763e7c4 perf(RUFU-871): memoize the prompt-override read behind the selection memo TTL
+  | refs/heads/rufu-871-project-runtime-off c2d2d2ee4c feat(RUFU-871): expose the runtime-off switch as an API, a UI control, and tests
+  | refs/heads/rufu-871-project-runtime-visibility 3c42602c29 test(RUFU-871): pin the runtime-off entry ordering, label, focus safety, and reachability
+  | refs/heads/rufu-871-project-scope-reads 3b79958eac fix(RUFU-871): batch the gridlock sweep's per-card selection reads
+  | refs/heads/rufu-871-project-state-icon b8b0d35372 feat(RUFU-871): project combo shows each project's state by colour and icon
+  | refs/heads/rufu-871-reliability-aggregate 43726e7ce4 fix(RUFU-871): fold Reliability merge-attempts in SQL instead of hydrating 50k audit rows
+  | refs/heads/rufu-871-resolution-reads 660ca98518 perf(RUFU-871): memoize the prompt-override read and invalidate IR caches on prompt edits
+  | refs/heads/rufu-871-runtime-central-read be52e07fbf fix(RUFU-871): resolve project runtime state from one batched central settings read
+  | refs/heads/rufu-871-runtime-flags-cold-read da43ab27e3 fix(RUFU-871): read project runtime flags under a transaction-local RLS bypass
+  | refs/heads/rufu-871-runtime-off-from-cards 6b9fc4eccb feat(RUFU-871): make the project card's runtime control a real toggle
+  | refs/heads/rufu-871-steering-dedup ae3c260cdf fix(RUFU-871): stop the overseer re-posting identical steering guidance every tick
+  | refs/heads/rufu-883-sampler-comment-projection 6aff48faff test(RUFU-883): teach the pg parity matrix the `comments` member it could not know about
+  | refs/heads/salvage/fn-9257-dup-906370c94c 906370c94c FN-9257: restore workflow-step activity run attribution
+  | refs/heads/salvage/rufu-133-stale-20260825 056802533c test(RUFU-133): add regression tests for stash relevance-score mapping
+  | refs/heads/salvage/rufu-141-stale-20260826 76620d55cd chore(RUFU-141): import dependency content from main
+  | refs/heads/salvage/rufu-192-pool-20260907 64c19055ce feat(RUFU-192): complete Step 5 — server-truth target reconcile and switch disclosure
+  | refs/heads/salvage/rufu-192-steps0-5 587ec331b1 test(RUFU-192): lock ack pass-through contract and downgrade changeset to patch
+  | refs/heads/scratch/upstream-cherrypick b741d6ea23 FN-9445: restore deferred workflow completion hops
+  | refs/heads/scubashack/gating e6b144e8c4 [local] gating: govern shell file writes with file_write_delete on both gates
+  | refs/heads/sso/dsnet-session-login 8adef1b12a feat(dashboard): trusted-proxy SSO session login (GitLab OIDC via oauth2-proxy)
+  | refs/heads/stas-394-fix-title-idempotence 1677ee018a fix(STAS-394): compose fix titles idempotently and record fix ancestry in lineage
+  | refs/heads/stas-395-measure-same-agent-duplicate-intake e038ea90e2 test(STAS-395): describe the prior stubbing in prose, keeping the mock census at zero
+  | refs/heads/sync/upstream-2026-09-13 913d6076a4 feat(RUFU-231): squash-land branch-conflict recovery loop fix
+  | refs/heads/take/upstream-20261005 47e0ad07d2 fix(engine): drop the archived-lane delivery predicate this build cannot have
+  | refs/heads/tmp-r502 8d1a47e28c fix(RUFU-502): count the post-merge re-seed budget from the durable log
+  | refs/heads/tmp-sync 12d4c2f105 Merge remote-tracking branch 'origin/main' into tmp-sync
+  | refs/heads/tmp-verify-871 9c7898b00e fix(RUFU-871): make project scope an invariant of task list reads
+  | refs/heads/upstream-sync-5 e0345399ec Merge main@155febe4a9 into upstream-sync-5
+
+card_refs_count=1
+  CARD REF: refs/heads/stas-395-measure-same-agent-duplicate-intake e038ea90e2 test(STAS-395): describe the prior stubbing in prose, keeping the mock census at zero
+
+$ git rev-parse refs/heads/stas-395-measure-same-agent-duplicate-intake
+  rc=0
+  | e038ea90e247532e4cdc84af33657fb5337adb7f
+
+$ git log --format=%h %ci %s f1247e8aef367c248ebb0b9d339bf0b9bd0a6421..refs/heads/stas-395-measure-same-agent-duplicate-intake
+  rc=0
+  | e038ea90e2 2026-11-07 23:46:10 +0100 test(STAS-395): describe the prior stubbing in prose, keeping the mock census at zero
+  | bc8c9da52d 2026-11-07 23:45:31 +0100 test(STAS-395): print one observed-verdict line per executed case
+  | 054df66fe7 2026-11-07 23:43:32 +0100 test(STAS-395): print the scratch store root and database per case
+  | f9ea6e9054 2026-11-07 22:46:48 +0100 test(STAS-395): measure the same-agent duplicate-intake lane on a real store
+
+$ git rev-list --count f1247e8aef367c248ebb0b9d339bf0b9bd0a6421..refs/heads/stas-395-measure-same-agent-duplicate-intake
+  rc=0
+  | 4
+
+$ git merge-base --is-ancestor f1247e8aef367c248ebb0b9d339bf0b9bd0a6421 refs/heads/main
+  rc=0
+  | (no stdout)
+
+$ git rev-list --count f1247e8aef367c248ebb0b9d339bf0b9bd0a6421..refs/heads/main
+  rc=0
+  | 1
+
+$ git rev-list --count f1247e8aef367c248ebb0b9d339bf0b9bd0a6421..refs/heads/main -- packages/core/src/__tests__/postgres/same-agent-duplicate-intake-real-store.pg.test.ts
+  rc=0
+  | 0
+
+$ git rev-list --left-right --count refs/heads/main...refs/heads/stas-395-measure-same-agent-duplicate-intake
+  rc=0
+  | 1	4
+
+$ git merge-tree --write-tree --name-only refs/heads/main refs/heads/stas-395-measure-same-agent-duplicate-intake
+  rc=0
+  | 4632368f2320007374ffcff21016a9cc2c33d4a1
+
+merge_tree_return_code=0
+merge_tree_conflict_lines=0
+
+merge_base=f1247e8aef367c248ebb0b9d339bf0b9bd0a6421
+$ git diff --name-only f1247e8aef367c248ebb0b9d339bf0b9bd0a6421 refs/heads/main -- packages/core/src/__tests__/postgres/same-agent-duplicate-intake-real-store.pg.test.ts
+  rc=0
+  | (no stdout)
+
+$ git diff --name-only f1247e8aef367c248ebb0b9d339bf0b9bd0a6421 refs/heads/stas-395-measure-same-agent-duplicate-intake
+  rc=0
+  | packages/core/src/__tests__/postgres/same-agent-duplicate-intake-real-store.pg.test.ts
+
+delivered_file_count=1
+
+=== collision probe against the STAS-394 branch discovered live ===
+  found: refs/heads/stas-394-fix-title-idempotence 1677ee018a fix(STAS-394): compose fix titles idempotently and record fix ancestry in lineage
+
+$ git merge-base refs/heads/stas-395-measure-same-agent-duplicate-intake refs/heads/stas-394-fix-title-idempotence
+  rc=0
+  merge_base=1d4bcc61847562837b44854bccea95b783d8b943
+$ git rev-list --left-right --count refs/heads/stas-395-measure-same-agent-duplicate-intake...refs/heads/stas-394-fix-title-idempotence
+  rc=0 left_right=11	1
+
+$ git merge-tree --write-tree --name-only refs/heads/stas-395-measure-same-agent-duplicate-intake refs/heads/stas-394-fix-title-idempotence
+  rc=0
+  conflict_lines=0
+
+$ git diff --name-only refs/heads/stas-395-measure-same-agent-duplicate-intake refs/heads/stas-394-fix-title-idempotence  (shared/differing file census)
+  differing_files=38
+  files_this_card_changed=1
+  files_stas394_changed_over_its_base=11
+  shared_files_touched_by_both=0
+
+$ git status --porcelain
+  rc=0
+  | (no stdout)
+
+$ git rev-list --all --max-count=1
+  rc=0
+  | 8893eb84da69ad1caf97ca617f356cb0c1587bdb
+
+=== before/after executed counts for the delivered file, from this run's own captures ===
+  green run at the tip:      Test Files 1 passed (1) | Tests 6 passed (6) | skipped 0
+  neutralised call site:     Test Files 1 failed (1) | Tests 3 failed | 3 passed (6)
+  after restore:             Test Files 1 passed (1) | Tests 6 passed (6)

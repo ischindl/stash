@@ -1,0 +1,30 @@
+before_failing_files_total= 263
+pg_gated_failing_files= 190
+non_pg_failing_files= 73
+top_error_signatures_in_before_run:
+      45  Error: adminExec failed: password authentication failed for user "schindler"
+      14  Error: Command failed: psql "postgresql://localhost:5432/postgres" -v ON_ERROR_STOP=1 -c "CREATE DATABASE \"fu
+       8  Error: Test timed out in 15000ms.
+       6  PostgresError: password authentication failed for user "schindler"
+       4  Error: Failed query: SELECT 1 AS warmup
+       4  Error: Command failed: psql postgresql://localhost:5432/postgres -v ON_ERROR_STOP=1 -c CREATE DATABASE "fusion
+       2  AssertionError: expected [ Array(1) ] to deeply equal []
+       2  AssertionError: expected PostgresError: password authentication fa… { …(9) } to be an instance of SchemaMutati
+       2  AssertionError: expected { taskId: 'FN-9', dryRun: false, …(7) } to match object { reason: 'repaired', repaire
+       2  Error: Failed query: SELECT pg_backend_pid() AS pid
+first_15_non_pg_failing_files:
+    src/__tests__/agent-activity-writers.test.ts
+    src/__tests__/agent-store-builtin-role-provisioning-pool.test.ts
+    src/__tests__/agent-store-pause-marker-clear.test.ts
+    src/__tests__/agent-store-routing-policy.test.ts
+    src/__tests__/architecture-hot-paths.test.ts
+    src/__tests__/builtin-adjacency-matches-legacy-transitions.test.ts
+    src/__tests__/builtin-workflows.test.ts
+    src/__tests__/coding-ideas-move.test.ts
+    src/__tests__/custom-review-lane-merge-blocker.test.ts
+    src/__tests__/delete-task-if-planning.test.ts
+    src/__tests__/excluded-awaited-run-audit-store-sites.test.ts
+    src/__tests__/gitlab-source-issue-storage.test.ts
+    src/__tests__/in-review-entry-audit.test.ts
+    src/__tests__/lifecycle-move-provenance-emit.test.ts
+    src/__tests__/live-move-path-undeclared-target.test.ts

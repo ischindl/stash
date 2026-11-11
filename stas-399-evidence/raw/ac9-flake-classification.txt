@@ -1,0 +1,71 @@
+### STAS-399 AC9 flake classification: the 3 files that appeared only in the after-suite
+purpose: prove load-induced timeouts, not this change (each file re-run alone, same pg base, same command shape)
+sha: 217833095935ff88da3f5c4996c9eb85f1908dba
+
+==================================================
+file: src/__tests__/workspace-e2e.test.ts
+project: engine-default
+started_utc: 2026-11-10T03:41:39Z
+
+ RUN  v4.1.10 /home/schindler/git/stash/.fusion/worktrees/stas-399/.engine/stas-399-engine/packages/engine
+
+·····
+
+ Test Files  1 passed (1)
+      Tests  5 passed (5)
+   Start at  04:41:39
+   Duration  34.77s (transform 8.98s, setup 186ms, import 12.89s, tests 21.48s, environment 0ms)
+
+exit_status: 0
+
+==================================================
+file: src/__tests__/workspace-merger-lease.test.ts
+project: engine-default
+started_utc: 2026-11-10T03:42:14Z
+
+ RUN  v4.1.10 /home/schindler/git/stash/.fusion/worktrees/stas-399/.engine/stas-399-engine/packages/engine
+
+··············
+
+ Test Files  1 passed (1)
+      Tests  14 passed (14)
+   Start at  04:42:15
+   Duration  54.15s (transform 6.52s, setup 325ms, import 9.48s, tests 44.14s, environment 0ms)
+
+exit_status: 0
+
+==================================================
+file: src/__tests__/reliability-interactions/explicit-duplicate-marker-sweep.test.ts
+project: engine-reliability
+started_utc: 2026-11-10T03:43:09Z
+
+ RUN  v4.1.10 /home/schindler/git/stash/.fusion/worktrees/stas-399/.engine/stas-399-engine/packages/engine
+
+··················
+
+ Test Files  1 passed (1)
+      Tests  18 passed (18)
+   Start at  04:43:09
+   Duration  25.67s (transform 7.59s, setup 260ms, import 11.41s, tests 13.73s, environment 0ms)
+
+exit_status: 0
+
+==================================================
+file: src/__tests__/reliability-interactions/self-defeating-dep-reconcile.test.ts
+project: engine-reliability
+started_utc: 2026-11-10T03:43:35Z
+       |                    ^
+     69|     expect(events[0]?.target).toBe(fx.task.id);
+     70|     expect(events[0]?.metadata).toMatchObject({
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  1 failed | 2 passed (3)
+   Start at  04:43:35
+   Duration  14.21s (transform 6.10s, setup 195ms, import 9.10s, tests 4.74s, environment 0ms)
+
+exit_status: 1
+
+finished_utc: 2026-11-10T03:43:50Z

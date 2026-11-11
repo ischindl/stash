@@ -1,0 +1,1332 @@
+From 0e408011138bbe7599134cc65803296fe9c15388 Mon Sep 17 00:00:00 2001
+From: Imrich Schindler <ischindl@progis.sk>
+Date: Sun, 8 Nov 2026 07:44:07 +0100
+Subject: [PATCH 1/5] test(STAS-397): guard that an automatic checkout release
+ decides from occupancy only
+
+Red at this base: the ignored-only fixture refuses with WorktreeContentPreservationError
+from worktree-backend.ts:1755, while the three blocking fixtures already pass.
+
+Co-authored-by: Fusion <noreply@runfusion.ai>
+---
+ ...se-decides-from-occupancy.real-git.test.ts | 171 ++++++++++++++++++
+ 1 file changed, 171 insertions(+)
+ create mode 100644 packages/engine/src/__tests__/worktree-release-decides-from-occupancy.real-git.test.ts
+
+diff --git a/packages/engine/src/__tests__/worktree-release-decides-from-occupancy.real-git.test.ts b/packages/engine/src/__tests__/worktree-release-decides-from-occupancy.real-git.test.ts
+new file mode 100644
+index 0000000000..42bf0eff7c
+--- /dev/null
++++ b/packages/engine/src/__tests__/worktree-release-decides-from-occupancy.real-git.test.ts
+@@ -0,0 +1,171 @@
++/*
++STAS-397 guard: an automatic checkout release decides from OCCUPANCY only.
++
++Occupancy is content git counts as occupying a checkout - a tracked modification, a staged
++change, or an untracked path. A git-IGNORED path is not occupancy, so a checkout whose only
++content is ignored build output releases, and the case below named `ignored-only` IS the
++invariant this file installs. It is the state seven board cards sat in on 2026-08-11 while a
++half-hourly sweep retried a removal that could never succeed: `--untracked-files=all` empty,
++the tip an ancestor of the integration ref, zero commits ahead, and `.venv/` plus
++`stashai.egg-info/` on disk - a checkout produced by following this repository's own
++documented development procedure.
++
++The three refusal cases beside it are the other half of the contract and are NOT negotiable:
++each differs from the released case by exactly one porcelain class, and each must keep the
++content it is refusing to throw away. Weakening or deleting one of them to make a suite green
++trades the wedge for data loss.
++
++Like the real-git suites beside it, this file deliberately mocks nothing: a mock of the status
++probe would reproduce the defect's own blind spot, because the bug lives in how the real
++porcelain read is classified.
++*/
++import { exec, spawnSync } from "node:child_process";
++import { access, constants, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
++import { tmpdir } from "node:os";
++import path from "node:path";
++import { promisify } from "node:util";
++import { afterEach, describe, expect, it } from "vitest";
++import { RemovalReason, removeWorktree } from "../worktree/worktree-backend.js";
++import type { GitAuditInput, RunAuditor } from "../util/run-audit.js";
++
++const execAsync = promisify(exec);
++
++const hasGit = spawnSync("git", ["--version"], { stdio: "pipe" }).status === 0;
++const describeIfGit = hasGit ? describe : describe.skip;
++
++async function run(command: string, cwd: string): Promise<string> {
++  const { stdout } = await execAsync(command, { cwd, encoding: "utf-8" });
++  return stdout.trim();
++}
++
++const tempDirs: string[] = [];
++
++afterEach(async () => {
++  await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
++});
++
++/*
++The wedge shape, reproduced on a throwaway repository: `.venv/` and a `*.egg-info/` directory
++are the two ignored artifacts the board's cards actually held, one of them a name the retired
++basename allowlist knew and the other a name it never could have known.
++*/
++const IGNORED_ARTIFACTS = [".venv/lib/sitecustomize.py", "stashai.egg-info/PKG-INFO"];
++
++async function createWedgedFixture(lane: string): Promise<{
++  repoDir: string;
++  worktreePath: string;
++  auditEvents: GitAuditInput[];
++}> {
++  const repoDir = await mkdtemp(path.join(tmpdir(), "stas-397-release-"));
++  tempDirs.push(repoDir);
++  await run('git init -q -b main', repoDir);
++  await run('git config user.email "engine-test@example.com" && git config user.name "Engine Test"', repoDir);
++  await writeFile(path.join(repoDir, ".gitignore"), ".venv/\n*.egg-info/\n.env\n", "utf-8");
++  await writeFile(path.join(repoDir, "README.md"), "# trunk\n", "utf-8");
++  await run("git add -A && git commit -qm init", repoDir);
++  await run("git branch fusion/wedged", repoDir);
++  // The lane branch must be a true ANCESTOR of the integration ref, as it is on a card whose
++  // work already landed: trunk moves past it, so the lane holds zero commits of its own.
++  await writeFile(path.join(repoDir, "LANDED.md"), "# the lane work, landed on trunk\n", "utf-8");
++  await run("git add LANDED.md && git commit -qm 'land the lane work on trunk'", repoDir);
++
++  await mkdir(path.join(repoDir, ".worktrees"), { recursive: true });
++  const worktreePath = path.join(repoDir, ".worktrees", lane);
++  await run(`git worktree add -q ${JSON.stringify(worktreePath)} fusion/wedged`, repoDir);
++  for (const artifact of IGNORED_ARTIFACTS) {
++    const target = path.join(worktreePath, artifact);
++    await mkdir(path.dirname(target), { recursive: true });
++    await writeFile(target, "regenerable build output\n", "utf-8");
++  }
++
++  const auditEvents: GitAuditInput[] = [];
++  return { repoDir, worktreePath, auditEvents };
++}
++
++/** The engine's own automatic release entry point, with the reason the recovery sweep passes. */
++function releaseCheckout(fixture: { repoDir: string; worktreePath: string; auditEvents: GitAuditInput[] }) {
++  return removeWorktree({
++    rootDir: fixture.repoDir,
++    worktreePath: fixture.worktreePath,
++    settings: {},
++    taskId: "STAS-397",
++    reason: RemovalReason.SelfHealingBranchConflict,
++    audit: { git: async (event: GitAuditInput) => { fixture.auditEvents.push(event); } } as unknown as RunAuditor,
++  });
++}
++
++/*
++Every fixture states its own premise, so a fixture that silently stopped resembling the wedge
++fails here instead of quietly proving nothing.
++*/
++async function assertWedgedPremise(fixture: { repoDir: string; worktreePath: string }): Promise<void> {
++  const expandedUntracked = await run("git status --porcelain --untracked-files=all", fixture.worktreePath);
++  expect(expandedUntracked, "fixture holds no untracked content").toBe("");
++  const ahead = await run("git rev-list --count refs/heads/main..HEAD", fixture.worktreePath);
++  expect(ahead, "fixture holds no commits of its own").toBe("0");
++  await run("git merge-base --is-ancestor HEAD refs/heads/main", fixture.worktreePath);
++  const ignored = await run("git status --porcelain=v1 --ignored=matching --untracked-files=normal", fixture.worktreePath);
++  const ignoredLines = ignored.split("\n").filter((line) => line.startsWith("!! "));
++  expect(ignoredLines.length).toBeGreaterThanOrEqual(1);
++  expect(ignoredLines.some((line) => line.includes(".venv/"))).toBe(true);
++  expect(ignoredLines.some((line) => line.includes("stashai.egg-info/"))).toBe(true);
++}
++
++async function pathExists(target: string): Promise<boolean> {
++  try {
++    await access(target, constants.F_OK);
++    return true;
++  } catch {
++    return false;
++  }
++}
++
++describeIfGit("STAS-397 automatic checkout release decides from occupancy only", () => {
++  it("releases a checkout whose only content is ignored build output, recording the discard", async () => {
++    const fixture = await createWedgedFixture("ignored-only");
++    await assertWedgedPremise(fixture);
++
++    await expect(releaseCheckout(fixture)).resolves.toMatchObject({ removed: true });
++
++    expect(await pathExists(fixture.worktreePath)).toBe(false);
++    expect(await run("git worktree list --porcelain", fixture.repoDir)).not.toContain(fixture.worktreePath);
++
++    const discard = fixture.auditEvents.find((event) => event.type === "worktree:removal-discarded-ignored-content");
++    expect(discard, "the release names what it threw away").toBeDefined();
++    const discardedPaths = (discard?.metadata as { discardedIgnoredPaths?: string[] }).discardedIgnoredPaths ?? [];
++    expect(discardedPaths).toEqual(expect.arrayContaining([".venv/", "stashai.egg-info/"]));
++  });
++
++  it("refuses and preserves a checkout holding one tracked modification", async () => {
++    const fixture = await createWedgedFixture("tracked-modified");
++    await writeFile(path.join(fixture.worktreePath, "README.md"), "# trunk\n\nwork in progress\n", "utf-8");
++    const occupied = await run("git status --porcelain --untracked-files=all", fixture.worktreePath);
++    expect(occupied).toContain("README.md");
++
++    await expect(releaseCheckout(fixture)).rejects.toThrow(/preserving .*: uncommitted or ignored content present/);
++
++    expect(await readFile(path.join(fixture.worktreePath, "README.md"), "utf-8")).toContain("work in progress");
++    expect(await pathExists(fixture.worktreePath)).toBe(true);
++  });
++
++  it("refuses and preserves a checkout holding one untracked file", async () => {
++    const fixture = await createWedgedFixture("untracked");
++    await writeFile(path.join(fixture.worktreePath, "notes.md"), "unfinished work\n", "utf-8");
++
++    await expect(releaseCheckout(fixture)).rejects.toThrow(/preserving .*: uncommitted or ignored content present/);
++
++    expect(await readFile(path.join(fixture.worktreePath, "notes.md"), "utf-8")).toBe("unfinished work\n");
++    expect(await pathExists(fixture.worktreePath)).toBe(true);
++  });
++
++  it("refuses a checkout holding one untracked path git reports quoted", async () => {
++    const fixture = await createWedgedFixture("quoted-untracked");
++    await writeFile(path.join(fixture.worktreePath, 'we"ird.md'), "unfinished work\n", "utf-8");
++    const occupied = await run("git status --porcelain --untracked-files=all", fixture.worktreePath);
++    expect(occupied.startsWith('?? "'), "git must report this path quoted for the case to mean anything").toBe(true);
++
++    await expect(releaseCheckout(fixture)).rejects.toThrow(/preserving .*: uncommitted or ignored content present/);
++
++    expect(await readFile(path.join(fixture.worktreePath, 'we"ird.md'), "utf-8")).toBe("unfinished work\n");
++  });
++});
+-- 
+2.56.0
+
+
+From 35f1406dc08e29f827e2f3a01103e8341ebcd0ee Mon Sep 17 00:00:00 2001
+From: Imrich Schindler <ischindl@progis.sk>
+Date: Sun, 8 Nov 2026 07:59:28 +0100
+Subject: [PATCH 2/5] fix(worktree): decide a checkout release from occupancy,
+ so ignored artifacts stop blocking forever
+
+An automatic release asked whether each ignored path's BASENAME was on a hardcoded list of
+well-known build and dependency directories, and refused when it was not. That question has no
+stable answer: the list knew `.venv` but no `*.egg-info` shape, so a checkout created by the
+documented dependency-install procedure of the repository it runs against could never be released,
+and the one escape hatch was admitted for a single removal reason the sweep hitting it every half
+hour is not allowed to use. Seven board cards held exactly that checkout.
+
+Occupancy is what a release can actually ask about: a tracked modification, a staged change, or an
+untracked path. Ignored content is probed, named in the release's own audit record, and never
+blocks. Deleting the allowlist, the child-probed scratch exception and the ignored-only proof gate
+leaves one predicate; the refusal for deliverable, unreadable and root content is untouched, so no
+sweep destroys work it could not enumerate.
+
+Retired: REGENERABLE_IGNORED_DIR_NAMES, FUSION_SCRATCH_REGENERABLE_CHILDREN,
+isRegenerableScratchDirectory, the `regenerable-ignored` class, and the
+worktree:post-landing-ignored-content-discarded and
+worktree:removal-discarded-regenerable-content rows, replaced by
+worktree:removal-discarded-ignored-content, which names the paths it discarded.
+
+Co-authored-by: Fusion <noreply@runfusion.ai>
+---
+ ...sive-removal-preservation.real-git.test.ts |  77 +++++++--
+ .../worktree-acquisition-pinned.test.ts       |   4 +-
+ .../src/__tests__/worktree-backend.test.ts    | 153 +++++++++--------
+ .../__tests__/worktree-doc-accuracy.test.ts   |  10 +-
+ packages/engine/src/util/run-audit.ts         |  15 +-
+ .../engine/src/worktree/worktree-backend.ts   | 160 ++++++------------
+ 6 files changed, 218 insertions(+), 201 deletions(-)
+
+diff --git a/packages/engine/src/__tests__/reliability-interactions/worktree-defensive-removal-preservation.real-git.test.ts b/packages/engine/src/__tests__/reliability-interactions/worktree-defensive-removal-preservation.real-git.test.ts
+index 410219aa41..3cfdf7f94a 100644
+--- a/packages/engine/src/__tests__/reliability-interactions/worktree-defensive-removal-preservation.real-git.test.ts
++++ b/packages/engine/src/__tests__/reliability-interactions/worktree-defensive-removal-preservation.real-git.test.ts
+@@ -2,6 +2,7 @@ import { access, constants as fsConstants, mkdir, mkdtemp, readFile, rm, writeFi
+ import { tmpdir } from "node:os";
+ import { dirname, join } from "node:path";
+ import { afterEach, describe, expect, it } from "vitest";
++import type { RunAuditor } from "../../util/run-audit.js";
+ import {
+   RemovalReason,
+   removeWorktree,
+@@ -18,6 +19,20 @@ async function pathExists(path: string): Promise<boolean> {
+   }
+ }
+ 
++/*
++STAS-397: a release that discards ignored content must say what it threw away, so the tests that used
++to assert a refusal now assert the record instead. A hand-rolled collector, not a mock: this suite's
++rule is that the git calls are real, and the auditor is the thing under observation, not a stand-in
++for it.
++*/
++function collectAuditEvents(): { events: Array<{ type: string; metadata?: Record<string, unknown> }>; auditor: RunAuditor } {
++  const events: Array<{ type: string; metadata?: Record<string, unknown> }> = [];
++  return {
++    events,
++    auditor: { git: async (event: { type: string; metadata?: Record<string, unknown> }) => { events.push(event); } } as unknown as RunAuditor,
++  };
++}
++
+ describe.skipIf(!hasGit)("reliability interactions: defensive removal preserves unverifiable content", () => {
+   const roots: string[] = [];
+ 
+@@ -70,7 +85,7 @@ describe.skipIf(!hasGit)("reliability interactions: defensive removal preserves
+     expect(await pathExists(worktreePath)).toBe(true);
+   });
+ 
+-  it("pool-prune removes ignored content under a regenerable directory", async () => {
++  it("pool-prune removes ignored content under a build directory", async () => {
+     const root = await setupRepo();
+     const worktreePath = await createWorktree(root, "ignored-prune");
+     await mkdir(join(worktreePath, "dist"), { recursive: true });
+@@ -78,8 +93,9 @@ describe.skipIf(!hasGit)("reliability interactions: defensive removal preserves
+ 
+     /*
+     FNXC:WorktreeCleanup 2026-09-01-06:09:
+-    FN-9233 deliberately removes the prior preservation contract for files beneath allowlisted
+-    build directories; their ignored contents are treated as project-regenerable output.
++    FN-9233 deliberately removed the prior preservation contract for files beneath build directories.
++    STAS-397 generalised it: no ignored path is occupancy, so the name of the directory is not a question
++    a release asks.
+     */
+     await expect(
+       removeWorktree({ rootDir: root, worktreePath, settings: {}, reason: RemovalReason.PoolPrune }),
+@@ -116,7 +132,7 @@ describe.skipIf(!hasGit)("reliability interactions: defensive removal preserves
+     RemovalReason.SelfHealingReclaim,
+     RemovalReason.SelfHealingStaleActiveBranch,
+     RemovalReason.StepSessionCleanup,
+-  ])("%s removes a built checkout with only regenerable ignored output", async (reason) => {
++  ])("%s removes a built checkout whose only content is ignored output", async (reason) => {
+     const root = await setupRepo();
+     const worktreePath = await createWorktree(root, `regenerable-${reason}`);
+     await mkdir(join(worktreePath, "node_modules", "pkg"), { recursive: true });
+@@ -139,7 +155,7 @@ describe.skipIf(!hasGit)("reliability interactions: defensive removal preserves
+     RemovalReason.SelfHealingStaleActiveBranch,
+     RemovalReason.StepSessionCleanup,
+     RemovalReason.CompletionLandedCleanup,
+-  ])("%s removes a built checkout with only proven Fusion scratch and regenerable output", async (reason) => {
++  ])("%s removes a built checkout holding Fusion scratch and other ignored output", async (reason) => {
+     const root = await setupRepo();
+     const worktreePath = await createWorktree(root, `fusion-scratch-${reason}`);
+     await mkdir(join(worktreePath, ".fusion", "cache"), { recursive: true });
+@@ -153,25 +169,48 @@ describe.skipIf(!hasGit)("reliability interactions: defensive removal preserves
+     expect(await pathExists(worktreePath)).toBe(false);
+   });
+ 
+-  it("preserves Fusion scratch with an unexpected child", async () => {
++  /*
++  STAS-397 replaced three name-based policies with one question. These three tests are where that
++  replacement is most visible, so they state the new rule from the angle that used to be refused.
++
++  The concern FN-9276 recorded here was real: a top-level `.fusion` can hold board state. What protects
++  that state is not the child probe — it is `assertCleanForDefensiveRemoval` refusing the project root
++  checkout by identity, which stays in place and is asserted below. A worktree-local `.fusion` is tool
++  output written into the copy, and the row naming it is what makes discarding it reviewable.
++  */
++  it("releases an ignored Fusion scratch directory whatever it holds, naming it in the discard record", async () => {
+     const root = await setupRepo();
+     const worktreePath = await createWorktree(root, "fusion-scratch-unexpected");
+     await mkdir(join(worktreePath, ".fusion", "tasks", "FN-1"), { recursive: true });
+     await writeFile(join(worktreePath, ".fusion", "tasks", "FN-1", "notes.md"), "keep\n", "utf-8");
++    const { events, auditor } = collectAuditEvents();
+ 
+-    await expect(removeWorktree({ rootDir: root, worktreePath, settings: {}, reason: RemovalReason.PoolPrune })).rejects.toThrow(/preserving/);
+-    expect(await pathExists(worktreePath)).toBe(true);
++    await expect(removeWorktree({ rootDir: root, worktreePath, settings: {}, reason: RemovalReason.PoolPrune, audit: auditor })).resolves.toMatchObject({ removed: true });
++
++    expect(await pathExists(worktreePath)).toBe(false);
++    expect(events).toContainEqual(expect.objectContaining({
++      type: "worktree:removal-discarded-ignored-content",
++      metadata: expect.objectContaining({ discardedIgnoredPaths: [".fusion/"] }),
++    }));
+   });
+ 
+-  it("preserves Fusion scratch alongside an ignored env file", async () => {
++  it("releases Fusion scratch alongside an ignored env file and names both in the discard record", async () => {
+     const root = await setupRepo();
+     const worktreePath = await createWorktree(root, "fusion-scratch-env");
+     await mkdir(join(worktreePath, ".fusion", "cache"), { recursive: true });
+     await writeFile(join(worktreePath, ".fusion", "cache", "plugin-build-cache.json"), "{}\n", "utf-8");
+     await writeFile(join(worktreePath, ".env"), "TOKEN=ignored\n", "utf-8");
++    const { events, auditor } = collectAuditEvents();
+ 
+-    await expect(removeWorktree({ rootDir: root, worktreePath, settings: {}, reason: RemovalReason.PoolPrune })).rejects.toThrow(/preserving/);
+-    expect(await pathExists(worktreePath)).toBe(true);
++    await expect(removeWorktree({ rootDir: root, worktreePath, settings: {}, reason: RemovalReason.PoolPrune, audit: auditor })).resolves.toMatchObject({ removed: true });
++
++    expect(await pathExists(worktreePath)).toBe(false);
++    expect(events).toContainEqual(expect.objectContaining({
++      type: "worktree:removal-discarded-ignored-content",
++      metadata: expect.objectContaining({
++        discardedIgnoredPaths: expect.arrayContaining([".fusion/", ".env"]),
++      }),
++    }));
+   });
+ 
+   it("refuses defensive removal of the project root", async () => {
+@@ -183,6 +222,12 @@ describe.skipIf(!hasGit)("reliability interactions: defensive removal preserves
+     expect(await pathExists(root)).toBe(true);
+   });
+ 
++  /*
++  STAS-397: this table used to run the eight defensive reasons against an unallowlisted `.env` to prove
++  each one PRESERVED the checkout. That is the policy that wedged every checkout created by this
++  repository's documented dependency install, so the table now proves the opposite half of the same
++  contract: none of the eight refuses, and none of them forces.
++  */
+   it.each([
+     RemovalReason.MergerCleanup,
+     RemovalReason.MergerPostMerge,
+@@ -192,19 +237,19 @@ describe.skipIf(!hasGit)("reliability interactions: defensive removal preserves
+     RemovalReason.SelfHealingReclaim,
+     RemovalReason.SelfHealingStaleActiveBranch,
+     RemovalReason.StepSessionCleanup,
+-  ])("%s preserves ignored-only content without proof because it contains .env", async (reason) => {
++  ])("%s releases a checkout whose ignored content includes an unlisted .env file", async (reason) => {
+     const root = await setupRepo();
+     const worktreePath = await createWorktree(root, `ignored-${reason}`);
+     await mkdir(join(worktreePath, "node_modules", "pkg"), { recursive: true });
+     await writeFile(join(worktreePath, "node_modules", "pkg", "index.js"), "generated\n", "utf-8");
+     await writeFile(join(worktreePath, ".env"), "TOKEN=ignored\n", "utf-8");
+ 
+-    await expect(removeWorktree({ rootDir: root, worktreePath, settings: {}, reason })).rejects.toThrow(/preserving/);
++    await expect(removeWorktree({ rootDir: root, worktreePath, settings: {}, reason })).resolves.toMatchObject({ removed: true });
+ 
+-    expect(await readFile(join(worktreePath, ".env"), "utf-8")).toBe("TOKEN=ignored\n");
++    expect(await pathExists(worktreePath)).toBe(false);
+   });
+ 
+-  it("removes non-regenerable ignored content after a durable landing proof", async () => {
++  it("removes ignored content that a durable landing proof accompanies, recording the proof", async () => {
+     const root = await setupRepo();
+     const worktreePath = await createWorktree(root, "post-landing-ignored");
+     await mkdir(join(worktreePath, "node_modules", "pkg"), { recursive: true });
+@@ -226,7 +271,7 @@ describe.skipIf(!hasGit)("reliability interactions: defensive removal preserves
+ 
+   it("removes a nested monorepo build directory reported by ignored matching", async () => {
+     const root = await setupRepo();
+-    const worktreePath = await createWorktree(root, "nested-regenerable");
++    const worktreePath = await createWorktree(root, "nested-ignored");
+     await mkdir(join(worktreePath, "packages", "core", "dist"), { recursive: true });
+     await writeFile(join(worktreePath, "packages", "core", "dist", "x.js"), "generated\n", "utf-8");
+ 
+diff --git a/packages/engine/src/__tests__/worktree-acquisition-pinned.test.ts b/packages/engine/src/__tests__/worktree-acquisition-pinned.test.ts
+index 2b1da566bb..76ea2f6214 100644
+--- a/packages/engine/src/__tests__/worktree-acquisition-pinned.test.ts
++++ b/packages/engine/src/__tests__/worktree-acquisition-pinned.test.ts
+@@ -111,6 +111,7 @@ function probe(classification: DefensiveRemovalContentProbe["classification"], e
+     uncommittedPaths: classification === "deliverable" ? ["wip.ts"] : [],
+     modifiedCount: 0,
+     untrackedCount: classification === "deliverable" ? 1 : 0,
++    ignoredPaths: classification === "deliverable" ? [] : ["generated/"],
+     status: "classified",
+     ...over,
+   };
+@@ -418,7 +419,8 @@ describe("acquireTaskWorktree — task-pinned mode", () => {
+ 
+     it.each([
+       { name: "clean", entryCount: 0 },
+-      { name: "regenerable-ignored", entryCount: 1 },
++      // STAS-397 dropped the `regenerable-ignored` row: the class no longer exists, so no probe can
++      // arrive with it. Acquisition's own choice is unchanged - `ignored-only` still preserves aside below.
+     ])("removes $name in place instead of preserving it", async ({ name, entryCount }) => {
+       vi.mocked(probeWorktreeRemovalContent).mockResolvedValue(probe(name as DefensiveRemovalContentProbe["classification"], entryCount));
+ 
+diff --git a/packages/engine/src/__tests__/worktree-backend.test.ts b/packages/engine/src/__tests__/worktree-backend.test.ts
+index e68e3de732..ce1de4dd21 100644
+--- a/packages/engine/src/__tests__/worktree-backend.test.ts
++++ b/packages/engine/src/__tests__/worktree-backend.test.ts
+@@ -2,7 +2,6 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
+ import {
+   ActiveSessionWorktreeRemovalError,
+   classifyWorktreeRemovalContent,
+-  isRegenerableScratchDirectory,
+   InvalidPostLandingProofUsageError,
+   NativeWorktreeBackend,
+   probeWorktreeRemovalContent,
+@@ -87,28 +86,37 @@ vi.mock("../worktree/worktree-prune.js", () => ({
+   pruneWorktreeAdminEntries: pruneWorktreeAdminEntriesMock,
+ }));
+ 
++/*
++STAS-397: the only question a release asks is whether git counts something here as occupying the
++checkout. Ignored entries separate `clean` from `ignored-only`, and that difference records a discard
++instead of blocking, so no ignored NAME can move a row. The rows that once turned on whether a
++directory was a known build output now all land on `ignored-only` - including the `.venv`, `dist` and
++`node_modules` names the retired allowlist knew, because "known build output" and "unlisted build
++output" now receive the same answer, which is the whole point of the change.
++The quoted-path row keeps its seat for the opposite reason it had before: it is no longer a
++fail-closed refusal, it is the case where git refused to print a name plainly, and the row proves a
++quoted ignored path still cannot smuggle an untracked file past `deliverable`.
++*/
+ describe("classifyWorktreeRemovalContent", () => {
+   it.each([
+     { name: "classifies empty output as clean", porcelain: "", expected: "clean" },
+     { name: "classifies whitespace-only output as clean", porcelain: "  \n\t\n", expected: "clean" },
+-    { name: "classifies a regenerable dependency directory", porcelain: "!! node_modules/\n", expected: "regenerable-ignored" },
+-    { name: "classifies ignored Python virtual environments and caches as regenerable", porcelain: "!! .venv/\n!! venv/\n!! .pytest_cache/\n", expected: "regenerable-ignored" },
+-    { name: "classifies nested and root regenerable directories", porcelain: "!! packages/core/dist/\n!! node_modules/\n", expected: "regenerable-ignored" },
+-    { name: "preserves ignored entries when one is non-regenerable", porcelain: "!! dist/\n!! .env\n", expected: "ignored-only" },
+-    { name: "preserves a non-regenerable ignored file", porcelain: "!! .env\n", expected: "ignored-only" },
+-    { name: "fails closed for a quoted ignored path", porcelain: '!! "generated output/"\n', expected: "ignored-only" },
++    { name: "records a dependency directory as ignored content, not as a blocker", porcelain: "!! node_modules/\n", expected: "ignored-only" },
++    { name: "records an ignored virtualenv beside an unlisted egg-info directory", porcelain: "!! .venv/\n!! stashai.egg-info/\n!! .pytest_cache/\n", expected: "ignored-only" },
++    { name: "records nested and root ignored directories alike", porcelain: "!! packages/core/dist/\n!! node_modules/\n", expected: "ignored-only" },
++    { name: "records a build directory and an ignored dotfile alike", porcelain: "!! dist/\n!! .env\n", expected: "ignored-only" },
++    { name: "records a lone ignored dotfile", porcelain: "!! .env\n", expected: "ignored-only" },
++    { name: "reports a quoted ignored path as ignored content", porcelain: '!! "generated output/"\n', expected: "ignored-only" },
++    { name: "reports Fusion scratch as ignored content like any other ignored path", porcelain: "!! .fusion/\n", expected: "ignored-only" },
++    { name: "reports nested Fusion scratch as ignored content", porcelain: "!! packages/core/.fusion/\n", expected: "ignored-only" },
+     { name: "classifies an untracked file as deliverable", porcelain: "?? untracked.txt\n", expected: "deliverable" },
+     { name: "classifies a modified tracked file as deliverable", porcelain: " M tracked.ts\n", expected: "deliverable" },
+     { name: "does not let ignored entries mask an untracked file", porcelain: "!! node_modules/\n?? untracked.txt\n", expected: "deliverable" },
++    { name: "does not let ignored entries mask a quoted untracked file", porcelain: '!! .venv/\n?? "we\\"ird.txt"\n', expected: "deliverable" },
+     { name: "classifies an unmerged file as deliverable", porcelain: "!! dist/\nUU conflicted.ts\n", expected: "deliverable" },
+-    { name: "classifies proven top-level Fusion scratch as regenerable", porcelain: "!! .fusion/\n", options: { provenScratchRootEntries: new Set([".fusion"]) }, expected: "regenerable-ignored" },
+-    { name: "preserves Fusion scratch without proof", porcelain: "!! .fusion/\n", expected: "ignored-only" },
+-    { name: "preserves nested Fusion scratch even when root is proven", porcelain: "!! packages/core/.fusion/\n", options: { provenScratchRootEntries: new Set([".fusion"]) }, expected: "ignored-only" },
+-    { name: "preserves quoted Fusion scratch", porcelain: '!! ".fusion/"\n', options: { provenScratchRootEntries: new Set([".fusion"]) }, expected: "ignored-only" },
+-    { name: "preserves mixed proven scratch and env file", porcelain: "!! .fusion/\n!! .env\n", options: { provenScratchRootEntries: new Set([".fusion"]) }, expected: "ignored-only" },
+-    { name: "does not let proven scratch mask an untracked file", porcelain: "!! .fusion/\n?? wip.txt\n", options: { provenScratchRootEntries: new Set([".fusion"]) }, expected: "deliverable" },
+-  ])("$name", ({ porcelain, options, expected }) => {
+-    expect(classifyWorktreeRemovalContent(porcelain, options)).toBe(expected);
++    { name: "does not let ignored Fusion scratch mask an untracked file", porcelain: "!! .fusion/\n?? wip.txt\n", expected: "deliverable" },
++  ])("$name", ({ porcelain, expected }) => {
++    expect(classifyWorktreeRemovalContent(porcelain)).toBe(expected);
+   });
+ });
+ 
+@@ -139,11 +147,11 @@ describe("probeWorktreeRemovalContent", () => {
+   });
+ 
+   it.each([
+-    { name: "reports a clean checkout", stdout: "", expected: "clean", entryCount: 0, uncommittedPaths: [] as string[] },
+-    { name: "reports allowlisted ignored output as regenerable", stdout: "!! dist/\n", expected: "regenerable-ignored", entryCount: 1, uncommittedPaths: [] as string[] },
+-    { name: "reports non-allowlisted ignored output as ignored-only", stdout: "!! .env\n", expected: "ignored-only", entryCount: 1, uncommittedPaths: [] as string[] },
+-    { name: "reports an untracked file as deliverable without throwing", stdout: "?? wip.txt\n", expected: "deliverable", entryCount: 1, uncommittedPaths: ["wip.txt"] },
+-  ])("$name", async ({ stdout, expected, entryCount, uncommittedPaths }) => {
++    { name: "reports a clean checkout", stdout: "", expected: "clean", entryCount: 0, uncommittedPaths: [] as string[], ignoredPaths: [] as string[] },
++    { name: "reports ignored output and names the path a discard will throw away", stdout: "!! dist/\n", expected: "ignored-only", entryCount: 1, uncommittedPaths: [] as string[], ignoredPaths: ["dist/"] },
++    { name: "reports an ignored dotfile and names it", stdout: "!! .env\n", expected: "ignored-only", entryCount: 1, uncommittedPaths: [] as string[], ignoredPaths: [".env"] },
++    { name: "reports an untracked file as deliverable without throwing", stdout: "?? wip.txt\n", expected: "deliverable", entryCount: 1, uncommittedPaths: ["wip.txt"], ignoredPaths: [] as string[] },
++  ])("$name", async ({ stdout, expected, entryCount, uncommittedPaths, ignoredPaths }) => {
+     execFileMock.mockResolvedValueOnce({ stdout, stderr: "" });
+ 
+     await expect(probeWorktreeRemovalContent("/repo/.worktrees/fn-298")).resolves.toEqual({
+@@ -152,6 +160,7 @@ describe("probeWorktreeRemovalContent", () => {
+       uncommittedPaths,
+       modifiedCount: 0,
+       untrackedCount: uncommittedPaths.length,
++      ignoredPaths,
+       status: "classified",
+     });
+     expect(execFileMock).toHaveBeenCalledWith(
+@@ -161,16 +170,6 @@ describe("probeWorktreeRemovalContent", () => {
+     );
+   });
+ 
+-  it("reports proven Fusion scratch as regenerable from the child probe", async () => {
+-    execFileMock.mockResolvedValueOnce({ stdout: "!! .fusion/\n", stderr: "" });
+-    readdirMock.mockResolvedValueOnce(["cache"]);
+-
+-    await expect(probeWorktreeRemovalContent("/repo/.worktrees/fn-298")).resolves.toMatchObject({
+-      classification: "regenerable-ignored",
+-      status: "classified",
+-    });
+-  });
+-
+   it("reports an unreadable tree as probe-failed rather than guessing a class", async () => {
+     execFileMock.mockRejectedValueOnce(new Error("not a git repository"));
+ 
+@@ -192,6 +191,7 @@ describe("probeWorktreeRemovalContent", () => {
+       uncommittedPaths: [],
+       modifiedCount: 0,
+       untrackedCount: 0,
++      ignoredPaths: [],
+       status: "path-absent",
+     });
+     expect(execFileMock).not.toHaveBeenCalled();
+@@ -226,18 +226,6 @@ describe("probeWorktreeRemovalContent", () => {
+   });
+ });
+ 
+-describe("isRegenerableScratchDirectory", () => {
+-  it.each([
+-    ["allows the build cache child", ".fusion", ["cache"], true],
+-    ["refuses an unexpected child", ".fusion", ["tasks"], false],
+-    ["refuses mixed children", ".fusion", ["cache", "tasks"], false],
+-    ["allows an empty scratch directory", ".fusion", [], true],
+-    ["refuses an unknown root", ".other", ["cache"], false],
+-  ])("%s", (_name, entryName, childNames, expected) => {
+-    expect(isRegenerableScratchDirectory(entryName, childNames)).toBe(expected);
+-  });
+-});
+-
+ beforeEach(() => {
+   execMock.mockReset();
+   execFileMock.mockReset();
+@@ -1138,7 +1126,7 @@ describe("removeWorktree", () => {
+     expect(audit.git).toHaveBeenCalledWith({ type: "worktree:remove", target: "/repo/.worktrees/fn-1" });
+   });
+ 
+-  it("permits non-regenerable ignored content after a proven landing without force", async () => {
++  it("releases ignored content without carrying a landing proof, naming the proof when one exists", async () => {
+     execFileMock.mockResolvedValueOnce({ stdout: "!! .env\n", stderr: "" });
+     execMock.mockResolvedValueOnce({ stdout: "", stderr: "" });
+     const audit = { git: vi.fn().mockResolvedValue(undefined) } as any;
+@@ -1163,12 +1151,14 @@ describe("removeWorktree", () => {
+       expect.objectContaining({ cwd: "/repo", timeout: 60000 }),
+     );
+     expect(audit.git).toHaveBeenCalledWith({
+-      type: "worktree:post-landing-ignored-content-discarded",
++      type: "worktree:removal-discarded-ignored-content",
+       target: "/repo/.worktrees/fn-251",
+       metadata: {
+         taskId: "FN-251",
+         reason: RemovalReason.CompletionLandedCleanup,
+-        source: "ai-merge-finalize",
++        entryCount: 1,
++        discardedIgnoredPaths: [".env"],
++        landingProofSource: "ai-merge-finalize",
+         landedSha: "abc123",
+       },
+     });
+@@ -1188,7 +1178,13 @@ describe("removeWorktree", () => {
+     expect(execMock).not.toHaveBeenCalled();
+   });
+ 
+-  it("removes regenerable ignored content during defensive cleanup and audits the discard", async () => {
++  /*
++  STAS-397: the pair below used to be three tests split by whether an ignored path's BASENAME was on a
++  list, and the third one - an unlisted `.env` with no landing proof - asserted the refusal that wedged
++  every checkout this repository's own documented setup produces. All three now state one rule from
++  different angles: ignored content releases, the discard is named, and occupancy still refuses.
++  */
++  it("releases ignored content during defensive cleanup and audits the discard by name", async () => {
+     execFileMock.mockResolvedValueOnce({ stdout: "!! node_modules/\n", stderr: "" });
+     execMock.mockResolvedValueOnce({ stdout: "", stderr: "" });
+     const audit = { git: vi.fn().mockResolvedValue(undefined) } as any;
+@@ -1203,15 +1199,22 @@ describe("removeWorktree", () => {
+     })).resolves.toMatchObject({ removed: true });
+ 
+     expect(audit.git).toHaveBeenCalledWith({
+-      type: "worktree:removal-discarded-regenerable-content",
++      type: "worktree:removal-discarded-ignored-content",
+       target: "/repo/.worktrees/fn-9233",
+-      metadata: { taskId: "FN-9233", reason: RemovalReason.PoolPrune, entryCount: 1 },
++      metadata: {
++        taskId: "FN-9233",
++        reason: RemovalReason.PoolPrune,
++        entryCount: 1,
++        discardedIgnoredPaths: ["node_modules/"],
++        landingProofSource: undefined,
++        landedSha: undefined,
++      },
+     });
++    expect(audit.git).not.toHaveBeenCalledWith(expect.objectContaining({ type: "worktree:removal-preserved" }));
+   });
+ 
+-  it("removes proven Fusion scratch and audits it as regenerable", async () => {
++  it("releases Fusion scratch as ordinary ignored content, probing no child directory", async () => {
+     execFileMock.mockResolvedValueOnce({ stdout: "!! .fusion/\n", stderr: "" });
+-    readdirMock.mockResolvedValueOnce(["cache"]);
+     execMock.mockResolvedValueOnce({ stdout: "", stderr: "" });
+     const audit = { git: vi.fn().mockResolvedValue(undefined) } as any;
+ 
+@@ -1224,38 +1227,40 @@ describe("removeWorktree", () => {
+       reason: RemovalReason.PoolPrune,
+     })).resolves.toMatchObject({ removed: true });
+ 
+-    expect(audit.git).toHaveBeenCalledWith({
+-      type: "worktree:removal-discarded-regenerable-content",
+-      target: "/repo/.worktrees/fn-9276",
+-      metadata: { taskId: "FN-9276", reason: RemovalReason.PoolPrune, entryCount: 1 },
+-    });
++    expect(audit.git).toHaveBeenCalledWith(expect.objectContaining({
++      type: "worktree:removal-discarded-ignored-content",
++      metadata: expect.objectContaining({
++        taskId: "FN-9276",
++        reason: RemovalReason.PoolPrune,
++        entryCount: 1,
++        discardedIgnoredPaths: [".fusion/"],
++      }),
++    }));
++    // The retired exception read a scratch directory's children to decide whether it was deletable.
++    // Nothing may re-introduce that read: the answer no longer depends on the name or the contents.
++    expect(readdirMock).not.toHaveBeenCalled();
+     expect(audit.git).not.toHaveBeenCalledWith(expect.objectContaining({ type: "worktree:removal-preserved" }));
+   });
+ 
+-  it("preserves non-regenerable ignored content without landing proof and audits it", async () => {
+-    execFileMock.mockResolvedValueOnce({ stdout: "!! .env\n", stderr: "" });
++  it("releases the wedged shape - a virtualenv beside an unlisted egg-info directory, no proof carried", async () => {
++    execFileMock.mockResolvedValueOnce({ stdout: "!! .venv/\n!! stashai.egg-info/\n", stderr: "" });
++    execMock.mockResolvedValueOnce({ stdout: "", stderr: "" });
+     const audit = { git: vi.fn().mockResolvedValue(undefined) } as any;
+ 
+     await expect(removeWorktree({
+       rootDir: "/repo",
+-      worktreePath: "/repo/.worktrees/fn-9233",
++      worktreePath: "/repo/.worktrees/stas-357",
+       settings: {},
+       audit,
+-      taskId: "FN-9233",
+-      reason: RemovalReason.PoolPrune,
+-    })).rejects.toThrow(/preserving/);
++      taskId: "STAS-357",
++      // The reason the auto-recovery sweep passes: it carries no landing proof and never can.
++      reason: RemovalReason.SelfHealingBranchConflict,
++    })).resolves.toMatchObject({ removed: true });
+ 
+-    expect(audit.git).toHaveBeenCalledWith({
+-      type: "worktree:removal-preserved",
+-      target: "/repo/.worktrees/fn-9233",
+-      metadata: {
+-        taskId: "FN-9233",
+-        reason: RemovalReason.PoolPrune,
+-        source: undefined,
+-        classification: "ignored-only",
+-        hasPostLandingProof: false,
+-      },
+-    });
++    expect(audit.git).toHaveBeenCalledWith(expect.objectContaining({
++      type: "worktree:removal-discarded-ignored-content",
++      metadata: expect.objectContaining({ discardedIgnoredPaths: [".venv/", "stashai.egg-info/"] }),
++    }));
+   });
+ 
+   it("records deliverable and unverifiable defensive refusals", async () => {
+@@ -1284,7 +1289,7 @@ describe("removeWorktree", () => {
+     });
+   });
+ 
+-  it("routes regenerable defensive removal through worktrunk without force", async () => {
++  it("routes ignored-content defensive removal through worktrunk without force", async () => {
+     execFileMock.mockResolvedValueOnce({ stdout: "!! dist/\n", stderr: "" });
+     execMock.mockResolvedValueOnce({ stdout: "", stderr: "" });
+     const audit = { git: vi.fn().mockResolvedValue(undefined) } as any;
+@@ -1303,7 +1308,7 @@ describe("removeWorktree", () => {
+       expect.objectContaining({ cwd: "/repo" }),
+     );
+     expect(audit.git).toHaveBeenCalledWith(expect.objectContaining({
+-      type: "worktree:removal-discarded-regenerable-content",
++      type: "worktree:removal-discarded-ignored-content",
+     }));
+   });
+ 
+diff --git a/packages/engine/src/__tests__/worktree-doc-accuracy.test.ts b/packages/engine/src/__tests__/worktree-doc-accuracy.test.ts
+index 27dcc6a943..1c8370cc07 100644
+--- a/packages/engine/src/__tests__/worktree-doc-accuracy.test.ts
++++ b/packages/engine/src/__tests__/worktree-doc-accuracy.test.ts
+@@ -225,8 +225,14 @@ describe("worktree audit attribution prose (RUFU-329)", () => {
+ 
+     it("the deletion did not disturb the removal-side event it must not rename", () => {
+       const backend = read(REMOVAL_BACKEND);
+-      expect(countOccurrences(backend, "worktree:removal-preserved")).toBeGreaterThanOrEqual(2);
+-      // Both emitters still derive a real class, which is why the corrected prose is true.
++      /*
++      STAS-397 reconciliation: this floor was 2 because two branches emitted the event - the refusal
++      branch and the ignored-only branch. STAS-397 deleted the ignored-only refusal, so one branch emits
++      it and still derives a real class from the probe. The claim this guard exists to protect is that the
++      EVENT survives with a real classification behind it, not how many branches reach it.
++      */
++      expect(countOccurrences(backend, "worktree:removal-preserved")).toBeGreaterThanOrEqual(1);
++      // The emitter still derives a real class, which is what makes the corrected prose true of it.
+       expect(backend).toContain("unverifiable");
+       expect(backend).toContain("ignored-only");
+     });
+diff --git a/packages/engine/src/util/run-audit.ts b/packages/engine/src/util/run-audit.ts
+index 2c202bc962..ac51abc533 100644
+--- a/packages/engine/src/util/run-audit.ts
++++ b/packages/engine/src/util/run-audit.ts
+@@ -182,12 +182,19 @@ export type GitMutationType =
+   | "worktree:removal-forced-over-active-session"
+   /*
+   FNXC:WorktreeCleanup 2026-09-01-06:09:
+-  FN-9233 records defensive preservation and regenerable-output discard outcomes without exposing
+-  porcelain paths or making audit persistence a worktree-removal lifecycle gate.
++  FN-9233 records defensive preservation outcomes without making audit persistence a
++  worktree-removal lifecycle gate.
++
++  STAS-397:
++  `worktree:post-landing-ignored-content-discarded` and `worktree:removal-discarded-regenerable-content`
++  are retired with the classification classes they named. One discard event replaces them, and it names
++  the ignored paths it threw away: once ignored content stops blocking a removal, the record that lists
++  the discard is the only thing standing between an automatic sweep and a silent delete, so an entry that
++  counts entries only would be the weaker half of the bargain the refusal used to strike. Path naming
++  already ships on the refusal side (`uncommittedPaths`), so this stays inside the existing surface.
+   */
+-  | "worktree:post-landing-ignored-content-discarded"
+-  | "worktree:removal-discarded-regenerable-content"
+   | "worktree:removal-preserved"
++  | "worktree:removal-discarded-ignored-content"
+   | "worktree:active-session-reconciled"
+   | "worktree:stale-lock-detected"
+   | "worktree:stale-lock-recovered"
+diff --git a/packages/engine/src/worktree/worktree-backend.ts b/packages/engine/src/worktree/worktree-backend.ts
+index 97fb3394be..e9fde2c8ef 100644
+--- a/packages/engine/src/worktree/worktree-backend.ts
++++ b/packages/engine/src/worktree/worktree-backend.ts
+@@ -1,6 +1,6 @@
+ import { exec, execFile } from "node:child_process";
+ import { existsSync } from "node:fs";
+-import { access, readFile, readdir, rm, writeFile } from "node:fs/promises";
++import { access, readFile, rm, writeFile } from "node:fs/promises";
+ import { basename, isAbsolute, resolve } from "node:path";
+ import { promisify } from "node:util";
+ import type { Settings, WorktreeContentClassification } from "@fusion/core";
+@@ -1252,59 +1252,32 @@ export class WorktreeContentPreservationError extends Error {
+ }
+ 
+ /*
+-FNXC:WorktreeCleanup 2026-09-01-06:09:
+-FN-9233 permits automatic cleanup of only well-known regenerable dependency and build directories.
+-Ignored paths outside this narrow allowlist can contain operator-owned local content and retain FN-251's
+-proof gate; quoted porcelain paths are deliberately unparseable and therefore fail closed.
++STAS-397: a checkout release decides from OCCUPANCY, and git does not count an ignored path as
++occupying a checkout. Occupancy is a tracked modification, a staged change, or an untracked path —
++including one whose name git prints quoted, which is refused because the release could not name it
++back to an operator, not because its name is unparseable. Ignored content is still read and still
++named in the release's own audit record, so a discard is never silent, but it is never a reason to
++refuse either.
++
++The rule this replaces (FN-9233's basename allowlist plus FN-251's durable-landing-proof gate) asked
++which build tool produced a directory, which is not the question a release has to answer. It listed
++`.venv` but no `*.egg-info` shape, so a checkout created by the documented dependency-install
++procedure of the very repository it runs against refused forever, and the refusal was unappealable:
++the proof that unlocked it was admitted for one removal reason that the sweep hitting it every half
++hour does not carry. Seven board cards held exactly that checkout.
+ */
+-/** Directory basenames whose ignored contents are reproducible project output. */
+-export const REGENERABLE_IGNORED_DIR_NAMES = new Set([
+-  "node_modules", "dist", "build", "out", "target", "bin", "obj", "coverage",
+-  ".next", ".nuxt", ".turbo", ".svelte-kit", ".parcel-cache", ".pytest_cache",
+-  ".mypy_cache", "__pycache__", ".gradle", ".venv", "venv",
+-]);
+-
+-export type WorktreeRemovalContentClassification = "clean" | "regenerable-ignored" | "ignored-only" | "deliverable";
+-
+-/*
+-FNXC:WorktreeCleanup 2026-09-08-06:13:
+-pnpm build writes .fusion/cache/plugin-build-cache.json, which made built task worktrees permanently
+-unreclaimable. Scratch is top-level and child-probed rather than basename-allowlisted because .fusion
+-can hold authoritative operator board state and nested .fusion directories are never project scratch.
+-*/
+-export const FUSION_SCRATCH_REGENERABLE_CHILDREN: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+-  [".fusion", new Set(["cache"])],
+-]);
+-
+-/** Return true only for a known scratch root whose immediate children are all regenerable. */
+-export function isRegenerableScratchDirectory(entryName: string, childNames: readonly string[]): boolean {
+-  const allowedChildren = FUSION_SCRATCH_REGENERABLE_CHILDREN.get(entryName);
+-  return allowedChildren !== undefined && childNames.every((childName) => allowedChildren.has(childName));
+-}
+-
+-function isTopLevelUnquotedDirectoryEntry(entry: string, entryName: string): boolean {
+-  return entry === `!! ${entryName}/`;
+-}
++export type WorktreeRemovalContentClassification = "clean" | "ignored-only" | "deliverable";
+ 
+-function isRegenerableIgnoredPorcelainEntry(entry: string, provenScratchRootEntries?: ReadonlySet<string>): boolean {
+-  const path = entry.slice(3).replace(/\/$/, "");
+-  if (!path || path.startsWith('"')) return false;
+-  if (provenScratchRootEntries?.has(path) && isTopLevelUnquotedDirectoryEntry(entry, path)) return true;
+-  const lastSegment = path.split("/").at(-1);
+-  return lastSegment !== undefined && REGENERABLE_IGNORED_DIR_NAMES.has(lastSegment);
+-}
+-
+-/** Classify porcelain output without allowing ignored entries to mask deliverable content. */
+-export function classifyWorktreeRemovalContent(
+-  porcelain: string,
+-  options?: { provenScratchRootEntries?: ReadonlySet<string> },
+-): WorktreeRemovalContentClassification {
++/**
++ * Classify a porcelain read into the three answers a release can act on. No ignored entry can reach
++ * `deliverable`, and no ignored name can change the verdict: `ignored-only` means only that there is
++ * ignored content to record, never that there is content to preserve.
++ */
++export function classifyWorktreeRemovalContent(porcelain: string): WorktreeRemovalContentClassification {
+   const entries = porcelain.split(/\r?\n/).filter((line) => line.trim().length > 0);
+   if (entries.length === 0) return "clean";
+   if (entries.some((line) => !line.startsWith("!! "))) return "deliverable";
+-  return entries.every((entry) => isRegenerableIgnoredPorcelainEntry(entry, options?.provenScratchRootEntries))
+-    ? "regenerable-ignored"
+-    : "ignored-only";
++  return "ignored-only";
+ }
+ 
+ export interface DefensiveRemovalContentProbe {
+@@ -1331,6 +1304,13 @@ export interface DefensiveRemovalContentProbe {
+   */
+   modifiedCount: number;
+   untrackedCount: number;
++  /*
++  STAS-397: the ignored paths behind an `ignored-only` classification, so the release that discards
++  them can NAME them. `entryCount` already told an operator how much was thrown away; the whole point
++  of recording a discard instead of blocking on it is that the record says what was thrown away.
++  Capped for the same reason `uncommittedPaths` is — the row stays readable on a huge tree.
++  */
++  ignoredPaths: string[];
+ }
+ 
+ /** Cap on paths a refusal may name, so a huge tree cannot make the row unreadable. */
+@@ -1364,7 +1344,7 @@ function porcelainEntryPath(entry: string): string {
+ export async function probeWorktreeRemovalContent(worktreePath: string): Promise<DefensiveRemovalContentProbe> {
+   // Nothing on disk means nothing to preserve — stale registrations prune normally below.
+   if (!existsSync(worktreePath)) {
+-    return { classification: "clean", entryCount: 0, uncommittedPaths: [], status: "path-absent", modifiedCount: 0, untrackedCount: 0 };
++    return { classification: "clean", entryCount: 0, uncommittedPaths: [], status: "path-absent", modifiedCount: 0, untrackedCount: 0, ignoredPaths: [] };
+   }
+   let stdout: string;
+   try {
+@@ -1382,21 +1362,12 @@ export async function probeWorktreeRemovalContent(worktreePath: string): Promise
+       status: "probe-failed",
+       modifiedCount: 0,
+       untrackedCount: 0,
++      ignoredPaths: [],
+       probeError: error instanceof Error ? error.message : String(error),
+     };
+   }
+-  const provenScratchRootEntries = new Set<string>();
+   const entries = stdout.split(/\r?\n/).filter((line) => line.trim().length > 0);
+-  await Promise.all([...FUSION_SCRATCH_REGENERABLE_CHILDREN.keys()].map(async (entryName) => {
+-    if (!entries.includes(`!! ${entryName}/`)) return;
+-    try {
+-      const childNames = await readdir(resolve(worktreePath, entryName));
+-      if (isRegenerableScratchDirectory(entryName, childNames)) provenScratchRootEntries.add(entryName);
+-    } catch {
+-      // An unreadable scratch directory is operator content until proven otherwise.
+-    }
+-  }));
+-  const classification = classifyWorktreeRemovalContent(stdout, { provenScratchRootEntries });
++  const classification = classifyWorktreeRemovalContent(stdout);
+   /*
+   FNXC:WorktreeCleanup 2026-09-29-22:04 (fusion/rufu-274 squash merge):
+   RUFU-278's typed `WorktreeContentPreservationError` refusal for a `deliverable` tree lives in
+@@ -1404,6 +1375,7 @@ export async function probeWorktreeRemovalContent(worktreePath: string): Promise
+   finalization lanes can read the classification of a dirty tree instead of catching a refusal.
+   */
+   const deliverableEntries = entries.filter((line) => !line.startsWith("!! "));
++  const ignoredEntries = entries.filter((line) => line.startsWith("!! "));
+   return {
+     classification,
+     entryCount: entries.length,
+@@ -1417,6 +1389,7 @@ export async function probeWorktreeRemovalContent(worktreePath: string): Promise
+     */
+     modifiedCount: deliverableEntries.filter((line) => !line.startsWith("?? ")).length,
+     untrackedCount: deliverableEntries.filter((line) => line.startsWith("?? ")).length,
++    ignoredPaths: ignoredEntries.slice(0, MAX_REPORTED_UNCOMMITTED_PATHS).map(porcelainEntryPath).filter(Boolean),
+   };
+ }
+ 
+@@ -1463,8 +1436,6 @@ export function worktreeContentClassificationFromProbe(
+   switch (probe.classification) {
+     case "clean":
+       return { state: "clean" };
+-    case "regenerable-ignored":
+-      return { state: "regenerable-ignored", scratchEntryCount: probe.entryCount };
+     case "ignored-only":
+       return { state: "ignored-only", entryCount: probe.entryCount };
+     case "deliverable":
+@@ -1687,7 +1658,7 @@ export async function removeWorktree(input: {
+   reason: RemovalReason;
+   taskId?: string;
+   audit?: RunAuditor;
+-  /** Durable landing proof permits ignored-only content, never force removal. */
++  /** Durable landing proof, carried onto the discard record so a release names the proof behind it. */
+   postLandingProof?: { landedSha?: string; source: string };
+   force?: boolean;
+   timeout?: number;
+@@ -1711,18 +1682,21 @@ export async function removeWorktree(input: {
+   const requiresCleanWorktree = DEFENSIVE_REMOVAL_REASONS.has(input.reason);
+ 
+   /*
+-  FNXC:WorktreeCleanup 2026-09-01-06:09:
+-  FN-9233 lets all defensive sweeps discard only allowlisted regenerable ignored output, while
+-  non-allowlisted ignored content retains FN-251's durable landing-proof gate. Deliverable,
+-  unverifiable, and live-session content remain fail-closed for every caller.
++  STAS-397: the content gate asks one question — does this checkout hold occupancy? A `deliverable`
++  tree and an unreadable tree are refused here and stay preserved; the project root checkout is
++  refused by `assertCleanForDefensiveRemoval` itself. Ignored content is captured on the way through
++  so the successful removal below can record what it discarded. Deliverable, unverifiable, and
++  live-session content remain fail-closed for every caller, exactly as before this change.
+   */
+   let contentClassification: WorktreeRemovalContentClassification | undefined;
+   let contentEntryCount = 0;
++  let discardedIgnoredPaths: string[] = [];
+   if (requiresCleanWorktree) {
+     try {
+       const contentProbe = await assertCleanForDefensiveRemoval(input.rootDir, input.worktreePath);
+       contentClassification = contentProbe.classification;
+       contentEntryCount = contentProbe.entryCount;
++      discardedIgnoredPaths = contentProbe.ignoredPaths;
+     } catch (error) {
+       const classification = error instanceof Error && error.message.includes(": status probe failed (")
+         ? "unverifiable"
+@@ -1740,33 +1714,26 @@ export async function removeWorktree(input: {
+       }).catch(() => undefined);
+       throw error;
+     }
+-    if (contentClassification === "ignored-only" && !input.postLandingProof) {
+-      await input.audit?.git({
+-        type: "worktree:removal-preserved",
+-        target: input.worktreePath,
+-        metadata: {
+-          taskId: input.taskId,
+-          reason: input.reason,
+-          source: undefined,
+-          classification: "ignored-only",
+-          hasPostLandingProof: false,
+-        },
+-      }).catch(() => undefined);
+-      throw new WorktreeContentPreservationError(input.worktreePath);
+-    }
+   }
+ 
+-  const recordIgnoredOnlyDiscard = async (): Promise<void> => {
+-    if (contentClassification !== "ignored-only" || !input.postLandingProof) return;
++  /*
++  STAS-397: one discard record, emitted only after the removal actually happened. A defensive sweep
++  that discards ignored content owes the operator a row naming it; that record is the whole
++  substitute for the refusal, so it carries the paths rather than a count alone.
++  */
++  const recordIgnoredContentDiscard = async (): Promise<void> => {
++    if (contentClassification !== "ignored-only" || discardedIgnoredPaths.length === 0) return;
+     try {
+       await input.audit?.git({
+-        type: "worktree:post-landing-ignored-content-discarded",
++        type: "worktree:removal-discarded-ignored-content",
+         target: input.worktreePath,
+         metadata: {
+           taskId: input.taskId,
+           reason: input.reason,
+-          source: input.postLandingProof.source,
+-          landedSha: input.postLandingProof.landedSha,
++          entryCount: contentEntryCount,
++          discardedIgnoredPaths,
++          landingProofSource: input.postLandingProof?.source,
++          landedSha: input.postLandingProof?.landedSha,
+         },
+       });
+     } catch {
+@@ -1774,19 +1741,6 @@ export async function removeWorktree(input: {
+     }
+   };
+ 
+-  const recordRegenerableDiscard = async (): Promise<void> => {
+-    if (contentClassification !== "regenerable-ignored") return;
+-    try {
+-      await input.audit?.git({
+-        type: "worktree:removal-discarded-regenerable-content",
+-        target: input.worktreePath,
+-        metadata: { taskId: input.taskId, reason: input.reason, entryCount: contentEntryCount },
+-      });
+-    } catch {
+-      // Audit persistence must not change worktree cleanup outcomes.
+-    }
+-  };
+-
+   if (input.expectedOwnerTaskId && input.liveOwnerProbe) {
+     const reconciled = reconcileSelfOwnedActiveSessionForRemoval(
+       activeSessionRegistry,
+@@ -1851,8 +1805,7 @@ export async function removeWorktree(input: {
+ 
+   try {
+     await backend.remove(removeInput);
+-    await recordIgnoredOnlyDiscard();
+-    await recordRegenerableDiscard();
++    await recordIgnoredContentDiscard();
+     if (input.audit) {
+       await input.audit.git({
+         type: backend.kind === "worktrunk" ? "worktree:worktrunk-remove" : "worktree:remove",
+@@ -1883,8 +1836,7 @@ export async function removeWorktree(input: {
+     const native = new NativeWorktreeBackend({ logger, settings: input.settings });
+     try {
+       await native.remove(removeInput);
+-      await recordIgnoredOnlyDiscard();
+-      await recordRegenerableDiscard();
++      await recordIgnoredContentDiscard();
+       await input.audit?.git({ type: "worktree:remove", target: input.worktreePath });
+       return { removed: true, classification: "removed" };
+     } catch (nativeError) {
+-- 
+2.56.0
+
+
+From e0c1328444c8d8d29a041fc4576646e8873ff23d Mon Sep 17 00:00:00 2001
+From: Imrich Schindler <ischindl@progis.sk>
+Date: Sun, 8 Nov 2026 08:00:34 +0100
+Subject: [PATCH 3/5] chore(changeset): record the occupancy-only checkout
+ release for operators
+
+Co-authored-by: Fusion <noreply@runfusion.ai>
+---
+ .../stas-397-worktree-release-occupancy.md       | 16 ++++++++++++++++
+ 1 file changed, 16 insertions(+)
+ create mode 100644 .changeset/stas-397-worktree-release-occupancy.md
+
+diff --git a/.changeset/stas-397-worktree-release-occupancy.md b/.changeset/stas-397-worktree-release-occupancy.md
+new file mode 100644
+index 0000000000..e3b2276837
+--- /dev/null
++++ b/.changeset/stas-397-worktree-release-occupancy.md
+@@ -0,0 +1,16 @@
++---
++"@runfusion/fusion": patch
++---
++
++summary: Worktrees holding only gitignored build output are released again instead of refusing forever.
++category: fix
++dev: An automatic checkout release now decides from occupancy alone — a tracked modification, a staged
++change, or an untracked path (quoted or not) — and records gitignored content it discards rather than
++gating on it. `probeWorktreeRemovalContent()` is the sole authority and additionally reports the ignored
++paths it saw, so the release names its discard. Retired as a result: the `REGENERABLE_IGNORED_DIR_NAMES`
++basename allowlist, the child-probed `FUSION_SCRATCH_REGENERABLE_CHILDREN` exception, the
++`regenerable-ignored` classification, and the durable-landing-proof gate that was the only way to remove
++ignored content (proof is now metadata on the discard record, never a permission). The audit types
++`worktree:post-landing-ignored-content-discarded` and `worktree:removal-discarded-regenerable-content`
++are replaced by `worktree:removal-discarded-ignored-content`, which lists the discarded paths.
++Deliverable, unreadable and project-root content still refuse, so no defensive sweep can destroy work.
+-- 
+2.56.0
+
+
+From 3ab0e5569817b36facad4e339fecb988a7e9aad1 Mon Sep 17 00:00:00 2001
+From: Imrich Schindler <ischindl@progis.sk>
+Date: Sun, 8 Nov 2026 08:13:30 +0100
+Subject: [PATCH 4/5] fix(worktree): make the four conflict doors ask the same
+ occupancy probe as the release
+
+STAS-397 AC5. taskWorktreeCheckoutIsClean read its own `git status --porcelain` - a second
+cleanliness predicate over the tree that the release gate probes with a different vector. That is how
+an already-merged checkout answered clean to the door and "uncommitted or ignored content present" to
+the removal in the same sweep. It is now defined next to the predicate it derives from, and its four
+callers import it from there. All five answers are unchanged: clean and ignored-only are free of
+occupancy, deliverable, unreadable and absent still fail closed.
+
+Two prose sites that still described the retired allowlist and the retired regenerable-ignored class
+were reconciled in the same commit (executor/overlap-acquisition-park.ts, worktree/worktree-acquisition.ts).
+---
+ .../stas-397-worktree-release-occupancy.md    |  4 +++
+ .../auto-recovery-handlers/branch-worktree.ts |  2 +-
+ .../engine/src/execution/branch-conflicts.ts  | 28 ++++++-------------
+ .../src/executor/overlap-acquisition-park.ts  |  8 ++++--
+ .../worktree-branch-conflict-handle.ts        |  2 +-
+ .../src/executor/worktree-create-conflict.ts  |  3 +-
+ packages/engine/src/self-healing.ts           |  4 +--
+ .../src/worktree/worktree-acquisition.ts      |  2 +-
+ .../engine/src/worktree/worktree-backend.ts   | 21 ++++++++++++++
+ 9 files changed, 45 insertions(+), 29 deletions(-)
+
+diff --git a/.changeset/stas-397-worktree-release-occupancy.md b/.changeset/stas-397-worktree-release-occupancy.md
+index e3b2276837..05b6619860 100644
+--- a/.changeset/stas-397-worktree-release-occupancy.md
++++ b/.changeset/stas-397-worktree-release-occupancy.md
+@@ -13,4 +13,8 @@ basename allowlist, the child-probed `FUSION_SCRATCH_REGENERABLE_CHILDREN` excep
+ ignored content (proof is now metadata on the discard record, never a permission). The audit types
+ `worktree:post-landing-ignored-content-discarded` and `worktree:removal-discarded-regenerable-content`
+ are replaced by `worktree:removal-discarded-ignored-content`, which lists the discarded paths.
++The other cleanliness probe, `taskWorktreeCheckoutIsClean()`, no longer reads `git status` on its own —
++it derives from the same probe, so the four conflict doors and the release they lead to cannot answer
++differently about one tree. Its answers are unchanged: a deliverable, unreadable or absent checkout
++still fails closed.
+ Deliverable, unreadable and project-root content still refuse, so no defensive sweep can destroy work.
+diff --git a/packages/engine/src/auto-recovery-handlers/branch-worktree.ts b/packages/engine/src/auto-recovery-handlers/branch-worktree.ts
+index 7c077b689f..bf8e731bcc 100644
+--- a/packages/engine/src/auto-recovery-handlers/branch-worktree.ts
++++ b/packages/engine/src/auto-recovery-handlers/branch-worktree.ts
+@@ -8,8 +8,8 @@ import {
+   inspectBareBranchCollision,
+   inspectBranchConflict,
+   reanchorBranchToBase,
+-  taskWorktreeCheckoutIsClean,
+ } from "../execution/branch-conflicts.js";
++import { taskWorktreeCheckoutIsClean } from "../worktree/worktree-backend.js";
+ import { recoverForeignOnlyContamination } from "../recovery/foreign-only-contamination.js";
+ /*
+ FNXC:BranchConflictRecovery 2026-09-13-02:50:
+diff --git a/packages/engine/src/execution/branch-conflicts.ts b/packages/engine/src/execution/branch-conflicts.ts
+index 32c0be9748..0affd2fcad 100644
+--- a/packages/engine/src/execution/branch-conflicts.ts
++++ b/packages/engine/src/execution/branch-conflicts.ts
+@@ -1527,26 +1527,14 @@ export async function inspectBareBranchCollision(
+   };
+ }
+ 
+-/**
+- * Proof that a checkout holds nothing uncommitted: an empty `git status --porcelain`
+- * (untracked files included, ignored excluded). Any doubt — a failing read, a dirty tree —
+- * returns false, because a checkout release must never destroy work it cannot prove absent.
+- * RUFU-231: required before releasing a checkout whose landedness was only proven against
+- * the remote-tracking identity (`landedVia: "remote-tracking"`).
+- */
+-export async function taskWorktreeCheckoutIsClean(worktreePath: string): Promise<boolean> {
+-  try {
+-    const { stdout } = await execAsync("git status --porcelain", {
+-      cwd: worktreePath,
+-      encoding: "utf-8",
+-      timeout: GIT_TIMEOUT_MS,
+-      maxBuffer: GIT_MAX_BUFFER,
+-    });
+-    return stdout.trim() === "";
+-  } catch {
+-    return false;
+-  }
+-}
++/*
++FNXC:OccupancyOnlyRelease 2026-11-08 (STAS-397):
++`taskWorktreeCheckoutIsClean` used to be defined here. It read its own `git status --porcelain` — a
++second cleanliness predicate over the same tree the removal gate probes — and the two disagreed about
++an already-merged checkout holding only ignored build artifacts, which is the wedge STAS-397 fixes.
++It now derives from `probeWorktreeRemovalContent` and lives beside that predicate in
++`worktree/worktree-backend.ts`; its four callers import it from there.
++*/
+ 
+ export async function inspectBranchConflict(
+   input: InspectBranchConflictInput,
+diff --git a/packages/engine/src/executor/overlap-acquisition-park.ts b/packages/engine/src/executor/overlap-acquisition-park.ts
+index 543a3af976..be45e462bb 100644
+--- a/packages/engine/src/executor/overlap-acquisition-park.ts
++++ b/packages/engine/src/executor/overlap-acquisition-park.ts
+@@ -50,10 +50,12 @@ FNXC:OverlapAcquisitionPark 2026-11-04-01:35 (RUFU-373):
+ The registration a refused acquisition leaves behind is the re-arm half of the wedge. SANE-436 kept its
+ worktree pointer through the failure, and `reconcile-dependency-blocking-lease` (RUFU-200) rebounds the
+ HOLDER for a dormant lease — so the waiter's own dead checkout could block the very predecessor it waits on.
+-The release reuses the proof-gated defensive path (registry guard + `git status --porcelain` + allowlist +
+-`WorktreeContentPreservationError`), so it can never destroy task-authored content: a checkout that is not
++The release reuses the proof-gated defensive path (registry guard + the one occupancy probe +
++`WorktreeContentPreservationError` for a deliverable tree), so it can never destroy task-authored content: a checkout that is not
+ provably empty keeps both the checkout AND its pointers, which is what makes a release safe to attempt
+-before execution has ever started.
++before execution has ever started. STAS-397 removed the ignored-name allowlist from that path, so the
++question this release asks is now exactly "does the checkout hold work", not "does it hold anything git
++does not recognise as a build artifact".
+ */
+ export async function releaseRefusedAcquisitionRegistration(input: {
+   store: TaskStore;
+diff --git a/packages/engine/src/executor/worktree-branch-conflict-handle.ts b/packages/engine/src/executor/worktree-branch-conflict-handle.ts
+index 7a4fad8b28..c4d7e2b39b 100644
+--- a/packages/engine/src/executor/worktree-branch-conflict-handle.ts
++++ b/packages/engine/src/executor/worktree-branch-conflict-handle.ts
+@@ -13,8 +13,8 @@ import {
+   desiredPathFor,
+   inspectBranchConflict,
+   liveCheckoutPathFor,
+-  taskWorktreeCheckoutIsClean,
+ } from "../execution/branch-conflicts.js";
++import { taskWorktreeCheckoutIsClean } from "../worktree/worktree-backend.js";
+ import { recoverForeignOnlyContamination } from "../recovery/foreign-only-contamination.js";
+ /*
+ FNXC:BranchConflictRecovery 2026-09-13-01:45:
+diff --git a/packages/engine/src/executor/worktree-create-conflict.ts b/packages/engine/src/executor/worktree-create-conflict.ts
+index f5074f967c..7d93520f71 100644
+--- a/packages/engine/src/executor/worktree-create-conflict.ts
++++ b/packages/engine/src/executor/worktree-create-conflict.ts
+@@ -10,7 +10,8 @@ import { rm } from "node:fs/promises";
+ import type { Settings } from "@fusion/core";
+ import { installTaskWorktreeIdentityGuard } from "../worktree/worktree-hooks.js";
+ import { isInsideWorktreesDir } from "../worktree/worktree-pool.js";
+-import { inspectBranchConflict, taskWorktreeCheckoutIsClean } from "../execution/branch-conflicts.js";
++import { inspectBranchConflict } from "../execution/branch-conflicts.js";
++import { taskWorktreeCheckoutIsClean } from "../worktree/worktree-backend.js";
+ import { resolveIntegrationBranch } from "../merge/integration-branch.js";
+ import { executorLog } from "../logger.js";
+ import { extractWorktreeConflictInfo } from "./worktree-conflict-info.js";
+diff --git a/packages/engine/src/self-healing.ts b/packages/engine/src/self-healing.ts
+index e2e9bb1904..5501530b21 100644
+--- a/packages/engine/src/self-healing.ts
++++ b/packages/engine/src/self-healing.ts
+@@ -231,7 +231,7 @@ import {
+   resetHeartbeatErrorRecoveryMetadata,
+   resolveErrorRecoveryLimit,
+ } from "./agent-heartbeat.js";
+-import { classifyForeignOnlyContamination, deriveTaskIdFromFusionBranch, inspectBranchConflict, listUniqueBranchCommits, taskWorktreeCheckoutIsClean } from "./execution/branch-conflicts.js";
++import { classifyForeignOnlyContamination, deriveTaskIdFromFusionBranch, inspectBranchConflict, listUniqueBranchCommits } from "./execution/branch-conflicts.js";
+ import { preserveWorktreeChanges, preserveWorktreeChangesIncludingUntracked } from "./execution/worktree-change-preservation.js";
+ import { createRunAuditor, generateSyntheticRunId, type DatabaseMutationType, type RunAuditor } from "./util/run-audit.js";
+ import {
+@@ -354,7 +354,7 @@ door cannot disagree about which repositories a card owes proof about — the di
+ SANE-509 bug.
+ */
+ import { workspaceObligationRepositories } from "./merge/workspace-merge-readiness.js";
+-import { measureAheadCommitCount } from "./worktree/worktree-backend.js";
++import { measureAheadCommitCount, taskWorktreeCheckoutIsClean } from "./worktree/worktree-backend.js";
+ import { resolveWorkspaceRootMembership } from "./worktree/workspace-root-member.js";
+ import { resolveBranchGroupMergeRouting } from "./merge/group-merge-coordinator.js";
+ import type { OwnedLandedClassification } from "./merger.js";
+diff --git a/packages/engine/src/worktree/worktree-acquisition.ts b/packages/engine/src/worktree/worktree-acquisition.ts
+index c2cca7d49a..d399ba2948 100644
+--- a/packages/engine/src/worktree/worktree-acquisition.ts
++++ b/packages/engine/src/worktree/worktree-acquisition.ts
+@@ -1269,7 +1269,7 @@ export async function acquireTaskWorktree(opts: AcquireTaskWorktreeOptions): Pro
+           /*
+            * FNXC:WorktreeCleanup 2026-10-02-15:56:
+            * RUFU-298: the preserve-vs-remove choice now DECIDES from the FN-9233 classification instead of
+-           * asking a boolean whether removal would refuse. `clean`/`regenerable-ignored` take the ordinary
++           * asking a boolean whether removal would refuse. `clean` takes the ordinary
+            * PoolPrune removal — same call site, same `audit: undefined` suppression of the removal-side
+            * FN-9233 rows as before this change; `ignored-only`/`deliverable` take the preserve-rename aside (RUFU-278's
+            * non-terminal third outcome, now reached by every surface through the shared probe rather than only
+diff --git a/packages/engine/src/worktree/worktree-backend.ts b/packages/engine/src/worktree/worktree-backend.ts
+index e9fde2c8ef..0c964bb990 100644
+--- a/packages/engine/src/worktree/worktree-backend.ts
++++ b/packages/engine/src/worktree/worktree-backend.ts
+@@ -1393,6 +1393,27 @@ export async function probeWorktreeRemovalContent(worktreePath: string): Promise
+   };
+ }
+ 
++/*
++FNXC:OccupancyOnlyRelease 2026-11-08 (STAS-397):
++The one question the conflict doors ask about a live checkout — does it hold work that must be
++preserved before it is released? — now derives from `probeWorktreeRemovalContent` instead of running
++its own `git status --porcelain`. The helper used to live in `execution/branch-conflicts.ts` with a
++bare read of its own, and two command vectors over one tree is exactly how an already-merged checkout
++came to answer "clean" to the door and "uncommitted or ignored content present" to the removal gate in
++the same sweep. Every answer is unchanged: a clean or ignored-only tree is still free of occupancy,
++and a deliverable tree, an unreadable tree and an absent path all still fail closed. What changed is
++that all four answers come from one observation, so they cannot disagree again.
++It stays a named helper rather than four inline `classification === …` tests because three of those
++call sites ask the identical conjunction; RUFU-329's ban is on a boolean that re-decides a *removal*,
++and this function decides nothing — it reads one classification.
++*/
++export async function taskWorktreeCheckoutIsClean(worktreePath: string): Promise<boolean> {
++  const content = await probeWorktreeRemovalContent(worktreePath);
++  // An unreadable or absent tree proves no absence of work, so it is never reported as clean.
++  if (content.status !== "classified") return false;
++  return content.classification !== "deliverable";
++}
++
+ /*
+ FNXC:WorktreeCleanup 2026-10-09-13:10 (RUFU-329 — one seam decides, the other only reports):
+ There is deliberately no "would this removal refuse?" boolean beside this guard. RUFU-278 shipped one for the
+-- 
+2.56.0
+
+
+From ef8ef296d28a0de11fd05cd72f368d7e662f144d Mon Sep 17 00:00:00 2001
+From: Imrich Schindler <ischindl@progis.sk>
+Date: Sun, 8 Nov 2026 10:07:29 +0100
+Subject: [PATCH 5/5] fix(worktree): retire the landing-proof sentence the
+ deleted gate left in the sweep's prose
+
+STAS-397: the gate that refused an already-merged checkout over a virtualenv is gone, so the sentence in the sweep that runs on that reason has to say what replaced it. Comment-only; the behaviour is the one the guard test pins.
+
+Co-authored-by: Fusion <noreply@runfusion.ai>
+---
+ packages/engine/src/self-healing.ts | 8 ++++++--
+ 1 file changed, 6 insertions(+), 2 deletions(-)
+
+diff --git a/packages/engine/src/self-healing.ts b/packages/engine/src/self-healing.ts
+index 5501530b21..77ffad6e9d 100644
+--- a/packages/engine/src/self-healing.ts
++++ b/packages/engine/src/self-healing.ts
+@@ -7849,8 +7849,12 @@ export class SelfHealingManager extends SelfHealingGitEvidence {
+             /*
+             FNXC:WorktreeCleanup 2026-08-29-01:19:
+             This post-move fan-out is the convergence backstop for worktrees leaked before FN-251,
+-            not the ordering gate. Only durable landing proof permits ignored-only content removal;
+-            preserved outcomes retain the pointer and are retried on later terminal transitions.
++            not the ordering gate. STAS-397 retired the sentence that used to sit here saying only
++            durable landing proof permits ignored-only content removal: that gate refused an
++            already-merged checkout over a virtualenv and could never be satisfied by the sweep that
++            runs it, so ignored content now releases and the discard names what it threw away, while
++            the proof still only says which landing produced it. Preserved outcomes still retain the
++            pointer and are retried on later terminal transitions.
+ 
+ /*
+             FNXC:WorktreeCleanup 2026-08-29-01:50:
+-- 
+2.56.0
+

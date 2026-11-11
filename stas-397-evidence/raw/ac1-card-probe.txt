@@ -1,0 +1,110 @@
+integration_ref=refs/heads/main trunk_sha=dd8db36bb2c66f3e72b0af864706f05f996dcc57 rc=0
+
+=== STAS-357 lane=stas-357 exists=True ===
+dotgit_kind=FILE
+branch=fusion/stas-357 rc=0 
+tip=0dfd17363 rc=0 
+porcelain_untracked_all_lines=0 rc=0
+porcelain_untracked_normal_lines=0 rc=0
+porcelain_ignored_matching_lines=2 ignored_lines=2 rc=0
+  I> !! .venv/
+  I> !! stashai.egg-info/
+left_right_main_dot_HEAD=14	0 rc=0
+is_ancestor_HEAD_of_main_rc=0 (0 means HEAD is an ancestor of trunk)
+ahead_of_main=0 rc=0
+column=todo status=awaiting-approval warn_rows=135 latest=2026-11-08T06:19:33.205Z
+awaitingApprovalReason=plan-review-replan-cap
+
+=== STAS-363 lane=stas-363 exists=True ===
+dotgit_kind=FILE
+branch=fusion/stas-363 rc=0 
+tip=b0126a2e1 rc=0 
+porcelain_untracked_all_lines=0 rc=0
+porcelain_untracked_normal_lines=0 rc=0
+porcelain_ignored_matching_lines=2 ignored_lines=2 rc=0
+  I> !! .venv/
+  I> !! stashai.egg-info/
+left_right_main_dot_HEAD=18	0 rc=0
+is_ancestor_HEAD_of_main_rc=0 (0 means HEAD is an ancestor of trunk)
+ahead_of_main=0 rc=0
+column=todo status=queued warn_rows=837 latest=2026-11-08T06:19:37.759Z
+awaitingApprovalReason=None
+
+=== STAS-374 lane=stas-374 exists=True ===
+dotgit_kind=FILE
+branch=fusion/stas-374 rc=0 
+tip=dd8db36bb rc=0 
+porcelain_untracked_all_lines=0 rc=0
+porcelain_untracked_normal_lines=0 rc=0
+porcelain_ignored_matching_lines=3 ignored_lines=3 rc=0
+  I> !! .venv/
+  I> !! backend/__pycache__/
+  I> !! stashai.egg-info/
+left_right_main_dot_HEAD=0	0 rc=0
+is_ancestor_HEAD_of_main_rc=0 (0 means HEAD is an ancestor of trunk)
+ahead_of_main=0 rc=0
+column=todo status=awaiting-approval warn_rows=34 latest=2026-11-08T06:19:44.578Z
+awaitingApprovalReason=plan-review-replan-cap
+
+=== STAS-376 lane=stas-376 exists=True ===
+dotgit_kind=FILE
+branch=fusion/stas-376 rc=0 
+tip=0dfd17363 rc=0 
+porcelain_untracked_all_lines=0 rc=0
+porcelain_untracked_normal_lines=0 rc=0
+porcelain_ignored_matching_lines=2 ignored_lines=2 rc=0
+  I> !! .venv/
+  I> !! stashai.egg-info/
+left_right_main_dot_HEAD=14	0 rc=0
+is_ancestor_HEAD_of_main_rc=0 (0 means HEAD is an ancestor of trunk)
+ahead_of_main=0 rc=0
+column=todo status=awaiting-approval warn_rows=137 latest=2026-11-08T06:19:49.946Z
+awaitingApprovalReason=plan-review-replan-cap
+
+=== STAS-384 lane=stas-384 exists=True ===
+dotgit_kind=FILE
+branch=fusion/stas-384 rc=0 
+tip=cff5fbc7a rc=0 
+porcelain_untracked_all_lines=0 rc=0
+porcelain_untracked_normal_lines=0 rc=0
+porcelain_ignored_matching_lines=2 ignored_lines=2 rc=0
+  I> !! .venv/
+  I> !! stashai.egg-info/
+left_right_main_dot_HEAD=12	0 rc=0
+is_ancestor_HEAD_of_main_rc=0 (0 means HEAD is an ancestor of trunk)
+ahead_of_main=0 rc=0
+column=todo status=awaiting-approval warn_rows=82 latest=2026-11-08T06:19:56.231Z
+awaitingApprovalReason=plan-review-replan-cap
+
+=== STAS-385 lane=stas-385 exists=True ===
+dotgit_kind=FILE
+branch=fusion/stas-385 rc=0 
+tip=cff5fbc7a rc=0 
+porcelain_untracked_all_lines=0 rc=0
+porcelain_untracked_normal_lines=0 rc=0
+porcelain_ignored_matching_lines=2 ignored_lines=2 rc=0
+  I> !! .venv/
+  I> !! stashai.egg-info/
+left_right_main_dot_HEAD=12	0 rc=0
+is_ancestor_HEAD_of_main_rc=0 (0 means HEAD is an ancestor of trunk)
+ahead_of_main=0 rc=0
+column=todo status=awaiting-approval warn_rows=79 latest=2026-11-08T06:20:00.571Z
+awaitingApprovalReason=plan-review-replan-cap
+
+=== STAS-393 lane=stas-393 exists=True ===
+dotgit_kind=FILE
+branch=fusion/stas-393 rc=0 
+tip=869d86b24 rc=0 
+porcelain_untracked_all_lines=0 rc=0
+porcelain_untracked_normal_lines=0 rc=0
+porcelain_ignored_matching_lines=2 ignored_lines=2 rc=0
+  I> !! .venv/
+  I> !! stashai.egg-info/
+left_right_main_dot_HEAD=3	0 rc=0
+is_ancestor_HEAD_of_main_rc=0 (0 means HEAD is an ancestor of trunk)
+ahead_of_main=0 rc=0
+column=todo status=awaiting-approval warn_rows=48 latest=2026-11-08T06:20:05.503Z
+awaitingApprovalReason=plan-review-replan-cap
+
+=== STAS-394 lane=stas-394 exists=False ===
+lane_absent

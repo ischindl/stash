@@ -1,0 +1,31 @@
+Scope: all 38 workspace projects
+Lockfile is up to date, resolution step is skipped
+Progress: resolved 1, reused 0, downloaded 0, added 0
+Packages: +1482
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+Progress: resolved 1482, reused 1022, downloaded 0, added 0
+Progress: resolved 1482, reused 1460, downloaded 0, added 545
+Progress: resolved 1482, reused 1460, downloaded 0, added 1028
+Progress: resolved 1482, reused 1460, downloaded 0, added 1482, done
+
+devDependencies:
++ @changesets/cli 2.30.0
++ @eslint/js 9.39.4
++ esbuild 0.25.12
++ eslint 9.39.4
++ fast-glob 3.3.3
++ i18next-cli 1.59.1
++ react-devtools-core 7.0.1
++ tsx 4.21.0
++ typescript 5.9.3
++ typescript-eslint 8.66.0
++ yaml 2.9.0
+
+╭ Warning ─────────────────────────────────────────────────────────────────────╮
+│                                                                              │
+│   Ignored build scripts: @swc/core@1.15.40, agent-browser@0.26.0.            │
+│   Run "pnpm approve-builds" to pick which dependencies should be allowed     │
+│   to run scripts.                                                            │
+│                                                                              │
+╰──────────────────────────────────────────────────────────────────────────────╯
+Done in 7.3s using pnpm v10.33.0

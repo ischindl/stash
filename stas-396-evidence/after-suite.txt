@@ -1,0 +1,89 @@
+STAS-396 STEP 4 / AC4 - THE SAME FOUR INSTRUMENTS AT THE JOINED TIP, GATED ON A NAME SET
+measured at the candidate tip cfe6daa16d9833c11031ae01dd97d5fef5b04928 [ENGINE repo], which is
+the object saved under refs/stas-396-candidate in Step 3. Same checkout, same commands, same
+host, same host database state as AC2. All SHAs are ENGINE repo objects.
+
+==========================================================================================
+0. ARRIVAL, by detaching; the engine's shared stash list was never touched
+==========================================================================================
+git checkout --detach refs/stas-396-candidate
+  rc 0, "HEAD is now at cfe6daa16d Merge branch 'refs/heads/main' into HEAD"
+  HEAD = cfe6daa16d9833c11031ae01dd97d5fef5b04928   symbolic HEAD = HEAD (detached)
+  git status --porcelain = 0 lines (clean, as AC4 requires)
+  delivery ref at arrival = 1677ee018a5d3aee0e74c0669676a1db40c690c5 (still unmoved)
+Reaching a tree by detaching and never by git stash is required here: the engine repository
+has ONE stash list shared by all its worktrees on this host.
+
+==========================================================================================
+1. DEPENDENCY INSTALL - re-run or not, decided by measurement and stated
+==========================================================================================
+git diff --name-only <AC2 tree> <candidate> -- pnpm-lock.yaml package.json pnpm-workspace.yaml
+  -> 0 entries. No manifest changed between the two trees, and
+  node_modules/.modules.yaml is still present.
+DECISION: no re-install was needed and none was run. The evidence that the existing install
+still drives the tree is section 2: the suite transformed one more test file than at AC2 and
+produced a full reporter block, so files are resolving, not silently missing.
+
+==========================================================================================
+2. I1 - THE AFFECTED PACKAGE'S WHOLE SUITE AT THE CANDIDATE
+==========================================================================================
+command        : pnpm --filter @fusion/core test      (identical string to AC2)
+SHA measured on: cfe6daa16d9833c11031ae01dd97d5fef5b04928
+raw capture    : raw/after-suite-raw.txt (204432 bytes, 2453 lines, full stdout+stderr)
+exit status    : 1     (read outside any pipe)
+
+reporter's counters, verbatim:
+    Test Files  264 failed | 535 passed | 1 skipped (800)
+          Tests  324 failed | 7021 passed | 1642 skipped (8987)
+         Errors  2 errors
+       Duration  229.52s (transform 50.38s, setup 238.97s, import 728.76s, tests 235.10s, environment 116ms)
+
+side by side with AC2, field by field:
+    field                       AC2 (branch tip)        AC4 (joined tip)      movement
+    test files failed           264                     264                   0
+    test files passed           534                     535                   +1
+    test files skipped          1                       1                      0
+    test files total            799                     800                   +1
+    tests failed                324                     324                    0
+    tests passed                7011                    7021                  +10
+    tests skipped               1642                    1642                   0
+    tests total                 8977                    8987                  +10
+    unhandled errors            2                       2                      0
+    individual FAIL blocks      552                     552                    0
+    duration                    336.62 s                229.52 s              (not a claim)
+    exit status                 1                       1                      0
+The +1 file and its +10 tests are the trunk's own arrival, identified by name:
+    A  packages/core/src/task-store/__tests__/project-runtime-enabled-flags.test.ts
+(git diff --name-status between the AC2 tree and the candidate, restricted to core test files,
+prints exactly this one Added line). It is a RUFU-871 test that the merge brought in and it
+passes; nothing of the branch's own was added, removed or altered by the join.
+
+==========================================================================================
+3. I2 / I3 / I4 AT THE CANDIDATE, each with its return code
+==========================================================================================
+I2  pnpm --filter @fusion/core typecheck     exit 0    raw/after-typecheck-core-raw.txt
+I3  pnpm --filter @fusion/engine typecheck   exit 0    raw/after-typecheck-engine-raw.txt
+I4  pnpm test:gate:static                    exit 0    raw/after-static-gate-raw.txt
+All three are zero, so no typecheck or static-gate attribution run at the trunk tip is
+required. I4's own validator self-reports are printed verbatim in raw/after-extra.txt and
+match AC2's line for line, including the three that quote counts (1879 files inspected,
+38 lockfile importers / 442 dependency records in sync, 111 retention declarations
+classified), so the rc=0 is falsifiable and not merely reported.
+
+==========================================================================================
+4. THE FIX ITSELF, at the joined tip
+==========================================================================================
+pnpm --filter @fusion/core exec vitest run
+  src/__tests__/mission-fix-title-composition.test.ts --silent=passed-only --reporter=dot
+  exit 0,  "Test Files 1 passed (1)",  "Tests 14 passed (14)"      raw/after-fixsuite-candidate-raw.txt
+The regression suite the closed card authored still passes whole after the absorption. This is
+a behavioural check beyond the set difference and is reported as an addition, not as a
+substitute for AC4's gate.
+
+==========================================================================================
+5. THE VERDICT THAT GATES STEP 5
+==========================================================================================
+VERDICT: AC4 MET. The introduced-failure count is 0, so the compare-and-swap in Step 5 is
+allowed to run. See set-diff.txt for the hashes, the two-direction difference, and the
+attribution arithmetic. Nothing was moved before this line was written: at the end of this step
+the delivery ref still read 1677ee018a5d3aee0e74c0669676a1db40c690c5.

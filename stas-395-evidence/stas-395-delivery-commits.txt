@@ -1,0 +1,4 @@
+e038ea90e2 test(STAS-395): describe the prior stubbing in prose, keeping the mock census at zero
+bc8c9da52d test(STAS-395): print one observed-verdict line per executed case
+054df66fe7 test(STAS-395): print the scratch store root and database per case
+f9ea6e9054 test(STAS-395): measure the same-agent duplicate-intake lane on a real store

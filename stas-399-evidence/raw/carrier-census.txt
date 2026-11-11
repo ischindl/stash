@@ -1,0 +1,207 @@
+STAS-399 Step 2 - NUMERAL CENSUS AT BASE (AC6) and CARRIER CENSUS
+base = nested engine checkout at c7311e7dc496aeed74ed70cad347a6a610980ef9 (refs/heads/main)
+
+================================================================================
+PART 1 - every tracked DEFINITION of the inline-memory-budget numeral
+================================================================================
+command: git grep -nE "50_000|50000" -- "*.ts" "*.tsx"      (rc=0)
+         -> 141 hits in TypeScript, of which 103 are inside __tests__ files (fixtures and pins).
+command: git grep -nE "50_000|50000" -- "*.ts" "*.tsx" "*.md" "*.mdx" "*.json"
+         -> 206 hits across all tracked text (the extra 65 are prose/markdown/JSON, dominated by
+            CHANGELOG history and unrelated docs; classified as unrelated unless named below).
+command (definitions only): git grep -n "^export const MAX_MEMORY_LENGTH\|^const MAX_MEMORY_LENGTH"
+
+  #  site                                                          kind
+  1  packages/engine/src/agents/agent-instructions.ts:28           export const MAX_MEMORY_LENGTH = 50_000;
+                                                                   THE concept. The one definition to keep.
+  2  packages/engine/src/agent-tools.ts:801                        const MAX_MEMORY_LENGTH = 50_000;
+                                                                   DUPLICATE of the same concept, private,
+                                                                   NOT imported. Feeds the write-side
+                                                                   rejection at :5969/:5971.
+                                                                   => MUST BE DELETED BY IMPORT (AC6).
+  BASE COUNT OF DEFINITIONS OF THIS CONCEPT = 2   (expected at tip: 1)
+
+Sibling duplicates of ADJACENT concepts, same module, same defect shape, each with its own single
+owner to collapse into. The stale copy predicted "both" at its lines 737/738; measured three at 800-802:
+  packages/engine/src/agent-tools.ts:800  const MAX_INSTRUCTIONS_TEXT_LENGTH = 50_000;  (dup of agent-instructions.ts:26)
+  packages/engine/src/agent-tools.ts:802  const MAX_SOUL_LENGTH = 10_000;               (dup of agent-instructions.ts:27)
+All three are used only inside the fn_update_identity / self-improve rejection branches at
+agent-tools.ts:5947, :5958, :5969 - i.e. read lazily, never at module-evaluation time - which is what
+makes replacing them with an import safe across the agent-tools <-> agent-instructions import cycle
+(agent-instructions.ts:20 already imports readAgentMemoryWorkspaceLongTerm from agent-tools.js).
+packages/engine/src/__tests__/agent-self-improve.test.ts:4 already imports all three from
+"../agents/agent-instructions.js", proving that import direction resolves in this package.
+
+================================================================================
+PART 2 - every other hit of the same numeral, classified
+================================================================================
+CLASS "THIS concept" (inline injected-memory budget) - 2 sites, both above.
+
+CLASS "different concept: write-side REJECTION cap on an agent's memory field" (same numeral, same
+unit, different verb - it REJECTS instead of truncating, and it is the ceiling that would neutralise a
+raised clamp; named in AC7's print, deliberately NOT merged):
+  packages/engine/src/agent-tools.ts:5969,5971        memory.length > MAX_MEMORY_LENGTH -> "ERROR: memory exceeds ... character limit"
+  packages/dashboard/src/routes/register-agent-core-routes.ts:295    memory.length > 50000
+  packages/dashboard/src/routes/register-agent-core-routes.ts:854    body.memory.length > 50000
+  packages/dashboard/src/routes/register-agent-runtime-routes.ts:265 memory.length > 50000
+  packages/dashboard/src/routes.ts:1538                              instructionsText.length > 50000 (instructions sibling)
+
+CLASS "different concept: instructions-text ceiling" (a different budget that happens to be 50,000):
+  packages/engine/src/agents/agent-instructions.ts:26   export const MAX_INSTRUCTIONS_TEXT_LENGTH = 50_000;
+  packages/engine/src/agent-tools.ts:800,577,600,6206,6208
+  packages/cli/src/extension.ts:6384,6440,6441
+  packages/dashboard/src/routes.ts:1538
+
+CLASS "different concept: user-facing project setting memoryAutoSummarizeThresholdChars"
+(a third concept, different owner, surfaced in the dashboard settings UI - untouched by this card):
+  packages/core/src/config/settings-schema.ts:1078               memoryAutoSummarizeThresholdChars: 50_000
+  packages/core/src/memory/memory-compaction.ts:221              settings.memoryAutoSummarizeThresholdChars ?? 50_000
+  packages/core/src/types/settings/settings-scope.ts:2539        doc comment "Default: 50000."
+  packages/i18n/src/resources.d.ts:7740                          "Memory will be compacted when it exceeds this character count. Default: 50000."
+  packages/dashboard/app/components/settings/sections/MemorySection.search.ts:58   (surfaced to the user)
+  packages/dashboard/app/hooks/useMemoryData.ts:115                                (surfaced to the user)
+  NOTE: the card's Surface Enumeration put the setting default at stale settings-schema.ts:1055 and the
+  `?? 50_000` at stale memory-compaction.ts:221. Measured: 1078 and 221. The `?? 50_000` line moved 0;
+  the schema default moved +23. Treated as measurement, not as a premise.
+
+CLASS "unrelated, coincidence of the numeral" (0 of them is this concept; all stay untouched):
+  packages/core/src/task-store/async/agent-activity.ts:54        AGENT_ACTIVITY_RETENTION_ROW_CAP (row count)
+  packages/core/src/task-store/bounded-task-cache.ts:43          DEFAULT_SEEN_ID_CAPACITY (id capacity)
+  packages/dashboard/src/lib/codebase-metrics.ts:31              MAX_SOURCE_ENTRIES (entry count)
+  packages/dashboard/src/terminal-service.ts:32                  MAX_SCROLLBACK_SIZE (bytes, "~50KB per terminal")
+  packages/dashboard/src/server.ts:2508                          getRunAuditEventsAsync limit (rows)
+  packages/core/src/merge/no-commits-finalize-guard.ts:138       prose, a commit SHA e5650000e4
+  packages/droid-cli/src/__tests__/thinking-config.test.ts:93,121     thinking budget fixture
+  packages/pi-claude-cli/src/__tests__/thinking-config.test.ts:101,129 thinking budget fixture
+  plugins/fusion-plugin-acp-runtime/src/__tests__/*.test.ts      fixture sizes
+  packages/core/src/__tests__/workflow-role-agent-defaults-merger.test.ts:40-41  PROSE that names both
+  constants and their units correctly; becomes stale only if a numeral moves, and D3 moves none.
+
+================================================================================
+PART 3 - CEILING CHAIN, memory file on disk -> bytes an agent actually sees
+================================================================================
+Ordered. One member binds any given scope; the binding member for the measured case is marked.
+Every numeral carries its own unit and its own verb. No two of these are the same concept and the
+card MERGES NONE OF THEM (Do-NOT list); it only names them apart, which is AC6's job.
+
+ [1] on-disk file            53,640 chars / 55,686 bytes   both units    (input, no limit)
+                             measured file: .fusion/agent-memory/agent-94d01490/MEMORY.md
+ [2] write-time budget       MEMORY_LONG_TERM_BYTE_BUDGET = 32 * 1024 = 32,768   BYTES
+                             verb: REPORT + SCHEDULE CONSOLIDATION, never refuses
+                             memory-budget.ts:28; readers memory-budget.ts:174, long-term-consolidation.ts:322
+                             -> binds the CONSOLIDATION question, not the prompt question
+ [3] write-side REJECT caps  50,000  CHARS  verb: REJECT the whole write
+                             agent-tools.ts:5969 (via the private duplicate) + the three dashboard routes
+                             -> binds what an agent can PUT IN with fn_update_identity
+ [4] PROMPT CLAMP            MAX_MEMORY_LENGTH = 50,000  CHARS (UTF-16 code units, String.length)
+                             verb: TRUNCATE, newest-keeping, per SOURCE
+                             agent-instructions.ts:28, applied at :474 (inline) and :475 (workspace)
+                             *** THIS IS THE BINDING MEMBER for every engine lane and for the
+                             measured CEO scope. ***  Budget is PER SOURCE, not combined: two calls,
+                             so a full-mode prompt legitimately carries up to 2 x 50,000 chars of
+                             memory plus headers. That is the answer Step 2 owed AC2, and it is the
+                             reviewer's finding ac2-length-invariant-scope.
+ [5] optional per-lane cap   CHAT_MEMORY_CAP_CHARS = 8,000  CHARS  verb: DEMOTE to a bounded heading
+                             index with its own notice. Passed ONLY by dashboard/src/chat.ts:2931
+                             and :3914, each behind a kill switch; every engine lane passes undefined,
+                             so [5] never binds a triage/executor/reviewer/merger/heartbeat wake.
+                             Its demote branch measures the inline slice in BYTES via clampUtf8
+                             (chat.ts's own history: FNXC:ChatContextBudget 2026-09-16-12:40) while
+                             the branch SELECTION at :419 compares CHARS. That asymmetry is pre-existing,
+                             deliberately left alone (RUFU-443 pinned it), and is printed here, not fixed.
+ [6] inclusion mode          agentMemoryInclusionMode = full | index | off  - a SWITCH, no numeral.
+                             "index" and "off" short-circuit before [4] entirely, so [4] binds only
+                             in "full" mode.
+ [7] soul / instructions ceilings  MAX_SOUL_LENGTH = 10,000 CHARS, MAX_INSTRUCTIONS_TEXT_LENGTH =
+                             50,000 CHARS  verb: TRUNCATE via trimAndClamp head slice, different
+                             fields, different concepts, not merged.
+
+For the measured CEO scope the chain resolves: 55,686 bytes passes [2]'s consolidation threshold
+(over it, so maintenance is scheduled), passes [3] (53,640 chars < 50,000? NO - it is over, so the
+write-side cap would REJECT a rewrite of this file through fn_update_identity; see PART 4), is in
+"full" mode so [6] does not short-circuit, has no lane cap so [5] is inert, and is stopped at [4]:
+53,640 chars against 50,000 chars, losing 5,743 chars of the two oldest sections.
+
+================================================================================
+PART 4 - THE TRAP THAT BELONGS IN THE CLOSE SUMMARY EVEN IF THE NUMERAL NEVER MOVES
+================================================================================
+[3] and [4] SHARE the numeral today (agent-tools.ts:801 is the same 50,000 as agent-instructions.ts:28).
+Consequence, stated for the CEO before any ruling: if a ruling raises ONLY [4] to 65,536, an agent
+still cannot get more than 50,000 chars of memory into its prompt through any path that writes the
+field, because [3] rejects the write first. The one-line change that would enact the ruling is NOT
+one line for the whole effect - it is the constant at agent-instructions.ts:28 plus the three
+dashboard guards plus the imported constant's value, i.e. one NUMBER with four enforcement sites.
+This card therefore keeps the numeral and prints the trap; see conflict-statement.txt.
+Note the asymmetry that makes [3] the more dangerous of the two: [4] truncates (loses tail content,
+reports it after this card), [3] rejects the ENTIRE write (loses the new content outright and tells
+the agent, in an error string, only the number).
+
+================================================================================
+PART 5 - CARRIER CENSUS: who consumes what this card edits, and the last commit per file
+================================================================================
+packages/engine/src/agents/agent-instructions.ts   last commit 378d9d4a83 (RUFU-443, 2026-10-29)
+  clampMemoryKeepingNewest  -> used only at :474/:475 (the full-render path)
+  formatMemoryClampNotice   -> used only at :500/:512
+  MAX_MEMORY_LENGTH         -> 4 files: agent-instructions.ts, agent-tools.ts (via its own copy),
+                               __tests__/agent-instructions.test.ts, __tests__/agent-self-improve.test.ts
+  exported entry points consumed by packages/dashboard/src/chat.ts (buildAgentChatPrompt, memoryCapChars)
+  and by the engine lanes through resolveAgentInstructions{,WithRatings}.
+packages/engine/src/agent-tools.ts                 last commit 1e94007b62 (RUFU-340)
+  private MAX_MEMORY_LENGTH / MAX_INSTRUCTIONS_TEXT_LENGTH / MAX_SOUL_LENGTH at :800-802
+  -> consumed only by the identity/self-improve rejection branches at :5947/:5958/:5969
+packages/engine/src/memory/memory-budget.ts        last commit 263e1014f7 (RUFU-279)
+  parseMemoryFile / renderMemoryFile / MemorySection.heading -> the SHARED section parser this card
+  reuses for both the dropped-heading names and the sacrifice-first predicate. NOT edited by this card.
+  Its heading field is "Heading text after `## `, trimmed" - the one definition of "what a section is".
+packages/core/src/__tests__/workflow-role-agent-defaults-merger.test.ts  (RUFU-463)
+  reads memory-budget.ts source by regex and asserts MEMORY_LONG_TERM_BYTE_BUDGET stays a literal
+  arithmetic constant; names MAX_MEMORY_LENGTH = 50_000 in PROSE at :40-41 with the right package and
+  the right unit. No assertion on its value. Stays true while D3 moves no numeral.
+
+PIN CENSUS (tests / static gates asserting memory size, truncation text or prompt budgets):
+  packages/engine/src/__tests__/agent-instructions.test.ts (1,641 lines)
+    :18, :1377 import MAX_MEMORY_LENGTH "only to size fixtures and to bound-check rendered output"
+    :1449 memory.length > MAX_MEMORY_LENGTH (fixture sizing)
+    :1463 expect(Number(budget)).toBe(MAX_MEMORY_LENGTH)          <- notice must keep stating the budget
+    :1475 expect(rendered.length) <= MAX_MEMORY_LENGTH            <- rendered BODY after the notice
+    :1480 expect(Number(keptChars)) <= MAX_MEMORY_LENGTH
+    :1408-1412 WORKSPACE_CLAMP_NOTICE / INLINE_CLAMP_NOTICE / BLOB_CLAMP_NOTICE regexes
+             <- the exact text shapes; extending the notice must keep these prefixes matching
+    :1477-1478 expect(Number(keptChars)).toBe(rendered.length) and omittedChars arithmetic
+    :1484-1494 inline (agent.memory) oversized variant, OLD-INLINE-001 absent
+    :1496-1514 both inputs oversized at once, two notices at once
+    :1516-1534 chat path, cap set but does not bite (60,000) -> full render
+    :1541-1558 bounded-index branch stays oldest-first (DEFERRED CONTRACT, must not move)
+    :1560-1570 under-budget renders verbatim with NO notice (asserts absence twice)
+    :1572-1583 heading-less blob keeps its tail, endsWith("TAIL-MARKER"), BLOB notice
+    :1585-1594 no dedupe while clamping (RUFU-279's lane)
+    :1596-1620 multi-byte: "記".repeat(MAX+10_000) and
+             ** expect(bmpRun.length).toBeGreaterThan(MAX_MEMORY_LENGTH - 50) **
+             <- THE pin this card's notice reserve necessarily breaks and must reconcile in the same
+                commit: once the notice is paid out of the budget, a heading-less body measures
+                MAX - reserve, so a -50 tolerance is arithmetically impossible to satisfy while also
+                satisfying AC2. Reconciled by importing the named reserve, never by weakening it.
+    :1622-1630 deterministic for the same input (prompt-cache stability) -> the new order must stay pure
+    :1632-1641 inclusionMode off / index still honored
+  packages/engine/src/__tests__/agent-self-improve.test.ts:4,136
+    "x".repeat(MAX_MEMORY_LENGTH + 1) must still be REJECTED with "memory exceeds" -> so D3's import
+    must preserve the numeral at the write-side site exactly, and this pin is what proves the import
+    did not silently change [3].
+  packages/engine/src/__tests__/agent-memory-index.test.ts   pins clampUtf8 and the 800-byte index budget
+    (MAX_INDEX_BYTES = 800 at packages/engine/src/agents/agent-memory-index.ts) -> reused, not edited.
+  packages/core/src/__tests__/memory-compaction.test.ts:71   auto-summarize numeral, different concept
+  packages/engine/src/__tests__/project-engine.test.ts:418   auto-summarize numeral, different concept
+  packages/core/src/__tests__/workflow-role-agent-defaults-merger.test.ts:38-58,120  prose + regex pin
+  STATIC GATES that could refuse this shape (from root package.json, read live):
+    pretest runs 19 checks; the ones with teeth here are
+      scripts/check-no-comment-assertions-in-tests.mjs
+      scripts/check-no-test-timeout-appeasement.mjs
+      scripts/check-changeset-format.mjs        (format only: it validates files that EXIST; there is
+                                                 no check-* script that REQUIRES a changeset to exist -
+                                                 the decision this card follows is recorded in
+                                                 carrier-diff.txt with the gate output)
+      scripts/check-changeset-migration-references.mjs
+      scripts/check-nonlatin-tracked-text.mjs   <- tracked text must stay inside the operator allowlist;
+                                                 this is why every evidence file here is ASCII
+    ls scripts/ | grep -i changeset -> check-changeset-format.mjs, check-changeset-migration-references.mjs
+  No live card names agent-instructions.ts or agent-tools.ts as a held file in this run's view.

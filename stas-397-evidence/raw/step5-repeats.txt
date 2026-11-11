@@ -1,0 +1,149 @@
+
+=== whole package suite, BASE 46b94afa0c
+    log: .fusion-tmp/stas-397/before-suite.raw.log
+    purpose: AC6 baseline: the package's own `test` command at the base commit
+    Test Files  183 failed | 1241 passed | 2 skipped (1426)
+    Tests  512 failed | 17378 passed | 278 skipped | 1 todo (18169)
+    distinct FAIL entries: 183
+      src/__tests__/agent-cwd-ratchet.test.ts
+      src/__tests__/agent-mission-tools.test.ts
+      src/__tests__/agent-tools-intake-column.test.ts
+      src/__tests__/agent-usage-telemetry-wiring.test.ts
+      src/__tests__/agent-workflow-tools-exposure.test.ts
+      src/__tests__/archived-review-failure-merge-wedge.test.ts
+      src/__tests__/automerge-toggle-legacy-advisory.test.ts
+      src/__tests__/census-baseline-corruption-guard.test.ts
+      src/__tests__/confirmed-merge-must-finalize.test.ts
+      src/__tests__/cron-runner.test.ts
+      src/__tests__/cross-card-write-target.pg.test.ts
+      src/__tests__/cross-node-claim-mutex.integration.test.ts
+      ... 171 more
+
+=== whole package suite, TIP 3ab0e55698
+    log: .fusion-tmp/stas-397/after-suite.raw.log
+    purpose: AC6 after: the identical command at the delivered tip
+    Test Files  182 failed | 1243 passed | 2 skipped (1427)
+    Tests  509 failed | 17376 passed | 278 skipped | 1 todo (18164)
+    distinct FAIL entries: 182
+      src/__tests__/agent-cwd-ratchet.test.ts
+      src/__tests__/agent-mission-tools.test.ts
+      src/__tests__/agent-tools-intake-column.test.ts
+      src/__tests__/agent-usage-telemetry-wiring.test.ts
+      src/__tests__/agent-workflow-tools-exposure.test.ts
+      src/__tests__/archived-review-failure-merge-wedge.test.ts
+      src/__tests__/automerge-toggle-legacy-advisory.test.ts
+      src/__tests__/census-baseline-corruption-guard.test.ts
+      src/__tests__/confirmed-merge-must-finalize.test.ts
+      src/__tests__/cron-runner.test.ts
+      src/__tests__/cross-card-write-target.pg.test.ts
+      src/__tests__/cross-node-claim-mutex.integration.test.ts
+      ... 170 more
+
+=== pin files + guard, TIP
+    log: .fusion-tmp/stas-397/tip-pins-rerun.log
+    purpose: every pin Step 2 named plus this card's guard, re-run at the delivered tip
+    Test Files  7 passed (7)
+    Tests  286 passed (286)
+    distinct FAIL entries: 0
+
+=== pin files (no guard), BASE
+    log: .fusion-tmp/stas-397/base-pins-rerun.log
+    purpose: the same six pin files at the base: green there too, so this card broke no pin
+    Test Files  6 passed (6)
+    Tests  291 passed (291)
+    distinct FAIL entries: 0
+
+=== pin files, per-file counts, TIP
+    log: .fusion-tmp/stas-397/tip-pins-verbose.log
+    purpose: verbose reporter, to count tests per pin file at the tip
+    Test Files  6 passed (6)
+    Tests  282 passed (282)
+    per-file test counts:
+        75  src/__tests__/merger-ai.test.ts
+        33  src/__tests__/post-landing-worktree-cleanup.test.ts
+        48  src/__tests__/reliability-interactions/worktree-defensive-removal-preservation.real-git.test.ts
+        16  src/__tests__/worktree-acquisition-pinned.test.ts
+        97  src/__tests__/worktree-backend.test.ts
+        13  src/__tests__/worktree-doc-accuracy.test.ts
+      ----  total 282
+    distinct FAIL entries: 0
+
+=== pin files, per-file counts, BASE
+    log: .fusion-tmp/stas-397/base-pins-verbose.log
+    purpose: verbose reporter, to count tests per pin file at the base
+    Test Files  6 passed (6)
+    Tests  291 passed (291)
+    per-file test counts:
+        75  src/__tests__/merger-ai.test.ts
+        33  src/__tests__/post-landing-worktree-cleanup.test.ts
+        48  src/__tests__/reliability-interactions/worktree-defensive-removal-preservation.real-git.test.ts
+        17  src/__tests__/worktree-acquisition-pinned.test.ts
+       105  src/__tests__/worktree-backend.test.ts
+        13  src/__tests__/worktree-doc-accuracy.test.ts
+      ----  total 291
+    distinct FAIL entries: 0
+
+=== guard file alone, TIP
+    log: .fusion-tmp/stas-397/tip-guard-solo.log
+    purpose: AC3's green-after print: passing count and skipped count for the guard file itself
+    Test Files  1 passed (1)
+    Tests  4 passed (4)
+    distinct FAIL entries: 0
+
+=== the 2 files newly failing at the tip, in isolation, TIP
+    log: .fusion-tmp/stas-397/tip-isolated-2files.log
+    purpose: does the delivered code actually fail them, with nothing else on the machine
+    Test Files  2 passed (2)
+    Tests  17 passed (17)
+    distinct FAIL entries: 0
+
+=== the same 2 files, 3 further isolated repetitions, TIP
+    log: .fusion-tmp/stas-397/tip-isolated-repeat.log
+    purpose: same rev, same command, repeated: a deterministic failure cannot alternate outcomes
+    Test Files  2 passed (2)
+    Tests  17 passed (17)
+    Test Files  2 passed (2)
+    Tests  17 passed (17)
+    Test Files  2 passed (2)
+    Tests  17 passed (17)
+    distinct FAIL entries: 0
+
+=== the 7 differing files, union run 1, BASE
+    log: .fusion-tmp/stas-397/base-union7.log
+    purpose: the same 7 files, same command, at the base
+    Test Files  3 failed | 4 passed (7)
+    Tests  2 failed | 68 passed | 3 skipped (73)
+    distinct FAIL entries: 3
+      src/__tests__/in-process-runtime-076-pause-gate.test.ts
+      src/__tests__/self-healing-stranded-todo-renamed-hold.test.ts
+      src/__tests__/workspace-merger-lease.test.ts
+
+=== the 7 differing files, union run 1, TIP
+    log: .fusion-tmp/stas-397/tip-union7.log
+    purpose: the same 7 files, same command, at the tip
+    Test Files  4 failed | 3 passed (7)
+    Tests  3 failed | 67 passed | 3 skipped (73)
+    distinct FAIL entries: 4
+      src/__tests__/in-process-runtime-076-pause-gate.test.ts
+      src/__tests__/self-healing-stranded-todo-renamed-hold.test.ts
+      src/__tests__/workspace-merger-lease.test.ts
+      src/runtimes/__tests__/remote-node-runtime.test.ts
+
+=== the 7 differing files, union run 2, BASE
+    log: .fusion-tmp/stas-397/base-union7-pass2.log
+    purpose: repeat at the base: does the base's own failing set move between identical runs
+    Test Files  2 failed | 5 passed (7)
+    Tests  1 failed | 69 passed | 3 skipped (73)
+    distinct FAIL entries: 2
+      src/__tests__/self-healing-stranded-todo-renamed-hold.test.ts
+      src/__tests__/workspace-merger-lease.test.ts
+
+=== the 7 differing files, union run 2, TIP
+    log: .fusion-tmp/stas-397/tip-union7-pass2.log
+    purpose: repeat at the tip: does the tip's own failing set move between identical runs
+    Test Files  3 failed | 4 passed (7)
+    Tests  2 failed | 68 passed | 3 skipped (73)
+    distinct FAIL entries: 3
+      src/__tests__/in-process-runtime-076-pause-gate.test.ts
+      src/__tests__/self-healing-stranded-todo-renamed-hold.test.ts
+      src/__tests__/workspace-merger-lease.test.ts

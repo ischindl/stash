@@ -1,0 +1,188 @@
+STAS-399 Step 2 - CLAIMS RECHECK (AC1: five inherited claims, each as command / expected / actual / verdict)
+All commands run in the nested engine checkout
+  /home/schindler/git/stash/.fusion/worktrees/stas-399/.engine/stas-399-engine
+detached at refs/heads/main = c7311e7dc496aeed74ed70cad347a6a610980ef9
+("RUFU-517: restore the workspace land/finalize lane test signal", 2026-11-09 23:51:03 +0100)
+Char measurements are python3 len(); byte measurements are len(open(...,'rb').read()). Never conflated.
+
+================================================================================
+A(i)  THE CLAMP: numeral, package, file, line range, function name
+================================================================================
+command:  git grep -n "MAX_MEMORY_LENGTH" -- "*.ts"
+          git ls-files "*agent-instructions*"
+expected (Original Description): packages/core/src/agents/agent-instructions.ts:76-92
+actual:
+  packages/engine/src/agents/agent-instructions.ts:28   export const MAX_MEMORY_LENGTH = 50_000;
+  packages/engine/src/agents/agent-instructions.ts:398  trimAndClamp(memory, MAX_MEMORY_LENGTH, "memory", agentId)
+  packages/engine/src/agents/agent-instructions.ts:399  trimAndClamp(workspaceMemory, MAX_MEMORY_LENGTH, "workspace memory", agentId)
+  packages/engine/src/agents/agent-instructions.ts:474  clampMemoryKeepingNewest(memory.trim(), MAX_MEMORY_LENGTH)
+  packages/engine/src/agents/agent-instructions.ts:475  clampMemoryKeepingNewest(workspaceMemory.trim(), MAX_MEMORY_LENGTH)
+  packages/engine/src/agents/agent-instructions.ts:500/512  formatMemoryClampNotice(...)
+  packages/engine/src/agents/agent-instructions.ts:478/484  log.warn(...)  (counts only)
+  file length: 985 lines. `trimAndClamp` still exists but at lines 28-38 and is NOT the inline
+  memory clamp any more: it is a plain head slice `trimmed.slice(0, maxLength)` that survives only
+  as (a) the emptiness guard and `combinedChars` branch-selection input at 398/399 and (b) the soul
+  clamp at 363. The inline memory clamp is `clampMemoryKeepingNewest`, declared at 113, body 113-190.
+VERDICT: REFUTED as to package, line range and function name; CONFIRMED as to numeral and repo.
+  The clamp is 50_000 and lives in the Fusion engine repo, but in packages/ENGINE, not packages/CORE.
+  This resolves spec contradiction C1 in favour of the stale readable copy. The algorithm is also
+  newer than the Original Description: `trimAndClamp` no longer decides what an agent sees.
+  The section-ordered clamp REQUIRED by this card's premise EXISTS on trunk (added by commit
+  378d9d4a83 "RUFU-443: keep newest memory entries inline and announce omissions", 2026-10-29).
+  => No stale-premise stop is warranted on the "clamp is not section-ordered" branch.
+
+================================================================================
+A(ii) THE NOTICE a real composed prompt carries today, verbatim; does it name a heading?
+================================================================================
+Observed live, in THIS session's own composed prompt header (agent-9fffa4b1, engine lane, full mode):
+
+_Workspace memory: kept the newest 50000 of 906848 chars within the 50000-char inline memory
+budget, so 316 of 317 older sections (856848 chars) are NOT in this prompt._ The newest entries are
+always kept; read the omitted ones with fn_memory_search, then fn_memory_get._
+
+Emitter, read from source (packages/engine/src/agents/agent-instructions.ts:207-217):
+  const keptChars = clamp.totalChars - clamp.omittedChars;
+  const omitted = clamp.totalSections > 0
+    ? `${clamp.omittedSections} of ${clamp.totalSections} older sections (${clamp.omittedChars} chars) are NOT in this prompt`
+    : `${clamp.omittedChars} chars of heading-less text are NOT in this prompt`;
+  return `_${scopeLabel}: kept the newest ${keptChars} of ${clamp.totalChars} chars within the ${maxLength}-char
+          inline memory budget, so ${omitted}._ The newest entries are always kept; read the omitted
+          ones with fn_memory_search, then fn_memory_get._`
+
+command (does any emitted string carry heading text?):
+  grep -n "omittedSections\|heading" packages/engine/src/agents/agent-instructions.ts
+actual: the notice interpolates only keptChars, totalChars, maxLength, omittedSections,
+  totalSections, omittedChars. No heading text. MemoryClampResult (lines 43-54) has no field that
+  could carry a heading: {text, totalChars, totalSections, omittedSections, omittedChars}.
+  The engine log.warn at 477-486 also interpolates counts only
+  ("omitted ${omittedSections}/${totalSections} sections (${omittedChars} chars)").
+independent confirmation that the observed string is generated from THIS file:
+  python3 len(open(agent-9fffa4b1/MEMORY.md).read().strip()) -> 906848  == observed totalChars
+  section count by the engine's own predicate (line.strip().startswith("## ")) -> 317 == observed 317
+  kept == 50000 exactly because the newest section alone exceeds the budget, so the keptFrom<0 branch
+  fired and keepNewestChars returned exactly maxLength. A production instance of that branch.
+VERDICT: CONFIRMED. Count-only; it names NO dropped heading (answer to the sub-question: no).
+  => The "notice already names headings" stale-premise stop is NOT warranted either.
+
+================================================================================
+A(iii) THE CEO SCOPE measurement, and the lane-cap claim
+================================================================================
+command: python3 over /home/schindler/git/stash/.fusion/agent-memory/agent-94d01490/MEMORY.md
+expected: 53,651 chars vs 50,000; 2 sections dropped; 5,823 chars lost
+actual:   raw chars 53,640; BYTES 55,686 (gap 2,046 - see the unit table at the foot of this file)
+          trimmed chars 53,639
+          preamble 7 lines / 317 chars; sections 11; sum of section line lengths 53,306
+          positional rule (preamble + newest fitting suffix) drops sections #1 and #2
+          dropped line-chars 5,743 (rendered delta 5,810 including the separators they take with them)
+VERDICT: CONFIRMED with drift. The claim's 53,651 / 5,823 / 2 sections is a point-in-time value; the
+  corpus has been written since (delta -11 chars). The STRUCTURE the claim asserts holds exactly:
+  the file is over the clamp and the positional rule takes exactly the two OLDEST sections.
+  The claim's per-section numerals 3,833 / 1,628 / 2,608 measure 3,832 / 1,627 / 2,596 today.
+
+command: git grep -n "memoryCapChars" -- "*.ts" | grep -v "__tests__"
+actual:  the ONLY callers that pass a cap are in packages/dashboard/src/chat.ts:
+           :2931  memoryCapChars: roomChatBudgetOn   ? CHAT_MEMORY_CAP_CHARS : undefined
+           :3914  memoryCapChars: directChatBudgetOn ? CHAT_MEMORY_CAP_CHARS : undefined
+         CHAT_MEMORY_CAP_CHARS = 8_000 at packages/dashboard/src/chat.ts:467, each call site behind
+         its own project-option kill switch. Every engine-lane path goes through
+         resolveAgentInstructions / resolveAgentInstructionsWithRatings with memoryCapChars undefined.
+VERDICT: CONFIRMED. Engine lanes (triage/executor/reviewer/merger/heartbeat) carry no cap and get the
+  full-mode render, i.e. they are exactly the lanes the new notice and the new order reach. The chat
+  lane is the only capped lane and it short-circuits into the bounded-index branch BEFORE the
+  newest-kept clamp and its notice, so the chat lane keeps its own existing notice and is untouched.
+
+================================================================================
+A(iv) WHERE 32 KB / 64 KB ARE WRITTEN DOWN; does a 32 KiB byte budget exist and who reads it
+================================================================================
+command: git grep -n "MEMORY_LONG_TERM_BYTE_BUDGET" -- "*.ts"
+actual:  packages/engine/src/memory/memory-budget.ts:28  export const MEMORY_LONG_TERM_BYTE_BUDGET = 32 * 1024;
+         readers: memory-budget.ts:174 (budget report), 
+                  memory/long-term-consolidation.ts:322 (consolidation sweep)
+                  packages/engine/src/memory/__tests__/memory-budget.test.ts (4 assertions)
+                  packages/core/src/__tests__/workflow-role-agent-defaults-merger.test.ts:58
+                    (reads the SOURCE TEXT by regex and multiplies the factors rather than importing
+                     it, because packages/core cannot import packages/engine)
+         Documented in docs/memory-plugin-contract.md constants table (line 45) and invariant 9.
+=> A 32 KiB BYTE budget EXISTS and is the write-time/consolidation bound. Its unit is bytes.
+
+command: git grep -nE "65_536|65536" -- "*.ts" "*.tsx"   (is the 64 KB hard cap implemented?)
+actual:  no code constant. (Hits elsewhere in the tree are unrelated: byte offsets in other modules.)
+command: git grep -ln "32 KB|32KB" -- "*.md"            (is the policy's 32 KB in engine prose?)
+actual:  0 files.
+command: git grep -ln "64 KB|64KB" -- "*.md"
+actual:  5 files, ALL unrelated to memory ceilings (CHANGELOG-archive.md,
+         docs/plans/2026-06-04-001-...step-inversion...md, docs/research/experiment-executor.md,
+         docs/solutions/architecture-patterns/acp-persistent-jsonrpc-agent-runtime-integration.md,
+         packages/cli/CHANGELOG.md).
+VERDICT: The STAS-340 ceiling PAIR is **prose policy only**, printed as the card required. Neither
+  "32 KB" nor "64 KB" is written down as a memory ceiling anywhere in the engine repo, in code or in
+  docs. What EXISTS in code are two DIFFERENT numbers for two DIFFERENT surfaces, and the engine docs
+  already say so (docs/memory-plugin-contract.md invariant 9, quoted in conflict-statement.txt):
+    - 32 * 1024 BYTES, write-time working-set bound (the policy's 32 KB soft target has an owner), and
+    - 50,000 CHARACTERS, injection-time clamp (what actually binds a prompt).
+  The policy's 64 KB hard cap has NO implementation at either surface. Its numeric form 65,536 is
+  greater than the 50,000-char clamp, so a scope obeying the 64 KB ceiling is still truncated -
+  the dead-rule premise of this card, stated precisely: 64 KB is not contradicted by code, it is
+  ABSENT from code, and the surface it purports to govern is governed by a smaller char budget.
+  Measured on the very scope the card names, in its own units, so the dead rule is arithmetic and not
+  rhetoric: the CEO file is 55,686 BYTES, i.e. 9,850 bytes UNDER the stated 64 KB (65,536) hard
+  ceiling, and it is STILL truncated, because the surface that decides what enters the prompt
+  compares 53,640 CHARS against 50,000. A scope can therefore be simultaneously compliant with the
+  policy ceiling and losing durable rules, which is exactly what the operator measured.
+
+================================================================================
+A(v)  PLACEMENT ARITHMETIC, re-derived section by section
+================================================================================
+Corpus: 53,639 trimmed chars, 11 sections, preamble 317 chars / 7 lines, LF, trailing newline yes.
+Clamp 50,000 chars. Must shed >= 3,639 chars of sections; the preamble is always kept.
+
+#   line-chars  heading (engine parser's own heading text, truncated here for this file)
+1        2,596  Current open loops (verify before acting; expire fast)
+2        3,214  Sweep-authority, `.engine/` je prace, a FF je moja paka
+3        3,832  Post-merge CI evidence gate (engine-baked) - predicate, not status
+4        3,552  Fabrication family (331/343/311 + waves) - adversarial wake content
+5        4,523  Policy walls & purge discipline
+6        6,749  Capacity knob & probe hygiene
+7        5,938  Release path & trunk measurement (goal G-MTMY5G2Y-0001-ZDVS)
+8        7,798  Durable operating rules
+9        1,627  MEMORY BUDGET (CEO ruling 2026-11-02, msg-370fa30d; mechanizmus prepisu)
+10       8,076  Dispatch-starvation taxonomy (family cards: STAS-343 + 300/307/331/335)
+11       5,401  Planovacia lane: park, ucet, a pamatove stropy (11-04 -> STAS-382)
+                sum of section line-chars = 53,306
+
+Positional rule as implemented (keep preamble + NEWEST contiguous suffix that fits):
+  drops #1 (2,596) and #2 (3,214) = 5,743 line-chars, keeps 9 sections starting at #3.
+  Section #2 is the named-rule section ("Sweep-authority, .engine/ je prace, a FF je moja paka" -
+  the `.engine/` working rule and the FF-is-my-lever rule the Original Description names).
+  TODAY'S RULE EVICTS A NAMED RULE. Confirmed, not asserted.
+
+Claim "no zero-loss placement exists": CONFIRMED.
+  Cheapest single section is #9 at 1,627 chars < the 3,639 required, so no single drop can fit.
+  Cheapest pair that fits: #9 + #1 = 1,627 + 2,596 = 4,223 >= 3,639. (Claim: 1,628 + 2,608 = 4,236.)
+  The positional rule spends 5,743 - i.e. on this corpus the positional rule is 1,520 chars MORE
+  expensive than the cheapest legal pair, and it is the pair that happens to contain the named rules.
+  => The corpus is above the clamp by construction, so the sacrifice must be deliberate. Claim (v)
+  CONFIRMED with drift.
+
+Declared-order demonstration on the SAME shape (mark #1 and #4 sacrifice-first, see placement-
+arithmetic.txt at Step 5 for the full run): drops #1 + #4 = 6,076 line-chars and KEEPS #2.
+The declared order spends 333 more chars than the positional rule and recovers the named rules.
+
+================================================================================
+ANSWERS TO THE TWO CONTRADICTIONS THIS SPEC CARRIES (spec contradiction C2, chars vs bytes)
+================================================================================
+The unit differs at every site and must be quoted separately. Measured:
+  site                                                       numeral   unit            verb
+  memory file on disk (agent-94d01490)                       53,640    BYTES (54,404)  - (input)
+                                                           
+  MEMORY_LONG_TERM_BYTE_BUDGET                        32 * 1024 BYTES      report + consolidate, never refuse
+  MAX_MEMORY_LENGTH                                      50,000  CHARS (String.length / UTF-16 code units)  TRUNCATE (newest-kept)
+  agent-tools.ts private MAX_MEMORY_LENGTH                 50,000  CHARS  REJECT ("memory exceeds ... character limit")
+  dashboard register-agent-*-routes memory guards          50,000  CHARS  REJECT
+  CHAT_MEMORY_CAP_CHARS                                     8,000  CHARS  -> bounded heading index (its own notice)
+  clampUtf8 (index/inline demote branch)                 caller-passed  BYTES          TRUNCATE + ellipsis suffix (the source appends U+2026 here)
+  keepNewestChars (tail mirror of clampUtf8)             caller-passed  CHARS          TRUNCATE
+Proof that MAX_MEMORY_LENGTH is chars and not bytes, measured rather than asserted:
+  the same file the live notice reported as 906,848 chars measures 922,620 BYTES; the gap is 15,771.
+  python len(open(p).read().strip()) == 906848 == the number printed in the live prompt header, so
+  the clamp compares code units. A byte comparison would have been wrong by 15,771 on that one file.

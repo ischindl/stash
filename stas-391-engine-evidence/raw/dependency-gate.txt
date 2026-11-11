@@ -1,0 +1,133 @@
+# STAS-391 Step 0 — dependency gate (STAS-390) and the AC0 trunk census
+# base pinned for every read in this file: 06b1768b18f38a9b4d0d5b35467204e25bfe4396
+# Regenerate: bash stas-391-engine-evidence/generate.sh   (run from the card worktree root)
+
+## Gate D — board reading of the dependency, taken per-ID
+
+Source: fn_task_show(STAS-390) and its task log, read inside this run. A
+card-level badge is not a content predicate, so the engine content Gate D
+exists to protect is measured below rather than inferred from the column.
+
+  Column: done          Steps: 7/7 done (0 Probe capability ... 6 Close)
+  workflowStepResults[0] verdict: NOT EXPOSED on either readable surface.
+    fn_task_show prints column, steps, prompt and log lines only. The CLI form
+    "fn task show STAS-390 --json" ignores --json and prints the same prose
+    (measured in this run: 2203 bytes of text, no JSON object).
+    Nearest content is the card log, quoted verbatim:
+      2:45:28 PM  Merge confirmed finalization blocked — required post-merge
+                  evidence gate post-merge-verification is not approved.
+      2:45:35 PM  [post-merge] Workflow step failed: Post-merge verification ->
+                  CI repository not configured: the postMergeCiRepo project
+                  setting is unset, so this gate was never told which repository
+                  runs the post-landing Full Suite
+      2:45:44 PM  Workflow graph observed confirmed merge while task was
+                  in-review — finalizing to done (graph-failure)
+      2:45:50 PM  Post-merge evidence was not required for STAS-390: gate
+                  post-merge-verification has no report ...
+      2:46:05 PM  Lifecycle move: in-review -> done (forward) —
+                  auto-merge-finalization transition [source=engine]
+    The lane that failed is the board-side post-merge CI evidence gate, whose
+    stated cause is an unset project setting in this deployment. It is not a
+    verdict on the engine work the dependency carried.
+
+  Gate D's stop-condition, as the card states it: stop while STAS-390 is triage,
+  todo, in-progress or failed. Measured column is done, so the stop does not fire.
+  What the badge cannot make true is the subject of the next section.
+
+## Engine state behind that badge — measured, not inherited
+
+  $ git -C .engine/stas-391-engine rev-list --left-right --count 06b1768b18f38a9b4d0d5b35467204e25bfe4396...refs/heads/fusion/stas-390-tool-channel-authority
+      0	2
+        rc=0
+
+  $ git -C .engine/stas-391-engine rev-list --left-right --count 06b1768b18f38a9b4d0d5b35467204e25bfe4396...refs/heads/fusion/stas-389-tool-channel-authority
+      7	2
+        rc=0
+
+  $ git -C .engine/stas-391-engine rev-list --left-right --count 06b1768b18f38a9b4d0d5b35467204e25bfe4396...refs/heads/fusion/stas-388-tool-result-authority
+      8	1
+        rc=0
+
+  columns are <commits the base has that the line lacks>  <commits the line has
+  that the base lacks>. A non-zero second column means that line is not landed.
+
+  $ git -C .engine/stas-391-engine merge-base --is-ancestor 06b1768b18f38a9b4d0d5b35467204e25bfe4396 refs/heads/fusion/stas-390-tool-channel-authority
+      (no output)
+        rc=0
+
+  rc=0 means the pinned base is an ancestor of that branch, i.e. the branch is
+  ahead of the base and a fast-forward of the base ref would carry it.
+
+## AC0 census — symbol presence at the pinned base, whole repo
+
+  read form: git -C .engine/stas-391-engine grep -c -e <symbol> 06b1768b18f38a9b4d0d5b35467204e25bfe4396 -- packages plugins
+  rc=1 with no output is "symbol absent"; files_with_hits counts files carrying
+  at least one hit.
+
+  symbol=ZERO_BYTES_NOTICE  rc=0  files_with_hits=1
+      06b1768b18f38a9b4d0d5b35467204e25bfe4396:packages/pi-claude-cli/src/tool-result-authority.ts:2
+  symbol=no-content-blocks  rc=1  files_with_hits=0
+  symbol=EMPTY_NOTICES  rc=1  files_with_hits=0
+  symbol=DeliveredText  rc=1  files_with_hits=0
+  symbol=emptinessOf  rc=1  files_with_hits=0
+  symbol=neutraliseStructureTokens  rc=1  files_with_hits=0
+  symbol=ENVELOPE_DELIMITER  rc=1  files_with_hits=0
+  symbol=ROLE_KEY  rc=1  files_with_hits=0
+
+## Message census — every site asserting the guard text, at the pinned base
+
+  $ git -C .engine/stas-391-engine grep -n -e no content to mark 06b1768b18f38a9b4d0d5b35467204e25bfe4396
+      06b1768b18f38a9b4d0d5b35467204e25bfe4396:packages/pi-claude-cli/src/__tests__/tool-result-authority.test.ts:132:      expect(() => promptWithToolResult(content)).toThrow(/no content to mark/);
+      06b1768b18f38a9b4d0d5b35467204e25bfe4396:packages/pi-claude-cli/src/__tests__/tool-result-authority.test.ts:152:    expect(() => buildPrompt(context)).toThrow(/no content to mark/);
+      06b1768b18f38a9b4d0d5b35467204e25bfe4396:packages/pi-claude-cli/src/tool-result-authority.ts:74:      `tool result payload has no content to mark: expected a string or a content-block array, got ${typeof content}`,
+      06b1768b18f38a9b4d0d5b35467204e25bfe4396:packages/pi-claude-cli/src/tool-result-authority.ts:79:      "tool result payload has no content to mark: the content-block array is empty, so no payload was delivered",
+      06b1768b18f38a9b4d0d5b35467204e25bfe4396:packages/pi-claude-cli/src/tool-result-authority.ts:89:          `tool result text block has no content to mark: expected a string, got ${typeof block.text}`,
+        rc=0
+
+  $ git -C .engine/stas-391-engine grep -n -e no payload was delivered 06b1768b18f38a9b4d0d5b35467204e25bfe4396
+      06b1768b18f38a9b4d0d5b35467204e25bfe4396:packages/pi-claude-cli/src/__tests__/tool-result-authority.test.ts:140:    expect(() => promptWithToolResult([])).toThrow(/no payload was delivered/);
+      06b1768b18f38a9b4d0d5b35467204e25bfe4396:packages/pi-claude-cli/src/tool-result-authority.ts:79:      "tool result payload has no content to mark: the content-block array is empty, so no payload was delivered",
+        rc=0
+
+## Files present at the pinned base (the lane boundary)
+
+  $ git -C .engine/stas-391-engine ls-tree --name-only 06b1768b18f38a9b4d0d5b35467204e25bfe4396 -- packages/pi-claude-cli/src/tool-result-authority.ts packages/pi-claude-cli/src/__tests__/tool-result-authority.test.ts packages/pi-claude-cli/src/__tests__/tool-channel-authority.test.ts
+      packages/pi-claude-cli/src/__tests__/tool-result-authority.test.ts
+      packages/pi-claude-cli/src/tool-result-authority.ts
+        rc=0
+
+  a path listed above exists at the base; a path absent from this output does not.
+
+## Single-stated guards at the base (AC5's prior state)
+
+  $ git -C .engine/stas-391-engine grep -l -e zero authority 06b1768b18f38a9b4d0d5b35467204e25bfe4396 -- packages plugins
+      06b1768b18f38a9b4d0d5b35467204e25bfe4396:packages/pi-claude-cli/src/__tests__/tool-result-authority.test.ts
+      06b1768b18f38a9b4d0d5b35467204e25bfe4396:packages/pi-claude-cli/src/tool-result-authority.ts
+        rc=0
+
+  $ git -C .engine/stas-391-engine grep -l -e DIRECTIVE_LABELS 06b1768b18f38a9b4d0d5b35467204e25bfe4396 -- packages plugins
+      06b1768b18f38a9b4d0d5b35467204e25bfe4396:packages/pi-claude-cli/src/__tests__/tool-result-authority.test.ts
+      06b1768b18f38a9b4d0d5b35467204e25bfe4396:packages/pi-claude-cli/src/tool-result-authority.ts
+        rc=0
+
+  each guard names one production module plus the test file that pins it.
+
+## LIVE section — the only part of this file allowed to change on regeneration
+
+  Live trunk tip right now, versus the pinned base above:
+  $ git -C .engine/stas-391-engine rev-parse --short refs/heads/main
+      c20b8e4eaa
+  Branch tips this family names, right now:
+      fusion/stas-382-reseed-cycle-rearm 0db7438466
+      fusion/stas-388-tool-result-authority 6a59cf4d51
+      fusion/stas-389-tool-channel-authority 22f6d6c5b1
+      fusion/stas-390-tool-channel-authority d38b478184
+      fusion/stas-391-empty-tool-result-announcement eb20a6bfc5
+  Engine worktree registrations, right now:
+      95
+
+  Occupancy as measured at Step 0: refs/heads/main is held by the primary engine
+  checkout, not by any card checkout, which is why moving that ref is an operator
+  leg. The full listing behind that count is not reproduced here: its rows are
+  other cards' lanes, and the count itself is machine state that moves between
+  runs — Step 0 measured 97, so a different number above is drift, not a finding.

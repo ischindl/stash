@@ -1,0 +1,9 @@
+files containing the doubled literal 'Fix: Fix:': 8
+   .fusion/tasks/STAS-265/task.json
+   .fusion/tasks/STAS-296/task.json
+   .fusion/tasks/STAS-352/task.json
+   .fusion/tasks/STAS-354/task.json
+   .fusion/tasks/STAS-355/task.json
+   .fusion/tasks/STAS-356/task.json
+   .fusion/tasks/STAS-357/task.json
+   .fusion/tasks/STAS-394/task.json

@@ -1,0 +1,16 @@
+### STAS-399 AC4: evicted set captured from UNMODIFIED production code vs edited, same fixtures, same run
+harness: temporary module copy of agent-instructions.ts at base commit + temporary test file (both deleted after this print, never delivered)
+base module: git show HEAD:packages/engine/src/agents/agent-instructions.ts -> src/agents/stas399base-instructions.ts
+sha: 217833095935ff88da3f5c4996c9eb85f1908dba
+started_utc: 2026-11-10T03:52:11Z
+------------------------------------------------
+[AC4-base-compare] fixture="56 x 1011 (AC2 shape)"  base_dropped=8 tip_dropped=9  setdiff(base\tip)=0  setdiff(tip\base)=1 ["Note 009"]  base_is_ordered_prefix_of_tip=true  base_render_chars=50166 tip_render_chars=49342 delta=-824  tip_notice_chars=467
+[AC4-base-compare] fixture="300 x 200 tiny (elision shape)"  base_dropped=90 tip_dropped=95  setdiff(base\tip)=0  setdiff(tip\base)=5 ["Tiny 091 durable operating note","Tiny 092 durable operating note","Tiny 093 durable operating note","Tiny 094 durable operating note"]  base_is_ordered_prefix_of_tip=true  base_render_chars=50901 tip_render_chars=50419 delta=-482  tip_notice_chars=976
+[AC4-base-compare] fixture="58 x 1011 (AC4-default shape)"  base_dropped=10 tip_dropped=11  setdiff(base\tip)=0  setdiff(tip\base)=1 ["Plain 011"]  base_is_ordered_prefix_of_tip=true  base_render_chars=50216 tip_render_chars=49424 delta=-792  tip_notice_chars=502
+[AC4-base-compare] fixture="rule + 43 ticks + 3 bulk, no marker (AC5 shape)"  base_dropped=11 tip_dropped=12  setdiff(base\tip)=0  setdiff(tip\base)=1 ["Tick 11"]  base_is_ordered_prefix_of_tip=true  base_render_chars=50837 tip_render_chars=50055 delta=-782  tip_notice_chars=510
+[AC4-base-compare] fixture="heading-less blob (no sections)"  base_dropped=0 tip_dropped=0  setdiff(base\tip)=0  setdiff(tip\base)=0  base_is_ordered_prefix_of_tip=true  base_render_chars=50900 tip_render_chars=49876 delta=-1024  tip_notice_chars=261
+[AC4-base-compare] fixture="single giant section"  base_dropped=0 tip_dropped=0  setdiff(base\tip)=0  setdiff(tip\base)=0  base_is_ordered_prefix_of_tip=true  base_render_chars=50903 tip_render_chars=49981 delta=-922  tip_notice_chars=366
+ Test Files  1 passed (1)
+      Tests  1 passed (1)
+exit_status: 0
+finished_utc: 2026-11-10T03:52:30Z

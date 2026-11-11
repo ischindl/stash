@@ -1,0 +1,92 @@
+STAS-396 STEP 5 / AC5 - THE DELIVERY REF MOVED BY COMPARE-AND-SWAP, LAST, ON A PASSING GATE
+raw transcript of every command in this section: raw/ref-move-run.txt. All SHAs are ENGINE repo
+objects; every one of them was re-read from refs/heads/* at the moment of printing.
+
+==========================================================================================
+0. THE GATE WAS CHECKED BEFORE THE REF WAS TOUCHED
+==========================================================================================
+names failing at the candidate but not at the AC2 baseline = 0  (raw/setdiff-new-failures.txt,
+empty file, sha256 of its own emptiness e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855)
+AC4 MET, therefore AC5 was permitted. Had it not been met, the script's guard prints
+"AC4 DID NOT PASS - no ref move", exits 8 without calling update-ref, and the board keeps
+STAS-394 delivered at 1677ee018a untouched. The guard was live, not decorative.
+
+==========================================================================================
+1. THE SWAP PRECONDITION, re-read from the ref itself at the moment of the move
+==========================================================================================
+AC1's printed old value : 1677ee018a5d3aee0e74c0669676a1db40c690c5
+the ref reads at the move: 1677ee018a5d3aee0e74c0669676a1db40c690c5
+equal -> precondition holds. The script also refuses (exit 7, no partial move) if the ref moved
+under this card between AC1 and the swap; it had not moved across the whole four-hour window of
+measurement, which is itself the evidence that no other card, engine session, or human moved it.
+
+==========================================================================================
+2. THE COMPARE-AND-SWAP - one call, the old value carried as its expected value
+==========================================================================================
+    git --git-dir=$HOME/git/Fusion/.git update-ref -m \
+      "STAS-396: absorb refs/heads/main into the STAS-394 delivery branch (join authored no code, zero new failing files)" \
+      refs/heads/stas-394-fix-title-idempotence \
+      refs/stas-396-candidate \
+      1677ee018a5d3aee0e74c0669676a1db40c690c5
+                                                            ^^^^^^^ expected value (AC1's old)
+    rc = 0
+Nothing else was written to this ref by any other means: no branch checkout, no merge into a
+working tree, no push, no --force, no reset. One call, with the comparison value in it, so a
+concurrent mover would have made it fail rather than be silently overwritten.
+
+==========================================================================================
+3. THREE PRINTS OF ONE SHA, which is AC5's proof that the swap landed where the green set was
+==========================================================================================
+  a) git rev-parse refs/heads/stas-394-fix-title-idempotence
+       = cfe6daa16d9833c11031ae01dd97d5fef5b04928
+  b) the candidate tip this card tested (refs/stas-396-candidate)
+       = cfe6daa16d9833c11031ae01dd97d5fef5b04928
+  c) the SHA the GREEN capture names. All four instrument headers in raw/after-run.txt print
+         SHA measured on: cfe6daa16d9833c11031ae01dd97d5fef5b04928
+     and after-suite.txt names it in prose: "measured at the candidate tip
+     cfe6daa16d9833c11031ae01dd97d5fef5b04928 [ENGINE repo]"
+  all three equal: YES  ->  ref == tested candidate == the SHA the green evidence is about.
+  The SHA the RED capture names (before-suite.txt) is 1677ee018a5d3aee0e74c0669676a1db40c690c5,
+  and the SHA the operator command in STAS-396-handoff.txt names is cfe6daa16d9833c11031ae01dd97d5fef5b04928
+  -- printed from refs/heads/stas-394-fix-title-idempotence after the move, not copied from a
+  planning-time guess.
+
+==========================================================================================
+4. THE REF'S OWN REFLOG, verbatim
+==========================================================================================
+cfe6daa16d refs/heads/stas-394-fix-title-idempotence@{0}: STAS-396: absorb refs/heads/main into the STAS-394 delivery branch (join authored no code, zero new failing files)
+1677ee018a refs/heads/stas-394-fix-title-idempotence@{1}: commit (amend): fix(STAS-394): compose fix titles idempotently and record fix ancestry in lineage
+9196cbfd8d refs/heads/stas-394-fix-title-idempotence@{2}: commit: fix(STAS-394): compose fix titles idempotently and record fix ancestry in lineage
+1d4bcc6184 refs/heads/stas-394-fix-title-idempotence@{3}: branch: Created from HEAD
+  @{0} is this card: the message names it and the authorship is the host's own git identity,
+  written by update-ref rather than by a commit, which is why it carries no tree of its own.
+  @{1} and @{2} predate this card and belong to the closed STAS-394; @{3} is the branch creation.
+  This card wrote exactly one entry.
+
+==========================================================================================
+5. WHAT ELSE THE MOVE DID NOT TOUCH
+==========================================================================================
+refs/heads/main                                        = ee995fcc85013a990752307d0f253e9d6fe5ebf4  UNMOVED
+refs/stas-396-candidate (this card's scratch ref)       = cfe6daa16d9833c11031ae01dd97d5fef5b04928  to be deleted in Step 7
+refs/heads/stas-395-measure-same-agent-duplicate-intake = e038ea90e247532e4cdc84af33657fb5337adb7f  UNMOVED
+three-dot refs/heads/main...the delivery branch         = 0    2   (the trunk is fully absorbed)
+git merge-base --is-ancestor refs/heads/main refs/heads/stas-394-... -> rc = 0, so the board's
+  branch now contains the trunk it was cut before.
+
+==========================================================================================
+6. THE WORKTREE LISTING RE-PRINTED AFTER THE MOVE
+==========================================================================================
+  entries = 133 (identical to the post-add count from AC2; unchanged again here)
+  checkouts whose checked-out branch is refs/heads/stas-394-fix-title-idempotence : 0
+  Therefore there is NO checkout holding a now-stale HEAD for this ref: the branch was never
+  checked out anywhere, exactly as AC1 measured, so nobody's working tree is left behind by the
+  move and there is nothing to leave alone. The scan line is present in raw/ref-move.sh and
+  would have printed any such checkout by path had one existed.
+  The primary checkout is named and unmoved:
+      worktree /home/schindler/git/Fusion
+      HEAD ee995fcc85013a990752307d0f253e9d6fe5ebf4
+      branch refs/heads/main
+  This card's own scratch checkout at .engine/stas-396-engine is DETACHED -- symbolic HEAD reads
+  HEAD, not a branch -- at cfe6daa16d9833c11031ae01dd97d5fef5b04928, the same object the ref now
+  points at. It is not a checkout of the moved branch, so the ref move did not change what it
+  has checked out, and it is removed in Step 7.

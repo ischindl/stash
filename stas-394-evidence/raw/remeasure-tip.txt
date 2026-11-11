@@ -1,0 +1,12 @@
+TRUNK_AT_REMEASURE=50cb123e8f1b9b29ef9a872defb3045c61480538
+
+$ git grep -n "Fix: ${" -- packages plugins scripts
+packages/core/src/__tests__/remediation-append-reopens-step-ledger.test.ts:52:    name: `Fix: ${detail}`,
+packages/core/src/async-stores/async-mission-store.ts:2477:        title: title ?? `Fix: ${source.title}`,
+packages/core/src/missions/mission-store.ts:3599:      title: title ?? `Fix: ${sourceFeature.title}`,
+packages/core/src/tasks/remediation-steps.ts:23:  return `Fix: ${detail || "review finding"}`;
+packages/engine/src/__tests__/workspace-code-review-revise-remediation.test.ts:262:      name: `Fix: ${reportedFinding.title}`,
+packages/engine/src/workflows/human-merge-approval-boundary.ts:319:    name: `Fix: ${step.title}`,
+
+$ git grep -l -F "Fix: " | wc -l   (files with the literal, tracked only)
+100

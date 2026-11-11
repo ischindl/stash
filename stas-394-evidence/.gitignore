@@ -1,0 +1,3 @@
+# Scratch measurement scripts. The captures they emit (*.txt) are the deliverable;
+# the generators stay on disk untracked so the lane stays clean.
+raw/*.py

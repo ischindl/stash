@@ -1,0 +1,110 @@
+# STAS-393 - AC2/AC6/AC7 - the stack moved by rebase alone, authoring no code, in the only honest order
+# generated: 2026-11-11T01:46:16Z
+# produced by stas-393-engine-evidence/generate.sh (capture: rebase)
+## ordering proven BEFORE anything moves (AC7) - the announcement must sit on top
+
+  $ git -C /home/schindler/git/stash/.fusion/worktrees/stas-393/.engine/stas-393-engine log --oneline refs/heads/fusion/stas-392-empty-tool-result-announcement | head -4
+      037a480cc5 STAS-391: announce an empty tool-result content array instead of crashing prompt assembly
+      e6b1fe4c7f STAS-389: prove frame and role authority are gone, per surface, red then green
+      a38c8be034 STAS-389: stop a tool result from writing its own frame or a role key
+      4fa1ea0e64 perf(RUFU-756): stop the overseer sweep from loading the log column it never reads
+
+  $ git -C /home/schindler/git/stash/.fusion/worktrees/stas-393/.engine/stas-393-engine merge-base --is-ancestor refs/heads/fusion/stas-390-tool-channel-authority refs/heads/fusion/stas-392-empty-tool-result-announcement
+      (no output)
+        rc=0
+      (rc=0 means both STAS-389 commits are ancestors of the announcement commit;
+       a stack carrying the announcement alone must never be delivered)
+
+## conflict predicate BEFORE the rebase
+      b258d410704d5ec0dbd6e28caf2ff55880ba98da
+        rc=0
+      CONFLICT line count = 0
+      stderr empty (0 bytes)
+
+## the two commands this card ran (no --force; a NEW name, never a predecessor ref)
+      git -C .engine/stas-393-engine switch -c fusion/stas-393-tool-result-stack refs/heads/fusion/stas-392-empty-tool-result-announcement
+      git -C .engine/stas-393-engine rebase refs/heads/main
+      PRE  037a480cc562ef994aac0b19215613cb93e2b500   (the tip carried by refs/heads/fusion/stas-392-empty-tool-result-announcement)
+      POST f91fd759ce33acc957ed1eb10df9143934ab2985   (this card's delivered tip)
+      onto c025edb9edf4a5eba16b03279ac9c5ba7805a4ef
+      merge-base c025edb9edf4a5eba16b03279ac9c5ba7805a4ef
+
+## git own record of the restack (branch reflog), plus the transcript this run kept
+
+  $ git -C /home/schindler/git/stash/.fusion/worktrees/stas-393/.engine/stas-393-engine reflog show fusion/stas-393-tool-result-stack
+      f91fd759ce fusion/stas-393-tool-result-stack@{0}: rebase (finish): refs/heads/fusion/stas-393-tool-result-stack onto c025edb9edf4a5eba16b03279ac9c5ba7805a4ef
+      037a480cc5 fusion/stas-393-tool-result-stack@{1}: branch: Created from refs/heads/fusion/stas-392-empty-tool-result-announcement
+        rc=0
+      --- transcript this run recorded ---
+      # the restack this card ran, as the machine recorded it
+      # recorded: 2026-11-11T01:33:20Z
+      
+      The two commands, in this order:
+        1. git -C .engine/stas-393-engine switch -c fusion/stas-393-tool-result-stack refs/heads/fusion/stas-392-empty-tool-result-announcement     rc=0
+        2. git -C .engine/stas-393-engine rebase refs/heads/main                                                                                    rc=0
+      Neither printed a CONFLICT line, so nothing was resolved by hand; no --force was
+      used, no predecessor ref was moved, and git stash was used nowhere.
+      
+      ## the branch reflog - git own record of where this line came from and what moved it
+      $ git -C .engine/stas-393-engine reflog show fusion/stas-393-tool-result-stack
+          f91fd759ce fusion/stas-393-tool-result-stack@{0}: rebase (finish): refs/heads/fusion/stas-393-tool-result-stack onto c025edb9edf4a5eba16b03279ac9c5ba7805a4ef
+          037a480cc5 fusion/stas-393-tool-result-stack@{1}: branch: Created from refs/heads/fusion/stas-392-empty-tool-result-announcement
+      
+      ## the carried tip versus the delivered tip
+        carried tip : 037a480cc562ef994aac0b19215613cb93e2b500
+        delivered tip: f91fd759ce33acc957ed1eb10df9143934ab2985
+        onto          : c025edb9edf4a5eba16b03279ac9c5ba7805a4ef
+        merge-base    : c025edb9edf4a5eba16b03279ac9c5ba7805a4ef
+      
+      ## the engine checkout is clean after the rebase
+      $ git -C .engine/stas-393-engine status --porcelain
+          (no output)
+
+## no-authored-code proof, part 1 - scoped diff over the paths the stack owns
+
+  $ git -C /home/schindler/git/stash/.fusion/worktrees/stas-393/.engine/stas-393-engine diff --stat 037a480cc562ef994aac0b19215613cb93e2b500 f91fd759ce33acc957ed1eb10df9143934ab2985 -- packages/pi-claude-cli/src/tool-result-authority.ts packages/pi-claude-cli/src/__tests__/
+      (no output)
+        rc=0
+      (empty = this card authored nothing inside the engine paths it carries)
+
+## no-authored-code proof, part 2 - range-diff; every carried commit must map to '='
+
+  $ git -C /home/schindler/git/stash/.fusion/worktrees/stas-393/.engine/stas-393-engine range-diff c025edb9edf4a5eba16b03279ac9c5ba7805a4ef 037a480cc562ef994aac0b19215613cb93e2b500 f91fd759ce33acc957ed1eb10df9143934ab2985
+      1:  a38c8be034 = 1:  7d96302d68 STAS-389: stop a tool result from writing its own frame or a role key
+      2:  e6b1fe4c7f = 2:  e94c723089 STAS-389: prove frame and role authority are gone, per surface, red then green
+      3:  037a480cc5 = 3:  f91fd759ce STAS-391: announce an empty tool-result content array instead of crashing prompt assembly
+        rc=0
+      (a '>' record with an empty left side is a trunk commit that moved under the stack,
+       not a mismatch; a '!' against a commit this card did not author would stop the card)
+
+## conflict predicate AFTER the rebase (an identical result tree restates the same fact)
+      b258d410704d5ec0dbd6e28caf2ff55880ba98da
+        rc=0
+      CONFLICT line count = 0
+      stderr empty (0 bytes)
+      result tree before = b258d410704d5ec0dbd6e28caf2ff55880ba98da
+      result tree after  = b258d410704d5ec0dbd6e28caf2ff55880ba98da
+
+## collision surface, printed ONLY in the scoped form (what the branch ADDS)
+
+  $ git -C /home/schindler/git/stash/.fusion/worktrees/stas-393/.engine/stas-393-engine diff --name-only c025edb9edf4a5eba16b03279ac9c5ba7805a4ef..refs/heads/fusion/stas-393-tool-result-stack
+      packages/pi-claude-cli/src/__tests__/tool-channel-authority.test.ts
+      packages/pi-claude-cli/src/__tests__/tool-result-authority.test.ts
+      packages/pi-claude-cli/src/tool-result-authority.ts
+      (never judged from refs/heads/main..branch: before a rebase that also pushes the
+       reverse delta of everything trunk added since the merge-base)
+
+## stack shape (AC7) - exactly three commits, neutraliser below announcement
+
+  $ git -C /home/schindler/git/stash/.fusion/worktrees/stas-393/.engine/stas-393-engine log --oneline refs/heads/main..refs/heads/fusion/stas-393-tool-result-stack
+      f91fd759ce STAS-391: announce an empty tool-result content array instead of crashing prompt assembly
+      e94c723089 STAS-389: prove frame and role authority are gone, per surface, red then green
+      7d96302d68 STAS-389: stop a tool result from writing its own frame or a role key
+
+## predecessor refs unmoved (AC6)
+      refs/heads/fusion/stas-390-tool-channel-authority                e6b1fe4c7f
+      refs/heads/fusion/stas-392-empty-tool-result-announcement        037a480cc5
+      refs/heads/fusion/stas-388-tool-result-authority                 6a59cf4d51
+      refs/heads/fusion/stas-389-tool-channel-authority                22f6d6c5b1
+      refs/heads/fusion/stas-391-empty-tool-result-announcement        eb20a6bfc5
+      (the three 38x/39x tips equal the values printed in raw/ac0-roots.txt for the same refs)

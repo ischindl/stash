@@ -1,0 +1,106 @@
+STAS-394 AC6 — the delivery window and the announcement, printed in one tick.
+
+=== WHAT THE PREDICATES SAY ===
+
+AC6 names three proofs: the delivered ref was newly named and carries only this card's
+commits; the trunk was measured twice in-run and was equal at the start and end of the run; the
+window is clean; and the CEO was announced in the same tick as the prints. Two of those three came
+out as AC6 predicted. The fast-forward one did not, and it is reported rather than fixed.
+
+The trunk moved inside this run. AC6 expected "the trunk measured twice in-run, equal at start and
+end". At Step 1 the trunk was 1d4bcc61847562837b44854bccea95b783d8b943; at Step 4 it was
+50cb123e8f1b9b29ef9a872defb3045c61480538; at Step 6 it is 42f9762e1c8c8bacd1f7e7a976b7fbb536feaa85.
+The boundary therefore has to say so instead of claiming a static window:
+  - my base is the Step-1 trunk SHA, which is also the merge-base and the base the before-suite and
+    the RED capture were measured on;
+  - the trunk advanced 4 commits over that base during this run, all of them RUFU-871 runtime-switch
+    work, visible verbatim in `git reflog show refs/heads/main`;
+  - the trunk was stable inside the announcement tick itself: two `git rev-parse refs/heads/main`
+    readings bracketing the predicate set, both 42f9762e1c8c8bacd1f7e7a976b7fbb536feaa85.
+
+No measurement in this capture is a SHA inherited from the spec or from a sibling card.
+
+=== PRINTS (raw/window-prints.txt) ===
+
+    STAS-394 STEP 6 WINDOW, measured 2026-11-07T19:10:41Z
+
+    delivered ref, discovered by for-each-ref rather than by the spec's wording:
+      refs/heads/ 257 refs scanned, 1 carrying this card's id:
+      refs/heads/stas-394-fix-title-idempotence 1677ee018a5d3aee0e74c0669676a1db40c690c5
+        fix(STAS-394): compose fix titles idempotently and record fix ancestry in lineage
+
+    git rev-parse refs/heads/main                                 -> 42f9762e1c8c8bacd1f7e7a976b7fbb536feaa85  rc=0
+    git rev-parse refs/heads/stas-394-fix-title-idempotence       -> 1677ee018a5d3aee0e74c0669676a1db40c690c5  rc=0
+    git merge-base refs/heads/main refs/heads/stas-394-...        -> 1d4bcc61847562837b44854bccea95b783d8b943  rc=0
+    git rev-list --left-right --count main...delivered            -> "4       1"   rc=0   (trunk moved 4; card is 1)
+    git merge-base --is-ancestor refs/heads/main delivered        -> rc=1          NOT a fast-forward
+    git merge-tree --write-tree --name-only main delivered        -> tree 69d8f9ccce3b2aa31a6ab94f736f1d8a6a488130  rc=0
+        CONFLICT lines in merge-tree output: 0
+    git diff --name-only 1d4bcc618 refs/heads/main -- <11 changed paths>
+                                                                  -> empty output, rc=0
+    git rev-parse refs/heads/main (second reading, same tick)     -> 42f9762e1c...  rc=0
+    TRUNK_STABLE_INSIDE_TICK=yes
+
+The 11 changed paths the second predicate covers:
+  .changeset/stas-394-fix-title-idempotence.md
+  docs/missions.md
+  docs/workflow-steps.md
+  packages/core/src/__tests__/mission-fix-title-composition.test.ts
+  packages/core/src/async-stores/async-mission-store.ts
+  packages/core/src/index.gate.ts
+  packages/core/src/index.ts
+  packages/core/src/missions/mission-store.ts
+  packages/core/src/tasks/fix-title.ts
+  packages/core/src/tasks/remediation-steps.ts
+  packages/engine/src/workflows/human-merge-approval-boundary.ts
+
+Reading of the pair: a three-way merge of this branch into today's trunk applies cleanly (rc=0, zero
+CONFLICT lines) and the trunk has not touched a single one of this card's files since the merge-base,
+so nothing of mine can be overwritten and nothing of theirs is at risk. A fast-forward is not
+available because the trunk is 4 commits ahead of my base; this card does not restack, because
+rebasing would orphan the SHAs that red.txt and green.txt name as the RED and GREEN tips.
+
+=== BEFORE/AFTER TEST COUNTS (measured in Step 5, quoted here as the announcement's numbers) ===
+
+    before-suite.txt @1d4bcc6184 (raw/before-suite-raw.txt): test files 263 failed | 534 passed | 1 skipped; tests 323 failed | 6998 passed | 1642 skipped
+    raw/after-suite-raw.txt @1677ee018a: test files 263 failed | 535 passed | 1 skipped; tests 323 failed | 7012 passed | 1642 skipped
+    delta: +1 file, +14 passing tests, 0 new failures. Unique failing-file sets identical: 263 vs 263,
+    same sha256 22e759745a9e536ee93494b05d5159d7431c44ff648f8356d95dee9977d26043, comm diff rc=0.
+
+=== THE SINGLE MERGE COMMAND ===
+
+    git -C <Fusion primary checkout> merge --no-ff stas-394-fix-title-idempotence
+
+Not `--ff-only`: the trunk is 4 commits ahead of the measured base, so a fast-forward cannot succeed.
+The merge leg, and the rebuild-and-restart that makes the fix live in the running board, are the
+operator's; this card cannot observe the running build's revision from inside the worktree.
+
+=== THE ANNOUNCEMENT ITSELF ===
+
+The message to the CEO (agent-94d01490) was issued at the same tick as the prints above, and the
+transport accepted it. The prints it quotes are the ones above, verbatim, including the single
+merge command and the trunk-drift disclosure.
+
+    fn_send_message to agent-94d01490 -> "Message sent to agent-94d01490 (ID: msg-c06d6b7a)"
+
+Raw capture of both the prints and the send: raw/window-send.txt
+
+=== ANOMALY REPORTED, NOT EDITED AWAY: the branch is published on a LAN mirror ===
+
+`git reflog show refs/remotes/lan/stas-394-fix-title-idempotence` records
+`update by push 2026-11-07 19:52:09 +0100`, and `git ls-remote lan refs/heads/stas-394*` confirms the
+mirror really holds
+
+    1677ee018a5d3aee0e74c0669676a1db40c690c5        refs/heads/stas-394-fix-title-idempotence
+
+AC6 forbids this card to push, and it did not:
+  - no push appears anywhere in this session's commands or task log; the push postdates Step 4's
+    delivery commit and is not recorded by any capture on this card;
+  - the trunk-side GitHub remote holds nothing for this card: `git ls-remote origin | grep -i stas-394`
+    is empty (rc=1), so no PR-side surface was created or fed;
+  - `lan` is a pre-existing LAN mirror of the engine (364 refs, `lan/main` has its own older push
+    entries) and two production code paths in the engine can push (`packages/engine/src/merge/
+    pr-response-run-ops.ts:202`, `packages/engine/src/merge/merger-ai.ts:4791`).
+The writer cannot be identified from inside this worktree. It is disclosed to the CEO in the same
+announcement rather than left out, because the observable fact is that the delivered SHA left the
+machine through a ref this card did not write.

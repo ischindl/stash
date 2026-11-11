@@ -1,0 +1,139 @@
+# STAS-391 — the landing decision this card hands to the operator
+# base pinned for every read in this file: 06b1768b18f38a9b4d0d5b35467204e25bfe4396
+# Regenerate: bash stas-391-engine-evidence/generate.sh   (run from the card worktree root)
+
+## What this card delivered, and what it deliberately did not touch
+- Delivered on branch `refs/heads/fusion/stas-391-empty-tool-result-announcement` at tip `eb20a6bfc583786b8c31cfe4f677237ebae54e10`: the announcement of an empty
+  content-block array on the prompt path, plus the two test amendments.
+- Not touched: no trunk ref was moved by this card, nothing was pushed, no pull
+  request was opened, nothing was deployed. Where trunk actually stands is measured
+  two blocks below rather than asserted here, because trunk keeps moving while a
+  card runs.
+- The trunk ref advances only when an operator runs one of the legs below.
+## Predicate measured now: can this branch reach trunk without a merge?
+ahead=1 behind=1, measured against c20b8e4eaaed6d01b74af1586a7ca8980fd1d499 (refs/heads/main) at run time.
+Shape: trunk moved 1 commit(s) past this card's base, so no fast-forward is
+available and the branch has to be rebased onto c20b8e4eaaed6d01b74af1586a7ca8980fd1d499 (or merged) first. The
+cost of that rebase is measured below, not guessed.
+What trunk's new commits did to the files this change touches:
+  $ git -C .engine/stas-391-engine diff --stat 06b1768b18f38a9b4d0d5b35467204e25bfe4396 c20b8e4eaaed6d01b74af1586a7ca8980fd1d499 -- packages/pi-claude-cli/src/tool-result-authority.ts packages/pi-claude-cli/src/__tests__/tool-result-authority.test.ts packages/pi-claude-cli/src/__tests__/tool-channel-authority.test.ts
+      (no output)
+        rc=0
+
+Empty output means none of them was touched, so the rebase costs nothing here.
+Applicability of this branch's diff onto the current trunk tip: the two rc values
+below are the verdict for rebasing this commit onto it.
+    at c20b8e4eaaed6d01b74af1586a7ca8980fd1d499 (trunk-tip), GNU patch --dry-run: rc=0
+      checking file packages/pi-claude-cli/src/__tests__/tool-result-authority.test.ts
+      checking file packages/pi-claude-cli/src/tool-result-authority.ts
+    at c20b8e4eaaed6d01b74af1586a7ca8980fd1d499 (trunk-tip), git apply --check: rc=0
+      
+
+## Collision cost of landing this branch, measured at the revisions it can meet
+
+Three instruments, all run against scratch copies — none of them touches the
+checkout. Each scratch copy is given its own one-commit repository first, and that
+is not ceremony: measured in this run, `git apply --check` run inside a scratch
+directory that merely sits inside this checkout was answered by the enclosing
+repository and returned rc=0 for every revision, including the two GNU patch
+rejects. Judged on its own content it disagrees, and that is the verdict printed
+below.
+
+- `patch` — GNU patch, the fuzz-tolerant applicator an operator would use by hand.
+- `git apply` — git's own strict applicator, the one a `git am` or a scripted
+  landing uses. rc=1 with a 'patch failed' line means it refuses the diff as-is.
+- `merge-file` — what a real `git merge` resolves to. rc=0 with zero conflict
+  blocks merges silently; rc=2 with N blocks means a human resolves N regions.
+
+Each revision is measured against the merge base named in its own block. The
+`merge-file` numbers behind these verdicts are in raw/base-witness.txt, which runs
+them against the same blobs this file names.
+
+The two cards this branch can meet are the two that decided the same question
+differently, so their numbers are the landing cost worth knowing.
+
+### The STAS-390 line (d38b478184, fusion/stas-390-tool-channel-authority)
+The predicate this leg turns on is measured here rather than asserted:
+merge-base 390-line/trunk. That is the base this branch is built on, so the 390
+line is still ahead of trunk and this card's commit is not built on it.
+  $ git -C .engine/stas-391-engine merge-base eb20a6bfc583786b8c31cfe4f677237ebae54e10 d38b478184
+      06b1768b18f38a9b4d0d5b35467204e25bfe4396
+        rc=0
+
+    at d38b478184 (the 390 line), GNU patch --dry-run: rc=0
+      checking file packages/pi-claude-cli/src/__tests__/tool-result-authority.test.ts
+      checking file packages/pi-claude-cli/src/tool-result-authority.ts
+      Hunk #1 succeeded at 14 with fuzz 2.
+      Hunk #2 succeeded at 107 (offset 44 lines).
+      Hunk #3 succeeded at 130 (offset 44 lines).
+    at d38b478184 (the 390 line), git apply --check: rc=1
+      error: patch failed: packages/pi-claude-cli/src/tool-result-authority.ts:14
+      error: packages/pi-claude-cli/src/tool-result-authority.ts: patch does not apply
+
+Verdict: GNU patch takes this branch with two fuzzed/offset hunks, 'git apply'
+refuses it, and a merge resolves it with zero conflict blocks. The silence is the
+cost to watch: nothing will warn that the STAS-390 line's own pin —
+`tool-channel-authority.test.ts:200`, 'expect(() => promptWithToolResult([])).toThrow
+(/no content to mark/)' — asserts the opposite of what this branch now does. That
+test is not touched here, because deciding which empty state should throw is the
+operator's vocabulary call, not this card's.
+### The STAS-388 remediation branch (6a59cf4d51, fusion/stas-388-tool-result-authority)
+Not on trunk, and the merge base is the commit that introduced the zero-authority
+layer — before this card's base and before the STAS-390 line.
+  $ git -C .engine/stas-391-engine merge-base eb20a6bfc583786b8c31cfe4f677237ebae54e10 6a59cf4d51
+      b6e6cb73f1b63fb6d63d87cab9f753cc316da103
+        rc=0
+
+    at 6a59cf4d51 (the STAS-388 remediation branch), GNU patch --dry-run: rc=1
+      checking file packages/pi-claude-cli/src/__tests__/tool-result-authority.test.ts
+      Hunk #2 FAILED at 130.
+      1 out of 2 hunks FAILED
+      checking file packages/pi-claude-cli/src/tool-result-authority.ts
+      Hunk #1 FAILED at 14.
+      Hunk #2 FAILED at 61.
+      Hunk #3 FAILED at 74.
+      3 out of 3 hunks FAILED
+    at 6a59cf4d51 (the STAS-388 remediation branch), git apply --check: rc=1
+      error: patch failed: packages/pi-claude-cli/src/__tests__/tool-result-authority.test.ts:126
+      error: packages/pi-claude-cli/src/__tests__/tool-result-authority.test.ts: patch does not apply
+      error: patch failed: packages/pi-claude-cli/src/tool-result-authority.ts:14
+      error: packages/pi-claude-cli/src/tool-result-authority.ts: patch does not apply
+
+Verdict: the remediation branch already contains the announcement this card just
+authored, so landing it over this branch produces real textual conflicts — two per
+file — because that branch's version of the same decision names the state
+`no-content-blocks` and this one names it `zero-bytes`. The two vocabularies are
+still one decision; card rules say the older vocabulary is inherited, not collapsed.
+## Where the empty-state vocabulary already stands on trunk
+Quoted verbatim from the landed pins, so the operator can match words rather than
+descriptions. This card used the first as its target.
+  $ bash -c git -C '.engine/stas-391-engine' show c20b8e4eaaed6d01b74af1586a7ca8980fd1d499:packages/pi-claude-cli/src/__tests__/tool-result-authority.test.ts | sed -n '128,141p'
+        it("refuses to render a payload that was never delivered, because the empty string this site used to return made 'nothing was delivered' read as 'the command printed nothing'", () => {
+          const dropped: unknown[] = [undefined, null, [], [{ type: "text" }], 42];
+      
+          for (const content of dropped) {
+            expect(() => promptWithToolResult(content)).toThrow(/no content to mark/);
+          }
+        });
+      
+        it("cannot print the same bytes for the two empty states, because that equality is the false negative this card was written to remove", () => {
+          const ranAndPrintedNothing = promptWithToolResult("");
+      
+          expect(ranAndPrintedNothing).toContain("zero bytes of output");
+          expect(() => promptWithToolResult([])).toThrow(/no payload was delivered/);
+        });
+        rc=0
+
+The landed pair separates three states: zero bytes of text, a payload that was
+never delivered, and the refusal to print the same bytes for the first two. Only
+the first two survive here, because the measurement in raw/base-witness.txt shows
+the runtime authors the third state on purpose.
+## What was NOT done here, and why
+- Nothing landed: this card's commit exists on its own branch only. `c20b8e4eaaed6d01b74af1586a7ca8980fd1d499` is
+  trunk's own history, untouched by this card, and a trunk that deploys on merge is
+  landed by an operator, not by an executor card.
+- No pull request, no push, no 'gh' invocation at all.
+- No second announcement string: this card reuses the notice the trunk already
+  owns instead of inventing a synonym.
+- The STAS-390 line's contradicting pin was left in place rather than quietly
+  reconciled — see the collision block above.

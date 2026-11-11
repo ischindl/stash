@@ -1,0 +1,161 @@
+# STAS-392 — AC0/AC4 — the empty-array pin census, on trunk and on both carried refs
+# generated: 2026-11-05T18:29:03Z
+# Three probes per ref. The second fragment is what a single-literal grep misses:
+
+"no payload was delivered" matches an assertion that says nothing about `no content to mark`.
+## refs/heads/main  (tip 4fa1ea0e64)
+
+  $ git -C .engine/stas-392-engine grep -n no content to mark refs/heads/main -- packages/pi-claude-cli
+      refs/heads/main:packages/pi-claude-cli/src/__tests__/tool-result-authority.test.ts:132:      expect(() => promptWithToolResult(content)).toThrow(/no content to mark/);
+      refs/heads/main:packages/pi-claude-cli/src/__tests__/tool-result-authority.test.ts:152:    expect(() => buildPrompt(context)).toThrow(/no content to mark/);
+      refs/heads/main:packages/pi-claude-cli/src/tool-result-authority.ts:74:      `tool result payload has no content to mark: expected a string or a content-block array, got ${typeof content}`,
+      refs/heads/main:packages/pi-claude-cli/src/tool-result-authority.ts:79:      "tool result payload has no content to mark: the content-block array is empty, so no payload was delivered",
+      refs/heads/main:packages/pi-claude-cli/src/tool-result-authority.ts:89:          `tool result text block has no content to mark: expected a string, got ${typeof block.text}`,
+        rc=0
+
+  $ git -C .engine/stas-392-engine grep -n no payload was delivered refs/heads/main -- packages/pi-claude-cli
+      refs/heads/main:packages/pi-claude-cli/src/__tests__/tool-result-authority.test.ts:140:    expect(() => promptWithToolResult([])).toThrow(/no payload was delivered/);
+      refs/heads/main:packages/pi-claude-cli/src/tool-result-authority.ts:79:      "tool result payload has no content to mark: the content-block array is empty, so no payload was delivered",
+        rc=0
+
+  $ git -C .engine/stas-392-engine grep -n promptWithToolResult(\[\]) refs/heads/main -- packages/pi-claude-cli
+      refs/heads/main:packages/pi-claude-cli/src/__tests__/tool-result-authority.test.ts:140:    expect(() => promptWithToolResult([])).toThrow(/no payload was delivered/);
+        rc=0
+
+### does the sibling test file exist on this ref?
+      packages/pi-claude-cli/src/__tests__/tool-channel-authority.test.ts does NOT exist
+        rc=128
+
+## refs/heads/fusion/stas-390-tool-channel-authority  (tip e6b1fe4c7f)
+
+  $ git -C .engine/stas-392-engine grep -n no content to mark refs/heads/fusion/stas-390-tool-channel-authority -- packages/pi-claude-cli
+      refs/heads/fusion/stas-390-tool-channel-authority:packages/pi-claude-cli/src/__tests__/tool-channel-authority.test.ts:200:    expect(() => promptWithToolResult([])).toThrow(/no content to mark/);
+      refs/heads/fusion/stas-390-tool-channel-authority:packages/pi-claude-cli/src/__tests__/tool-result-authority.test.ts:132:      expect(() => promptWithToolResult(content)).toThrow(/no content to mark/);
+      refs/heads/fusion/stas-390-tool-channel-authority:packages/pi-claude-cli/src/__tests__/tool-result-authority.test.ts:152:    expect(() => buildPrompt(context)).toThrow(/no content to mark/);
+      refs/heads/fusion/stas-390-tool-channel-authority:packages/pi-claude-cli/src/tool-result-authority.ts:118:      `tool result payload has no content to mark: expected a string or a content-block array, got ${typeof content}`,
+      refs/heads/fusion/stas-390-tool-channel-authority:packages/pi-claude-cli/src/tool-result-authority.ts:123:      "tool result payload has no content to mark: the content-block array is empty, so no payload was delivered",
+      refs/heads/fusion/stas-390-tool-channel-authority:packages/pi-claude-cli/src/tool-result-authority.ts:133:          `tool result text block has no content to mark: expected a string, got ${typeof block.text}`,
+        rc=0
+
+  $ git -C .engine/stas-392-engine grep -n no payload was delivered refs/heads/fusion/stas-390-tool-channel-authority -- packages/pi-claude-cli
+      refs/heads/fusion/stas-390-tool-channel-authority:packages/pi-claude-cli/src/__tests__/tool-result-authority.test.ts:140:    expect(() => promptWithToolResult([])).toThrow(/no payload was delivered/);
+      refs/heads/fusion/stas-390-tool-channel-authority:packages/pi-claude-cli/src/tool-result-authority.ts:123:      "tool result payload has no content to mark: the content-block array is empty, so no payload was delivered",
+        rc=0
+
+  $ git -C .engine/stas-392-engine grep -n promptWithToolResult(\[\]) refs/heads/fusion/stas-390-tool-channel-authority -- packages/pi-claude-cli
+      refs/heads/fusion/stas-390-tool-channel-authority:packages/pi-claude-cli/src/__tests__/tool-channel-authority.test.ts:200:    expect(() => promptWithToolResult([])).toThrow(/no content to mark/);
+      refs/heads/fusion/stas-390-tool-channel-authority:packages/pi-claude-cli/src/__tests__/tool-result-authority.test.ts:140:    expect(() => promptWithToolResult([])).toThrow(/no payload was delivered/);
+        rc=0
+
+### does the sibling test file exist on this ref?
+      packages/pi-claude-cli/src/__tests__/tool-channel-authority.test.ts exists
+        rc=0
+
+## refs/heads/fusion/stas-391-empty-tool-result-announcement  (tip eb20a6bfc5)
+
+  $ git -C .engine/stas-392-engine grep -n no content to mark refs/heads/fusion/stas-391-empty-tool-result-announcement -- packages/pi-claude-cli
+      refs/heads/fusion/stas-391-empty-tool-result-announcement:packages/pi-claude-cli/src/__tests__/tool-result-authority.test.ts:138:      expect(() => promptWithToolResult(content)).toThrow(/no content to mark/);
+      refs/heads/fusion/stas-391-empty-tool-result-announcement:packages/pi-claude-cli/src/__tests__/tool-result-authority.test.ts:179:    expect(() => buildPrompt(context)).toThrow(/no content to mark/);
+      refs/heads/fusion/stas-391-empty-tool-result-announcement:packages/pi-claude-cli/src/tool-result-authority.ts:86:      `tool result payload has no content to mark: expected a string or a content-block array, got ${typeof content}`,
+      refs/heads/fusion/stas-391-empty-tool-result-announcement:packages/pi-claude-cli/src/tool-result-authority.ts:96:          `tool result text block has no content to mark: expected a string, got ${typeof block.text}`,
+        rc=0
+
+  $ git -C .engine/stas-392-engine grep -n no payload was delivered refs/heads/fusion/stas-391-empty-tool-result-announcement -- packages/pi-claude-cli
+      (no output)
+        rc=1
+
+  $ git -C .engine/stas-392-engine grep -n promptWithToolResult(\[\]) refs/heads/fusion/stas-391-empty-tool-result-announcement -- packages/pi-claude-cli
+      refs/heads/fusion/stas-391-empty-tool-result-announcement:packages/pi-claude-cli/src/__tests__/tool-result-authority.test.ts:147:    const prompt = promptWithToolResult([]);
+        rc=0
+
+### does the sibling test file exist on this ref?
+      packages/pi-claude-cli/src/__tests__/tool-channel-authority.test.ts does NOT exist
+        rc=128
+
+## the three pins, located by title rather than line number
+
+### refs/heads/main
+--- pin (a) loop and its list
+129:    const dropped: unknown[] = [undefined, null, [], [{ type: "text" }], 42];
+130-
+131-    for (const content of dropped) {
+132-      expect(() => promptWithToolResult(content)).toThrow(/no content to mark/);
+133-    }
+134-  });
+135-
+--- pin (b) its own it() and its last assertions
+138-
+139-    expect(ranAndPrintedNothing).toContain("zero bytes of output");
+140:    expect(() => promptWithToolResult([])).toThrow(/no payload was delivered/);
+141-  });
+142-});
+143-
+--- pin (c) sibling file
+      (file absent or no empty-array call)
+
+### refs/heads/fusion/stas-390-tool-channel-authority
+--- pin (a) loop and its list
+129:    const dropped: unknown[] = [undefined, null, [], [{ type: "text" }], 42];
+130-
+131-    for (const content of dropped) {
+132-      expect(() => promptWithToolResult(content)).toThrow(/no content to mark/);
+133-    }
+134-  });
+135-
+--- pin (b) its own it() and its last assertions
+138-
+139-    expect(ranAndPrintedNothing).toContain("zero bytes of output");
+140:    expect(() => promptWithToolResult([])).toThrow(/no payload was delivered/);
+141-  });
+142-});
+143-
+--- pin (c) sibling file
+196-    const prompt = promptWithToolResult("");
+197-
+198-    expect(prompt).toContain('delivered="zero-bytes"');
+199-    expect(prompt).toContain("zero bytes of output");
+200:    expect(() => promptWithToolResult([])).toThrow(/no content to mark/);
+201-  });
+202-});
+
+### refs/heads/fusion/stas-391-empty-tool-result-announcement
+--- pin (a) loop and its list
+135:    const dropped: unknown[] = [undefined, null, [{ type: "text" }], 42];
+136-
+137-    for (const content of dropped) {
+138-      expect(() => promptWithToolResult(content)).toThrow(/no content to mark/);
+139-    }
+140-  });
+141-
+--- pin (b) its own it() and its last assertions
+145-    // asserted, because both values state that a tool delivered no text, and only
+146-    // the array shape was ever upstream's own doing.
+147:    const prompt = promptWithToolResult([]);
+148-    const resumed = buildResumePrompt(
+149-      contextWith([
+150-        { role: "user", content: "Check the tree." },
+--- pin (c) sibling file
+      (file absent or no empty-array call)
+
+## classification (authored — the hits above are the measurement)
+
+  empty-array-must-go  an assertion that `content: []` throws, i.e. it pins the guard
+                       STAS-391 deletes. Three such sites exist across the family:
+                        (a) tool-result-authority.test.ts, the `dropped` loop that still
+                            lists `[]`  -> reconciled by STAS-391's commit, verified here
+                        (b) tool-result-authority.test.ts, the standalone
+                            /no payload was delivered/ assertion -> reconciled by
+                            STAS-391's commit, verified here
+                        (c) tool-channel-authority.test.ts, /no content to mark/ inside
+                            the it() titled "...must not widen or weaken the fail-loud
+                            rule it builds on" -> arrives only with the 390 line, so
+                            STAS-391's base could not reach it. THIS CARD's delta.
+  retained             a hit that says nothing about `[]`: the production throw
+                       messages, the `dropped` loop's surviving four entries, and
+                       tool-result-authority.test.ts's
+                       "propagates a failure inside the marking step to the caller"
+                       (content: undefined through buildPrompt). AC3 ground — the
+                       390/392 line must keep all of them throwing.
+  already-reconciled   a hit whose file is on a ref where the guard is already deleted
+                       and the assertion rewritten (see the 391 section above: "no
+                       payload was delivered" returns rc=1 there).

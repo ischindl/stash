@@ -1,0 +1,23 @@
+stas-388-engine.bundle.txt is the base64 of stas-388-engine.bundle,
+which carries the engine branch fusion/stas-388-tool-result-authority of repository Fusion,
+0efa71d679ebdbafe24e7c63147427587a557b19..6a59cf4d51feaa0293869d4343d6395c3f37d6ff.
+
+  decode:  base64 -d stas-388-engine.bundle.txt > stas-388-engine.bundle
+  verify:  git bundle verify stas-388-engine.bundle
+  fetch:   git fetch stas-388-engine.bundle refs/heads/fusion/stas-388-tool-result-authority
+  apply:   git merge --ff-only FETCH_HEAD   (fast-forward is possible
+           because merge-base(tip, main) equals main — see engine-commits.txt)
+
+heads recorded in the bundle:
+  6a59cf4d51feaa0293869d4343d6395c3f37d6ff refs/heads/fusion/stas-388-tool-result-authority
+
+git bundle verify, run where the prerequisite commit exists:
+  <card-worktree>/stas-388-engine-evidence/stas-388-engine.bundle is okay
+  The bundle contains this ref:
+  6a59cf4d51feaa0293869d4343d6395c3f37d6ff refs/heads/fusion/stas-388-tool-result-authority
+  The bundle requires this ref:
+  0efa71d679ebdbafe24e7c63147427587a557b19 
+  The bundle uses this hash algorithm: sha1
+
+size: 10785 bytes binary,
+      14524 bytes base64

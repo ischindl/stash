@@ -1,0 +1,4 @@
+BASE_SHA=1d4bcc61847562837b44854bccea95b783d8b943
+COMMAND: pnpm --filter @fusion/core exec vitest run src/__tests__/mission-fix-title-composition.test.ts --reporter=verbose
+TRACKED_CHANGES_IN_ENGINE_WORKTREE:
+?? packages/core/src/__tests__/mission-fix-title-composition.test.ts

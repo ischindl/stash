@@ -1,0 +1,83 @@
+=== 0. arrive at the candidate by detaching, and prove where we are ===
+refs/stas-396-candidate = cfe6daa16d9833c11031ae01dd97d5fef5b04928
+  checkout rc = 0   output: HEAD is now at cfe6daa16d Merge branch 'refs/heads/main' into HEAD|
+  HEAD      = cfe6daa16d9833c11031ae01dd97d5fef5b04928
+  symbolic  = HEAD (detached)
+  porcelain = 0 lines
+  delivery ref, untouched so far = 1677ee018a5d3aee0e74c0669676a1db40c690c5
+
+=== 1. is the dependency install still valid for this tree? ===
+  manifests changed between the AC2 tree and the candidate = 0
+  marker node_modules/.modules.yaml present = YES
+
+=== 2. the four instruments, same commands as Step 2 ===
+=== instrument run: after-suite ===
+command        : pnpm --filter @fusion/core test
+SHA measured on: cfe6daa16d9833c11031ae01dd97d5fef5b04928
+raw capture    : stas-396-evidence/raw/after-suite-raw.txt
+exit status (read outside any pipe): 1
+raw bytes: 204432   raw lines: 2453
+
+--- reporter lines, verbatim ---
+⎯⎯⎯⎯⎯⎯ Failed Tests 324 ⎯⎯⎯⎯⎯⎯
+ Test Files  264 failed | 535 passed | 1 skipped (800)
+      Tests  324 failed | 7021 passed | 1642 skipped (8987)
+     Errors  2 errors
+   Duration  229.52s (transform 50.38s, setup 238.97s, import 728.76s, tests 235.10s, environment 116ms)
+ ERR_PNPM_RECURSIVE_RUN_FIRST_FAIL  @fusion/core@0.78.0-beta.9 test: `vitest run --silent=passed-only --reporter=dot`
+--- end reporter lines ---
+
+=== instrument run: after-typecheck-core ===
+command        : pnpm --filter @fusion/core typecheck
+SHA measured on: cfe6daa16d9833c11031ae01dd97d5fef5b04928
+raw capture    : stas-396-evidence/raw/after-typecheck-core-raw.txt
+exit status (read outside any pipe): 0
+raw bytes: 147   raw lines: 4
+
+--- reporter lines, verbatim ---
+> @fusion/core@0.78.0-beta.9 typecheck /home/schindler/git/stash/.fusion/worktrees/stas-396/.engine/stas-396-engine/packages/core
+--- end reporter lines ---
+
+=== instrument run: after-typecheck-engine ===
+command        : pnpm --filter @fusion/engine typecheck
+SHA measured on: cfe6daa16d9833c11031ae01dd97d5fef5b04928
+raw capture    : stas-396-evidence/raw/after-typecheck-engine-raw.txt
+exit status (read outside any pipe): 0
+raw bytes: 151   raw lines: 4
+
+--- reporter lines, verbatim ---
+> @fusion/engine@0.78.0-beta.9 typecheck /home/schindler/git/stash/.fusion/worktrees/stas-396/.engine/stas-396-engine/packages/engine
+--- end reporter lines ---
+
+=== instrument run: after-static-gate ===
+command        : pnpm test:gate:static
+SHA measured on: cfe6daa16d9833c11031ae01dd97d5fef5b04928
+raw capture    : stas-396-evidence/raw/after-static-gate-raw.txt
+exit status (read outside any pipe): 0
+raw bytes: 2589   raw lines: 17
+
+--- reporter lines, verbatim ---
+--- end reporter lines ---
+
+=== 3. the failing-file set at the candidate ===
+list               : stas-396-evidence/raw/failfiles-after-suite.txt
+unique failing files: 264
+sha256(list)        : 188d9514386cb41831ca13ad8ef655733f853b8cfb7a9ba609b29ecf5046438a  -
+individual FAIL blocks in raw: 552
+auth_failed lines in raw     : 16
+pg-gated files (*.pg.test.ts): 190
+non-pg files                 : 74
+unhandled-error lines in raw : 3
+
+--- difference against the inherited tip list (raw/failfiles-inherited-394-tip.lst) ---
+inherited list lines : 263
+inherited list sha256: 22e759745a9e536ee93494b05d5159d7431c44ff648f8356d95dee9977d26043  -
+failing here, absent there : 1
+  + src/__tests__/workflow-prompt-overrides-memo.test.ts
+present there, not failing here : 0
+
+=== 4. the two-direction set difference (AC4's actual gate) ===
+  AC2 baseline sha256 (branch tip as found) : 188d9514386cb41831ca13ad8ef655733f853b8cfb7a9ba609b29ecf5046438a  -
+  AC4 candidate sha256 (joined tip)         : 188d9514386cb41831ca13ad8ef655733f853b8cfb7a9ba609b29ecf5046438a  -
+  NEW failures (failing at candidate, not at AC2 baseline) = 0
+  STOPPED failing (allowed, named) = 0

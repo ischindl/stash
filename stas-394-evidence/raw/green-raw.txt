@@ -1,0 +1,38 @@
+TIP_SHA=1677ee018a5d3aee0e74c0669676a1db40c690c5
+## new regression test (verbose)
+
+ RUN  v4.1.10 /home/schindler/git/stash/.fusion/worktrees/stas-394/.engine/stas-394-engine/packages/core
+
+ ✓ src/__tests__/mission-fix-title-composition.test.ts > STAS-394 fix-title composition stays at one layer > composes at most one layer over a parent carrying 0 3ms
+ ✓ src/__tests__/mission-fix-title-composition.test.ts > STAS-394 fix-title composition stays at one layer > composes at most one layer over a parent carrying 1 1ms
+ ✓ src/__tests__/mission-fix-title-composition.test.ts > STAS-394 fix-title composition stays at one layer > composes at most one layer over a parent carrying 2 0ms
+ ✓ src/__tests__/mission-fix-title-composition.test.ts > STAS-394 fix-title composition stays at one layer > composes at most one layer over a parent carrying 3 0ms
+ ✓ src/__tests__/mission-fix-title-composition.test.ts > STAS-394 fix-title composition stays at one layer > composing twice is the same as composing once 0ms
+ ✓ src/__tests__/mission-fix-title-composition.test.ts > STAS-394 remediation step names take the same single layer > names a fix round over a finding already carrying 0 layers 0ms
+ ✓ src/__tests__/mission-fix-title-composition.test.ts > STAS-394 remediation step names take the same single layer > names a fix round over a finding already carrying 1 layers 0ms
+ ✓ src/__tests__/mission-fix-title-composition.test.ts > STAS-394 remediation step names take the same single layer > names a fix round over a finding already carrying 2 layers 0ms
+ ✓ src/__tests__/mission-fix-title-composition.test.ts > STAS-394 the composer itself is idempotent > returns the one-layer title for a subject carrying 0 0ms
+ ✓ src/__tests__/mission-fix-title-composition.test.ts > STAS-394 the composer itself is idempotent > returns the one-layer title for a subject carrying 1 0ms
+ ✓ src/__tests__/mission-fix-title-composition.test.ts > STAS-394 the composer itself is idempotent > returns the one-layer title for a subject carrying 2 0ms
+ ✓ src/__tests__/mission-fix-title-composition.test.ts > STAS-394 the composer itself is idempotent > returns the one-layer title for a subject carrying 5 0ms
+ ✓ src/__tests__/mission-fix-title-composition.test.ts > STAS-394 the composer itself is idempotent > leaves a word that merely begins like the prefix alone 0ms
+ ✓ src/__tests__/mission-fix-title-composition.test.ts > STAS-394 triage records ancestry in the existing lineage field > passes the parent card as sourceParentTaskId when triaging a generated fix feature 2ms
+
+ Test Files  1 passed (1)
+      Tests  14 passed (14)
+   Start at  19:19:08
+   Duration  2.16s (transform 1.02s, setup 337ms, import 1.59s, tests 10ms, environment 0ms)
+
+NEW_TEST_RC=0
+## impacted core suites
+
+ RUN  v4.1.10 /home/schindler/git/stash/.fusion/worktrees/stas-394/.engine/stas-394-engine/packages/core
+
+···························································································································
+
+ Test Files  15 passed (15)
+      Tests  123 passed (123)
+   Start at  19:19:12
+   Duration  6.54s (transform 13.55s, setup 4.62s, import 22.75s, tests 204ms, environment 2ms)
+
+IMPACTED_CORE_RC=0

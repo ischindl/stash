@@ -1,0 +1,53 @@
+=== 0. AC4's gate result, re-stated before the ref is touched ===
+  names failing at the candidate but not at the AC2 baseline = 0  (must be 0)
+  AC4 MET, so the compare-and-swap proceeds.
+
+=== 1. the old value this card printed in AC1, re-read from the ref itself ===
+  AC1 printed old value : 1677ee018a5d3aee0e74c0669676a1db40c690c5
+  ref reads now         : 1677ee018a5d3aee0e74c0669676a1db40c690c5
+  equal, so the swap precondition holds : YES
+
+=== 2. THE COMPARE-AND-SWAP - one update-ref, message naming this card ===
+  git update-ref -m <msg> refs/heads/stas-394-fix-title-idempotence refs/stas-396-candidate 1677ee018a5d3aee0e74c0669676a1db40c690c5
+  rc = 0
+
+=== 3. three prints of ONE SHA ===
+  a) git rev-parse refs/heads/stas-394-fix-title-idempotence
+     = cfe6daa16d9833c11031ae01dd97d5fef5b04928
+  b) the candidate tip this card tested
+     = cfe6daa16d9833c11031ae01dd97d5fef5b04928
+  c) the SHA the GREEN capture names (raw/after-suite-raw.txt, measured on this commit)
+     - the GREEN capture records the SHA it measured on:
+       SHA measured on: cfe6daa16d9833c11031ae01dd97d5fef5b04928
+       SHA measured on: cfe6daa16d9833c11031ae01dd97d5fef5b04928
+       SHA measured on: cfe6daa16d9833c11031ae01dd97d5fef5b04928
+       SHA measured on: cfe6daa16d9833c11031ae01dd97d5fef5b04928
+     - and this card's AC4 capture names it in its own words (after-suite.txt header):
+       measured at the candidate tip cfe6daa16d9833c11031ae01dd97d5fef5b04928 [ENGINE repo], which is
+  all three equal ? YES: ref == candidate == the tested SHA
+
+=== 4. the ref's reflog, verbatim, so the new entry and its authorship are visible ===
+  cfe6daa16d refs/heads/stas-394-fix-title-idempotence@{0}: STAS-396: absorb refs/heads/main into the STAS-394 delivery branch (join authored no code, zero new failing files)
+  1677ee018a refs/heads/stas-394-fix-title-idempotence@{1}: commit (amend): fix(STAS-394): compose fix titles idempotently and record fix ancestry in lineage
+  9196cbfd8d refs/heads/stas-394-fix-title-idempotence@{2}: commit: fix(STAS-394): compose fix titles idempotently and record fix ancestry in lineage
+  1d4bcc6184 refs/heads/stas-394-fix-title-idempotence@{3}: branch: Created from HEAD
+
+=== 5. post-move state of everything this card cares about ===
+  refs/heads/stas-394-fix-title-idempotence                = cfe6daa16d9833c11031ae01dd97d5fef5b04928
+  refs/heads/main           = ee995fcc85013a990752307d0f253e9d6fe5ebf4   [must be UNMOVED]
+  refs/stas-396-candidate   = cfe6daa16d9833c11031ae01dd97d5fef5b04928   [deleted in Step 7]
+  STAS-395 branch           = e038ea90e247532e4cdc84af33657fb5337adb7f
+  three-dot main...branch   = 0	2
+  rc(trunk is ancestor of the delivery branch NOW) = 0
+
+=== 6. the worktree listing re-printed; name any checkout whose branch was just moved ===
+  entries = 133
+  checkouts whose branch is refs/heads/stas-394-fix-title-idempotence : 0
+  (AC1 measured 0 checkouts holding this branch, so none can hold a now-stale HEAD;
+   this card's own checkout is detached and is therefore not one that was moved.)
+  primary checkout still holds refs/heads/main ? worktree /home/schindler/git/Fusion
+HEAD ee995fcc85013a990752307d0f253e9d6fe5ebf4
+branch refs/heads/main
+  this card's scratch checkout HEAD = cfe6daa16d9833c11031ae01dd97d5fef5b04928
+  delivery branch tip                                    = cfe6daa16d9833c11031ae01dd97d5fef5b04928
+  scratch checkout is detached, so its HEAD is NOT the moved branch: HEAD

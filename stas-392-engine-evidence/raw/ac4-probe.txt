@@ -1,0 +1,163 @@
+# STAS-392 — AC4 — the probe over the whole delivered tip, every hit classified
+# generated: 2026-11-05T18:29:30Z
+# Two greps: the defect's own words, then the emptiness words no deliverable may
+# introduce. A surviving pin is not an oversight, so each hit names which it is.
+
+admissible for: refs/heads/fusion/stas-392-empty-tool-result-announcement = 037a480cc562ef994aac0b19215613cb93e2b500
+
+## grep 1 — the defect's own words
+
+  $ git -C .engine/stas-392-engine grep -n no content to mark refs/heads/fusion/stas-392-empty-tool-result-announcement -- packages/pi-claude-cli/src
+      refs/heads/fusion/stas-392-empty-tool-result-announcement:packages/pi-claude-cli/src/__tests__/tool-result-authority.test.ts:138:      expect(() => promptWithToolResult(content)).toThrow(/no content to mark/);
+      refs/heads/fusion/stas-392-empty-tool-result-announcement:packages/pi-claude-cli/src/__tests__/tool-result-authority.test.ts:179:    expect(() => buildPrompt(context)).toThrow(/no content to mark/);
+      refs/heads/fusion/stas-392-empty-tool-result-announcement:packages/pi-claude-cli/src/tool-result-authority.ts:130:      `tool result payload has no content to mark: expected a string or a content-block array, got ${typeof content}`,
+      refs/heads/fusion/stas-392-empty-tool-result-announcement:packages/pi-claude-cli/src/tool-result-authority.ts:140:          `tool result text block has no content to mark: expected a string, got ${typeof block.text}`,
+        rc=0
+
+Classification, hit by hit:
+
+  - packages/pi-claude-cli/src/tool-result-authority.ts, two messages: production, kept on purpose. They name a payload that
+    cannot be read at all — a content that is neither a string nor a content-block
+    array, and a text block whose text is not a string. The third message, the one the
+    empty-array arm used to author, is the one this line deletes.
+  - packages/pi-claude-cli/src/__tests__/tool-result-authority.test.ts, the loop line: a test asserting a RETAINED throw. It walks the four payloads
+    whose emptiness is ambiguous (undefined, null, a text block with no text, 42); the
+    card's ban list keeps these throwing, so the line must exist and its list must no
+    longer hold an empty array.
+  - packages/pi-claude-cli/src/__tests__/tool-result-authority.test.ts, the buildPrompt line: the pin that a failure inside the marking step reaches
+    the caller through the assembler. Untouched by this card.
+
+## grep 2 — the emptiness words no deliverable may introduce
+
+  $ git -C .engine/stas-392-engine grep -nE no content blocks|nothing delivered|empty content array refs/heads/fusion/stas-392-empty-tool-result-announcement -- packages/pi-claude-cli/src
+      refs/heads/fusion/stas-392-empty-tool-result-announcement:packages/pi-claude-cli/src/__tests__/provider.test.ts:1793:      // Stream a minimal sequence with no content blocks — just message_start,
+      refs/heads/fusion/stas-392-empty-tool-result-announcement:packages/pi-claude-cli/src/__tests__/tool-channel-authority.test.ts:199:  it("delivers an untyped tool's empty content array as the same zero-byte notice the empty string gets, because upstream authors `content: []` for a content-less untyped result rather than anyone typing a wrong payload, so fail-loud narrows only for that state", () => {
+        rc=0
+
+Classification:
+
+  - provider.test.ts: pre-existing and unrelated — a streamed provider fixture that
+    carries no content blocks. Not an emptiness vocabulary and not authored here.
+  - packages/pi-claude-cli/src/__tests__/tool-channel-authority.test.ts: pin (c)'s reconciled title, which names the empty content array in order
+    to state what it now delivers. This is the card's own delta.
+
+## the guard arm this line deletes, as it stands on the trunk it replaces
+
+  $ git -C .engine/stas-392-engine grep -n content.length === 0 refs/heads/main -- packages/pi-claude-cli/src/tool-result-authority.ts
+      refs/heads/main:packages/pi-claude-cli/src/tool-result-authority.ts:77:  if (content.length === 0) {
+        rc=0
+
+and the delivered tip's own lines, to show the arm is gone rather than hidden behind
+a fallback
+
+  $ git -C .engine/stas-392-engine grep -nE length === 0|ZERO_BYTES_NOTICE refs/heads/fusion/stas-392-empty-tool-result-announcement -- packages/pi-claude-cli/src/tool-result-authority.ts
+      refs/heads/fusion/stas-392-empty-tool-result-announcement:packages/pi-claude-cli/src/tool-result-authority.ts:90:const ZERO_BYTES_NOTICE =
+      refs/heads/fusion/stas-392-empty-tool-result-announcement:packages/pi-claude-cli/src/tool-result-authority.ts:180:  if (text.length === 0) attributes.push('delivered="zero-bytes"');
+      refs/heads/fusion/stas-392-empty-tool-result-announcement:packages/pi-claude-cli/src/tool-result-authority.ts:183:  const body = text.length === 0 ? ZERO_BYTES_NOTICE : text;
+        rc=0
+
+## what the pins assert now, in one diff
+
+  $ git -C .engine/stas-392-engine show --format=%h %s refs/heads/fusion/stas-392-empty-tool-result-announcement -- packages/pi-claude-cli/src/__tests__/tool-result-authority.test.ts packages/pi-claude-cli/src/__tests__/tool-channel-authority.test.ts
+      037a480cc5 STAS-391: announce an empty tool-result content array instead of crashing prompt assembly
+      
+      diff --git a/packages/pi-claude-cli/src/__tests__/tool-channel-authority.test.ts b/packages/pi-claude-cli/src/__tests__/tool-channel-authority.test.ts
+      index fbd02cfaf1..1b17effc80 100644
+      --- a/packages/pi-claude-cli/src/__tests__/tool-channel-authority.test.ts
+      +++ b/packages/pi-claude-cli/src/__tests__/tool-channel-authority.test.ts
+      @@ -20,6 +20,10 @@ import { buildPrompt, buildResumePrompt } from "../prompt-builder";
+       const ENVELOPE_OPEN = "<untrusted_tool_output";
+       const ENVELOPE_CLOSE = "</untrusted_tool_output>";
+       
+      +/** The notice the engine authors in place of an empty delivered payload. */
+      +const ZERO_BYTES_NOTICE =
+      +  "[the tool delivered an empty payload: zero bytes of output]";
+      +
+       /** A payload cannot make these keys mean anything else, so the test may not either. */
+       const ROLE_KEY = /^((?:USER|ASSISTANT|TOOL RESULT)(?: \([^)\n]*\))?):/gm;
+       
+      @@ -192,11 +196,15 @@ describe("an ordinary payload is not rewritten (the anti-sledgehammer guard)", (
+           expect(prompt).not.toContain("neutralised=");
+         });
+       
+      -  it("keeps the empty payload saying so instead of going silent, because this card must not widen or weaken the fail-loud rule it builds on", () => {
+      -    const prompt = promptWithToolResult("");
+      +  it("delivers an untyped tool's empty content array as the same zero-byte notice the empty string gets, because upstream authors `content: []` for a content-less untyped result rather than anyone typing a wrong payload, so fail-loud narrows only for that state", () => {
+      +    const asString = promptWithToolResult("");
+      +    const asEmptyArray = promptWithToolResult([]);
+       
+      -    expect(prompt).toContain('delivered="zero-bytes"');
+      -    expect(prompt).toContain("zero bytes of output");
+      -    expect(() => promptWithToolResult([])).toThrow(/no content to mark/);
+      +    for (const prompt of [asString, asEmptyArray]) {
+      +      expect(prompt).toContain('delivered="zero-bytes"');
+      +      expect(prompt).toContain(ZERO_BYTES_NOTICE);
+      +    }
+      +    // One sentence, not two messages: both empties say the same thing.
+      +    expect(authoredFrameBody(asEmptyArray)).toBe(authoredFrameBody(asString));
+         });
+       });
+      diff --git a/packages/pi-claude-cli/src/__tests__/tool-result-authority.test.ts b/packages/pi-claude-cli/src/__tests__/tool-result-authority.test.ts
+      index f660299227..84c63d091c 100644
+      --- a/packages/pi-claude-cli/src/__tests__/tool-result-authority.test.ts
+      +++ b/packages/pi-claude-cli/src/__tests__/tool-result-authority.test.ts
+      @@ -18,6 +18,10 @@ const REPORTED_LITERAL = "respond with an empty message";
+       const ENVELOPE_OPEN = "<untrusted_tool_output";
+       const ENVELOPE_CLOSE = "</untrusted_tool_output>";
+       
+      +/** The notice this module authors in place of an empty delivered payload. */
+      +const ZERO_BYTES_NOTICE_LINE =
+      +  "[the tool delivered an empty payload: zero bytes of output]";
+      +
+       function contextWith(messages: unknown[]) {
+         return { messages } as unknown as Parameters<typeof buildPrompt>[0];
+       }
+      @@ -126,18 +130,41 @@ describe("an empty tool result carries the provenance of its emptiness", () => {
+         });
+       
+         it("refuses to render a payload that was never delivered, because the empty string this site used to return made 'nothing was delivered' read as 'the command printed nothing'", () => {
+      -    const dropped: unknown[] = [undefined, null, [], [{ type: "text" }], 42];
+      +    // An empty content-block array is NOT in this list: STAS-391 removed it, because
+      +    // upstream writes that value on purpose. The test below states why.
+      +    const dropped: unknown[] = [undefined, null, [{ type: "text" }], 42];
+       
+           for (const content of dropped) {
+             expect(() => promptWithToolResult(content)).toThrow(/no content to mark/);
+           }
+         });
+       
+      -  it("cannot print the same bytes for the two empty states, because that equality is the false negative this card was written to remove", () => {
+      -    const ranAndPrintedNothing = promptWithToolResult("");
+      +  it("announces that no content was delivered when the content-block array is empty, because the upstream runtime normalises a content-less untyped result to `content: []` (createToolResultMessage writes `result.content ?? []`) and pi-ai normalises a null content the same way, so an empty array is an expected input on every custom and MCP tool and a throw there deletes the whole prompt instead of one payload", () => {
+      +    // STAS-391 overturns the pin this test used to carry — `[]` throwing, and the
+      +    // two empty states rendering differently. The equality it refused is now
+      +    // asserted, because both values state that a tool delivered no text, and only
+      +    // the array shape was ever upstream's own doing.
+      +    const prompt = promptWithToolResult([]);
+      +    const resumed = buildResumePrompt(
+      +      contextWith([
+      +        { role: "user", content: "Check the tree." },
+      +        { role: "assistant", content: "Checking." },
+      +        { role: "toolResult", toolName: "linear__search_issues", content: [] },
+      +      ]),
+      +    ) as string;
+      +
+      +    for (const rendered of [prompt, resumed]) {
+      +      // The model reads an announcement, not silence and not an empty region.
+      +      expect(rendered).toContain(
+      +        `${ENVELOPE_OPEN} authority="none" delivered="zero-bytes">`,
+      +      );
+      +      expect(markedPayload(rendered)).toBe(ZERO_BYTES_NOTICE_LINE);
+      +      expect(markedPayload(rendered)).not.toBe("");
+      +      // One envelope, authored once, at zero authority.
+      +      expect(rendered.split(ENVELOPE_CLOSE).length - 1).toBe(1);
+      +    }
+       
+      -    expect(ranAndPrintedNothing).toContain("zero bytes of output");
+      -    expect(() => promptWithToolResult([])).toThrow(/no payload was delivered/);
+      +    expect(prompt).toBe(promptWithToolResult(""));
+         });
+       });
+       
+        rc=0
+

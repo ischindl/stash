@@ -1,0 +1,11 @@
+  git reflog show refs/heads/main  -> rc = 0, 288 entries total
+  entries whose message names STAS-396   = 0
+  entries whose message names this card's merge commit = 0
+  newest entry : ee995fcc85 refs/heads/main@{0}: cherry-pick: fix(RUFU-871): read project runtime flags under a transaction-local RLS bypass
+  oldest entry : 1263545d3c refs/heads/main@{287}: merge 1263545d3c: Fast-forward
+  refs/heads/main now = ee995fcc85013a990752307d0f253e9d6fe5ebf4  (identical to the value re-printed in block (a))
+
+  cross-check: every ref in the engine repo that names this card's merge commit or its
+  scratch ref, so the blast radius of this card's writes is enumerated, not assumed:
+    cfe6daa16d9833c11031ae01dd97d5fef5b04928 refs/heads/stas-394-fix-title-idempotence
+    cfe6daa16d9833c11031ae01dd97d5fef5b04928 refs/stas-396-candidate

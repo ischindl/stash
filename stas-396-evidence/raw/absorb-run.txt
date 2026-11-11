@@ -1,0 +1,111 @@
+=== 0. scratch ref name freedom, checked before creating it ===
+for-each-ref refs/stas-396* -> 0 lines (0 == free)
+
+=== 1. re-read the trunk; if it moved, AC1's collision pair is re-printed ===
+refs/heads/main now = ee995fcc85013a990752307d0f253e9d6fe5ebf4
+trunk unchanged since AC1; AC1's collision pair still binds.
+
+=== 2. the old values this card will name as parents, re-printed ===
+old branch tip (delivery ref, still unmoved) = 1677ee018a5d3aee0e74c0669676a1db40c690c5
+trunk tip to absorb                                     = ee995fcc85013a990752307d0f253e9d6fe5ebf4
+
+=== 3. checkout state immediately before the merge ===
+checkout HEAD      : 1677ee018a5d3aee0e74c0669676a1db40c690c5
+symbolic HEAD      : HEAD  (HEAD == detached)
+porcelain before   : 0 lines
+
+=== 4. THE MERGE - one invocation, output verbatim ===
+merge rc = 0
+Merge made by the 'ort' strategy.
+ .changeset/project-runtime-central-read.md         |   7 +
+ .changeset/project-selector-state-icon.md          |   7 +
+ .changeset/rufu-871-project-runtime-visibility.md  |   7 +
+ .changeset/rufu-871-runtime-flags-cold-read.md     |   7 +
+ .changeset/rufu-871-runtime-off-from-cards.md      |   7 +
+ .../rufu-871-runtime-state-honest-fallback.md      |   7 +
+ packages/core/src/central/central-core.ts          |  32 ++
+ .../project-runtime-enabled-flags.test.ts          | 252 ++++++++++++++
+ .../core/src/task-store/async/async-settings.ts    |  77 +++++
+ packages/dashboard/app/App.tsx                     |   3 +
+ packages/dashboard/app/api/projects/projects.ts    |  32 +-
+ packages/dashboard/app/components/ProjectCard.css  |  10 +
+ packages/dashboard/app/components/ProjectCard.tsx  | 155 ++++++++-
+ .../dashboard/app/components/ProjectOverview.tsx   |  13 +
+ .../dashboard/app/components/ProjectSelector.css   |  61 ++++
+ .../dashboard/app/components/ProjectSelector.tsx   | 213 ++++++++++--
+ .../__tests__/ProjectCard.runtime-toggle.test.tsx  | 208 ++++++++++++
+ .../__tests__/ProjectCard.runtime.test.tsx         | 169 ++++++++++
+ .../__tests__/ProjectSelector.runtime.test.tsx     | 158 +++++++++
+ .../__tests__/ProjectSelector.stateIcon.test.tsx   | 217 +++++++++++++
+ .../app/components/dashboard/MainContent.tsx       |   2 +
+ .../dashboard/app/components/dashboard/types.ts    |   7 +
+ packages/dashboard/app/hooks/useProjectActions.ts  |  51 ++-
+ .../utils/__tests__/projectDisplayOrder.test.ts    |  86 +++++
+ .../dashboard/app/utils/projectDisplayOrder.ts     |  67 ++++
+ .../__tests__/project-runtime-cold-read.test.ts    | 238 ++++++++++++++
+ .../__tests__/project-runtime-projection.test.ts   | 361 +++++++++++++++++++++
+ .../src/routes/register-project-routes.ts          | 213 +++++++++++-
+ 28 files changed, 2620 insertions(+), 47 deletions(-)
+ create mode 100644 .changeset/project-runtime-central-read.md
+ create mode 100644 .changeset/project-selector-state-icon.md
+ create mode 100644 .changeset/rufu-871-project-runtime-visibility.md
+ create mode 100644 .changeset/rufu-871-runtime-flags-cold-read.md
+ create mode 100644 .changeset/rufu-871-runtime-off-from-cards.md
+ create mode 100644 .changeset/rufu-871-runtime-state-honest-fallback.md
+ create mode 100644 packages/core/src/task-store/__tests__/project-runtime-enabled-flags.test.ts
+ create mode 100644 packages/dashboard/app/components/__tests__/ProjectCard.runtime-toggle.test.tsx
+ create mode 100644 packages/dashboard/app/components/__tests__/ProjectCard.runtime.test.tsx
+ create mode 100644 packages/dashboard/app/components/__tests__/ProjectSelector.runtime.test.tsx
+ create mode 100644 packages/dashboard/app/components/__tests__/ProjectSelector.stateIcon.test.tsx
+ create mode 100644 packages/dashboard/app/utils/__tests__/projectDisplayOrder.test.ts
+ create mode 100644 packages/dashboard/app/utils/projectDisplayOrder.ts
+ create mode 100644 packages/dashboard/src/routes/__tests__/project-runtime-cold-read.test.ts
+ create mode 100644 packages/dashboard/src/routes/__tests__/project-runtime-projection.test.ts
+CONFLICT lines in the merge output = 0
+
+=== 5. save the candidate so the tested object outlives this checkout ===
+fatal: STAS-396: candidate tip for testing before the delivery ref moves: not a valid old SHA1
+update-ref refs/stas-396-candidate rc=128
+candidate tip = cfe6daa16d9833c11031ae01dd97d5fef5b04928
+
+=== 6. AC3 proofs ===
+-- 6a. the join's two parents (git log -1 --format=%P at the candidate) --
+parents = 1677ee018a5d3aee0e74c0669676a1db40c690c5 ee995fcc85013a990752307d0f253e9d6fe5ebf4
+  parent1 == old branch tip ? YES
+  parent2 == trunk tip      ? YES
+  commit subject: Merge branch 'refs/heads/main' into HEAD
+-- 6b. both ancestries: absorbed, not rewritten --
+  rc(old branch tip is ancestor of candidate) = 0
+  rc(trunk tip is ancestor of candidate)      = 0
+-- 6c. exactly one new commit beyond trunk --
+  rev-list --count oldtip..candidate ^trunk = 1
+-- 6d. the join authored no code on the branch's own paths --
+  merge-base(trunk, old branch tip) = 1d4bcc61847562837b44854bccea95b783d8b943
+  branch's own path count = 11
+  git diff --name-only oldtip candidate -- <those paths>  -> 0 entries
+-- 6e. the candidate relative to the trunk is exactly the branch's own work --
+  git diff --name-only trunk candidate -> 11 entries (branch's own = 11)
+  equal counts ? YES
+.changeset/stas-394-fix-title-idempotence.md
+docs/missions.md
+docs/workflow-steps.md
+packages/core/src/__tests__/mission-fix-title-composition.test.ts
+packages/core/src/async-stores/async-mission-store.ts
+packages/core/src/index.gate.ts
+packages/core/src/index.ts
+packages/core/src/missions/mission-store.ts
+packages/core/src/tasks/fix-title.ts
+packages/core/src/tasks/remediation-steps.ts
+packages/engine/src/workflows/human-merge-approval-boundary.ts
+-- 6f. three-dot divergence of the candidate against the trunk --
+fatal: ambiguous argument 'refs/heads/main...refs/stas-396-candidate': unknown revision or path not in the working tree.
+Use '--' to separate paths from revisions, like this:
+'git <command> [<revision>...] -- [<file>...]'
+-- 6g. tree cleanliness after the merge --
+  porcelain lines = 0
+
+=== 7. the delivery ref was NOT touched by this step ===
+  refs/heads/stas-394-fix-title-idempotence = 1677ee018a5d3aee0e74c0669676a1db40c690c5   (must still equal the AC1 old value 1677ee018a5d3aee0e74c0669676a1db40c690c5)
+  reflog: 1677ee018a refs/heads/stas-394-fix-title-idempotence@{0}: commit (amend): fix(STAS-394): compose fix titles idempotently and record fix ancestry in lineage
+  reflog: 9196cbfd8d refs/heads/stas-394-fix-title-idempotence@{1}: commit: fix(STAS-394): compose fix titles idempotently and record fix ancestry in lineage
+  reflog: 1d4bcc6184 refs/heads/stas-394-fix-title-idempotence@{2}: branch: Created from HEAD

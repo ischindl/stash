@@ -1,0 +1,39 @@
+=== which core test files did the absorbed trunk add or remove? ===
+  A	packages/core/src/task-store/__tests__/project-runtime-enabled-flags.test.ts
+
+=== the STAS-394 regression suite at the candidate tip, run alone ===
+  command: pnpm --filter @fusion/core exec vitest run
+           src/__tests__/mission-fix-title-composition.test.ts --silent=passed-only --reporter=dot
+  raw    : stas-396-evidence/raw/after-fixsuite-candidate-raw.txt
+   Test Files  1 passed (1)
+        Tests  14 passed (14)
+
+=== attribution runs at the trunk tip: how many are required? ===
+  names failing at the candidate but not at the AC2 baseline = 0
+  therefore single-file attribution runs at the trunk tip required = 0 (none)
+  no detach-to-trunk attribution pass was executed, and none was needed; the trunk tip
+  was never checked out in this checkout during Step 4.
+
+=== static-gate validator self-reports at the candidate, verbatim ===
+  check-capacity-pool-id: ok (1879 files inspected)
+  check-cli-runtime-routing: ok
+  docker workspace manifests: all 37 staged before pnpm install
+  [check-lockfile-importers] 38 lockfile importers, 38 manifests, 442 dependency records in sync
+  ✅ @fusion/dashboard mock completeness: all hardcoded mocks cover source imports.
+  ✅ @fusion/engine mock completeness: all hardcoded mocks cover source imports.
+  inert-sync-lane: 0 guard(s) consuming a sync-resolved lane across 0 file(s)
+  [check-runtime-skill-loader-drift] Claude and Grok loaders match as a clean rename-diff (342 lines).
+  retention coverage OK: 111 module-scope Map/Set declarations classified (38 census-registered, 4 bounded, 13 carrying expiry evidence)
+    pending root packages/engine/src: 136 module-scope declarations, 50 still unclassified (not yet gated — RUFU-257 classified the crashing process first)
+    pending root packages/core/src: 144 module-scope declarations, 44 still unclassified (not yet gated — RUFU-257 classified the crashing process first)
+    pending root packages/cli/src: 10 module-scope declarations, 3 still unclassified (not yet gated — RUFU-257 classified the crashing process first)
+  changeset migration references: 9 reference(s) resolve against /home/schindler/git/stash/.fusion/worktrees/stas-396/.engine/stas-396-engine/packages/core/src/postgres/migrations
+
+=== state at the end of Step 4 ===
+  checkout HEAD      = cfe6daa16d9833c11031ae01dd97d5fef5b04928
+  symbolic HEAD      = HEAD (detached)
+  porcelain          = 0 lines
+  refs/stas-396-candidate = cfe6daa16d9833c11031ae01dd97d5fef5b04928
+  delivery ref still      = 1677ee018a5d3aee0e74c0669676a1db40c690c5
+  refs/heads/main         = ee995fcc85013a990752307d0f253e9d6fe5ebf4
+  STAS-395 branch         = e038ea90e247532e4cdc84af33657fb5337adb7f

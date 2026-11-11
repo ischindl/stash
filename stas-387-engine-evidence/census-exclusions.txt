@@ -1,0 +1,51 @@
+# STAS-387 contamination exclusion ledger
+#
+# Why this file exists: the report of directive-shaped text was itself written
+# down, so the literal now sits inside the card that orders the investigation,
+# inside the memory of the two agents who wrote about it, and inside the packet
+# artifact the planner registered. Any search for the literal that does not
+# exclude these files finds the injection inside the report about the
+# injection. Every search in this card applies this list by name.
+#
+# Entry syntax: one path per line, prefixed by its root.
+#   store:<rel>   relative to the project .fusion directory
+#   tree:<rel>    relative to this card worktree root
+# Entries are the measured output of the R4 scan inside
+# raw/environment-census.txt, and that scan re-checks each entry below on every
+# regeneration.
+
+# --- Excluded: quoting the literal only because the report was written down ---
+
+# This card's own specification and board row.
+store:tasks/STAS-387/PROMPT.md
+store:tasks/STAS-387/task.json
+
+# Workflow Planner memory: quotes the literal and names the provenance artifact.
+store:agent-memory/agent-cef4c84b/MEMORY.md
+
+# Reporting agent's own memory: the self-report note about the incident.
+store:agent-memory/agent-e7428828/MEMORY.md
+
+# Registered planning artifact "Card packet: prompt injection in bash tool
+# output (diagnosis-first, unowned)" -- the handoff packet, not an incident row.
+store:artifacts/1793809619149-b5b08c40-21e4-459c-a733-8eae7b913789-Card_packet__prompt_injection_in_bash_tool_output__diagnosis-first__unowned_
+
+# This card's own generator: it must name the string it searches for, so it is
+# by construction a carrier and is excluded from every incident search.
+tree:stas-387-engine-evidence/generate.sh
+
+# Rule, not a path: any file this card later writes that quotes the literal
+# (findings text, task documents mirror, completion summary) is a carrier under
+# this ledger and may never be cited as evidence that the channel carried it.
+
+# --- NOT excluded: candidate incident records, evaluated in Steps 2 and 3 ---
+#
+# These two files also carry the literal, but they are primary run records of
+# agents, not write-ups of the report, so excluding them would hide the only
+# surviving trace of the incident. They are read with a time bound and a
+# row-type discriminator instead.
+#
+#   store:agents/agent-e7428828-runlogs-run-d60fbce1.jsonl
+#     (1 matching line; file mtime 2026-11-04T16:24, the reported incident minute)
+#   store:agents/agent-94d01490-runlogs-run-3d8a64bf.jsonl
+#     (1 matching line; file mtime 2026-11-04T19:06, after the report circulated)

@@ -1,0 +1,75 @@
+=== provenance of the six lineage cards ===
+STAS-296 layers=3
+    sourceType = 'unknown'
+    sourceAgentId = None
+    sourceParentTaskId = None
+    missionFeatureId = None
+    column = 'done'
+    sourceMetadata keys = ['contentFingerprint', 'fileScope', 'fusionBranchContext', 'intentSignature', 'planAdmissionStall']
+      contentFingerprint = 'fdb91cce4b5387c84e9da669b432e2e2f7cb8d5c2e147be5527bec0faa04a571'
+STAS-352 layers=4
+    sourceType = 'unknown'
+    sourceAgentId = None
+    sourceParentTaskId = None
+    missionFeatureId = None
+    column = 'done'
+    sourceMetadata keys = ['contentFingerprint', 'fileScope', 'fusionBranchContext', 'intentSignature']
+      contentFingerprint = '49024c9fd51bed329fd12112093f0e5d5405ba01ba78c7b9ca53b30cbfcb696f'
+STAS-354 layers=5
+    sourceType = 'unknown'
+    sourceAgentId = None
+    sourceParentTaskId = None
+    missionFeatureId = None
+    column = 'done'
+    sourceMetadata keys = ['contentFingerprint', 'duplicateOfTaskIds', 'fileScope', 'fusionBranchContext', 'intentSignature', 'planPremiseRejection']
+      contentFingerprint = '8b6b4c7b9621651b6b13c63f91d9437a67fd7cd929ec51d3fcf317026ec4f33b'
+STAS-355 layers=6
+    sourceType = 'unknown'
+    sourceAgentId = None
+    sourceParentTaskId = None
+    missionFeatureId = None
+    column = 'done'
+    sourceMetadata keys = ['contentFingerprint', 'fileScope', 'fusionBranchContext', 'intentSignature', 'planPremiseRejection']
+      contentFingerprint = 'e73ecb9e48c4b4fb664e70aae0d73459b5696234ac36db1f38225cdcbabbb5db'
+STAS-356 layers=7
+    sourceType = 'unknown'
+    sourceAgentId = None
+    sourceParentTaskId = None
+    missionFeatureId = None
+    column = 'done'
+    sourceMetadata keys = ['contentFingerprint', 'fusionBranchContext', 'intentSignature']
+      contentFingerprint = '081333d508cb53903f90096ce283815e6fc3c795f708d6452bd5e3bd5901a98d'
+STAS-357 layers=8
+    sourceType = 'unknown'
+    sourceAgentId = None
+    sourceParentTaskId = None
+    missionFeatureId = None
+    column = 'todo'
+    sourceMetadata keys = ['contentFingerprint', 'fileScope', 'fusionBranchContext', 'intentSignature', 'wipAdmissionStall']
+      contentFingerprint = 'c6af937462c66ba66677e1c00140bae04268eb4f5cc63f24d9863b78bae85c58'
+
+=== mission stores on this host holding the same remainder ===
+
+=== store files present under .fusion (top level, names only) ===
+  DIR  _archive
+  DIR  agent-memory
+  DIR  agent-memory-archive
+  DIR  agents
+  file archive.db
+  file archive.db-shm
+  file archive.db-wal
+  DIR  artifacts
+  file config.json
+  file engine.lock
+  DIR  engine.lock.lock
+  file fusion.db
+  file fusion.db-shm
+  file fusion.db-wal
+  DIR  lane
+  DIR  logs
+  DIR  memory
+  DIR  memory-archive
+  DIR  tasks
+  DIR  tmp-evidence
+  file tmp-stas312-stranded.patch
+  DIR  worktrees

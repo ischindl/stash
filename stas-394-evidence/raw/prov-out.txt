@@ -1,0 +1,54 @@
+TASKS DIR: /home/schindler/git/stash/.fusion/tasks
+===== STAS-296 | keys: approvedPlanFingerprint,assignedAgentId,attachments,baseBranch,baseCommitSha,branch,branchConflictRecoveryCount,branchContext,checkoutLeaseEpoch,column,columnDwellMs,columnMovedAt,comments,completionHandoffLimboRecoveryCount,consecutiveToolFailureRetryCount,createdAt,cumulativeActiveMs,cumulativePlanningMs,currentStep,customFields,dependencies,description,effectiveNodeSource,en
+    title = "Fix: Fix: Fix: Folder-share→agent MCP access + skill \"Publish & share\" working E2E"
+    sourceType = "unknown"
+    column = "done"
+    branchContext = {"groupId": "BG-MTMY6YSR-9U2MK3", "source": "mission", "assignmentMode": "shared"}
+    sourceMetadata = {"fileScope": ["docs/share-mcp-live-proof.md", "backend/scripts/verify_share_mcp_e2e.py", "docs/testing.md", "CHANGELOG.md"], "intentSignature": {"filePaths": ["docs/share-mcp-live
+===== STAS-352 | keys: assignedAgentId,attachments,baseBranch,baseCommitSha,branch,branchConflictRecoveryCount,branchContext,checkoutLeaseEpoch,column,columnDwellMs,columnMovedAt,comments,completionHandoffLimboRecoveryCount,consecutiveToolFailureRetryCount,createdAt,cumulativeActiveMs,cumulativePlanningMs,currentStep,customFields,dependencies,description,effectiveNodeSource,enabledWorkflowSteps,execu
+    title = "Fix: Fix: Fix: Fix: Folder-share→agent MCP access + skill \"Publish & share\" working E2E"
+    sourceType = "unknown"
+    column = "done"
+    branchContext = {"groupId": "BG-MTMY6YSR-9U2MK3", "source": "mission", "assignmentMode": "shared"}
+    sourceMetadata = {"fileScope": ["backend/scripts/share_mcp_proof.py", "backend/tests/test_share_mcp.py"], "intentSignature": {"filePaths": [], "routePaths": ["/api/v1/me/skills", "/api/v1/skills"],
+===== STAS-354 | keys: approvedPlanFingerprint,attachments,baseBranch,baseCommitSha,branch,branchConflictRecoveryCount,branchContext,checkoutLeaseEpoch,column,columnDwellMs,columnMovedAt,comments,completionHandoffLimboRecoveryCount,consecutiveToolFailureRetryCount,createdAt,cumulativeActiveMs,cumulativePlanningMs,currentStep,customFields,dependencies,description,effectiveNodeSource,enabledWorkflowSte
+    title = "Fix: Fix: Fix: Fix: Fix: Folder-share→agent MCP access + skill \"Publish & share\" working E2E"
+    sourceType = "unknown"
+    column = "done"
+    branchContext = {"groupId": "BG-MTMY6YSR-9U2MK3", "source": "mission", "assignmentMode": "shared"}
+    sourceMetadata = {"fileScope": ["backend/scripts/share_mcp_proof.py", "backend/tests/test_share_mcp_proof_runner.py", "docs/share-mcp-live-proof.md", "docs/testing.md"], "intentSignature": {"filePa
+===== STAS-355 | keys: approvedPlanFingerprint,attachments,baseBranch,baseCommitSha,branch,branchConflictRecoveryCount,branchContext,checkoutLeaseEpoch,column,columnDwellMs,columnMovedAt,completionHandoffLimboRecoveryCount,consecutiveToolFailureRetryCount,createdAt,cumulativeActiveMs,cumulativePlanningMs,currentStep,customFields,dependencies,description,effectiveNodeSource,enabledWorkflowSteps,execut
+    title = "Fix: Fix: Fix: Fix: Fix: Fix: Folder-share→agent MCP access + skill \"Publish & share\" working E2E"
+    sourceType = "unknown"
+    column = "done"
+    branchContext = {"groupId": "BG-MTMY6YSR-9U2MK3", "source": "mission", "assignmentMode": "shared"}
+    sourceMetadata = {"fileScope": [".gitignore", "backend/scripts/share_mcp_proof.py", "backend/tests/test_share_mcp_proof_runner.py", "docs/share-mcp-live-proof.md"], "intentSignature": {"filePaths":
+===== STAS-356 | keys: approvedPlanFingerprint,attachments,baseBranch,baseCommitSha,branch,branchConflictRecoveryCount,branchContext,checkoutLeaseEpoch,column,columnDwellMs,columnMovedAt,comments,completionHandoffLimboRecoveryCount,consecutiveToolFailureRetryCount,createdAt,cumulativeActiveMs,cumulativePlanningMs,currentStep,customFields,dependencies,description,effectiveNodeSource,enabledWorkflowSte
+    title = "Fix: Fix: Fix: Fix: Fix: Fix: Fix: Folder-share→agent MCP access + skill \"Publish & share\" working E2E"
+    sourceType = "unknown"
+    column = "done"
+    branchContext = {"groupId": "BG-MTMY6YSR-9U2MK3", "source": "mission", "assignmentMode": "shared"}
+    sourceMetadata = {"intentSignature": {"filePaths": [], "routePaths": ["/api/v1/me/skills", "/api/v1/skills", "/tasks/stas-355/attachments"], "identifiers": ["./start.sh", "feat/folder-mcp-sharing",
+===== STAS-357 | keys: approvedPlanFingerprint,awaitingApprovalReason,baseBranch,baseCommitSha,branch,branchConflictRecoveryCount,branchContext,checkoutLeaseEpoch,column,columnMovedAt,completionHandoffLimboRecoveryCount,consecutiveToolFailureRetryCount,createdAt,cumulativePlanningMs,currentStep,customFields,dependencies,description,enabledWorkflowSteps,executeRequeueLoopCount,executionStartBranch,gra
+    title = "Fix: Fix: Fix: Fix: Fix: Fix: Fix: Fix: Folder-share→agent MCP access + skill \"Publish & share\" working E2E"
+    sourceType = "unknown"
+    column = "todo"
+    branchContext = {"groupId": "BG-MTMY6YSR-9U2MK3", "source": "mission", "assignmentMode": "shared"}
+    sourceMetadata = {"fileScope": ["docs/testing.md", ".gitignore", "backend/scripts/share_mcp_proof.py", "backend/scripts/share_mcp_live/*", ".stas357-evidence/*", "backend/routers/share_mcp.py", "ba
+===== STAS-141 | keys: assignedAgentId,branchConflictRecoveryCount,checkoutLeaseEpoch,column,columnMovedAt,completionHandoffLimboRecoveryCount,consecutiveToolFailureRetryCount,createdAt,currentStep,customFields,dependencies,description,enabledWorkflowSteps,executeRequeueLoopCount,graphResumeRetryCount,id,lineageId,log,mergeAuditBounceCount,mergeConflictBounceCount,mergeTransientRetryCount,modifiedFil
+    sourceType = "api"
+    column = "done"
+    sourceMetadata = {"contentFingerprint": "b189d46d71511217161d5303357378f7c3adb5886a7ac2eafde14e589be16c0d"}
+    sourceParentTaskId = "STAS-122"
+===== STAS-341 | keys: approvedPlanFingerprint,assignedAgentId,baseBranch,baseCommitSha,branch,branchConflictRecoveryCount,checkoutLeaseEpoch,column,columnDwellMs,columnMovedAt,completionHandoffLimboRecoveryCount,consecutiveToolFailureRetryCount,createdAt,cumulativeActiveMs,cumulativePlanningMs,currentStep,customFields,dependencies,description,effectiveNodeSource,enabledWorkflowSteps,executeRequeueLo
+    title = "Fix: 5 testových zlyhaní na main z zastaraných ciest migrácií po prečíslovaní (0218→0222, 0221→0225) + stamp_only a security_headers"
+    sourceType = "agent_heartbeat"
+    column = "done"
+    sourceMetadata = {"fileScope": ["backend/tests/test_migration_data_convergence.py", "backend/tests/test_migration_close_backfill.py", "backend/tests/migration_ids.py", "backend/tests/test_migration
+    sourceParentTaskId = "STAS-285"
+===== STAS-367 | keys: aiMergeReviewReconciliation,approvedPlanFingerprint,attachments,baseBranch,baseCommitSha,branch,branchConflictRecoveryCount,checkoutLeaseEpoch,column,columnDwellMs,columnMovedAt,completionHandoffLimboRecoveryCount,consecutiveToolFailureRetryCount,createdAt,cumulativeActiveMs,cumulativePlanningMs,currentStep,customFields,dependencies,description,effectiveNodeSource,enabledWorkfl
+    title = "Napravovacia dodávka pre STAS-343: braň"
+    sourceType = "task_refine"
+    column = "done"
+    sourceMetadata = {"fileScope": ["docs/architecture.md", "packages/engine/src/agent-tools.ts", "packages/engine/src/execution/hold-release.ts", "packages/engine/src/__tests__/promote-unplanned-refus
+    sourceParentTaskId = "STAS-343"

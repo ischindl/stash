@@ -1,0 +1,5 @@
+# Scratch measurement scripts. The captures they emit (*.txt / *.json) are the
+# deliverable; the generators stay on disk untracked so the lane stays clean,
+# matching the stas-394-evidence/ precedent committed at de5515fd1.
+raw/*.py
+raw/*.sh

@@ -1,0 +1,7 @@
+left_right_main_dot_wedged=1 0
+is_ancestor_rc=0
+lane_porcelain_untracked_all=0
+lane_ignored_lines=2
+NATIVE_REMOVE_RC=0
+native_remove_stderr=
+lane_dir_remains=NO

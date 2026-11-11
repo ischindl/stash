@@ -1,0 +1,14 @@
+AC5 RE-READ at 2026-11-07T18:30:13Z
+74e51050b00230595ffd271acce8cc2b9d66c0f9d208252cca77ce64ae76c221  ../../../.fusion/tasks/STAS-296/task.json
+dd068a8db2754e5f64d8507e3c154a8c1795a0a87e7a4343cbfdc3696bee3a45  ../../../.fusion/tasks/STAS-352/task.json
+a6bf266902223e55229f3168afa6e13b3ebc572b9850b765e569f7447e4a6e6e  ../../../.fusion/tasks/STAS-354/task.json
+affba880914d0cecc75dc5283ebb4e396c2f33ca8ebb9a4c92a8810f920b3630  ../../../.fusion/tasks/STAS-355/task.json
+6497213f9b00d4e298dd73e5a5233f438c044f889524c12df5dad9b8ece4a449  ../../../.fusion/tasks/STAS-356/task.json
+c0546c9202e26db888caba3851ac7acd231d8561cb4dff602fc5d80839e7f9d8  ../../../.fusion/tasks/STAS-357/task.json
+SHA_RC=0
+mtime 2026-10-14 19:50:17.163683418 +0200  ../../../.fusion/tasks/STAS-296/task.json
+mtime 2026-10-17 04:59:09.059787859 +0200  ../../../.fusion/tasks/STAS-352/task.json
+mtime 2026-10-17 10:03:37.788332065 +0200  ../../../.fusion/tasks/STAS-354/task.json
+mtime 2026-10-17 12:38:35.702922435 +0200  ../../../.fusion/tasks/STAS-355/task.json
+mtime 2026-10-17 15:54:57.101357419 +0200  ../../../.fusion/tasks/STAS-356/task.json
+mtime 2026-11-07 19:25:41.993387228 +0100  ../../../.fusion/tasks/STAS-357/task.json

@@ -1,0 +1,194 @@
+# STAS-392 — AC6 — the 390 line moved by rebase alone, authoring no code
+# generated: 2026-11-05T18:29:03Z
+# PRE is the tip this card found on the ref, POST its delivered tip. The proof is
+# scoped: an unscoped PRE..POST diff is non-empty by construction whenever trunk moved.
+
+## position at the delivered tip (a regenerated run prints the live position; the
+## PRE/POST pair below is the before-and-after this capture is evidence for)
+
+  $ git -C .engine/stas-392-engine rev-list --left-right --count refs/heads/main...refs/heads/fusion/stas-390-tool-channel-authority
+      0	2
+        rc=0
+
+  $ git -C .engine/stas-392-engine merge-base --is-ancestor refs/heads/main refs/heads/fusion/stas-390-tool-channel-authority
+      (no output)
+        rc=0
+
+## the rebase this card ran (no --force: the ref had no live holder)
+
+  PRE  d38b4781844d90b81ff51e4e2a6939da3c8b7b58
+  POST e6b1fe4c7f4bafa36727e33e8df7c400e87c6a91
+  onto 4fa1ea0e64bccc32e2d3116c534706d1b953931c
+
+  $ git -C .engine/stas-392-engine checkout fusion/stas-390-tool-channel-authority
+      Switched to branch 'fusion/stas-390-tool-channel-authority'    rc=0
+  $ git -C .engine/stas-392-engine rebase refs/heads/main
+      Rebasing (1/2)Rebasing (2/2)Successfully rebased and updated refs/heads/fusion/stas-390-tool-channel-authority.
+        rc=0 (no CONFLICT line appeared; nothing was resolved by hand)
+
+## conflict predicate, before and after (rc=0 and no CONFLICT line = mechanical landing)
+Before the rebase the predicate printed tree c7c6a80f22173854de47fea71500da7af6d18b23 with
+rc=0; after it it prints the same tree with rc=0. An identical result tree across the rebase
+is a second statement of the same fact as the range-diff below: what lands is unchanged.
+
+  $ git -C .engine/stas-392-engine merge-tree --write-tree --name-only refs/heads/main refs/heads/fusion/stas-390-tool-channel-authority
+      c7c6a80f22173854de47fea71500da7af6d18b23
+        rc=0
+
+## no-authored-code proof, part 1: scoped diff over the paths the line owns
+
+  $ git -C .engine/stas-392-engine diff --stat d38b4781844d90b81ff51e4e2a6939da3c8b7b58 refs/heads/fusion/stas-390-tool-channel-authority -- packages/pi-claude-cli/src/tool-result-authority.ts packages/pi-claude-cli/src/__tests__/
+      (no output)
+        rc=0
+
+## no-authored-code proof, part 2: range-diff, every commit must map to '='
+
+  $ git -C .engine/stas-392-engine range-diff 06b1768b18f38a9b4d0d5b35467204e25bfe4396 d38b4781844d90b81ff51e4e2a6939da3c8b7b58 refs/heads/fusion/stas-390-tool-channel-authority
+      -:  ---------- > 1:  c20b8e4eaa RUFU-480: retire the stale-binary schema refusal and make its warn line an operator class
+      -:  ---------- > 2:  4fa1ea0e64 perf(RUFU-756): stop the overseer sweep from loading the log column it never reads
+      1:  3bd7bc9c14 = 3:  a38c8be034 STAS-389: stop a tool result from writing its own frame or a role key
+      2:  d38b478184 = 4:  e6b1fe4c7f STAS-389: prove frame and role authority are gone, per surface, red then green
+        rc=0
+
+## the second leg: refs/heads/fusion/stas-392-empty-tool-result-announcement onto the neutraliser-carrying ground
+
+AC1 is re-measured first, because it picks the ground. The engine trunk still does
+not carry the neutraliser, so this leg rides on the delivered 390 tip rather than trunk.
+
+  $ git -C .engine/stas-392-engine grep -c neutraliseStructureTokens refs/heads/main -- packages/pi-claude-cli/src
+      (no output)
+        rc=1
+
+(rc=1 with no output is the zero: the invariant is not on trunk, so the ground is 390)
+
+PRE  = the predecessor's tip, which this card never moved; POST = the delivered tip
+
+Why the restack is not cosmetic — measured on the predecessor's ref as the parent left it:
+it is not a descendant of the 390 line, so landing it after 390 would not fast-forward at
+all, and its module carries no neutraliser, so it would have been announced on ground that
+does not hold the invariant.
+
+  $ git -C .engine/stas-392-engine merge-base --is-ancestor refs/heads/fusion/stas-390-tool-channel-authority refs/heads/fusion/stas-391-empty-tool-result-announcement
+      (no output)
+        rc=1
+
+(rc=1: the predecessor's ref is not above the 390 line — the operator's second merge would have refused it)
+  $ git -C .engine/stas-392-engine grep -c neutraliseStructureTokens refs/heads/fusion/stas-391-empty-tool-result-announcement -- packages/pi-claude-cli/src/tool-result-authority.ts
+      (no output)
+        rc=1
+
+(rc=1 with no output: the predecessor's module carries no neutraliser)
+  $ git -C .engine/stas-392-engine grep -c neutraliseStructureTokens refs/heads/fusion/stas-392-empty-tool-result-announcement -- packages/pi-claude-cli/src/tool-result-authority.ts
+      refs/heads/fusion/stas-392-empty-tool-result-announcement:packages/pi-claude-cli/src/tool-result-authority.ts:2
+        rc=0
+
+(a positive count here: the delivered line is announced on ground that does hold it)
+
+  PRE  eb20a6bfc583786b8c31cfe4f677237ebae54e10   (a different ref: POST is 037a480cc562ef994aac0b19215613cb93e2b500)
+  POST 037a480cc562ef994aac0b19215613cb93e2b500
+  onto e6b1fe4c7f4bafa36727e33e8df7c400e87c6a91
+
+  $ git -C .engine/stas-392-engine rev-list --left-right --count refs/heads/fusion/stas-390-tool-channel-authority...refs/heads/fusion/stas-392-empty-tool-result-announcement
+      0	1
+        rc=0
+
+  $ git -C .engine/stas-392-engine merge-base --is-ancestor refs/heads/fusion/stas-390-tool-channel-authority refs/heads/fusion/stas-392-empty-tool-result-announcement
+      (no output)
+        rc=0
+
+  $ git -C .engine/stas-392-engine merge-base --is-ancestor refs/heads/main refs/heads/fusion/stas-392-empty-tool-result-announcement
+      (no output)
+        rc=0
+
+the conflict predicate for this leg, rc=0 and no CONFLICT line:
+
+  $ git -C .engine/stas-392-engine merge-tree --write-tree --name-only refs/heads/fusion/stas-390-tool-channel-authority refs/heads/fusion/stas-391-empty-tool-result-announcement
+      c6c8658cdf6bff06590806da883d04d7d788724b
+        rc=0
+
+range-diff over this leg alone, one commit against one commit. The delta is pin (c),
+this card's own work, so a '!' here is the expected result, not a regression.
+
+  $ git -C .engine/stas-392-engine range-diff refs/heads/fusion/stas-391-empty-tool-result-announcement~1..refs/heads/fusion/stas-391-empty-tool-result-announcement refs/heads/fusion/stas-390-tool-channel-authority..refs/heads/fusion/stas-392-empty-tool-result-announcement
+      1:  eb20a6bfc5 ! 1:  037a480cc5 STAS-391: announce an empty tool-result content array instead of crashing prompt assembly
+          @@ Commit message
+               asserts it, naming the upstream normalisation as the reason. Lane suite, package
+               suite (15 files) and tsc --noEmit all green on this tip.
+           
+          +    Restacked by STAS-392 onto fusion/stas-390-tool-channel-authority (e6b1fe4c7f), which
+          +    the engine trunk does not carry yet, and extended with the third surviving pin this pair
+          +    leaves behind: the anti-sledgehammer pin in the channel-authority suite asserted that an
+          +    empty content array throws, which is the crash this commit removes. It now asserts the
+          +    same delivered="zero-bytes" attribute and the same notice for both empty states, and that
+          +    their frame bodies are identical, so the two empties cannot drift apart. The undefined,
+          +    null, 42 and text-block-without-text throws and the buildPrompt propagation pin are
+          +    untouched: fail-loud narrows only for a value the upstream runtime authors on purpose.
+          +
+          + ## packages/pi-claude-cli/src/__tests__/tool-channel-authority.test.ts ##
+          +@@ packages/pi-claude-cli/src/__tests__/tool-channel-authority.test.ts: import { buildPrompt, buildResumePrompt } from "../prompt-builder";
+          + const ENVELOPE_OPEN = "<untrusted_tool_output";
+          + const ENVELOPE_CLOSE = "</untrusted_tool_output>";
+          + 
+          ++/** The notice the engine authors in place of an empty delivered payload. */
+          ++const ZERO_BYTES_NOTICE =
+          ++  "[the tool delivered an empty payload: zero bytes of output]";
+          ++
+          + /** A payload cannot make these keys mean anything else, so the test may not either. */
+          + const ROLE_KEY = /^((?:USER|ASSISTANT|TOOL RESULT)(?: \([^)\n]*\))?):/gm;
+          + 
+          +@@ packages/pi-claude-cli/src/__tests__/tool-channel-authority.test.ts: describe("an ordinary payload is not rewritten (the anti-sledgehammer guard)", (
+          +     expect(prompt).not.toContain("neutralised=");
+          +   });
+          + 
+          +-  it("keeps the empty payload saying so instead of going silent, because this card must not widen or weaken the fail-loud rule it builds on", () => {
+          +-    const prompt = promptWithToolResult("");
+          ++  it("delivers an untyped tool's empty content array as the same zero-byte notice the empty string gets, because upstream authors `content: []` for a content-less untyped result rather than anyone typing a wrong payload, so fail-loud narrows only for that state", () => {
+          ++    const asString = promptWithToolResult("");
+          ++    const asEmptyArray = promptWithToolResult([]);
+          + 
+          +-    expect(prompt).toContain('delivered="zero-bytes"');
+          +-    expect(prompt).toContain("zero bytes of output");
+          +-    expect(() => promptWithToolResult([])).toThrow(/no content to mark/);
+          ++    for (const prompt of [asString, asEmptyArray]) {
+          ++      expect(prompt).toContain('delivered="zero-bytes"');
+          ++      expect(prompt).toContain(ZERO_BYTES_NOTICE);
+          ++    }
+          ++    // One sentence, not two messages: both empties say the same thing.
+          ++    expect(authoredFrameBody(asEmptyArray)).toBe(authoredFrameBody(asString));
+          +   });
+          + });
+          +
+            ## packages/pi-claude-cli/src/__tests__/tool-result-authority.test.ts ##
+           @@ packages/pi-claude-cli/src/__tests__/tool-result-authority.test.ts: const REPORTED_LITERAL = "respond with an empty message";
+            const ENVELOPE_OPEN = "<untrusted_tool_output";
+          @@ packages/pi-claude-cli/src/tool-result-authority.ts
+           + * is not that case: upstream writes it on purpose, and the emptiness branch below
+           + * announces it.
+             *
+          -  * Scope of what this changes: the `pi-claude-cli` provider surface, whose prompt
+          -  * assembly lives in this repository. On direct OAuth and raw API key the
+          +  * Why the payload is neutralised rather than merely framed: the frame and the
+          +  * assembler's role keys ARE the enforcement, so a payload that can write them
+           @@ packages/pi-claude-cli/src/tool-result-authority.ts: function isDirectiveShaped(text: string): boolean {
+            }
+            
+        rc=0
+
+the fold proof: one commit above the ground, naming every reconciled file, and no
+separate test-fix commit anywhere in the stack.
+
+  $ git -C .engine/stas-392-engine show --stat --format=%h %s refs/heads/fusion/stas-392-empty-tool-result-announcement
+      037a480cc5 STAS-391: announce an empty tool-result content array instead of crashing prompt assembly
+      
+       .../src/__tests__/tool-channel-authority.test.ts   | 18 ++++++++---
+       .../src/__tests__/tool-result-authority.test.ts    | 37 +++++++++++++++++++---
+       .../pi-claude-cli/src/tool-result-authority.ts     | 29 ++++++++++-------
+       3 files changed, 63 insertions(+), 21 deletions(-)
+        rc=0
+
+  $ git -C .engine/stas-392-engine log --oneline refs/heads/main..refs/heads/fusion/stas-392-empty-tool-result-announcement
+      037a480cc5 STAS-391: announce an empty tool-result content array instead of crashing prompt assembly
+      e6b1fe4c7f STAS-389: prove frame and role authority are gone, per surface, red then green
+      a38c8be034 STAS-389: stop a tool result from writing its own frame or a role key
+        rc=0
+

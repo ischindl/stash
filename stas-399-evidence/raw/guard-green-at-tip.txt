@@ -1,0 +1,27 @@
+### STAS-399 final guard + reconciled-pin run at the DELIVERED TIP (clean tracked tree)
+
+Run at the delivered implementation commit, after both commits existed, with no tracked modification:
+  git status --porcelain --untracked-files=no -> (empty)
+  HEAD = 324da3366f7ab6551bd8280a30fa498475c1a282   (refs/heads/fusion/stas-399)
+  cwd  = packages/engine
+  command: NO_COLOR=1 node_modules/.bin/vitest run \
+             src/__tests__/agent-memory-eviction-notice.test.ts \
+             src/__tests__/agent-instructions.test.ts \
+             --silent=passed-only --reporter=dot
+  (exit status read from PIPESTATUS, i.e. apart from the tail pipe)
+
+ RUN  v4.1.10 .../packages/engine
+ Test Files  2 passed (2)
+      Tests  106 passed (106)
+   Duration  12.29s
+ rc=0
+ started_utc: 2026-11-10T05:33:07Z
+
+Reading: the new guard file contributes 14 tests and the pre-existing instruction suite contributes the
+remaining 92, so the reconciled pins (`agent-instructions.test.ts`, whose clamp assertions this card had to
+re-home onto the named-eviction notice) pass ALONGSIDE the new file in one invocation rather than being
+weakened or skipped. skipped = 0 in both files; no test name appears in both files.
+
+This closes the Verification bullet "guard file ... then green with passing count at least 6 and skipped
+exactly 0" at the exact bytes that are delivered, not only at the earlier working-tree state.
+(The earlier green runs, at the pre-commit tree, remain in guard-green.txt and guard-green-first-pass.txt.)

@@ -1,0 +1,65 @@
+packages/core/src/__tests__/postgres/mission-store.pg.test.ts:1420:    const firstFix = await m.createGeneratedFixFeature(root.id, failedRun.id, [], "repair");
+packages/core/src/__tests__/postgres/mission-store.pg.test.ts:1424:    const secondFix = await m.createGeneratedFixFeature(secondRoot.id, secondRun.id, [], "repair");
+packages/core/src/__tests__/postgres/mission-store.pg.test.ts:1464:    const fix = await m.createGeneratedFixFeature(root.id, failedRun.id, [], "repair");
+packages/core/src/__tests__/postgres/mission-store.pg.test.ts:1501:    const fix = await m.createGeneratedFixFeature(feature.id, run.id, [assertion!.id], "expected vs actual");
+packages/core/src/__tests__/postgres/mission-store.pg.test.ts:1503:    expect((await m.createGeneratedFixFeature(feature.id, run.id, [assertion!.id])).id).toBe(fix.id);
+packages/core/src/__tests__/postgres/mission-store.pg.test.ts:1526:      source = await m.createGeneratedFixFeature(source.id, run.id, [], "deterministic failure");
+packages/core/src/__tests__/postgres/mission-store.pg.test.ts:1532:    await expect(m.createGeneratedFixFeature(source.id, fourthRun.id, [], "deterministic failure"))
+packages/core/src/__tests__/postgres/mission-store.pg.test.ts:1620:    const fix = await m.createGeneratedFixFeature(root.id, run.id, [], "repair");
+packages/core/src/__tests__/postgres/mission-store.pg.test.ts:1831:    await expect(m.createGeneratedFixFeature(feature.id, old.id, [], "stale", undefined, undefined, { requireCurrentRun: true }))
+packages/core/src/__tests__/postgres/mission-store.pg.test.ts:1846:    const child = await m.createGeneratedFixFeature(root.id, initialRun.run.id, [], "repair");
+packages/core/src/__tests__/postgres/mission-store.pg.test.ts:1855:    await expect(m.createGeneratedFixFeature(child.id, childRun.id, [], "late repair", undefined, undefined, { requireCurrentRun: true }))
+packages/core/src/__tests__/postgres/mission-store.pg.test.ts:1874:    const ancestor = await m.createGeneratedFixFeature(root.id, rootRun.id, [], "repair");
+packages/core/src/__tests__/postgres/mission-store.pg.test.ts:1876:    const child = await m.createGeneratedFixFeature(ancestor.id, ancestorRun.id, [], "repair");
+packages/core/src/__tests__/postgres/mission-store.pg.test.ts:1892:      await expect(competing.createGeneratedFixFeature(child.id, childRun.id, [], "late", undefined, undefined, { requireCurrentRun: true }))
+packages/core/src/__tests__/postgres/mission-store.pg.test.ts:1916:    const ancestor = await m.createGeneratedFixFeature(root.id, rootRun.id, [], "repair");
+packages/core/src/__tests__/postgres/mission-store.pg.test.ts:1918:    const child = await m.createGeneratedFixFeature(ancestor.id, ancestorRun.id, [], "repair");
+packages/core/src/__tests__/postgres/mission-store.pg.test.ts:1950:      admission = m.createGeneratedFixFeature(child.id, childRun.id, [], "late", undefined, undefined, { requireCurrentRun: true })
+packages/core/src/__tests__/postgres/mission-store.pg.test.ts:1985:      primary.createGeneratedFixFeature(feature.id, run.id, [], "first"),
+packages/core/src/__tests__/postgres/mission-store.pg.test.ts:1986:      competing.createGeneratedFixFeature(feature.id, run.id, [], "second"),
+packages/core/src/__tests__/postgres/mission-validation-repair.pg.test.ts:56:    const fix = await store.createGeneratedFixFeature(feature.id, failedRun.id, [], "repair");
+packages/core/src/async-stores/async-mission-store.ts:2389:  async createGeneratedFixFeature(
+packages/core/src/missions/mission-store.ts:3505:  createGeneratedFixFeature(
+packages/core/src/missions/mission-store.ts:3674:   * pair, if any. Used to make {@link createGeneratedFixFeature} idempotent
+packages/core/src/missions/mission-store.ts:3696:   * Used by {@link createGeneratedFixFeature} so a recovery/reaper re-drive does
+packages/engine/src/__tests__/mission-autopilot-end-to-end.test.ts:160:    createGeneratedFixFeature: vi.fn(),
+packages/engine/src/__tests__/mission-execution-loop.test.ts:330:    createGeneratedFixFeature: vi.fn((sourceFeatureId: string, runId: string, _failedAssertionIds: string[]) => {
+packages/engine/src/__tests__/mission-execution-loop.test.ts:686:      expect(missionStore.createGeneratedFixFeature).not.toHaveBeenCalled();
+packages/engine/src/__tests__/mission-execution-loop.test.ts:702:      expect(missionStore.createGeneratedFixFeature).not.toHaveBeenCalled();
+packages/engine/src/__tests__/mission-execution-loop.test.ts:756:      expect(missionStore.createGeneratedFixFeature).not.toHaveBeenCalled();
+packages/engine/src/__tests__/mission-execution-loop.test.ts:1824:      expect(missionStore.createGeneratedFixFeature).not.toHaveBeenCalled();
+packages/engine/src/__tests__/mission-execution-loop.test.ts:2301:      expect(missionStore.createGeneratedFixFeature).not.toHaveBeenCalled();
+packages/engine/src/__tests__/mission-execution-loop.test.ts:2379:      expect(missionStore.createGeneratedFixFeature).not.toHaveBeenCalled();
+packages/engine/src/__tests__/mission-execution-loop.test.ts:2522:      missionStore.createGeneratedFixFeature.mockImplementationOnce(() => {
+packages/engine/src/__tests__/mission-execution-loop.test.ts:2536:      expect(missionStore.createGeneratedFixFeature).toHaveBeenCalledExactlyOnceWith(
+packages/engine/src/__tests__/mission-execution-loop.test.ts:2568:      expect(missionStore.createGeneratedFixFeature).not.toHaveBeenCalled();
+packages/engine/src/__tests__/mission-execution-loop.test.ts:2631:      expect(missionStore.createGeneratedFixFeature).not.toHaveBeenCalled();
+packages/engine/src/__tests__/mission-execution-loop.test.ts:2755:      expect(missionStore.createGeneratedFixFeature).not.toHaveBeenCalled();
+packages/engine/src/__tests__/mission-execution-loop.test.ts:2801:      expect(missionStore.createGeneratedFixFeature).not.toHaveBeenCalled();
+packages/engine/src/__tests__/mission-execution-loop.test.ts:2839:      expect(missionStore.createGeneratedFixFeature).not.toHaveBeenCalled();
+packages/engine/src/__tests__/mission-execution-loop.test.ts:2889:        expect(missionStore.createGeneratedFixFeature).not.toHaveBeenCalled();
+packages/engine/src/__tests__/mission-execution-loop.test.ts:2933:        expect(missionStore.createGeneratedFixFeature).toHaveBeenCalled();
+packages/engine/src/__tests__/mission-execution-loop.test.ts:2960:      expect(missionStore.createGeneratedFixFeature).not.toHaveBeenCalled();
+packages/engine/src/__tests__/mission-execution-loop.test.ts:3089:        expect(missionStore.createGeneratedFixFeature).not.toHaveBeenCalled();
+packages/engine/src/__tests__/mission-execution-loop.test.ts:3158:      // createGeneratedFixFeature should NOT be called
+packages/engine/src/__tests__/mission-execution-loop.test.ts:3159:      expect(missionStore.createGeneratedFixFeature).not.toHaveBeenCalled();
+packages/engine/src/__tests__/mission-execution-loop.test.ts:3206:      expect(missionStore.createGeneratedFixFeature).not.toHaveBeenCalled();
+packages/engine/src/__tests__/mission-execution-loop.test.ts:3413:      expect(missionStore.createGeneratedFixFeature).not.toHaveBeenCalled();
+packages/engine/src/__tests__/mission-execution-loop.test.ts:3539:      expect(missionStore.createGeneratedFixFeature).not.toHaveBeenCalled();
+packages/engine/src/__tests__/mission-execution-loop.test.ts:3571:      // When createGeneratedFixFeature is called with exhausted budget,
+packages/engine/src/__tests__/mission-execution-loop.test.ts:3573:      missionStore.createGeneratedFixFeature = vi.fn().mockImplementation(() => {
+packages/engine/src/__tests__/mission-execution-loop.test.ts:3634:      // When createGeneratedFixFeature is called with exhausted budget,
+packages/engine/src/__tests__/mission-execution-loop.test.ts:3636:      missionStore.createGeneratedFixFeature = vi.fn().mockImplementation(() => {
+packages/engine/src/__tests__/reliability-interactions/mission-validator-behavioral-posture.test.ts:199:    createGeneratedFixFeature: vi.fn((sourceFeatureId: string, runId: string) => {
+packages/engine/src/__tests__/reliability-interactions/mission-validator-behavioral-posture.test.ts:351:    expect(missionStore.createGeneratedFixFeature).toHaveBeenCalled();
+packages/engine/src/__tests__/reliability-interactions/mission-validator-behavioral-posture.test.ts:435:    expect(missionStore.createGeneratedFixFeature).not.toHaveBeenCalled();
+packages/engine/src/__tests__/reliability-interactions/mission-validator-behavioral-posture.test.ts:496:    expect(missionStore.createGeneratedFixFeature).toHaveBeenCalled();
+packages/engine/src/__tests__/reliability-interactions/mission-validator-behavioral-posture.test.ts:525:    expect(missionStore.createGeneratedFixFeature).not.toHaveBeenCalled();
+packages/engine/src/__tests__/reliability-interactions/mission-validator-behavioral-posture.test.ts:550:    expect(missionStore.createGeneratedFixFeature).not.toHaveBeenCalled();
+packages/engine/src/__tests__/reliability-interactions/mission-validator-behavioral-posture.test.ts:573:    expect(missionStore.createGeneratedFixFeature).toHaveBeenCalled();
+packages/engine/src/__tests__/reliability-interactions/mission-validator-behavioral-posture.test.ts:574:    const call = (missionStore.createGeneratedFixFeature as any).mock.calls[0];
+packages/engine/src/__tests__/reliability-interactions/mission-validator-behavioral-posture.test.ts:623:    expect(missionStore.createGeneratedFixFeature).not.toHaveBeenCalled();
+packages/engine/src/__tests__/reliability-interactions/mission-validator-behavioral-posture.test.ts:681:    missionStore.createGeneratedFixFeature = vi.fn(() => existingFix) as any;
+packages/engine/src/missions/mission-execution-loop.ts:2155:          const fixFeature = await this.missionStore.createGeneratedFixFeature(
+packages/engine/src/missions/mission-execution-loop.ts:2166:        // Auto-triage only a newly untriaged fix. createGeneratedFixFeature is
+packages/engine/src/missions/mission-execution-loop.ts:2331:      // Explicitly does NOT call createGeneratedFixFeature — inconclusive mints

@@ -1,0 +1,110 @@
+STAS-394 STEP 0 - BOARD BASELINE AND LINEAGE CENSUS
+measured in-run, this worktree, no engine access
+
+== R1 lane baseline ==
+git rev-parse HEAD      : 869d86b241e1d1a157cc1ca39d471dbcbc209f22
+branch                  : fusion/stas-394
+git status --porcelain  : 0 lines at run start (pristine lane, measured before any write)
+                      : 1 line at capture time; that one entry is this card's own evidence
+                        directory stas-394-evidence/, created by this step
+
+== records read (read-only, project task store, derived path = 3 levels above lane) ==
+.fusion/tasks/<ID>/task.json for STAS-296, 352, 354, 355, 356, 357
+
+PREFIX LAYER TABLE (prefix literal = 'Fix: ', counted as exact leading occurrences)
+id         lay claim fixRd repl sourceParentTaskId   column     status             created
+STAS-296     3    OK     3    0 ABSENT               done       None               2026-09-25T21:41:28.605Z
+STAS-352     4    OK     1    0 ABSENT               done       None               2026-10-14T17:55:09.287Z
+STAS-354     5    OK     1    0 ABSENT               done       failed             2026-10-17T03:02:24.811Z
+STAS-355     6    OK     0    0 ABSENT               done       None               2026-10-17T08:07:16.198Z
+STAS-356     7    OK     6    0 ABSENT               done       None               2026-10-17T10:42:34.141Z
+STAS-357     8    OK     8    0 ABSENT               todo       awaiting-approval  2026-10-17T13:56:49.943Z
+
+REMAINDER BYTE-IDENTITY ACROSS THE LINE
+reference remainder (STAS-296): 'Folder-share→agent MCP access + skill "Publish & share" working E2E'
+sha256(remainder)             : 2b55badcc3805b3d27087320604cc1f609e09afc853fcab27c21e39ef8630ef8
+  STAS-296: identical=True  sha256=2b55badcc3805b3d
+  STAS-352: identical=True  sha256=2b55badcc3805b3d
+  STAS-354: identical=True  sha256=2b55badcc3805b3d
+  STAS-355: identical=True  sha256=2b55badcc3805b3d
+  STAS-356: identical=True  sha256=2b55badcc3805b3d
+  STAS-357: identical=True  sha256=2b55badcc3805b3d
+
+MECHANISM TEST  (A = composition at child-creation from parent's current title; B = mutation of same record once per fix round)
+  STAS-296: layers=3 postReviewFixCount=3 -> B possible (counter == layers)
+  STAS-352: layers=4 postReviewFixCount=1 -> B impossible: counter != layers
+  STAS-354: layers=5 postReviewFixCount=1 -> B impossible: counter != layers
+  STAS-355: layers=6 postReviewFixCount=0 -> B impossible: layers > 0 while fix-round counter is ZERO
+  STAS-356: layers=7 postReviewFixCount=6 -> B impossible: counter != layers
+  STAS-357: layers=8 postReviewFixCount=8 -> B possible (counter == layers)
+
+AC3 LINEAGE-FIELD STATE on this family
+  STAS-296: sourceParentTaskId=ABSENT
+  STAS-352: sourceParentTaskId=ABSENT
+  STAS-354: sourceParentTaskId=ABSENT
+  STAS-355: sourceParentTaskId=ABSENT
+  STAS-356: sourceParentTaskId=ABSENT
+  STAS-357: sourceParentTaskId=ABSENT
+
+STEP-0 RECORD HASHES (re-measured in Step 5 for AC5 byte-identity)
+  74e51050b00230595ffd271acce8cc2b9d66c0f9d208252cca77ce64ae76c221  STAS-296
+  dd068a8db2754e5f64d8507e3c154a8c1795a0a87e7a4343cbfdc3696bee3a45  STAS-352
+  a6bf266902223e55229f3168afa6e13b3ebc572b9850b765e569f7447e4a6e6e  STAS-354
+  affba880914d0cecc75dc5283ebb4e396c2f33ca8ebb9a4c92a8810f920b3630  STAS-355
+  6497213f9b00d4e298dd73e5a5233f438c044f889524c12df5dad9b8ece4a449  STAS-356
+  1e0050f9b11d6067a9d8ae25b0733fc7927da668f19b46b6f19197b93bce6260  STAS-357
+
+== MECHANISM VERDICT ==
+Verdict: MECHANISM A - composition at CHILD-CREATION time from the parent's CURRENT title.
+Decisive cell: STAS-355 carries 6 prefix layers while its postReviewFixCount is 0.
+  A record that never completed a post-review fix round cannot have mutated its own title
+  six times, so mechanism B (self-mutation once per fix round on the same record) is refuted
+  by the data, not by preference. Corroborated independently by STAS-352 (4 layers / 1 fix),
+  STAS-354 (5 / 1) and STAS-356 (7 / 6); only 296 and 357 coincidentally have counter==layers.
+Layers equal generation depth and increase by exactly one per generation (3,4,5,6,7,8) while
+the remainder of the title is byte-identical (sha256 2b55badcc3805b3d...) across all six.
+
+== AC3 PRE-FINDING (measured here, confirmed against engine code in Step 2) ==
+The engine's existing lineage-parent field is 'sourceParentTaskId'. It is POPULATED on
+other records of this same board (STAS-141 -> STAS-122, 261 -> 241, 282 -> 264, 315 -> 270,
+341 -> 285, 345 -> 298, 367 -> 343) and ABSENT on all six cards of this lineage family.
+So the field already serves and only this creation path fails to use it. STAS-341 is the
+healthy shape: exactly 1 prefix layer AND a populated sourceParentTaskId.
+
+== claimant-number agreement ==
+claimant said 3,4,5,6,7,8 for 296/352/354/355/356/357; measured 3,4,5,6,7,8. No disagreement.
+
+== AC1 CLOSURE (measured at Step 5, this is the proof AC1 asks for) ==
+STAS-357 is still open, still on the board, and still carrying exactly eight "Fix: " layers.
+Measured again at raw/ac5-reread.txt and again at raw/ac5_v2_samples.txt:
+    title sha256          25c5e43caf9888818d205c2aa6836fd82033833f75aa5a69ca426a4149334a57
+    layers                8
+    remainder sha256      2b55badcc3805b3d27087320604cc1f609e09afc853fcab27c21e39ef8630ef8
+What the eight layers actually are: eight copies of the same five characters, indistinguishable
+from each other inside the stored string. Their order of arrival cannot be read off STAS-357 alone;
+it is inferred from the generation ladder measured in this step, where each card in the chain carries
+exactly one more layer than its parent: STAS-296 3, STAS-352 4, STAS-354 5, STAS-355 6, STAS-356 7,
+STAS-357 8. STAS-357's eighth layer is therefore the one this chain added last, and the seven ahead
+of it arrived by composition, not by any repair or rename. That ladder is why AC1 names STAS-357: it
+is the deepest still-open record on the board.
+Nothing on this card renamed, retitled, repaired or restacked that title. AC1 is satisfied by
+leaving the record exactly as found: the accumulation this card fixes is the one that produced
+those eight layers, and they remain as the reproduction evidence for anyone who wants to re-run
+the composition against them (the regression suite feeds the real eight-layer string in).
+
+== PROVENANCE DISCIPLINE ==
+Every SHA in the evidence set was produced by a command run in this lane or in the engine
+worktree this card provisioned, and each capture names its own branch and commit:
+    trunk SHA read in-run, Step 1:   refs/heads/main = 1d4bcc61847562837b44854bccea95b783d8b943
+    trunk SHA read in-run, Step 4:   refs/heads/main = 50cb123e8f1b9b29ef9a872defb3045c61480538
+    trunk SHA read in-run, Step 6:   refs/heads/main = 42f9762e1c8c8bacd1f7e7a976b7fbb536feaa85
+    base this card branched from:    1d4bcc61847562837b44854bccea95b783d8b943 (= Step-1 trunk, the
+                                    parent of the delivered commit, and the merge-base)
+    trunk SHA seen at provisioning:  7c14f53184a2f8e3a95c5b38eb2125ef52dd0acf (the detached checkout's
+                                    first HEAD; before-suite.txt records the move to 1d4bcc618 and
+                                    re-verifies every Step-2 hit at the new base)
+    RED capture (failing at base):   BASE_SHA above, raw/red.txt + raw/red-vitest.txt
+    GREEN capture (passing at tip):  TIP_SHA 1677ee018a5d3aee0e74c0669676a1db40c690c5, green.txt
+    branch discovered by for-each-ref: refs/heads/stas-394-fix-title-idempotence (Step 6 print)
+No SHA in this set is inherited from the spec or from a sibling card, and the RED and GREEN
+captures name different commits of this card's own branch, which is what makes them a pair.

@@ -1,0 +1,16 @@
+=== instrument run: before-suite ===
+command        : pnpm --filter @fusion/core test
+SHA measured on: 1677ee018a5d3aee0e74c0669676a1db40c690c5
+raw capture    : stas-396-evidence/raw/before-suite-raw.txt
+exit status (read outside any pipe): 1
+raw bytes: 204480   raw lines: 2453
+
+--- reporter lines, verbatim ---
+⎯⎯⎯⎯⎯⎯ Failed Tests 324 ⎯⎯⎯⎯⎯⎯
+ Test Files  264 failed | 534 passed | 1 skipped (799)
+      Tests  324 failed | 7011 passed | 1642 skipped (8977)
+     Errors  2 errors
+   Duration  336.62s (transform 72.86s, setup 259.24s, import 1234.20s, tests 285.30s, environment 131ms)
+ ERR_PNPM_RECURSIVE_RUN_FIRST_FAIL  @fusion/core@0.78.0-beta.9 test: `vitest run --silent=passed-only --reporter=dot`
+--- end reporter lines ---
+

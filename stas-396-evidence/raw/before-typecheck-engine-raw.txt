@@ -1,0 +1,4 @@
+
+> @fusion/engine@0.78.0-beta.9 typecheck /home/schindler/git/stash/.fusion/worktrees/stas-396/.engine/stas-396-engine/packages/engine
+> tsc --noEmit
+

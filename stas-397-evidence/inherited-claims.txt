@@ -1,0 +1,72 @@
+STAS-397 Step 0 - inherited claims, this card's baseline, and the dependency-install decision
+=============================================================================================
+
+This file records CLAIMS INHERITED from the card body. Nothing here is an input: every
+coordinate is re-measured in the step that consumes it, and where the live base disagrees,
+the live base wins (AC0).
+
+Inherited claims to be re-measured
+-----------------------------------
+1. Refusal text lives at packages/engine/src/worktree/worktree-backend.ts:1249 as the
+   literal "uncommitted or ignored content present".            -> re-measure in Step 2.
+2. Cleanliness probe at packages/engine/src/worktree/worktree-backend.ts:1371 is
+   `git status --porcelain=v1 --ignored=matching --untracked-files=normal`. -> Step 2.
+3. Competing probes: merger.ts:6641 uses --untracked-files=no; review-checkout-clean.ts:14
+   and scheduler.ts:813 count untracked but not ignored.        -> Step 2 census.
+4. tip-already-merged callers: auto-recovery-handlers/branch-worktree.ts:535-562,
+   executor/worktree-branch-conflict-handle.ts:185,234, worktree/worktree-create-conflict.ts:401-427.
+                                                              -> Step 2.
+5. At the stale snapshot the refusal is produced TWICE in the same file.  -> Step 2 must
+   locate both throw sites or report a stale premise.
+6. A hardcoded basename allowlist gates ignored entries, with a venv-shaped name listed and
+   an `*.egg-info`-shaped name possibly absent.                 -> Step 2 prints present/absent.
+7. The landing-proof escape is admitted for one removal reason only, not the sweep's reason.
+                                                              -> Step 2.
+8. The bounded recovery-park is unreachable because the refusal throws first. -> Step 2.
+9. The engine repository is /home/schindler/git/Fusion, its trunk ref is refs/heads/main, and
+   the delivered branch must be a NEW ref that no existing ref occupies.  -> Step 1 / Step 6.
+10. `fn_run_verification` false-greens inside a nested engine checkout; every test claim here
+    rests on a shell run whose summary line is quoted.          -> applied, see project memory.
+
+Baseline of THIS worktree (measured in this run)
+------------------------------------------------
+HEAD    = dd8db36bb2c66f3e72b0af864706f05f996dcc57
+branch  = fusion/stas-397
+git status --porcelain line count taken at step start = 0
+
+This card's record state (so a park can be told from a stall) - printed verbatim from the record
+---------------------
+column                = todo at the moment the census ran (the record now reads in-progress
+                        because this card's own execution started; the census above is the
+                        pre-execution state)
+dependencies          = []  (empty - matches the Dependencies section: no edge to add)
+lineage-parent field  = ABSENT from the record's key set (no sourceParentTaskId key);
+                        lineageId is present on every record and is not a parent edge
+awaitingApprovalReason = ABSENT from the record's key set, i.e. this card carries NO park
+planReviewReplanCount = 0
+assignedAgentId       = agent-ff03cfcc
+steps                 = 8, currentStep 0
+
+Board census (measured in this run, read-only)
+----------------------------------------------
+see stas-397-evidence/ac1-reproduction.txt for the full capture and
+stas-397-evidence/raw/{board_census,ac1_card_probe,census_24h}.py for the readers.
+
+Seven cards hold an unreleasable checkout, all in column `todo`, all matching the impossible
+predicate exactly (0 expanded-untracked lines, >=1 ignored line, is-ancestor rc=0, ahead=0):
+STAS-357, STAS-363, STAS-374, STAS-376, STAS-384, STAS-385, STAS-393. STAS-394 is `done` and
+its lane directory is absent.
+Warning rows in the last 24 h = 174 across 8 cards, matching the operator's census exactly.
+Worktree capacity from the on-disk settings record = settings.maxWorktrees = 4.
+STAS-357, STAS-374, STAS-376, STAS-384, STAS-385, STAS-393 additionally carry
+awaitingApprovalReason = plan-review-replan-cap, an operator-owned release this card does not
+remove. STAS-363 is status=queued with no awaitingApprovalReason.
+
+Dependency-install decision for THIS repository
+----------------------------------------------
+NOT APPLICABLE, with reason: this card authors no code in the stash repository. Its only
+stash-side writes are the evidence captures in stas-397-evidence/, and no stash-side test,
+lint or build is invoked anywhere in this card's plan, so installing Python or Node
+dependencies here would change nothing that is measured. All dependency installation in this
+card happens in Step 1, inside the nested engine checkout, with the engine repository's own
+documented command.

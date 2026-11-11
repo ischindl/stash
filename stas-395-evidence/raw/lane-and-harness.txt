@@ -1,0 +1,277 @@
+STAS-395 AC1/AC2 capture - lane shape and harness verdict
+measured_at_utc=2026-11-07T21:12:19Z
+base_sha=f1247e8aef367c248ebb0b9d339bf0b9bd0a6421
+base_subject=feat(RUFU-871): make the project card's runtime control a real toggle
+trunk_ref_sha=f1247e8aef367c248ebb0b9d339bf0b9bd0a6421
+
+=== [1] resolved paths (git ls-files) ===
+packages/core/src/__test-utils__/pg-test-harness.ts
+packages/core/src/duplicates/duplicate-intake.ts
+packages/core/src/store.ts
+packages/core/src/task-store/async/async-persistence.ts
+packages/core/src/task-store/reads.ts
+packages/core/src/task-store/task-creation.ts
+
+=== [2] git grep -c of lane symbol resolveSameAgentDuplicateIntake at base ===
+packages/core/src/__tests__/excluded-awaited-run-audit-layer-sites.test.ts:4
+packages/core/src/__tests__/intake-duplicate-terminal-lanes.test.ts:1
+packages/core/src/__tests__/same-agent-duplicate-intake.test.ts:5
+packages/core/src/__tests__/task-symbol-resolution.test.ts:1
+packages/core/src/store.ts:6
+packages/core/src/task-store/task-creation.ts:5
+packages/core/src/task-store/task-mutation-ops.ts:3
+packages/engine/src/__tests__/_merge-durable-write-callsites.ts:4
+packages/engine/src/__tests__/fixtures/merge-orphan-durable-write-inventory.json:4
+total_hit_lines=33
+files_holding_symbol=9
+
+=== [3] call sites with line numbers (git grep -n, tracked files only) ===
+packages/core/src/task-store/task-creation.ts:1072:      await store._resolveSameAgentDuplicateIntakeBackend(task, input);
+packages/core/src/task-store/task-creation.ts:1504:    await store._resolveSameAgentDuplicateIntake(task, input);
+
+=== [4] guard in front of call site A (task-creation.ts:1063-1073) ===
+    /*
+    FNXC:MissionAdmission 2026-07-23-20:00:
+    A defined-feature first task has already claimed feature.taskId in the insert
+    transaction. The ordinary same-agent intake may archive that claimed row
+    after commit, so this narrow internal opt-out delegates duplicate resolution
+    to the bootstrap caller, which preserves the claimed canonical atomically.
+    */
+    if (!(input as CreateTaskWithAfterInsert).skipSameAgentDuplicateIntake) {
+      // Same-agent duplicate marking is best-effort and uses async project-scoped reads.
+      await store._resolveSameAgentDuplicateIntakeBackend(task, input);
+    }
+
+=== [5] call site B context (task-creation.ts:1500,1506) ===
+    }
+    await mkdir(dir, { recursive: true });
+    await writePromptFileAtomic(join(dir, "PROMPT.md"), prompt);
+
+    await store._resolveSameAgentDuplicateIntake(task, input);
+
+    store.emitTaskLifecycleEventSafely("task:created", [task]);
+
+=== [6] lane guard at head of resolver (task-creation.ts:1549,1558) ===
+export async function resolveSameAgentDuplicateIntake(store: TaskStore, task: Task, input: TaskCreateInput): Promise<void> {
+  const sourceAgentId = task.sourceAgentId ?? null;
+  const sourceParentTaskId = task.sourceParentTaskId ?? null;
+  if (!sourceAgentId && !sourceParentTaskId) return;
+
+  try {
+    const nowMs = Date.now();
+    const settings = await store.getSettings();
+    const stickyWindowDays = Math.max(0, settings.tombstoneStickyWindowDays ?? 7);
+    const allCandidates = await store.listTasksBySourceLineage({ sourceAgentId, sourceParentTaskId });
+
+=== [7] tombstoned-filter condition verbatim (task-creation.ts:1565,1577) ===
+        if (candidate.deletedAt) {
+          const deletedAtMs = Date.parse(candidate.deletedAt);
+          if (sourceAgentId == null
+            || candidate.sourceAgentId !== sourceAgentId
+            || Number.isNaN(deletedAtMs)
+            || stickyWindowDays <= 0
+            || deletedAtMs < nowMs - stickyWindowDays * 24 * 60 * 60 * 1000) return [];
+          return [{
+            id: candidate.id, title: candidate.title ?? "", description: candidate.description,
+            column: candidate.column, createdAt, sourceAgentId: candidate.sourceAgentId ?? null,
+            sourceParentTaskId: candidate.sourceParentTaskId ?? null, tombstoned: true,
+            deletedAt: candidate.deletedAt, allowResurrection: candidate.allowResurrection === true,
+          }];
+
+=== [8] live-candidate same-agent/parent filter (task-creation.ts:1579,1586) ===
+        const agentMatch = sourceAgentId != null && candidate.sourceAgentId === sourceAgentId;
+        const parentMatch = sourceParentTaskId != null && candidate.sourceParentTaskId === sourceParentTaskId;
+        if (!agentMatch && !parentMatch) return [];
+        return [{
+          id: candidate.id, title: candidate.title ?? "", description: candidate.description,
+          column: candidate.column, createdAt, sourceAgentId: candidate.sourceAgentId ?? null,
+          sourceParentTaskId: candidate.sourceParentTaskId ?? null, tombstoned: false,
+        }];
+
+=== [9] rejection branch (task-creation.ts:1590,1618) ===
+    if (matches.length === 0) return;
+
+    const tombstonedMatch = matches.find((match) => match.tombstoned && match.allowResurrection !== true);
+    if (tombstonedMatch?.deletedAt) {
+      const metadata = {
+        matchedTaskId: tombstonedMatch.id, score: tombstonedMatch.score,
+        tombstoneDeletedAt: tombstonedMatch.deletedAt, stickyWindowDays,
+      };
+            await recordRunAuditEventAsync(store.asyncLayer!, {
+        taskId: task.id, agentId: "system", runId: `store:intake:resurrection-blocked:${task.id}`,
+        domain: "database", mutationType: "intake:resurrection-blocked", target: task.id, metadata,
+      });
+      await softDeleteTaskRowAsync(store.asyncLayer!, task.id, new Date().toISOString());
+
+      if (store.isWatching) store.taskCache.delete(task.id);
+      const taskDir = store.taskDir(task.id);
+      if (existsSync(taskDir)) await rm(taskDir, { recursive: true, force: true });
+      throw new TombstonedTaskResurrectionError(tombstonedMatch.id, tombstonedMatch.deletedAt, false);
+    }
+
+    const siblingTaskIds = matches.filter((match) => !match.tombstoned).map((match) => match.id);
+    if (siblingTaskIds.length === 0) return;
+    const scores = Object.fromEntries(matches.filter((match) => !match.tombstoned).map((match) => [match.id, match.score]));
+    const appliedPatch = await flagSameAgentDuplicate(store, task.id, siblingTaskIds, scores);
+    if (appliedPatch) task.sourceMetadata = { ...(task.sourceMetadata ?? {}), ...appliedPatch };
+  } catch (error) {
+    if (error instanceof TombstonedTaskResurrectionError) throw error;
+    storeLog.warn(`FN-4892 same-agent duplicate intake failed open for ${task.id}: ${getErrorMessage(error)}`);
+  }
+
+=== [10] flagSameAgentDuplicate write statements verbatim (duplicate-intake.ts:309,337) ===
+export async function flagSameAgentDuplicate(
+  store: TaskStore,
+  taskId: string,
+  siblingIds: string[],
+  scores: Record<string, number>,
+): Promise<Record<string, unknown> | undefined> {
+  const canonicalId = siblingIds[0];
+  await store.logEntry(
+    taskId,
+    "Flagged as same-agent duplicate",
+    `Near-duplicate of recently-filed sibling task(s): ${siblingIds.join(", ")} (awaiting Keep/Delete decision)`,
+  );
+  await store.recordActivity({
+    type: "task:near-duplicate-flagged",
+    taskId,
+    details: "Flagged as same-agent duplicate during intake",
+    metadata: { siblingTaskIds: siblingIds, scores, source: "same-agent-flagged" },
+  });
+  if (!canonicalId) return undefined;
+  const sourceMetadataPatch = {
+    nearDuplicateOf: canonicalId,
+    nearDuplicateScore: scores[canonicalId] ?? null,
+  };
+  await store.updateTask(taskId, { sourceMetadataPatch });
+  // Return the applied patch so the in-memory task object held by the createTask
+  // caller (which was written to disk BEFORE this flag runs) can be kept in sync
+  // without a redundant re-fetch.
+  return sourceMetadataPatch;
+}
+
+=== [11] candidate read used by the lane (reads.ts:456,459) ===
+export async function listTasksBySourceLineageImpl(store: TaskStore, input: { sourceAgentId?: string | null; sourceParentTaskId?: string | null }): Promise<Task[]> {
+  const rows = await readTaskRowsBySourceLineage(store.asyncLayer!, input);
+  return rows.map((row) => store.rowToTask(store.pgRowToTaskRow(row)));
+}
+
+=== [12] SQL pre-narrower, tombstones intentionally participate (async-persistence.ts:602,626) ===
+
+/** Read source-lineage candidates without a board-wide scan; tombstones intentionally participate. */
+export async function readTaskRowsBySourceLineage(
+  layer: AsyncDataLayer,
+  input: { sourceAgentId?: string | null; sourceParentTaskId?: string | null },
+): Promise<Record<string, unknown>[]> {
+  const predicates = [
+    input.sourceAgentId ? eq(schema.project.tasks.sourceAgentId, input.sourceAgentId) : undefined,
+    input.sourceParentTaskId ? eq(schema.project.tasks.sourceParentTaskId, input.sourceParentTaskId) : undefined,
+  ].filter((predicate): predicate is SQL => predicate !== undefined);
+  if (predicates.length === 0) return [];
+  /* FNXC:TaskRecommendations 2026-08-13-22:23: SQL pre-narrowing is equivalent to the
+   * existing JS filter; cold archives have no lineage fields and never matched old scans.
+   *
+   * FNXC:TaskListReadProjectScope 2026-11-07-05:20 (RUFU-871 slice 2): this hydrates a ROW SET,
+   * so it takes its operand from the watched list-read accessor: on the shared task table an
+   * unbound lineage scan returns another project's cards under this project's ids. */
+  const scope = taskListProjectScope(layer, "readTaskRowsBySourceLineage");
+  return layer.db.select({
+    id: schema.project.tasks.id, title: schema.project.tasks.title, description: schema.project.tasks.description,
+    column: schema.project.tasks.column, createdAt: schema.project.tasks.createdAt,
+    sourceAgentId: schema.project.tasks.sourceAgentId, sourceParentTaskId: schema.project.tasks.sourceParentTaskId,
+    deletedAt: schema.project.tasks.deletedAt, allowResurrection: schema.project.tasks.allowResurrection,
+  }).from(schema.project.tasks).where(and(scope, sql`(${predicates.reduce((left, right) => sql`${left} OR ${right}`)})`));
+}
+
+=== [13] store's own delete path (the only legitimate tombstone producer) ===
+packages/core/src/store.ts:4221:  public async deleteTaskBackend( id: string, options?: { removeDependencyReferences?: boolean; removeLineageReferences?: boolean; allowResurrection?: boolean; githubIssueAction?: GithubIssueAction; auditContext?: TaskDeleteAuditContext; }, ): Promise<Task> {
+packages/core/src/store.ts:4232:  async deleteTask( id: string, options?: { removeDependencyReferences?: boolean; removeLineageReferences?: boolean; allowResurrection?: boolean; githubIssueAction?: GithubIssueAction; auditContext?: TaskDeleteAuditContext; }, ): Promise<Task> {
+
+=== [14] asyncLayer is an injected option, default null (plain JSON store has none) ===
+packages/core/src/store.ts:702:  public readonly asyncLayer: AsyncDataLayer | null = null;
+packages/core/src/store.ts:996:    this.asyncLayer = options?.asyncLayer ?? null;
+
+=== [15] producer state at base: writes of source.sourceParentTaskId in non-test source ===
+count_assignment_lines=23
+packages/cli/src/commands/task.ts:175:        sourceParentTaskId: task.sourceParentTaskId,
+packages/core/src/planner/spec-lock.ts:197:    ...(bindings?.sourceParentTaskId?.trim() ? { sourceParentTaskId: bindings.sourceParentTaskId.trim() } : {}),
+packages/core/src/postgres/schema/project.ts:324:  sourceParentTaskId: text("source_parent_task_id"),
+packages/core/src/task-store/async/async-lifecycle.ts:189:  const returned = await tx.update(schema.project.tasks).set({ sourceParentTaskId: null, approvedPlanFingerprint: null, awaitingApprovalReason: null, updatedAt: nowIso })
+packages/core/src/task-store/async/async-persistence.ts:623:    sourceAgentId: schema.project.tasks.sourceAgentId, sourceParentTaskId: schema.project.tasks.sourceParentTaskId,
+packages/core/src/task-store/branch-and-pr-entities.ts:608:  sourceParentTaskId: string,
+packages/core/src/task-store/follow-up-ops.ts:252:      sourceParentTaskId: id,
+packages/core/src/task-store/persistence.ts:210:  sourceParentTaskId: string | null;
+packages/core/src/task-store/project-store-ops.ts:198:              sourceParentTaskId: task.sourceParentTaskId,
+packages/core/src/task-store/project-store-ops.ts:433:          sourceParentTaskId: id,
+packages/core/src/task-store/serialization.ts:312:    sourceParentTaskId: row.sourceParentTaskId || undefined,
+packages/core/src/task-store/task-artifacts-ops.ts:362:        sourceParentTaskId: undefined,
+
+=== [16] public createTask maps both provenance fields from input.source ===
+packages/core/src/task-store/task-creation.ts:771:      sourceAgentId: input.source?.sourceAgentId,
+packages/core/src/task-store/task-creation.ts:775:      sourceParentTaskId: input.source?.sourceParentTaskId,
+packages/core/src/task-store/task-creation.ts:1339:      sourceAgentId: input.source?.sourceAgentId,
+packages/core/src/task-store/task-creation.ts:1343:      sourceParentTaskId: input.source?.sourceParentTaskId,
+
+=== [17] harness census: core test files constructing the real TaskStore ===
+plain_files=16
+pg_files=20
+total_pg_test_files_in_core=191
+
+--- plain candidates: does any inject an asyncLayer? (1 = yes, 0 = no) ---
+packages/core/src/__tests__/agent-store-routing-policy.test.ts asynclayer_hits=6
+packages/core/src/__tests__/dispatch-wake.test.ts asynclayer_hits=1
+packages/core/src/__tests__/gitlab-source-issue-storage.test.ts asynclayer_hits=2
+packages/core/src/__tests__/postgres/legacy-adoption-runtime-marker.test.ts asynclayer_hits=2
+packages/core/src/__tests__/postgres/taskstore-persistence.test.ts asynclayer_hits=2
+packages/core/src/__tests__/runtime-persistence-async.test.ts asynclayer_hits=8
+packages/core/src/__tests__/settings-workspace-toggle-side-effect.test.ts asynclayer_hits=2
+packages/core/src/__tests__/store-thinking-levels.test.ts asynclayer_hits=1
+packages/core/src/__tests__/symbol-locks.test.ts asynclayer_hits=1
+packages/core/src/__tests__/task-deleted-observed-dispatch-side-effects.test.ts asynclayer_hits=0
+packages/core/src/__tests__/task-detail-prompt-resilience.test.ts asynclayer_hits=1
+packages/core/src/__tests__/task-id-integrity-measurement-failure.test.ts asynclayer_hits=0
+packages/core/src/__tests__/task-store-get-project-id.test.ts asynclayer_hits=5
+packages/core/src/__tests__/task-updated-lanes-emit-surfaces.test.ts asynclayer_hits=0
+packages/core/src/__tests__/task-updated-lanes-payload.test.ts asynclayer_hits=0
+packages/core/src/task-store/__tests__/lifecycle-outbox-writer.test.ts asynclayer_hits=1
+
+--- the backend-mode construction that production and the pg harness share ---
+packages/core/src/__test-utils__/pg-test-harness.ts:1127:  const store = new TaskStore(rootDir, undefined, { asyncLayer: layer });
+packages/cli/src/commands/backup.ts:13: * via `resolveProject`, OR an UNCACHED `new TaskStore(process.cwd())`
+packages/cli/src/commands/branch-group.ts:11: * (cached via `resolveProject`, OR an UNCACHED `new TaskStore(process.cwd())`
+packages/cli/src/commands/mcp.ts:55: * build an UNCACHED `new TaskStore(process.cwd())` (when no project is in
+packages/cli/src/commands/memory-backup.ts:15: * `new TaskStore(process.cwd())` CWD-fallback) that no `runMemoryBackup*`
+packages/cli/src/commands/pr.ts:29: * `resolveProject`, OR an UNCACHED `new TaskStore(process.cwd())`
+packages/cli/src/commands/project.ts:165:  // backend mode. Previously this constructed `new TaskStore(projectPath)`,
+packages/cli/src/commands/settings-import.ts:11: * (path-only leak), THEN built a second, UNCACHED `new TaskStore(...)` that
+packages/cli/src/commands/task.ts:223: * `new TaskStore(process.cwd())`), reusing `asLocalProjectContext` for the
+
+=== [18] decisive harness test: any PLAIN core test construct the store with an injected asyncLayer? ===
+plain_files_with_asyncLayer_construction=8
+all_files_with_asyncLayer_construction=24
+packages/core/src/__test-utils__/pg-test-harness.ts:1127:  const store = new TaskStore(rootDir, undefined, { asyncLayer: layer });
+packages/core/src/__tests__/agent-store-routing-policy.test.ts:575:      const otherStore = new TaskStore(h.rootDir(), h.globalDir(), { asyncLayer: h.layer() });
+packages/core/src/__tests__/gitlab-source-issue-storage.test.ts:115:      const second = new TaskStore(harness.rootDir, undefined, { asyncLayer: harness.layer });
+packages/core/src/__tests__/postgres/agent-project-isolation.pg.test.ts:185:    const taskStoreA = new TaskStore(h.rootDir(), undefined, { asyncLayer: projectA });
+packages/core/src/__tests__/postgres/import-translation-cache.pg.test.ts:43:  const store = new TaskStore(harness.rootDir, undefined, { asyncLayer: layer });
+packages/core/src/__tests__/postgres/import-translation-cache.pg.test.ts:78:      const blankStore = new TaskStore(harness.rootDir, undefined, { asyncLayer: blankLayer });
+packages/core/src/__tests__/postgres/in-review-stall-observation-fence.pg.test.ts:54:    const peer = new TaskStore(h.rootDir(), undefined, { asyncLayer: h.layer() });
+packages/core/src/__tests__/postgres/in-review-stall-observation-fence.pg.test.ts:76:    const peer = new TaskStore(h.rootDir(), undefined, { asyncLayer: h.layer() });
+packages/core/src/__tests__/postgres/in-review-stall-observation-fence.pg.test.ts:110:    const peer = new TaskStore(h.rootDir(), undefined, { asyncLayer: h.layer() });
+packages/core/src/__tests__/postgres/in-review-stall-observation-fence.pg.test.ts:140:    const storeA = new TaskStore(h.rootDir(), undefined, { asyncLayer: bind("stall-project-a") });
+
+--- AsyncDataLayer lives in the postgres module (a plain JSON store has no such layer) ---
+packages/core/src/postgres/connection.ts
+packages/core/src/postgres/data-layer.ts
+
+=== [19] probe: existing real-store pg lane test executed on THIS host ===
+command: FUSION_PG_TEST_URL_BASE=postgresql://localhost:55432 FUSION_PG_TEST_SETUP_PARTICIPANT=1 pnpm --filter @fusion/core exec vitest run --config vitest.pg.config.ts src/__tests__/postgres/duplicate-and-sibling-lanes.pg.test.ts --silent=passed-only --reporter=dot
+raw_capture=stas-395-evidence/raw/probe-existing-pg-lane.txt
+
+=== [19b] probe numbers (from the raw capture) ===
+grep: /home/schindler/git/stash/.fusion/worktrees/stas-395/stas-395-evidence/raw/probe-existing-pg-lane.txt: binary file matches
+
+=== [20] HARNESS VERDICT: H2 ===
+H1 rejected: listTasksBySourceLineageImpl (reads.ts:456) dereferences store.asyncLayer!, and store.ts:996 defaults it to null for a store constructed without options, so a plain JSON store reaches the resolver and fails open inside its try on a null-layer TypeError. No plain core test injects a real (non-mock) asyncLayer: plain_files_with_asyncLayer_construction printed in [18] and the mock-layer construction is documented at packages/core/src/__tests__/runtime-persistence-async.test.ts:27-35 (createMockAsyncLayer).
+H2 accepted: the backend-mode store the pg harness builds (pg-test-harness.ts:1127, new TaskStore(rootDir, undefined, { asyncLayer: layer })) is the same construction production uses, the documented local route is docs/testing.md:63-71 (pnpm pg:test:up + FUSION_PG_TEST_URL_BASE), and it authenticates on this host at postgresql://localhost:55432 with health=healthy (pg:test:status) and an executed probe (5 tests passed, 0 skipped).
+Scratch database naming: every run creates its own database from the schema template, named fusion_test_* / fusion_dup_sibling_lanes_* / fusion_schema_template_* on the throwaway postmaster; no repository env file and no shared server database is touched.

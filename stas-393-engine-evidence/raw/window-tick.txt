@@ -1,0 +1,64 @@
+# STAS-393 Step 4 - the window, printed 2026-11-11T01:38:41Z in one command block
+# branch under measurement: fusion/stas-393-tool-result-stack
+
+$ git -C .engine/stas-393-engine rev-parse refs/heads/fusion/stas-393-tool-result-stack
+    f91fd759ce33acc957ed1eb10df9143934ab2985
+      rc=0
+
+$ git -C .engine/stas-393-engine rev-parse refs/heads/main
+    c025edb9edf4a5eba16b03279ac9c5ba7805a4ef
+      rc=0
+
+$ git -C .engine/stas-393-engine rev-list --left-right --count refs/heads/main...refs/heads/fusion/stas-393-tool-result-stack
+    0	3
+      rc=0
+
+$ git -C .engine/stas-393-engine merge-base --is-ancestor refs/heads/main refs/heads/fusion/stas-393-tool-result-stack
+    (no output)
+      rc=0
+
+$ git -C .engine/stas-393-engine log --oneline refs/heads/main..refs/heads/fusion/stas-393-tool-result-stack
+    f91fd759ce STAS-391: announce an empty tool-result content array instead of crashing prompt assembly
+    e94c723089 STAS-389: prove frame and role authority are gone, per surface, red then green
+    7d96302d68 STAS-389: stop a tool result from writing its own frame or a role key
+      rc=0
+
+$ git -C .engine/stas-393-engine diff --shortstat refs/heads/main...refs/heads/fusion/stas-393-tool-result-stack
+     3 files changed, 333 insertions(+), 22 deletions(-)
+      rc=0
+
+$ git -C .engine/stas-393-engine merge-tree --write-tree --name-only refs/heads/main refs/heads/fusion/stas-393-tool-result-stack
+    b258d410704d5ec0dbd6e28caf2ff55880ba98da
+      rc=0
+      CONFLICT line count = 0
+      stderr empty (0 bytes)
+
+## AC1 census - delivered tip beside trunk (the trunk form belongs to the operator's merge)
+
+$ git -C .engine/stas-393-engine grep -c neutraliseStructureTokens refs/heads/fusion/stas-393-tool-result-stack -- packages/pi-claude-cli/src
+    refs/heads/fusion/stas-393-tool-result-stack:packages/pi-claude-cli/src/tool-result-authority.ts:2
+      rc=0
+
+$ git -C .engine/stas-393-engine grep -c neutraliseStructureTokens refs/heads/main -- packages/pi-claude-cli/src
+    (no output)
+      rc=1
+
+$ git -C .engine/stas-393-engine grep -c ZERO_BYTES_NOTICE refs/heads/fusion/stas-393-tool-result-stack -- packages/pi-claude-cli/src
+    refs/heads/fusion/stas-393-tool-result-stack:packages/pi-claude-cli/src/__tests__/tool-channel-authority.test.ts:2
+    refs/heads/fusion/stas-393-tool-result-stack:packages/pi-claude-cli/src/__tests__/tool-result-authority.test.ts:2
+    refs/heads/fusion/stas-393-tool-result-stack:packages/pi-claude-cli/src/tool-result-authority.ts:2
+      rc=0
+
+$ git -C .engine/stas-393-engine grep -c ZERO_BYTES_NOTICE refs/heads/main -- packages/pi-claude-cli/src
+    refs/heads/main:packages/pi-claude-cli/src/tool-result-authority.ts:2
+      rc=0
+
+## fresh red-green counters from Step 2, as printed, and the SHA they were measured on
+    GREEN at f91fd759ce33acc957ed1eb10df9143934ab2985:  Test Files 2 passed (2)| Tests 23 passed (23)|
+    RED  at module restored to c025edb9edf4a5eba16b03279ac9c5ba7805a4ef:  Test Files 2 failed (2)| Tests 10 failed | 13 passed (23)|
+    whole package after-suite: 16 passed (16) / 387 passed (387) / 0 failing
+    whole package before-suite: 15 passed (15) / 376 passed (376) / 0 failing
+
+## AC6 - the trunk ref this card never wrote, run start beside run end
+    run start : c025edb9edf4a5eba16b03279ac9c5ba7805a4ef  2026-11-11T01:30:43Z
+    run end   : c025edb9edf4a5eba16b03279ac9c5ba7805a4ef 2026-11-11T01:38:42Z

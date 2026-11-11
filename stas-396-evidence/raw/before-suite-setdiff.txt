@@ -1,0 +1,15 @@
+list               : stas-396-evidence/raw/failfiles-before-suite.txt
+unique failing files: 264
+sha256(list)        : 188d9514386cb41831ca13ad8ef655733f853b8cfb7a9ba609b29ecf5046438a  -
+individual FAIL blocks in raw: 552
+auth_failed lines in raw     : 16
+pg-gated files (*.pg.test.ts): 190
+non-pg files                 : 74
+unhandled-error lines in raw : 3
+
+--- difference against the inherited tip list (raw/failfiles-inherited-394-tip.lst) ---
+inherited list lines : 263
+inherited list sha256: 22e759745a9e536ee93494b05d5159d7431c44ff648f8356d95dee9977d26043  -
+failing here, absent there : 1
+  + src/__tests__/workflow-prompt-overrides-memo.test.ts
+present there, not failing here : 0

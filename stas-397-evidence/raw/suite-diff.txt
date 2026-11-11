@@ -1,0 +1,28 @@
+=== the package suite's own summary lines ===
+  BASE:  Test Files  183 failed | 1241 passed | 2 skipped (1426)
+  BASE:       Tests  512 failed | 17378 passed | 278 skipped | 1 todo (18169)
+  TIP:  Test Files  182 failed | 1243 passed | 2 skipped (1427)
+  TIP:       Tests  509 failed | 17376 passed | 278 skipped | 1 todo (18164)
+
+=== failing test names ===
+  BASE  count=558  sha256(sorted set)[:16]=d654721687159194
+  TIP   count=555  sha256(sorted set)[:16]=6f3cd86258d1ff1c
+  failing-name-set hash diff rc=NONZERO (sets differ)
+
+  new failing tests at the tip: 2
+    + engine-default :: src/__tests__/self-healing-stranded-deferral-horizon.test.ts :: reconcileStrandedWorkflowContinuations — deferral horizon (RUFU-299) > records every saturated pass as an event row but announces the card only once per episode
+    + engine-default :: src/runtimes/__tests__/remote-node-runtime.test.ts :: RemoteNodeRuntime > observeInFlight > treats an answer that arrives after the probe budget as no answer
+  failing-at-base-only (fixed by this card): 5
+    - engine-default :: src/__tests__/in-process-runtime-076-pause-gate.test.ts :: RUFU-076 runtime pause-gate seam (InProcessRuntime lifecycle) > I1: a project that starts paused stays git-silent across many maintenance windows
+    - engine-default :: src/__tests__/merge-orphan-body-durable-writes.test.ts :: FN-8923 orphan merge-body durable writes > Layer B — production-path writes > aborts during a real second workspace-repository land and partitions successor writes
+    - engine-default :: src/__tests__/workspace-merger-lease.test.ts :: landWorkspaceTask — per-repo land lease (Phase C U3, KTD4) > independence: disjoint sub-repos land without contention (no false serialization)
+    - engine-default :: src/__tests__/workspace-merger-lease.test.ts :: landWorkspaceTask — per-repo land lease (Phase C U3, KTD4) > publishes one dispatch tenancy pin to every sub-repo remote before fenced pushes
+    - engine-default :: src/__tests__/workspace-merger.test.ts :: landWorkspaceTask — per-repo merge loop (Phase C U1) > happy: both clean repos advance their OWN local integration ref with NO push
+
+  NEW FAILING FILES at the tip: 2
+    ! src/__tests__/self-healing-stranded-deferral-horizon.test.ts
+    ! src/runtimes/__tests__/remote-node-runtime.test.ts
+  files failing only at base: 3
+    = src/__tests__/in-process-runtime-076-pause-gate.test.ts
+    = src/__tests__/merge-orphan-body-durable-writes.test.ts
+    = src/__tests__/workspace-merger.test.ts

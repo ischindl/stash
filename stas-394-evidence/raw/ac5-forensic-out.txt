@@ -1,0 +1,62 @@
+=== A. field-level forensic on STAS-357 ===
+  prefix layers now     : 8   (step 0 measured 8)
+  title sha256          : 25c5e43caf9876e2aeda980dcc8b24b8a573cf31bb2b73f751f08faebae9479e
+  remainder sha256      : 2b55badcc3805b3d27087320604cc1f609e09afc853fcab27c21e39ef8630ef8
+  step0 remainder sha   : 2b55badcc3805b3d27087320604cc1f609e09afc853fcab27c21e39ef8630ef8
+  postReviewFixCount    : 8  (step 0 measured 8)
+  column / status       : todo / awaiting-approval
+  fields whose value is a timestamp carrying the run date 2026-11-07:
+    updatedAt = 2026-11-07T18:37:05.620Z
+    log[233].timestamp = 2026-11-07T02:48:54.129Z
+    log[234].timestamp = 2026-11-07T03:01:19.156Z
+    log[235].timestamp = 2026-11-07T04:45:26.827Z
+    log[236].timestamp = 2026-11-07T05:02:34.463Z
+    log[237].timestamp = 2026-11-07T06:26:12.782Z
+    log[238].timestamp = 2026-11-07T06:54:47.619Z
+    log[239].timestamp = 2026-11-07T08:15:08.138Z
+    log[240].timestamp = 2026-11-07T08:30:45.541Z
+    log[241].timestamp = 2026-11-07T12:41:42.745Z
+    log[242].timestamp = 2026-11-07T12:52:39.365Z
+    log[243].timestamp = 2026-11-07T13:28:51.572Z
+    log[244].timestamp = 2026-11-07T14:12:47.861Z
+    log[245].timestamp = 2026-11-07T14:49:02.320Z
+    log[246].timestamp = 2026-11-07T15:59:58.542Z
+    log[247].timestamp = 2026-11-07T18:25:38.694Z
+    sourceMetadata.wipAdmissionStall.lastAt = 2026-11-07T18:37:04.991Z
+    count = 17
+  container fields and their sizes:
+    branchContext: dict len=3
+    customFields: dict len=0
+    dependencies: list len=0
+    enabledWorkflowSteps: list len=3
+    log: list len=248
+    modifiedFiles: list len=0
+    scopeAutoWiden: list len=0
+    sourceMetadata: dict len=5
+    steps: list len=8
+    tokenUsage: dict len=10
+    workflowStepResults: list len=1
+
+=== B. is this store live under a running daemon? ===
+    .fusion entries at project root: ['_archive', 'agent-memory', 'agent-memory-archive', 'agents', 'archive.db', 'archive.db-shm', 'archive.db-wal', 'artifacts', 'config.json', 'engine.lock', 'engine.lock.lock', 'fusion.db', 'fusion.db-shm', 'fusion.db-wal', 'lane', 'logs', 'memory', 'memory-archive', 'tasks', 'tmp-evidence', 'tmp-stas312-stranded.patch', 'worktrees']
+    processes matching 'deno': 0
+
+=== C. LIVE CONTROL: six read-only samples, this session writes nothing ===
+    t+ 20s  sampled=299  moved_this_interval=0  none
+    t+ 40s  sampled=299  moved_this_interval=0  none
+    t+ 60s  sampled=299  moved_this_interval=0  none
+    t+ 80s  sampled=299  moved_this_interval=0  none
+    t+100s  sampled=299  moved_this_interval=0  none
+    t+120s  sampled=299  moved_this_interval=0  none
+    distinct records mutated while this session only READ: 0
+    they are: none
+    records disappeared over the window: none
+    records appeared over the window   : none
+
+=== D. lineage family hashes at the end of the control window ===
+  74e51050b00230595ffd271acce8cc2b9d66c0f9d208252cca77ce64ae76c221  STAS-296
+  dd068a8db2754e5f64d8507e3c154a8c1795a0a87e7a4343cbfdc3696bee3a45  STAS-352
+  a6bf266902223e55229f3168afa6e13b3ebc572b9850b765e569f7447e4a6e6e  STAS-354
+  affba880914d0cecc75dc5283ebb4e396c2f33ca8ebb9a4c92a8810f920b3630  STAS-355
+  6497213f9b00d4e298dd73e5a5233f438c044f889524c12df5dad9b8ece4a449  STAS-356
+  17a77ecd61b69ea1569952cd48d589d7126f0430d4b1a2d2c749a171a1c47636  STAS-357

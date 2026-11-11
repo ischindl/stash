@@ -1,0 +1,137 @@
+STAS-395 AC5 - the suite delta and the proof that nothing outside this card moved
+measured_by=raw/census_and_suites.py (generator stays untracked by this evidence dir's .gitignore)
+engine_checkout_head_sha=e038ea90e247532e4cdc84af33657fb5337adb7f (rev-parse rc=0)
+delivered_branch=refs/heads/stas-395-measure-same-agent-duplicate-intake e038ea90e247532e4cdc84af33657fb5337adb7f (rev-parse rc=0)
+engine_refs_heads_main_re_read_now=ee995fcc85013a990752307d0f253e9d6fe5ebf4 (rev-parse rc=0)
+measured_base_sha=f1247e8aef367c248ebb0b9d339bf0b9bd0a6421
+measured_tip_sha=e038ea90e247532e4cdc84af33657fb5337adb7f
+
+=== [1] the command, taken from the package that hosts the lane, not restated ===
+$ grep -n '"test"' packages/core/package.json  rc=0
+  | 79:    "test": "vitest run --silent=passed-only --reporter=dot",
+$ pnpm --filter @fusion/core test   (the derived command, identical in both runs below)
+
+=== [2] provenance of the two runs compared here, with each exit status read outside any pipe ===
+before (base, no test file in the tree): raw=ac5-before-suite-close-tick.txt sha=f1247e8aef367c248ebb0b9d339bf0b9bd0a6421 exit_status=1 (status echoed by the run command itself, read outside any pipe)
+    first_output_line=> @fusion/core@0.78.0-beta.9 test /home/schindler/git/stash/.fusion/worktrees/stas-395/.engine/stas-395-engine/packages/
+after (tip, delivered test committed): raw=ac5-after-suite-close-tick.txt sha=e038ea90e247532e4cdc84af33657fb5337adb7f exit_status=1 (status echoed by the run command itself, read outside any pipe)
+    first_output_line=> @fusion/core@0.78.0-beta.9 test /home/schindler/git/stash/.fusion/worktrees/stas-395/.engine/stas-395-engine/packages/
+  the two checkouts between the runs: to base rc=0, back to tip rc=0; git status --porcelain = 0 lines at both points
+  earlier-tick captures kept for continuity: raw/before-suite-base-run.txt (command=, sha=, counts)
+
+=== [3] the delta table (before, after, delta) ===
+  metric       before                                                           after
+  Test Files   Test Files  263 failed | 535 passed | 1 skipped (799)            Test Files  264 failed | 535 passed | 1 skipped (800)
+  Tests        Tests  323 failed | 7002 passed | 1642 skipped (8967)            Tests  323 failed | 7002 passed | 1648 skipped (8973)
+  failing      263                                                              264   (distinct failing test FILES, delta=1)
+
+=== [4] the failing-file sets, compared as sorted sets by hash ===
+before_failing_files=263  hash=8fc5b5e4ac8d8d24
+after_failing_files =264  hash=a51a3548265fdfff
+failing_files_added=1
+    + src/__tests__/postgres/same-agent-duplicate-intake-real-store.pg.test.ts
+failing_files_removed=0
+before_excluding_this_cards_file=263  hash=8fc5b5e4ac8d8d24
+after_excluding_this_cards_file =263  hash=8fc5b5e4ac8d8d24
+diff_return_code_excluding_this_cards_file=0 (0 = identical sets)
+
+=== [5] the one added failing file, classified by its own error line, not absorbed ===
+$ pnpm --filter @fusion/core exec vitest run src/__tests__/postgres/same-agent-duplicate-intake-real-store.pg.test.ts   (default route, no pg server)  exit_status=1
+    Test Files  1 failed (1)
+    Tests  6 skipped (6)
+    error_signature=PostgresError: password authentication failed for user "schindler"
+pg_gated_failing_files_before=213  pg_gated_failing_files_after=214  (rule: .pg.test.ts OR under a postgres/ directory)
+  reconciliation with raw/baseline-failure-classification.txt, which used the narrower .pg.test.ts-only rule:
+    this_run_pg_by_filename_only_before=190  that_capture_printed=190
+  reading: this card's file joins the pre-existing pg-gated class (same error signature, same route
+  that has no authenticated Postgres on this host). On the documented pg route it is green - [6].
+  AC5 literal predicate new_failing_files_expected_0: measured 1; excluding this card's own
+  file the set is identical. The deviation is this card's file on a route that cannot run pg suites,
+  reported rather than smoothed.
+
+=== [6] the same file on the documented pg route, re-run in this tick ===
+    Test Files  1 passed (1)
+    Tests  6 passed (6)
+    Duration  14.68s (transform 3.89s, setup 377ms, import 5.46s, tests 1.38s, environment 0ms)
+    skipped_word_occurrences=0
+    verdict_lines_printed=6
+    verdict_rejected_lines=1
+    [STAS-395] scratch store root=/tmp/fusion-test-workers-zkUrG8/redir-3850957/fusion_stas395_same_agent-pg-5PhAmo scratch database=fusion_stas395_same_agent_3850957_1_i9nshd
+  command: FUSION_PG_TEST_URL_BASE=postgresql://localhost:55432 FUSION_PG_TEST_SETUP_PARTICIPANT=1
+           pnpm --filter @fusion/core exec vitest run --config vitest.pg.config.ts src/__tests__/postgres/same-agent-duplicate-intake-real-store.pg.test.ts
+
+=== [7] every pre-existing failure named, not absorbed into a total ===
+pre_existing_failing_files_total=263
+  pg_gated=213  rule=.pg.test.ts OR under a postgres/ directory; host_cause=no authenticated Postgres on the default route
+    pg_gated_by_filename_only=190
+  non_pg=50  named individually below
+    src/__tests__/agent-activity-writers.test.ts
+    src/__tests__/agent-store-builtin-role-provisioning-pool.test.ts
+    src/__tests__/agent-store-pause-marker-clear.test.ts
+    src/__tests__/agent-store-routing-policy.test.ts
+    src/__tests__/architecture-hot-paths.test.ts
+    src/__tests__/builtin-adjacency-matches-legacy-transitions.test.ts
+    src/__tests__/builtin-workflows.test.ts
+    src/__tests__/coding-ideas-move.test.ts
+    src/__tests__/custom-review-lane-merge-blocker.test.ts
+    src/__tests__/delete-task-if-planning.test.ts
+    src/__tests__/excluded-awaited-run-audit-store-sites.test.ts
+    src/__tests__/gitlab-source-issue-storage.test.ts
+    src/__tests__/in-review-entry-audit.test.ts
+    src/__tests__/lifecycle-move-provenance-emit.test.ts
+    src/__tests__/live-move-path-undeclared-target.test.ts
+    src/__tests__/merge-blocker-renamed-review-lane.test.ts
+    src/__tests__/merge-path-lanes-resolved.test.ts
+    src/__tests__/mission-store-sync-deprecated.test.ts
+    src/__tests__/move-task-if-planning.test.ts
+    src/__tests__/moves-flag-equivalence.test.ts
+    src/__tests__/no-selection-default-workflow-move.test.ts
+    src/__tests__/reads-selection-cache-threading.test.ts
+    src/__tests__/retry-release-vs-drag-park.test.ts
+    src/__tests__/runtime-persistence-async.test.ts
+    src/__tests__/schema-mutation-lock-timeout.test.ts
+    src/__tests__/settings-revision-attribution.test.ts
+    src/__tests__/settings-workspace-toggle-side-effect.test.ts
+    src/__tests__/skip-bypass-taint-persistence.test.ts
+    src/__tests__/store-bypass-review.test.ts
+    src/__tests__/store-create-intake-column.test.ts
+    src/__tests__/store-gitlab-tracking-reconcile.test.ts
+    src/__tests__/store-overlap-repair-lanes-resolved.test.ts
+    src/__tests__/store-phantom-reservation-reconcile.test.ts
+    src/__tests__/store-reservation-atomicity.test.ts
+    src/__tests__/store-resume-step.test.ts
+    src/__tests__/store-thinking-levels.test.ts
+    src/__tests__/store-wedge-pending.test.ts
+    src/__tests__/symbol-locks.test.ts
+    src/__tests__/task-assignee-changed.test.ts
+    src/__tests__/task-detail-prompt-resilience.test.ts
+    src/__tests__/task-lane-cache-emitter-preservation.test.ts
+    src/__tests__/task-recommendations-list.test.ts
+    src/__tests__/task-symbol-resolution.test.ts
+    src/__tests__/task-updated-lanes-emit-surfaces.test.ts
+    src/__tests__/workflow-work-item-cas.test.ts
+    src/__tests__/workflow-work-items-conditional-seed.test.ts
+    src/__tests__/worktree-capacity-limit.test.ts
+    src/chat/__tests__/chat-memory-focus.test.ts
+    src/config/__tests__/default-workflow-write-validation.test.ts
+    src/task-store/__tests__/lifecycle-outbox-writer.test.ts
+
+=== [8] the delivered commit's scope, from the base to the tip measured here ===
+$ git diff --name-only f1247e8aef367c248ebb0b9d339bf0b9bd0a6421 e038ea90e247532e4cdc84af33657fb5337adb7f  rc=0
+    packages/core/src/__tests__/postgres/same-agent-duplicate-intake-real-store.pg.test.ts
+delivered_file_count=1
+production_files_in_delivered_commit=0
+every_delivered_file_inside_file_scope_globs=True
+
+=== [9] clean-tree predicates on both working surfaces ===
+engine_checkout_porcelain_lines=0 (rc=0)
+stash_worktree_porcelain_lines_filtered_of_untracked=0
+stash_worktree_untracked_entries=1 (this card's own evidence directory only)
+nested engine checkout exclusion is printed from the repository's common exclude file:
+    /home/schindler/git/stash/.git/info/exclude:33:/.engine/	.engine
+
+=== [10] provisioning proof for the checkout this measurement ran in ===
+    marker=node_modules/.modules.yaml present=True
+    marker=packages/core/node_modules/vitest present=True
+    marker=node_modules/.pnpm present=True
+

@@ -1,0 +1,31 @@
+
+ RUN  v4.1.10 /home/schindler/git/stash/.fusion/worktrees/stas-397/.engine/stas-397-engine/packages/engine
+
+x···
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  |engine-default| src/__tests__/worktree-release-decides-from-occupancy.real-git.test.ts > STAS-397 automatic checkout release decides from occupancy only > releases a checkout whose only content is ignored build output, recording the discard
+AssertionError: promise rejected "WorktreeContentPreservationError: preserv… { worktreePath: '…' }" instead of resolving
+ ❯ src/__tests__/worktree-release-decides-from-occupancy.real-git.test.ts:128:42
+    126|     await assertWedgedPremise(fixture);
+    127|
+    128|     await expect(releaseCheckout(fixture)).resolves.toMatchObject({ re…
+       |                                          ^
+    129|
+    130|     expect(await pathExists(fixture.worktreePath)).toBe(false);
+
+Caused by: WorktreeContentPreservationError: preserving /tmp/fusion-test-workers-hm2WwB/redir-3275717/stas-397-release-BMy1rc/.worktrees/ignored-only: uncommitted or ignored content present
+ ❯ removeWorktree src/worktree/worktree-backend.ts:1755:13
+ ❯ src/__tests__/worktree-release-decides-from-occupancy.real-git.test.ts:128:5
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯
+Serialized Error: { worktreePath: '/tmp/fusion-test-workers-hm2WwB/redir-3275717/stas-397-release-BMy1rc/.worktrees/ignored-only' }
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  1 failed | 3 passed (4)
+   Start at  07:43:54
+   Duration  8.56s (transform 5.22s, setup 231ms, import 7.37s, tests 715ms, environment 0ms)
+

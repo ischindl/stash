@@ -1,0 +1,13 @@
+measured_at_utc=2026-11-08T06:32:31.378385+00:00
+trunk_sha_at_step0=dd8db36bb2c66f3e72b0af864706f05f996dcc57
+
+id | warn_24h | warn_total | refusal_literal_rows_total | column
+STAS-357 | 26 | 135 | 135 | todo
+STAS-363 | 26 | 837 | 837 | todo
+STAS-374 | 16 | 34 | 34 | todo
+STAS-376 | 26 | 137 | 137 | todo
+STAS-384 | 26 | 82 | 82 | todo
+STAS-385 | 26 | 79 | 79 | todo
+STAS-393 | 26 | 48 | 48 | todo
+STAS-394 | 2 | 2 | 2 | done
+total_warning_rows_last_24h=174

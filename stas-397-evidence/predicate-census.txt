@@ -1,0 +1,217 @@
+STAS-397 Step 2 - predicate, callers, competing probes and pins, measured at the live base
+=============================================================================================
+
+Engine checkout: .engine/stas-397-engine (linked worktree of /home/schindler/git/Fusion,
+detached at refs/heads/main = 46b94afa0c50d942cb312b59ac69619fb348b5dd).
+NOTE ON THE BASE: the branch was first cut at 723b777ee4 and trunk moved by one commit
+(46b94afa0c, "RUFU-485: park a spec the deterministic checker refuses twice for the same reason")
+before delivery, so the branch was rebased onto it. Every number below is measured at the
+REBASED base 46b94afa0c, which is what the delivered branch is built on. `worktree-backend.ts` is
+byte-identical between the two candidates, so every line number and symbol total in this file is
+the same at both; the `self-healing.ts` numbers shifted because RUFU-485 added lines there, and
+they were re-measured rather than carried over.
+Every census below is `git grep` on TRACKED files inside that checkout, never a filesystem
+walk (a filesystem walk there also enters other cards' worktrees).
+
+---------------------------------------------------------------------------------------------
+AC2 - the refusal as a code fact at this base (not only as a log line)
+---------------------------------------------------------------------------------------------
+
+File: packages/engine/src/worktree/worktree-backend.ts
+
+  1249  super(`preserving ${worktreePath}: uncommitted or ignored content present`);
+        -> the refusal sentence, carried by class WorktreeContentPreservationError (1247).
+
+  BOTH throw sites of that class (the stale-snapshot claim of two sites HOLDS at this base):
+  1672      throw new WorktreeContentPreservationError(worktreePath);
+            inside assertCleanForDefensiveRemoval(), reached when
+            probe.classification === "deliverable".
+  1755      throw new WorktreeContentPreservationError(input.worktreePath);
+            inside removeWorktree(), reached when
+            contentClassification === "ignored-only" && !input.postLandingProof.
+            This is the site the recovery sweep dies on: the seven wedged cards are not
+            `deliverable`, they are `ignored-only`, and their reason carries no proof.
+
+  The probe command vector (line 1371):
+            ["status", "--porcelain=v1", "--ignored=matching", "--untracked-files=normal"]
+            run with cwd = the worktree, so an ignored entry arrives as an entry and the
+            classification is computed over ignored + non-ignored lines together.
+
+  The classification decision table (classifyWorktreeRemovalContent, 1298-1308), as it stands:
+            no entries                                    -> "clean"
+            any entry NOT beginning "!! "                 -> "deliverable"
+            every ignored entry allowlisted / proven      -> "regenerable-ignored"
+            otherwise (>=1 unlisted ignored entry)        -> "ignored-only"
+  ...and the gate maps that onto a refusal:
+            "deliverable"      -> throw (1672)
+            "ignored-only"     -> throw unless a durable postLandingProof is present (1743-1756)
+            "regenerable-ignored" / "clean" -> removal proceeds.
+
+  The basename allowlist (REGENERABLE_IGNORED_DIR_NAMES, 1261-1264), verbatim:
+            node_modules, dist, build, out, target, bin, obj, coverage, .next, .nuxt,
+            .turbo, .svelte-kit, .parcel-cache, .pytest_cache, .mypy_cache, __pycache__,
+            .gradle, .venv, venv
+  Explicit present-or-absent answers for the two artifact shapes this board actually holds:
+            venv-shaped names        PRESENT  - ".venv" and "venv" are both listed (line 1264).
+            *.egg-info-shaped names  ABSENT   - `git grep -c "egg-info" -- packages` over all
+                                                 tracked engine sources returns 0 matches.
+            => a checkout holding .venv/ AND stashai.egg-info/ is `ignored-only`, never
+               `regenerable-ignored`: the listed name cannot rescue the unlisted one. That is
+               the arithmetic of the wedge, and it is why widening the list is not a fix.
+
+  The child-probed scratch exception (731-738 / 1272-1281):
+            FUSION_SCRATCH_REGENERABLE_CHILDREN = { ".fusion" -> { "cache" } } (1272),
+            probed with readdir on the entry's immediate children (1388-1396) and admitted only
+            when EVERY child is in the set (isRegenerableScratchDirectory, 1276-1280).
+
+  The removal-reason sets and the landing-proof question:
+            DEFENSIVE_REMOVAL_REASONS (1191-1204) = MergerCleanup, MergerPostMerge, PoolPrune,
+              SelfHealingBranchConflict, SelfHealingIdleSweep, SelfHealingReclaim,
+              SelfHealingStaleActiveBranch, StepSessionCleanup, CompletionLandedCleanup,
+              AcquisitionRefused.
+            POST_LANDING_PROOF_REASONS (1205-1207) = { CompletionLandedCleanup } ONLY.
+            ALLOWED_FORCE_REASONS (1182-1190) = HardCancel, ExecutorDispose,
+              ExecutorTransientRetry, ExecutorStuckKilled, WorkspaceAcquireRollback, TaskDeletion.
+            Explicit answer: the recovery sweep's own reason is SelfHealingBranchConflict, which
+            is NOT in POST_LANDING_PROOF_REASONS, so that reason may NEVER carry a landing proof -
+            removeWorktree throws InvalidPostLandingProofUsageError (1707-1709) if it is passed
+            one. The only escape hatch from the 1755 refusal is therefore unreachable for the
+            sweep by construction. The escape is admitted for one reason only, exactly as claimed.
+
+  Symbol occurrence counts at this base (git grep -c summed over packages/plugins/scripts):
+            WorktreeContentPreservationError           11
+            REGENERABLE_IGNORED_DIR_NAMES               2
+            FUSION_SCRATCH_REGENERABLE_CHILDREN         3
+            isRegenerableScratchDirectory               5
+            isRegenerableIgnoredPorcelainEntry          2
+            "regenerable-ignored"                      21
+            "ignored-only"                             60
+            postLandingProof                           19
+            POST_LANDING_PROOF_REASONS                  2
+            InvalidPostLandingProofUsageError           5
+            --ignored=matching (the probe token)        3
+            "uncommitted or ignored content present"     7
+  (Identical totals were measured at 723b777ee4, the pre-rebase candidate base.)
+
+---------------------------------------------------------------------------------------------
+R4 - the callers of an already-merged release, the reason each passes, and park reachability
+---------------------------------------------------------------------------------------------
+
+  (a) packages/engine/src/self-healing.ts:6458-6464 - THE failing caller (the 174-rows-per-day
+      writer). Passes reason: RemovalReason.SelfHealingBranchConflict and NO postLandingProof
+      and NO audit. The refusal surfaces at self-healing.ts:6545 as
+      `Auto-recovery warning: tip-already-merged cleanup failed - <message>`, from the catch at
+      6543, which logs and falls through: it neither parks nor advances the card.
+      Nothing before it can make the tree clean for this gate. The patch-preserving arm at
+      6360-6440 runs only when landedVia === "remote-tracking" AND
+      taskWorktreeCheckoutIsClean() is false, and it ends with
+      `git reset --hard && git clean -fd` (6434) - `clean -fd` WITHOUT `-x`, which by git's own
+      definition leaves every ignored entry exactly where it was. So even a checkout that has been
+      through the engine's own preservation path arrives at the gate still holding its ignored
+      artifacts. For the seven wedged cards landedVia is the local identity and bare porcelain is
+      empty, so that arm is not even entered.
+
+  (b) packages/engine/src/executor/worktree-branch-conflict-handle.ts:185-245 - stage-A handler.
+      Passes no reason of its own: it calls deps.cleanupConflictingWorktree (213), which routes
+      to removeOwnWorktreeWithReconcile with reason: RemovalReason.ExecutorDispose
+      (executor/worktree-cleanup-conflicting.ts) - a FORCE-ALLOWED, NON-DEFENSIVE reason,
+      so it never reaches the content gate. Its only cleanliness question is
+      taskWorktreeCheckoutIsClean (197), which ignores ignored entries and so already answers
+      "clean" for these seven cards.
+
+  (c) packages/engine/src/executor/worktree-create-conflict.ts:401-445 - same shape: the
+      tip-already-merged door calls deps.cleanupConflictingWorktree (428/441/462), i.e. the
+      ExecutorDispose path, gated only by taskWorktreeCheckoutIsClean (405).
+
+  (d) packages/engine/src/auto-recovery-handlers/branch-worktree.ts:535-549 - requeue/park door;
+      asks taskWorktreeCheckoutIsClean (547) and either requeues or emits an irreducible pause.
+      Never calls removeWorktree.
+
+  PARK REACHABILITY, stated from the code at this base: the bounded recovery-park lives at
+  self-healing.ts:6386-6421 (`planBranchConflictRecoveryPass` / `buildBranchConflictRecoveryParkPatch`)
+  and is reachable ONLY from the dirty-checkout hold inside the
+  `landedVia === "remote-tracking" && !taskWorktreeCheckoutIsClean(...)` arm opened at 6360. For a
+  card in the wedged state that arm is false at its first conjunct, so the park code is never
+  entered; and where the already-merged release IS attempted (6458), the refusal THROWS into the
+  catch at 6543, which writes the warning and falls through - it never reaches
+  planBranchConflictRecoveryPass. So the failure can neither park nor advance, which is exactly
+  what the 26-repeats-per-card-per-day census measures. CONFIRMED, not assumed.
+
+---------------------------------------------------------------------------------------------
+AC5 - cleanliness-probe census (pre-change form)
+---------------------------------------------------------------------------------------------
+
+Probes found by `git grep -- "--porcelain"` over tracked engine sources, keeping every
+`git status` read (a `git worktree list --porcelain` read is a registration inventory, not a
+cleanliness question, and is excluded as a class).
+
+file:line | exact command form | participates in an automatic release of an already-merged checkout?
+----------+--------------------+--------------------------------------------------------------------
+worktree/worktree-backend.ts:1371 | status --porcelain=v1 --ignored=matching --untracked-files=normal | YES - THE removal gate's only read (both throw sites derive from it).
+execution/branch-conflicts.ts:1539 (taskWorktreeCheckoutIsClean) | git status --porcelain (bare; untracked counted, ignored NOT) | YES - gates the preserve-a-patch arm in three of the four R4 callers.
+worktree/checkout-emptiness.ts:353 | git status --porcelain (bare) | NO - proves the "nothing was ever delivered" invariant for a scheduler admission waiver; its own comment says an untracked file IS work. Different question: "did this card ever produce anything", not "may this checkout be vacated".
+scheduler.ts:813 | git -C <path> status --porcelain --untracked-files=all | NO - rechecks a durable clean-checkout waiver before an admission decision. Different question: "is the waiver still true", not a release.
+worktree/review-checkout-clean.ts:14 | status --porcelain=v1 -z --untracked-files=all | NO - binds an approval to committed content. Different question: "is there source content an approval would cover".
+merger.ts:6641 | git status --porcelain --untracked-files=no | NO - early-fast-path cleanup of a stranded worktree after the task is already done; deliberately ignores untracked content entirely. Different question: "is there TRACKED dirt".
+worktree/worktree-dependency-install.ts:421 | -C <wt> status --porcelain=v1 --untracked-files=normal | NO - post-install dirtiness detector for the dependency bootstrap. Different question.
+executor/overlap-resume-gate.ts:129 | status --porcelain=v1 --untracked-files=all | NO - overlap resume gate. Different question.
+executor/worktree-git-refs.ts:18 | git status --porcelain | NO - refs-capture freshness helper. Different question.
+execution/worktree-change-preservation.ts:22,54 | git status --porcelain | NO - decides whether a recovery patch has anything to capture. Different question.
+executor/workspace-main-checkout-guard.ts:122 | status --porcelain=v1 -uall --no-renames -z | NO - refuses operations against the main checkout. Different question.
+merge/merger-integration-worktree.ts:235,268,316 | status -z --porcelain | NO - integration-worktree reuse/reset. Different question.
+merge/merger-ref-update-advance.ts:273 | status --porcelain | NO - ref-advance guard. Different question.
+merge/smart-pull.ts:80 | status --porcelain=v1 --untracked-files=all | NO - smart-pull safety. Different question.
+merge/merger-ai.ts:952 | git status --porcelain | NO - AI-merge preflight on the project root. Different question.
+execution/external-execution-checkout.ts:67 | status --porcelain=v1 | NO - external execution checkout handoff. Different question.
+execution/task-revert.ts (many) | git status --porcelain | NO - revert/replay bookkeeping on conflicted paths. Different question.
+missions/mission-verification.ts:362 | git status --porcelain | NO - mission verification sandbox. Different question.
+cli-agent/resume-coordinator.ts:109 | git status --porcelain | NO - dirty-tree probe guarding a CLI resume. Different question.
+healing/gridlock-detector.ts | (no porcelain read) | NO - board-state analysis only; the claim that it carries a cleanliness probe does not hold at this base.
+
+Pre-change totals: participating command forms = 2 (worktree-backend 1371 and
+taskWorktreeCheckoutIsClean's bare porcelain); blocking uses of ignored content in the release
+decision = 1 (worktree-backend 1371 -> classification -> the two throws).
+
+---------------------------------------------------------------------------------------------
+R6 - the pins this change touches (all reconciled in the same commit as the change)
+---------------------------------------------------------------------------------------------
+packages/engine/src/__tests__/worktree-backend.test.ts
+   159, 1158  exact argv of the ignored probe            -> form is UNCHANGED by this card, stays.
+    90-111    classifyWorktreeAllowlist decision table    -> rows naming regenerable-ignored and
+              proven-scratch must be restated for the new table.
+   143, 169   probe rows expecting regenerable-ignored     -> restate to ignored-only.
+   229-237    isRegenerableScratchDirectory table          -> subject deleted, so the table goes.
+   1153-1185  post-landing proof + both discard audit rows -> restate for one discard event.
+   1206,1228,1306  worktree:removal-discarded-regenerable-content -> restate for the new type.
+packages/engine/src/__tests__/reliability-interactions/worktree-defensive-removal-preservation.real-git.test.ts
+   ~185-200   "preserves Fusion scratch with an unexpected child" / "...alongside an ignored env
+              file" / "%s preserves ignored-only content without proof because it contains .env"
+              -> these three assert the retired policy and must be restated as releases; the
+              dirty/untracked assertions in the same file are the safety pins and stay.
+packages/engine/src/__tests__/post-landing-worktree-cleanup.test.ts:288,347
+              carries the refusal sentence in a mocked deliverable refusal -> wording unchanged.
+packages/engine/src/__tests__/merger-ai.test.ts:1067
+              asserts the sentence NEVER appears in logs -> unchanged by this card.
+packages/engine/src/__tests__/worktree-acquisition-pinned.test.ts:476,488,513
+   513 probes ignored-only and expects the preserve-aside door -> the acquisition door changes.
+
+---------------------------------------------------------------------------------------------
+Risk census required by the spec: what the engine writes into a task worktree that is ignored
+---------------------------------------------------------------------------------------------
+secrets-env-writer.ts materialises a git-ignored .env (332) into a task worktree, and it only
+writes when the file is gitignored ("not-gitignored" is a skip reason) and records a
+fingerprint file. Its source of truth is the durable SecretsStore, re-materialised at every
+acquisition (worktree-acquisition.ts:49 imports writeSecretsEnvFile), so the worktree copy is a
+regenerable projection, not the store. REPORTED as required: after this change a defensive
+release discards that projection along with the rest of the ignored set, and it is recovered on
+the next acquisition. Nothing engine-written into a worktree is a non-regenerable source of
+truth in this census.
+
+---------------------------------------------------------------------------------------------
+The module that will hold the predicate, and why
+---------------------------------------------------------------------------------------------
+packages/engine/src/worktree/worktree-backend.ts keeps holding it: probeWorktreeRemovalContent
+is already the single read that both removal throws derive from, and worktree-acquisition.ts
+and worktree-pool.ts already import that one probe rather than re-reading the tree, so the
+change removes classes from the existing single predicate instead of moving a predicate
+anywhere. No new module.

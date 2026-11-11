@@ -1,0 +1,40 @@
+== core.hooksPath (engine) ==
+core.hooksPath = [<unset>]  rc=1
+resolved hooks dir = /home/schindler/git/Fusion/.git/hooks
+entries=22
+  active hook: commit-msg
+  active hook: post-checkout
+  active hook: post-commit
+  active hook: post-merge
+  active hook: post-rewrite
+  active hook: pre-commit
+  active hook: prepare-commit-msg
+  active hook: pre-push
+
+== the lan-backup hook is the only network-capable one; print its gate ==
+  #!/usr/bin/env bash
+  # lan-backup:managed-hook — written by scripts/lan-backup.sh --install-hooks.
+  #
+  # FNXC:Backup 2026-09-05-14:07: LAN backup fast path. Refresh the OneDev copy
+  # (`lan` -> http://192.168.12.60:6610/fusion.git) when `main` moves. This hook
+  # only pays for itself when the current branch IS main: task-worktree commits
+  # move fusion/<task> refs and must not reach the network. The work is handed to
+  # the detached script, which owns locking, drift detection and logging, so a
+  # commit never waits on a LAN transfer. Always exits 0 — a backup must never be
+  # able to fail a commit.
+  [ "$(git rev-parse --abbrev-ref HEAD 2>/dev/null)" = "main" ] || exit 0
+  ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
+
+== engine primary checkout path and what it holds (from the worktree listing) ==
+worktree entries=132
+  holds refs/heads/main: /home/schindler/git/Fusion
+  checkouts holding the delivery branch = 0
+
+== this card's scratch checkout ==
+  HEAD = 1677ee018a5d3aee0e74c0669676a1db40c690c5
+  symbolic HEAD = HEAD  (HEAD == detached)
+  porcelain lines = 0
+  gitlink -> gitdir: /home/schindler/git/Fusion/.git/worktrees/stas-396-engine
+
+== install marker ==
+  -rw-r--r-- 1 schindler schindler 103018 nov  8 01:05 .engine/stas-396-engine/node_modules/.modules.yaml

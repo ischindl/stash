@@ -1,0 +1,19 @@
+# Commits on the delivered engine branch, oldest first
+base: 3c8ece6606f16ab13174be0e78b2c50e18e62dd8
+tip:  22f6d6c5b1
+
+203afd2c9fc4323224e68949c2bb6a065fdf3ac3 2026-11-05T04:50:25+01:00 STAS-389: stop a tool result from writing its own frame or a role key
+22f6d6c5b11338f32e15bec81f1338a6c367c757 2026-11-05T04:51:52+01:00 STAS-389: prove frame and role authority are gone, per surface, red then green
+
+# changed files (the authoritative engine-side scope list)
+  packages/pi-claude-cli/src/__tests__/tool-channel-authority.test.ts
+  packages/pi-claude-cli/src/tool-result-authority.ts
+
+# landing boundary, measured not intended
+merge-base(tip, refs/heads/main) = 3c8ece6606f16ab13174be0e78b2c50e18e62dd8
+refs/heads/main                  = 3c8ece6606f16ab13174be0e78b2c50e18e62dd8
+commits in main not in tip       = 0
+main...tip (behind ahead)         = 0	2
+
+# equality of the first two lines is what makes the operator's --ff-only possible.
+# This card writes no trunk ref in either repository; the branch above is a branch write.

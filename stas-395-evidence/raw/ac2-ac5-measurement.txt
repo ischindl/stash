@@ -1,0 +1,71 @@
+STAS-395 AC2/AC5 measurement (all numbers printed in this run)
+measured_by=measure_ac2_ac5.py
+engine_checkout_head_sha=e038ea90e247532e4cdc84af33657fb5337adb7f
+
+engine_refs_heads_main_at_this_print=ee995fcc85013a990752307d0f253e9d6fe5ebf4
+
+test_file=packages/core/src/__tests__/postgres/same-agent-duplicate-intake-real-store.pg.test.ts
+
+=== [AC2-1] mock census over the delivered test file ===
+pattern[vi.mock / vi.doMock] = 0
+    (no matching line)
+pattern[vi.fn / mock function] = 0
+    (no matching line)
+pattern[spy or stub or fake or replacement] = 2
+    packages/core/src/__tests__/postgres/same-agent-duplicate-intake-real-store.pg.test.ts:6:hand-written stub functions, and the store method that production calls was faked in the tests
+    packages/core/src/__tests__/postgres/same-agent-duplicate-intake-real-store.pg.test.ts:133:  /** The store's real creation path — no stubbed `createTask`, no stubbed resolver. */
+pattern[any line naming createTask] = 4
+    packages/core/src/__tests__/postgres/same-agent-duplicate-intake-real-store.pg.test.ts:8:file therefore drives the lane through the real `createTask` path on a real `TaskStore` bound to a
+    packages/core/src/__tests__/postgres/same-agent-duplicate-intake-real-store.pg.test.ts:36:/* The lane runs inside `createTask`, after the row is inserted and before the lifecycle event is
+    packages/core/src/__tests__/postgres/same-agent-duplicate-intake-real-store.pg.test.ts:133:  /** The store's real creation path — no stubbed `createTask`, no stubbed resolver. */
+    packages/core/src/__tests__/postgres/same-agent-duplicate-intake-real-store.pg.test.ts:135:    return h.store().createTask({ title: TITLE, description: DESCRIPTION, column: "todo", source: source(input) });
+pattern[any line naming the lane symbol] = 1
+    packages/core/src/__tests__/postgres/same-agent-duplicate-intake-real-store.pg.test.ts:4:Nothing in the repository executed `resolveSameAgentDuplicateIntake` on a real store before this
+
+AC2_mock_lines_replacing_createTask_or_the_lane_symbol = 0 (expected exactly 0)
+
+=== [AC2-2] store factory the test calls vs the module production uses to reach createTask ===
+[test import of the harness] -> packages/core/src/__tests__/postgres/same-agent-duplicate-intake-real-store.pg.test.ts
+    packages/core/src/__tests__/postgres/same-agent-duplicate-intake-real-store.pg.test.ts:26:} from "../../__test-utils__/pg-test-harness.js";
+[harness constructs the store] -> packages/core/src/__test-utils__/pg-test-harness.ts
+    packages/core/src/__test-utils__/pg-test-harness.ts:1127:  const store = new TaskStore(rootDir, undefined, { asyncLayer: layer });
+[TaskStore.createTask public entry] -> packages/core/src/store.ts
+    packages/core/src/store.ts:1739:  async createTask( input: TaskCreateInput, options?: { onSummarize?: (description: string) => Promise<string | null>; settings?: { autoSummarizeTitles?: boolean }; invokeTaskCreatedHook?: boolean; onProposalClaimConflict?: (task: Task) => void; ownershipExemption?: IntakeOwnershipExemption; } ): Promise<Task> {
+[createTask implementation lives in] -> packages/core/src/task-store/task-creation.ts
+    packages/core/src/task-store/task-creation.ts:254:export async function createTaskBackendImpl(store: TaskStore, input: TaskCreateInput, options?: {
+    packages/core/src/task-store/task-creation.ts:1085:export async function createTaskImpl(store: TaskStore, input: TaskCreateInput, options?: { onSummarize?: (description: string) => Promise<string | null>; settings?: { autoSummarizeTitles?: boolean }; invokeTaskCreatedHook?: boolean; onProposalClaimConflict?: (task: Task) => void; ownershipExemption?: IntakeOwnershipExemption; }): Promise<Task> {
+[lane call sites] -> packages/core/src/task-store/task-creation.ts
+    packages/core/src/task-store/task-creation.ts:1072:      await store._resolveSameAgentDuplicateIntakeBackend(task, input);
+    packages/core/src/task-store/task-creation.ts:1504:    await store._resolveSameAgentDuplicateIntake(task, input);
+[lane definition] -> packages/core/src/task-store/task-creation.ts
+    packages/core/src/task-store/task-creation.ts:1549:export async function resolveSameAgentDuplicateIntake(store: TaskStore, task: Task, input: TaskCreateInput): Promise<void> {
+
+=== [AC5] affected-package suite delta, computed from the two raw run captures ===
+[before-suite-base-run.txt]
+    ⎯⎯⎯⎯⎯⎯ Failed Tests 323 ⎯⎯⎯⎯⎯⎯
+    Test Files  263 failed | 535 passed | 1 skipped (799)
+    Tests  323 failed | 7002 passed | 1642 skipped (8967)
+[after-suite-raw.txt]
+    ⎯⎯⎯⎯⎯⎯ Failed Tests 323 ⎯⎯⎯⎯⎯⎯
+    Test Files  264 failed | 535 passed | 1 skipped (800)
+    Tests  323 failed | 7002 passed | 1648 skipped (8973)
+
+before_failing_files=263  hash=8fc5b5e4ac8d8d24
+after_failing_files=264  hash=a51a3548265fdfff
+failing_files_added=1
+    + src/__tests__/postgres/same-agent-duplicate-intake-real-store.pg.test.ts
+failing_files_removed=0
+
+before_without_our_file=263  hash=8fc5b5e4ac8d8d24
+after_without_our_file=263  hash=8fc5b5e4ac8d8d24
+identical_excluding_our_own_file=YES
+diff_return_code_excluding_our_file=0
+
+=== [AC5/AC4] delivered commit scope over the measured base ===
+git diff --name-only f1247e8aef367c248ebb0b9d339bf0b9bd0a6421..HEAD -> 1 file(s)
+    packages/core/src/__tests__/postgres/same-agent-duplicate-intake-real-store.pg.test.ts
+engine_checkout_porcelain_lines=0
+
+=== [AC5] scratch store root the test wrote to, taken from the test's own output ===
+    store_root=/tmp/fusion-test-workers-XqAYQB/redir-3700862/fusion_stas395_same_agent-pg-mfA7re scratch_database=fusion_stas395_same_agent_3700862_1_a9ju7s
+distinct_scratch_roots=1

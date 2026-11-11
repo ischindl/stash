@@ -1,0 +1,60 @@
+STAS-395 Step 0 capture - the card's own baseline plus the inherited claims it must re-measure
+measured_at_utc=2026-11-08T00:12Z (this run; the run started 2026-11-08T00:03Z)
+
+=== [1] this card's own worktree (R1 - stash product repository) ===
+stash_head=de5515fd113e485c05e4d745e992c641aa69511c
+stash_branch=fusion/stas-395
+stash_porcelain_lines=1
+stash_porcelain_body=
+?? stas-395-evidence/
+
+The single porcelain line is this card's own evidence directory, which the File Scope declares as a
+deliverable location for this repository. No tracked file in the stash product repository is modified
+by this card, and none will be committed by it: the delivered artifact lives in the engine repository.
+
+=== [2] this card's board record, printed before any engine work ===
+column=In Progress
+dependencies=[STAS-394]
+lineage=Created via: Refinement of STAS-394  (the record's own lineage display; STAS-395 has a lineage parent)
+board_steps_listed=7
+dependency_gate_measurement=the runtime printed "Worktree dependency readiness: satisfied" at 00:03:30 in this
+  card's own log, so the STAS-394 edge does not park this card; no awaitingApprovalReason is present on the record
+this_card_is_not_parked=yes
+
+=== [3] dependency-install decision for THIS repository ===
+install_step_applies=no
+reason=this card authors zero code in the stash product repository. The only files it writes here are
+  plain-text captures under stas-395-evidence/. Nothing imports, builds, lints or tests from this
+  repository on this card, so there is no dependency tree to provision here. Node/pnpm provisioning
+  belongs to the engine checkout (Step 1) and is recorded there.
+
+=== [4] the engine repository as seen at Step 0 (all re-printed in-run, nothing inherited) ===
+engine_trunk_refs_heads_main=ee995fcc85013a990752307d0f253e9d6fe5ebf4
+engine_trunk_subject_at_this_print=fix(RUFU-871): read project runtime flags under a transaction-local RLS bypass
+engine_worktrees_listed=131
+stas394_ref_live=refs/heads/stas-394-fix-title-idempotence 1677ee018a fix(STAS-394): compose fix titles idempotently and record fix ancestry in lineage
+
+TRUNK-MOVED-WITHIN-THIS-RUN: the harness probe at 21:12Z and the checkout at 22:05Z both saw
+refs/heads/main = f1247e8aef367c248ebb0b9d339bf0b9bd0a6421 (subject: feat(RUFU-871): make the project
+card's runtime control a real toggle). At 00:12Z the same ref reads ee995fcc85.
+git merge-base --is-ancestor f1247e8ae refs/heads/main  -> rc=0   (the delivery base is an ancestor of trunk)
+git rev-list --count f1247e8ae..refs/heads/main         -> 1      (trunk moved by exactly one commit)
+trunk_commits_touching_our_test_path=0
+trunk_tree_contains_our_test_path=0
+The delivery branch stays based on f1247e8ae, the SHA the test was written and measured against; the
+movement is re-printed against the live ref again in the AC6 capture, as AC0 requires.
+
+=== [5] INHERITED CLAIMS - to be re-measured, never facts ===
+These come from STAS-394's code review (verdict APPROVE_WITH_NOTES, msg-469436f2, reviewer
+agent-e7428828, dated 2026-11-07) and from STAS-394's captures. They are 2026-11-07 coordinates.
+Each is re-printed at the delivery base in stas-395-evidence/raw/lane-and-harness.txt (AC1); the
+re-measured value is quoted next to each claim there.
+
+claim_C1  "the lane lives in task-creation.ts, guard around lines 1549-1552, call sites around 1072 and 1504"
+claim_C2  "flagSameAgentDuplicate lives in duplicate-intake.ts, lines 309-334"
+claim_C3  "the flag function only writes metadata and a log line and never pauses/moves/deletes"
+claim_C4  "the tombstone-resurrection branch is gated on a non-null sourceAgentId, which mission triage
+          never sets, so the lane is fail-open and rejection cannot occur"
+claim_C5  "this host refuses the *.pg.test.ts suites with PostgresError: password authentication failed
+          for user schindler (code 28P01) on 190 files"
+claim_C6  "STAS-394 delivered refs/heads/stas-394-fix-title-idempotence; the merge leg is the operator's"

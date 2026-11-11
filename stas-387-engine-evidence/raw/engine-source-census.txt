@@ -1,0 +1,108 @@
+# Step 1 source census: the path from a command's stdout to model-visible content
+# Two instruments are involved and they are named separately, because
+# conflating them is how a card ends up grepping the wrong tree.
+#   Instrument A = the installed agent runtime (pi) that owns the bash tool.
+#   Instrument B = the Fusion engine plus its ACP driver, which consume the
+#                runtime's events, persist them and forward them.
+
+## Instrument A identity (R5: the installed runtime, outside both repositories)
+runtime_package=	"name": "@earendil-works/pi-coding-agent",
+runtime_version=	"version": "1.5.0",
+runtime_dist_js_files=339
+runtime_dist_max_mtime=2026-11-04 11:35
+runtime_files_modified_after_the_incident_minute=0
+# Read with the incident time (16:24Z = 17:24 local): zero files changed
+# after it, so this install is the build that was in place during the report.
+
+## (1) The reported literal in every source tree this card can read
+command: git --git-dir=$HOME/git/Fusion/.git grep -n '<literal>' refs/heads/main
+  exit_code=1 matching_lines=0 at R2 trunk
+command: git --git-dir=... grep -n '<literal>' 37b7575e89
+  exit_code=1 matching_lines=0 at the revision the reporter measured
+command: grep -rl '<literal>' <runtime dist tree>
+  files_with_hits=0 in Instrument A
+command: grep -rn 'empty message' <R2 near-variant search, whole tree>
+  files_containing_the_phrase='empty message'=24 at R2 trunk (each is prose; two are named below)
+
+## (2) The two prose-only near-hits the card body names, re-derived at trunk
+# Line numbers move, so the body's numbers are not trusted. Command:
+command: git --git-dir=... grep -n 'empty message' refs/heads/main -- <the two named paths>
+refs/heads/main:packages/dashboard/src/routes/register-chat-routes.ts:95:distinguishes two empty messages at different t
+refs/heads/main:packages/engine/src/execution/interactive-ai-session.ts:62:Two bounded reformat retries instead of one g
+# Both hits are comment prose about distinguishing an empty message in
+# logs; neither can place text into a tool result.
+
+## (3) Instrument A: where bash stdout becomes model-visible content
+file: <runtime dist>/core/tools/bash.js   (the bash tool definition)
+command: grep -nE 'stdout|content: \[|appendStatus|formatOutput|OutputAccumulator' bash.js
+92:                child.stdout?.on("data", onData);
+185:                const snapshot = output.snapshot({ persistIfTruncated: true });
+187:                    content: [{ type: "text", text: snapshot.content || "" }],
+221:                output.append(data);
+229:                const snapshot = output.snapshot({ persistIfTruncated: true });
+233:            const formatOutput = (snapshot, emptyText = "(no output)") => {
+235:                let text = snapshot.content || emptyText;
+254:            const appendStatus = (text, status) => `${text ? `${text}\n\n` : ""}${status}`;
+268:                    const snapshot = await finishOutput();
+271:                        throw new Error(appendStatus(text, "Command aborted"));
+275:                        throw new Error(appendStatus(text, `Command timed out after ${timeoutSecs} seconds`));
+279:                const snapshot = await finishOutput();
+282:                    throw new Error(appendStatus(outputText, "Command terminated without an exit code"));
+297:                        content: [{ type: "text", text: appendStatus(outputText, `Command exited with code ${exitCode}`) }],
+303:                return { content: [{ type: "text", text: outputText }], details, structuredContent };
+326:    const tool = wrapToolDefinition(definition);
+
+# Reading of those lines, per line:
+#   stdout+stderr are streamed into one accumulator: the child's two output
+#     pipes share one sink, so stderr is indistinguishable from stdout here.
+#   snapshot content is emitted verbatim as the single text content block.
+#   emptyText substitution inserts the harness string '(no output)' when a
+#     command produced nothing, and only then.
+#   formatOutput APPENDS bracketed truncation notices naming the line range
+#     and the temp file holding the full output -- harness text, but shaped
+#     as a notice, never as a directive.
+#   appendStatus APPENDS one of exactly four status strings (Command aborted
+#     / Command timed out after N seconds / Command terminated without an
+#     exit code / Command exited with code N). These are the only
+#     non-command-derived strings this instrument can attach to a result.
+
+## (4) Instrument A: does anything wrap or rewrite a tool result?
+command: grep -n 'return {' <runtime>/dist/core/tools/tool-definition-wrapper.js | head
+  pass-through wrapper, execute call sites: 1
+command: grep -rc 'name: "bash"' <each installed extension>
+  files_in_extensions_dir_defining_a_bash_tool=0
+command: grep -rc 'name: bash' <runtime own dist>  (control: the runtime defines exactly one)
+  runtime_files_defining_bash=1
+  installed_extensions=remindb-java-mode.ts remindb.ts stash-sync.ts subagent 
+not_read: other extension load paths beyond this directory (a settings file
+  could list more) were not censused; recorded as a limit of this census.
+command: grep -nE 'pi.on\(.tool_result' <each installed extension>
+<extensions>/stash-sync.ts:326:  pi.on("tool_result", async (event: EventPayloadMap["tool_result"], ctx) => {
+command: grep -c '<literal>' <each installed extension>
+# Measured: the extension seam observes tool_result (transcript upload); no
+# installed extension redefines the bash tool and none carries the literal.
+
+## (5) Instrument B: what the engine and its ACP driver do to content
+command: git --git-dir=... grep -n 'sanitizeText' refs/heads/main -- packages/pi-claude-cli/src/acp-driver.ts
+refs/heads/main:packages/pi-claude-cli/src/acp-driver.ts:165:function sanitizeText(text: string, cap = MAX_CHUNK_CHARS): string {
+refs/heads/main:packages/pi-claude-cli/src/acp-driver.ts:401:      bridge.handleEvent({ type: "content_block_delta", index: blockI
+refs/heads/main:packages/pi-claude-cli/src/acp-driver.ts:420:          const text = sanitizeText(content.text);
+refs/heads/main:packages/pi-claude-cli/src/acp-driver.ts:426:          const text = sanitizeText(content.text);
+command: git --git-dir=... grep -cE 'tool_result|toolResult' refs/heads/main -- packages/pi-claude-cli/src/acp-driver.ts
+  exit_code=1 matching_lines=0 -- the ACP driver has no tool-result branch at all
+# sanitizeText call sites sit on agent_message_chunk, agent_thought_chunk
+# and the tool INPUT json, never on a tool result: it is the assistant-text
+# sanitiser, not the tool-output assembly site.
+command: git --git-dir=... grep -n 'type = isError ? ' refs/heads/main -- packages/engine/src/agents/agent-logger.ts
+refs/heads/main:packages/engine/src/agents/agent-logger.ts:474:    const type = isError ? "tool_error" : "tool_result";
+# The engine persists a finished result under type tool_result or
+# tool_error and does not compose new text into it.
+
+## Assembly site named for AC3
+# The one place a bash command's bytes become a model-visible content block
+# is formatOutput in Instrument A's core/tools/bash.js, with appendStatus the
+# only function there that adds non-command text. Instrument B contains no
+# such site for this channel: it sanitises assistant text and persists
+# results, so a hardening rule placed in B cannot reach this channel, and a
+# rule placed at formatOutput edits an upstream dependency this repo does
+# not own. That asymmetry is the whole cost of the AC3 proposal.

@@ -1,0 +1,5 @@
+0e40801113 2026-11-08T07:44:07+01:00 test(STAS-397): guard that an automatic checkout release decides from occupancy only
+35f1406dc0 2026-11-08T07:59:28+01:00 fix(worktree): decide a checkout release from occupancy, so ignored artifacts stop blocking forever
+e0c1328444 2026-11-08T08:00:34+01:00 chore(changeset): record the occupancy-only checkout release for operators
+3ab0e55698 2026-11-08T08:13:30+01:00 fix(worktree): make the four conflict doors ask the same occupancy probe as the release
+ef8ef296d2 2026-11-08T10:07:29+01:00 fix(worktree): retire the landing-proof sentence the deleted gate left in the sweep's prose

@@ -1,0 +1,321 @@
+STAS-397 — Step 5 capture: one predicate as the sole authority (AC5)
+=====================================================================
+
+Measured in the engine checkout `.engine/stas-397-engine` (a linked worktree of
+`/home/schindler/git/Fusion`). Everything below is `git grep` against an explicit rev — never a
+filesystem walk, because a filesystem walk in that directory also enters other cards' worktrees.
+
+  delivered base : 46b94afa0c50d942cb312b59ac69619fb348b5dd  (live refs/heads/main when cut)
+  delivered tip  : 3ab0e5569817b36facad4e339fecb988a7e9aad1  (refs/heads/stas-397-delivery)
+
+The raw enumeration (every `git status` read in tracked sources, the forms carrying
+`--ignored=matching`, and the base/tip symbol counts) is `raw/ac5-counts.txt`, produced by
+`raw/ac5_counts.py`. Read that file alongside this one; the counts quoted below are its lines.
+
+
+1. PARTICIPATING COMMAND FORMS — the number AC5 turns on
+--------------------------------------------------------
+"Participating" means: a `git status` read whose answer decides whether an already-merged checkout
+holding ONLY gitignored content gets released. That is the question the wedged seven are stuck on.
+
+  BEFORE (base 46b94afa0c) — 2 forms, and they disagreed:
+
+    a) worktree-backend.ts:1371  `git status --porcelain=v1 --ignored=matching --untracked-files=normal`
+       Answer for a wedged checkout: `ignored-only` -> removeWorktree THREW
+       "preserving <path>: uncommitted or ignored content present" (line 1755). BLOCKED the release.
+    b) execution/branch-conflicts.ts:1539  `git status --porcelain` (bare)
+       Answer for a wedged checkout: empty stdout -> "clean". ALLOWED the release.
+       Its four callers are the doors that lead to that release:
+         self-healing.ts:6361, executor/worktree-branch-conflict-handle.ts:197,
+         executor/worktree-create-conflict.ts:405, auto-recovery-handlers/branch-worktree.ts:547.
+       Two predicates, one tree, opposite answers, in the same sweep: the door said the checkout was
+       empty and the removal said it was not, and the removal won by throwing.
+
+  AFTER (tip 3ab0e55698) — 1 form:
+
+    a) worktree-backend.ts:1351  the same vector, unchanged argv, now the ONLY read that decides it.
+       Answer for a wedged checkout: `ignored-only` -> releases, and records the discard by name.
+    b) `taskWorktreeCheckoutIsClean` no longer runs a command. It is defined next to the predicate and
+       returns `content.status === "classified" && content.classification !== "deliverable"`, so the
+       four doors ask the probe. The bare `git status --porcelain` in branch-conflicts.ts is gone
+       (raw/ac5-counts.txt shows the only remaining hit there is a comment naming the relocation).
+
+  Its answers are identical to before, which is what makes the alignment safe:
+      clean          -> true      (was: empty porcelain -> true)
+      ignored-only   -> true      (was: ignored excluded by the bare read -> true)
+      deliverable    -> false     (was: non-empty -> false)
+      probe-failed   -> false     (was: exec threw -> false)
+      path-absent    -> false     (was: exec threw -> false; all four call sites are behind existsSync)
+  The guard test covers the ignored-only row for real; the four doors are covered by the existing
+  suites (`raw/` logs below and before-after-suites.txt).
+
+
+2. WRITTEN VERDICT FOR EVERY OTHER CLEANLINESS PROBE
+----------------------------------------------------
+Every hit is listed in raw/ac5-counts.txt (90 lines, packages + plugins + scripts, tests excluded).
+Verdicts, grouped:
+
+  CONSUMES THE SINGLE PREDICATE (changed by this card):
+    execution/branch-conflicts.ts            — derived from probeWorktreeRemovalContent (section 1).
+
+    merge/post-landing-worktree-cleanup.ts   — already called the probe; unchanged. Its
+                                               CompletionLandedCleanup call passes the proof metadata
+                                               that names the landing on the discard record.
+
+    worktree/worktree-acquisition.ts:1306    — already consumed the same probe. Its ignored-only branch
+                                               is a preserve-RENAME (move the checkout aside under the
+                                               recovery root, delete nothing), never a delete, so it is
+                                               not a use of ignored content to BLOCK: the release it
+                                               gates still happens and nothing is discarded. Untouched
+                                               production code; only its stale prose was reconciled.
+
+  ANSWERS A DEMONSTRABLY DIFFERENT QUESTION (not release decisions; left alone):
+    worktree/checkout-emptiness.ts:353       — the RUFU-200 emptiness PROVER. Its question is "is this
+                                               RETAINED checkout still occupied" for admission, the
+                                               dispatch gate and capacity accounting; its verdict set is
+                                               `empty | occupied | unknown` with a TTL cache, and it is
+                                               deliberately downgrade-only (a git failure reproduces the
+                                               old behaviour, never releases a card). Different
+                                               consumers, different failure posture, and it never
+                                               authorises a deletion. Not merged into the predicate:
+                                               making a proof-of-emptiness for admission share a
+                                               function with a removal gate would move admission risk
+                                               into this card.
+    execution/worktree-change-preservation.ts:22,54 — asks whether there is anything to put IN a patch
+                                               before a preserve. Nothing is deleted on that path.
+    execution/task-revert.ts (10 reads)      — revert safety: unmerged-code detection and before/after
+                                               drift checks. No removal.
+    merger.ts / merge/*.ts                   — the INTEGRATION checkout and staging area (root dir),
+                                               not a card checkout being released.
+    self-healing.ts:7320, 20315, 23968       — retained-checkout occupancy evidence, root-dir dirtiness
+                                               reporting and a re-park guard after a pointer clear.
+                                               None removes a worktree.
+    worktree-base-refresh.ts:91,170          — refuses to REBASE a dirty checkout, then refreshes the
+                                               base stamp. Different action, opposite direction: it
+                                               declines to touch the tree.
+    experiment/git-ops.ts:78                 — experiment-run branch bookkeeping.
+    cli-agent/resume-coordinator.ts:109, executor/overlap-resume-gate.ts:129,
+    worktree/review-checkout-clean.ts:14, executor/workspace-main-checkout-guard.ts:122,
+    worktree-dependency-install.ts:421, executor/post-merge-evidence-inspection.ts:52 — resume gates,
+    review-lane cleanliness reporting, workspace-main guard, dependency-install reporting, evidence
+    capture. None of them is on a checkout-release path.
+    core/store.ts:3943, scheduler.ts:813     — lease-holder occupancy in a store read / scheduler
+    (packages/core, packages/dashboard,     pass; plus CLI and dashboard read-only status surfaces
+     packages/cli, scripts/)                 and release tooling. Outside the engine's release path.
+
+  IN THIS CARD'S PATH BUT NOT A PREDICATE:
+    worktree-backend.ts:378, merger-ref-update-advance.ts:98, deleted-task-worktree-cleanup.ts:102,
+    prove-task-worktree-rebind.ts:40, acquisition-conflict-revalidation.ts:285 — those read
+    `git worktree list --porcelain`, a REGISTRY read, not a content read. Counted in the enumeration
+    only so the list is provably complete.
+
+  No probe that participates in an already-merged release keeps its own predicate at the tip.
+
+
+3. ORPHANED / RETIRED SYMBOLS — base vs tip (raw/ac5-counts.txt)
+----------------------------------------------------------------
+  REGENERABLE_IGNORED_DIR_NAMES                   2 -> 0
+  FUSION_SCRATCH_REGENERABLE_CHILDREN             3 -> 0
+  isRegenerableScratchDirectory                   5 -> 0
+  isRegenerableIgnoredPorcelainEntry              2 -> 0   (also counted at 723b777ee4 = 2)
+  "regenerable-ignored"                          21 -> 10   (engine+plugins+scripts: 3 -> 2, both comments)
+  worktree:removal-discarded-regenerable-content  5 -> 1    (the 1 is run-audit.ts's retirement note)
+  worktree:post-landing-ignored-content-discarded 3 -> 1    (same)
+  worktree:removal-discarded-ignored-content      0 -> 10   (the new record)
+  WorktreeContentPreservationError               11 -> 10   (-1: the ignored-only throw is gone)
+  postLandingProof                               19 -> 17
+  "uncommitted or ignored content present"        7 -> 10   (message kept for deliverable trees; the
+                                                            extra hits are this card's tests)
+  POST_LANDING_PROOF_REASONS                      2 -> 2    (retained: it is the contract of the
+                                                            discard record's proof metadata)
+  InvalidPostLandingProofUsageError               5 -> 5    (same reason)
+
+  CORE-SIDE RESIDUE, deliberately NOT edited (packages/core is outside this card's File Scope):
+    packages/core/src/types/merge/worktree-content.ts:19,27,50 still declare `regenerable-ignored` in
+    the `WorktreeContentClassification` union, and packages/core/src/merge/zero-commit-landing-proof.ts
+    :54,:64 still list it, with two core tests asserting that pure table
+    (no-commits-finalize-guard.test.ts:341, zero-commit-landing-proof.test.ts:69). After this card no
+    engine code can PRODUCE the member — the remaining engine hits are two comments — so the class is
+    unreachable, not half-live. Removing a declared union member is a cross-package API change with its
+    own test surface and belongs in its own card; reported, not smuggled in here.
+
+
+4. PIN AND PROSE RECONCILED IN THE SAME COMMITS
+-----------------------------------------------
+  35f1406dc0 (the fix):
+    __tests__/worktree-backend.test.ts            classify table, probe table (+`ignoredPaths`),
+                                                dropped the isRegenerableScratchDirectory describe and
+                                                the child-probe test, rewrote 5 removeWorktree tests
+    __tests__/worktree-doc-accuracy.test.ts       `worktree:removal-preserved` emitter floor 2 -> 1
+                                                (the second emitter died with the refusal; the event
+                                                itself survives with a real derived class)
+    __tests__/worktree-acquisition-pinned.test.ts dropped the `regenerable-ignored` argv row, added
+                                                `ignoredPaths`
+    __tests__/reliability-interactions/
+      worktree-defensive-removal-preservation
+        .real-git.test.ts                        the three tests that pinned the REFUSAL for an
+                                                ignored-only tree now pin the RELEASE, with an audit
+                                                recorder asserting the discard names its paths. No
+                                                fixture was weakened or deleted: the four states are
+                                                still built with real git, and the deliverable-tree
+                                                refusal test is untouched.
+    util/run-audit.ts                             the two retired literals are replaced by
+                                                `worktree:removal-discarded-ignored-content`
+  3ab0e55698 (the alignment):
+    executor/overlap-acquisition-park.ts:53       prose said "registry guard + `git status --porcelain`
+                                                + allowlist"; the allowlist is gone, so the sentence
+                                                names the occupancy probe and says what changed
+    worktree/worktree-acquisition.ts:1272         prose said `clean`/`regenerable-ignored` take the
+                                                ordinary PoolPrune removal; that class no longer exists
+
+
+5. ENGINE DOCUMENTATION THAT NOW CONTRADICTS THE CODE (printed, NOT edited — out of scope)
+------------------------------------------------------------------------------------------
+  AGENTS.md:364                       still documents `worktree:removal-discarded-regenerable-content`
+                                      and says non-allowlisted ignored content "remains proof-gated".
+  docs/architecture.md:787            the FN-9233/FN-9276 paragraph: four classes including
+                                      `regenerable-ignored`, the allowlist by name (`node_modules`,
+                                      `dist`, `target`, `__pycache__`), the `.fusion` child probe,
+                                      "only `CompletionLandedCleanup` with durable `postLandingProof`
+                                      may remove it", and both retired audit literals.
+  docs/architecture.md:1011           "only ... allowlisted regenerable ignored output" may be
+                                      discarded; "non-regenerable ignored content remains preserved".
+  docs/solutions/reliability/
+    pinned-worktree-ignored-only-acquisition-reclaim.md:22,:41
+                                      the four-class list and "`clean` / `regenerable-ignored`:
+                                      ordinary PoolPrune removal".
+  docs/run-audit.md                   checked for a gap: it does not enumerate the worktree removal
+                                      events at all, so the new record type is not a missing row.
+  These are the engine's own docs and this card's File Scope excludes them; the card that lands the
+  branch has to fold them, or the docs will teach the old predicate to the next agent.
+
+
+6. HOW THE SUITE MEASUREMENT WAS TAKEN — including the discarded attempt
+-----------------------------------------------------------------------
+  See before-after-suites.txt for the numbers. Two disclosures first:
+
+  (a) A first baseline run was launched at 723b777ee4 BEFORE the production edits, but it was still
+      executing WHILE the edits landed, so its wallclock was shared with a changing working tree.
+      That run was killed at 07:0x Z and its log is NOT used for any claim here. The replacement is
+      one script (`.fusion-tmp/stas-397/measure-suites.sh`) that checks the SAME checkout out to the
+      base rev, runs the package's own `test` command to completion, then checks out the delivered
+      branch and runs it again — sequential, never concurrent.
+  (b) The branch was cut at 723b777ee4 and live trunk moved by one commit (46b94afa0c, RUFU-485)
+      before delivery, so the branch was rebased onto it and the measurement base is 46b94afa0c — the
+      commit the delivered branch is actually built on. `worktree-backend.ts` is byte-identical
+      between the two candidates, so every line number in this capture holds at both.
+  (c) The alignment commit (3ab0e55698) landed after the first measurement attempt, so the base and
+      tip runs in before-after-suites.txt both measure the FINAL delivered tip. No number in this
+      card comes from a working tree that differs from the delivered branch.
+
+
+7. THE SUITE RESULT, AND THE VERDICT ON EVERY DIFFERENCE (Step 5's own numbers)
+-------------------------------------------------------------------------------
+The full table, both raw summary lines, and the per-file classification are in
+`before-after-suites.txt`; the raw re-print of every run is `raw/step5-repeats.txt` (produced by
+`raw/step5_repeats.py`). Summary of what those numbers say:
+
+  BASE 46b94afa0c : Test Files 183 failed | 1241 passed | 2 skipped (1426)
+                    Tests      512 failed | 17378 passed | 278 skipped | 1 todo (18169)   rc=1
+  TIP  3ab0e55698 : Test Files 182 failed | 1243 passed | 2 skipped (1427)
+                    Tests      509 failed | 17376 passed | 278 skipped | 1 todo (18164)   rc=1
+
+  sorted failing-name set hash, BASE d654721687159194  vs  TIP 6f3cd86258d1ff1c  -> NOT EQUAL
+  new failing files at the tip 2, tests failing only at the base 5.
+
+AC6's identical-failing-set-hash predicate is therefore NOT met by the raw comparison, and that is
+reported rather than dressed up. It is not achievable on this host: the same seven files, run as one
+union with the identical command twice per revision, produce a DIFFERENT failing set on the second
+run at both revs - `in-process-runtime-076-pause-gate` drops out at the base, `remote-node-runtime`
+drops out at the tip. A hash over a 1426-file suite's failing set measures the run's load here, not
+the code. What the card establishes instead, file by file:
+
+  - `src/runtimes/__tests__/remote-node-runtime.test.ts` - a 30000 ms timeout on a fake-timer race;
+    green 3/3 in isolated runs at the delivered SHA; none of its imports is in this card's diff.
+  - `src/__tests__/self-healing-stranded-deferral-horizon.test.ts` - a knife-edge in a fixture this
+    card never touches: `rungSaturated` compares `priorWidthMs >= TOP_RUNG` where the fixture's
+    `retryAfter` and `updatedAt` come from two separate `Date.now()` reads, so the assertion holds
+    only when both land in the same millisecond. The failure text is the arithmetic showing up as
+    `expected [] to have a length of 1 but got +0`. Lines and derivation: before-after-suites.txt
+    section 4. REPORTED as a pre-existing defect worth its own card.
+  - attributable new failing files: 0. attributable new failing tests: 0.
+  - the 9 tests this card removed are named by title, and the arithmetic closes: pins 291 -> 282 at
+    both revs measured per file, +4 for the guard file, which is exactly the -5 suite total.
+  - every pin re-ran green at BOTH revs (base 291 passed / tip 282 passed, `raw/pin-reconciliation.txt`
+    carries the assertion-level before and after for each), so no pin was left red and no pin was
+    weakened except the one `>= 2` -> `>= 1` emitter floor, justified in one line there.
+
+
+7b. THE BRANCH GREW ONE MORE COMMIT AFTER THE SUITE PAIR, AND IT IS DISCLOSED HERE
+-----------------------------------------------------------------------------------
+Step 2's census was re-read in this tick before writing anything down, and it found one prose site
+the alignment commit had missed: `self-healing.ts:7852` still said, in the sweep that dies on this
+wedge, that "Only durable landing proof permits ignored-only content removal" - a sentence about the
+gate this card deletes, sitting in a file this card already changes. Leaving it would have left the
+engine teaching its own retired predicate from inside the module that no longer enforces it, so it is
+retired in commit `ef8ef296d2` ("retire the landing-proof sentence the deleted gate left in the
+sweep's prose"), which is comment-only:
+
+  git diff --stat 3ab0e55698..ef8ef296d2
+    packages/engine/src/self-healing.ts | 8 ++++++--
+    1 file changed, 6 insertions(+), 2 deletions(-)
+
+Consequences stated plainly:
+  - the AC6 whole-suite pair measures 3ab0e55698, the DIRECT PARENT of the delivered tip, not the tip.
+    No number in before-after-suites.txt was taken at ef8ef296d2.
+  - what a prose change can break is a test that reads source text, so the seven pin/guard files plus
+    the four `self-healing-landed-worktree-cleanup` cases (the file that reads this module's text) were
+    re-run at ef8ef296d2: `Test Files 1 failed | 7 passed (8)` / `Tests 4 failed | 289 passed (293)`,
+    and the one failing file fails with the same four source-text assertions in BOTH the base and the
+    tip full-suite logs (`grep -a "FAIL .*self-healing-landed-worktree-cleanup"` hits in both), so it is
+    pre-existing, named here, and not caused by the comment. Guard and all six pins passed at the tip.
+  - two gates the suite cannot cover were run at the delivered tip, because vitest strips types rather
+    than checking them and a deleted export with a forgotten importer is exactly this card's failure mode:
+      `./node_modules/.bin/tsc --noEmit` in packages/engine        -> exit 0, 0 errors
+      eslint over the 14 changed .ts files                          -> 0 errors, 7 warnings
+        (5 warnings are "file ignored by pattern" for test paths, 2 are pre-existing `no-empty`
+         warnings at self-healing.ts:7082/7087, which this card does not touch)
+  - the delivered name and tip are re-read in Step 6 with `git for-each-ref`; every bundle and
+    collision predicate in this card is computed against ef8ef296d2, the branch head, and the AC6
+    table's SHA is named in the same sentence wherever it is quoted.
+
+
+8. FILE SCOPE CONFORMANCE OF THE DELIVERED DIFF - including the extensions, printed
+-----------------------------------------------------------------------------------
+The delivered diff is 15 files (`git diff --name-only 46b94afa0c...3ab0e55698`). Seven of them sit
+outside the literal File Scope globs (`worktree/*.ts`, `execution/*.ts`, `__tests__/*.ts`,
+`**/__tests__/*.ts`). The spec's File Scope clause says an alignment that needs a file outside those
+globs is to be printed, made, and disclosed rather than left half done; each row names what forced it.
+
+  path                                                            in the declared globs?  why it had to change
+  packages/engine/src/worktree/worktree-backend.ts                YES                     the predicate and the gate
+  packages/engine/src/execution/branch-conflicts.ts               YES                     retired the second predicate
+  packages/engine/src/worktree/worktree-acquisition.ts            YES                     stale prose naming a deleted class
+  packages/engine/src/__tests__/worktree-backend.test.ts          YES                     pin
+  packages/engine/src/__tests__/worktree-acquisition-pinned.test.ts YES                 pin
+  packages/engine/src/__tests__/worktree-doc-accuracy.test.ts     YES                     pin
+  packages/engine/src/__tests__/worktree-release-decides-from-occupancy.real-git.test.ts YES   the guard
+  packages/engine/src/self-healing.ts                             NO (root of src)       imported the helper from the
+                                                                                          module that no longer defines it,
+                                                                                          and carried the retired gate's prose
+  packages/engine/src/util/run-audit.ts                           NO                      hosts the audit-event union the
+                                                                                          discard record has to live in
+  packages/engine/src/auto-recovery-handlers/branch-worktree.ts   NO                      one of the four doors; same import move
+  packages/engine/src/executor/worktree-branch-conflict-handle.ts NO                      door
+  packages/engine/src/executor/worktree-create-conflict.ts        NO                      door
+  packages/engine/src/executor/overlap-acquisition-park.ts        NO                      prose naming the deleted allowlist
+  packages/engine/src/__tests__/reliability-interactions/
+    worktree-defensive-removal-preservation.real-git.test.ts      NO (one level under     the pin Step 2 named, which is the
+       __tests__/                                                 an approved glob)      suite that pinned the old refusal
+  .changeset/stas-397-worktree-release-occupancy.md               NO                      the repository's release-note
+                                                                                          convention (see below)
+
+Two of those deserve a second sentence. The four import moves are the direct cost of not leaving a
+re-export shim behind: `taskWorktreeCheckoutIsClean` now lives beside the predicate it derives from,
+and a caller still importing it from the old module would be exactly the compatibility layer this
+repository forbids. And the changeset is new, additive, and the repo's own convention rather than an
+edit to somebody else's changelog: measured this tick, 3 of the last 4 commits on trunk each add one
+`.changeset/*.md` file (46b94afa0c, 723b777ee4, b99c0dac5d), the exception b08093135b being a
+test-only commit. This card edited no engine `CLAUDE.md`, no `docs/`, and no gate validator - the
+documentation that now contradicts the code is printed in section 5 and left for the landing card.
+

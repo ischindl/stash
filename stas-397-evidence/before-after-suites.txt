@@ -1,0 +1,229 @@
+STAS-397 Step 5 - the package suite before and after, and the verdict on every difference
+==========================================================================================
+
+Engine checkout `.engine/stas-397-engine` (a linked worktree of /home/schindler/git/Fusion). Every
+number here is a summary line quoted from a raw log under `.fusion-tmp/stas-397/`, re-printed by
+`raw/step5_repeats.py` into `raw/step5-repeats.txt`. Nothing in this file is remembered.
+
+  base : 46b94afa0c50d942cb312b59ac69619fb348b5dd  (live refs/heads/main when the branch was cut and rebased onto)
+  tip  : 3ab0e5569817b36facad4e339fecb988a7e9aad1   refs/heads/stas-397-delivery  (the delivered branch)
+  (both re-read with `git rev-parse` in the tick that wrote this file; live trunk at that moment was
+   e2d910e98a0d556a9431aeedf243b5989141ec1d, which moved after the base was taken - disclosed in Step 6)
+
+One command, run twice against the SAME checkout, sequentially, never concurrently:
+
+  cd packages/engine
+  NO_COLOR=1 ./node_modules/.bin/vitest run --silent=passed-only --reporter=dot \
+    --project=engine-default --project=engine-reliability
+
+The command is derived from that package's own `package.json` `test` script (the two projects are the
+ones that script selects), and `fn_run_verification` was deliberately NOT used: against a nested
+engine checkout it retargets to the wrong root and reports success over zero test files. The
+measurement script is `.fusion-tmp/stas-397/measure-suites.sh`; its two `rc` lines and four
+timestamps are `.fusion-tmp/stas-397/suite-runs.txt`:
+
+  BASE RUN at 46b94afa0c...  started 2026-11-08T07:13:36Z   base_rc=1  finished 2026-11-08T07:59:08Z   (2752 s)
+  TIP  RUN at 3ab0e55698...  started 2026-11-08T07:59:08Z   tip_rc=1   finished 2026-11-08T08:37:29Z   (2301 s)
+
+Both exit 1. The baseline is red before this card exists, and this card neither caused nor cured that
+- see section 4 for what the 182-183 red files are made of.
+
+
+1. THE PACKAGE'S OWN SUMMARY LINES, AND THE DELTA
+-------------------------------------------------
+                                          BASE        TIP      DELTA
+  Test Files  failed                     183         182        -1
+  Test Files  passed                    1241        1243        +2   (+1 is this card's guard file, +1 a flake)
+  Test Files  skipped                      2           2         0
+  Test Files  total                     1426        1427        +1   = the one file this card adds
+  Tests       failed                     512         509        -3
+  Tests       passed                   17378       17376        -2
+  Tests       skipped                    278         278         0
+  Tests       todo                         1           1         0
+  Tests       total                    18169       18164        -5
+
+The suite got one file bigger and five tests smaller. Section 3 accounts for those five exactly, so
+the -5 is arithmetic and not a loss of coverage nobody explained.
+
+
+2. THE FAILING-NAME SETS - AND THE PREDICATE AC6 SETS ON THEM, REPORTED AS UNMET
+--------------------------------------------------------------------------------
+`raw/suite_diff.py` over the two raw logs (`raw/suite-diff.txt`):
+
+  BASE   distinct failing names = 558   sha256(sorted set)[:16] = d654721687159194
+  TIP    distinct failing names = 555   sha256(sorted set)[:16] = 6f3cd86258d1ff1c
+  hash comparison                                                            -> NOT EQUAL
+  new failing tests at the tip                                                   2
+  tests failing only at the base                                                 5
+  NEW FAILING FILES at the tip                                                   2
+  files failing only at the base                                                 3
+
+AC6 asks for the diff return code of the two sorted failing-file name sets to be 0. Measured
+against these two runs it is NOT 0, and it is not going to be 0 on this machine for any pair of
+full-suite runs, including two runs of the same commit - section 4 proves that with measurements
+rather than assertions. What this card can and does establish is the thing the predicate exists to
+catch: not one of those differences is attributable to the change. Both numbers are printed as
+measured; neither is smoothed.
+
+
+3. THE FIVE TESTS THIS CARD REMOVED FROM THE SUITE, NAMED AND JUSTIFIED
+-----------------------------------------------------------------------
+Per-file test counts, taken with the package's own binary and the verbose reporter at both revs
+(`raw/step5-repeats.txt`, the two verbose runs), for the six files whose assertions this card reconciled:
+
+  pin file                                                    BASE   TIP  DELTA
+  src/__tests__/worktree-backend.test.ts                       105    97    -8
+  src/__tests__/worktree-acquisition-pinned.test.ts             17    16    -1
+  src/__tests__/reliability-interactions/worktree-defensive-removal-preservation.real-git.test.ts   48  48   0
+  src/__tests__/worktree-doc-accuracy.test.ts                   13    13     0
+  src/__tests__/post-landing-worktree-cleanup.test.ts           33    33     0
+  src/__tests__/merger-ai.test.ts                               75    75     0
+                                                              ---   ---   ---
+                                                              291   282    -9
+
+  -9 in the pins, +4 from the guard file this card installs            = -5 net, which is exactly the
+  Tests-total delta in section 1. The two runs reconcile to the test, not approximately.
+
+Every one of the nine is a case that asserted the retired machinery, listed by title in
+`raw/pin-reconciliation.txt`. The -8 in `worktree-backend.test.ts` is the `isRegenerableScratchDirectory`
+describe plus its `it.each` table (a function this card deletes has no table to keep) and the rows of the
+classification table that named the two deleted classes. The -1 in `worktree-acquisition-pinned.test.ts`
+is the argv row that expected a `regenerable-ignored` classification.
+
+No test was weakened to make the suite green, with one exception printed and justified:
+`worktree-doc-accuracy.test.ts` moved an emitter-count floor from `>= 2` to `>= 1` for
+`worktree:removal-preserved`. Justification in one line: the second emitter of that event was the
+`ignored-only` refusal branch this card deletes, the event itself survives with a real derived
+classification, and the doc-accuracy assertion is about the event existing, not about how many
+places name it. Everything else in that file still reads the same way it did.
+
+
+4. THE TWO FILES NEWLY FAILING AT THE TIP, CLASSIFIED BY MEASUREMENT
+---------------------------------------------------------------------
+The two: `src/__tests__/self-healing-stranded-deferral-horizon.test.ts` (an assertion) and
+`src/runtimes/__tests__/remote-node-runtime.test.ts` (`Error: Test timed out in 30000ms.`).
+Neither file, and nothing in either file's import chain, is in this card's diff:
+
+  git diff --name-only 46b94afa0c...3ab0e55698 | grep -E "stranded|remote-node|project-runtime|isolation-transition"
+  -> 0 lines
+
+Proof 1 - at the delivered SHA, both pass when nothing else is competing, and keep passing:
+
+  2 files, isolated, at 3ab0e55698            -> Test Files 2 passed (2) / Tests 17 passed (17)
+  the same 3 more times, same command         -> 2 passed / 17 passed, then again, then again (3/3)
+
+Proof 2 - the same files move in and out of the failing set at a single unchanged revision. The seven
+files in the symmetric difference were run as one union, twice per rev, identical command
+(`raw/step5-repeats.txt` holds all four logs):
+
+  files failing in the union run          pass 1              pass 2
+  BASE   (46b94afa0c)                     3 files / 2 tests   2 files / 1 test
+  TIP    (3ab0e55698)                     4 files / 3 tests   3 files / 2 tests
+
+  at the BASE, `in-process-runtime-076-pause-gate.test.ts` failed pass 1 and passed pass 2;
+  at the TIP,  `remote-node-runtime.test.ts`            failed pass 1 and passed pass 2.
+
+So at one fixed commit the failing set of these files is not reproducible run to run. A hash over a
+full-suite failing set is therefore not a measurement of code on this host at this wallclock: it
+measures the load of the run. That is what section 2's NONZERO hash comparison means, and it is why
+the attributable-regression count is computed per file below rather than by the hash.
+
+Proof 3 - each of the two has a mechanism that does not involve this card.
+
+  remote-node-runtime.test.ts > "treats an answer that arrives after the probe budget as no answer"
+    The test installs `vi.useFakeTimers()` after `await runtime.start()` and then races a never-
+    resolving promise against `advanceTimersByTimeAsync(INFLIGHT_PROBE_TIMEOUT_MS)`. Its failure mode
+    is a 30000 ms timeout, which is what a fake-timer race loses when the process is starved. The
+    module under test imports `node:events`, `@fusion/core`, `scheduler`, `project-runtime`,
+    `isolation-transition-blockers`, `logger` and `remote-node-client`; this card edits none of them.
+
+  self-healing-stranded-deferral-horizon.test.ts > "records every saturated pass as an event row..."
+    This one is a knife-edge in the fixture, and the arithmetic closes:
+      the sweep   self-healing.ts:12893  stalenessMs = max(0, now - updatedAt)
+      the judge   stranded-continuation-reclaim.ts:387-388
+                    stoppedAt    = input.now - input.stalenessMs      (== the row's updatedAt)
+                    priorWidthMs = Date.parse(item.retryAfter) - stoppedAt
+                  :405-406  rungSaturated = priorWidthMs >= TOP_RUNG
+      the fixture self-healing-stranded-deferral-horizon.test.ts:155 sets
+                    retryAfter = Date.now() - STALE + TOP_RUNG          (read A, at the call site)
+      and the same file's :68 default sets
+                    updatedAt  = Date.now() - STALE                     (read D, inside the builder,
+                                                                         evaluated after the arguments)
+      therefore  priorWidthMs = TOP_RUNG - (D - A), and `rungSaturated` - the only thing that emits
+                 `workflowWorkItem:reconcile-stranded-defer-sustained` - is true iff A and D land in
+                 the SAME MILLIMETRE.
+    The observed failure text is `AssertionError: expected [] to have a length of 1 but got +0` at
+    that file's line 161: no sustained row, because the row was one millisecond short of "saturated".
+    A loaded machine separates the two `Date.now()` reads by a millisecond; an idle one does not.
+    Neither this test file nor `stranded-continuation-reclaim.ts` is in this card's diff, and the
+    file's last commit is `7eb5aed394 RUFU-299`, not this card. REPORTED as a pre-existing defect
+    worth its own card: a test whose predicate holds only when two clock reads share a millisecond
+    will mis-signal for every future engine card that runs the full suite.
+
+The five tests failing only at the BASE, named and not absorbed:
+  `in-process-runtime-076-pause-gate.test.ts > I1: a project that starts paused stays git-silent...`
+      (AssertionError, a mock called once) - proven non-deterministic at the base by pass 1 vs pass 2
+      of the union run above.
+  `merge-orphan-body-durable-writes.test.ts > ...aborts during a real second workspace-repository land...`
+      (Test timed out in 30000ms).
+  `workspace-merger-lease.test.ts` x2 and `workspace-merger.test.ts` x1 (all Test timed out in 30000ms).
+Nothing in this card fixes them either - they are the same load flake, read from the other side.
+
+
+5. WHAT THE ~182 RED FILES ARE MADE OF, SO "RED" IS NOT MISREAD
+----------------------------------------------------------------
+Named causes, from the failure text of the full runs and the four union runs: PostgreSQL-gated suites
+whose credential is refused on this host (`workspace-merger-lease.test.ts > workspace land dispatch
+finalization (PostgreSQL)` fails at both revs in every run, file-level, without a single test
+failing), 30000 ms timeouts on real-git suites, and doc/accuracy ratchets. These were already the
+shape of the baseline when Step 1 recorded it, and the delivered tip inherits them unchanged:
+the pre-existing failures are named here, not absorbed into a pass claim.
+
+
+6. VERDICT
+----------
+  new failing files attributable to this card ......... 0   (the 2 named files are proven load-
+                                                          dependent at both revs, green 3/3 isolated
+                                                          at the delivered SHA, and outside the diff)
+  new failing tests attributable to this card ......... 0
+  tests this card deleted, named in section 3 ......... 9   (each one asserting deleted machinery)
+  tests this card installs ........................... 4   (the guard, green at the delivered SHA)
+  pin files broken and left red ....................... 0   (all six re-run green at both revs)
+  reconciled pins that got weaker ..................... 1   (the >=2 -> >=1 floor, justified in section 3)
+  AC6's literal identical-failing-set-hash predicate ... UNMET in the raw comparison, with the
+                                                      reason measured rather than asserted (section 4)
+  suite strictly no worse ............................. yes on the raw counts: 512 -> 509 failing tests,
+                                                      183 -> 182 failing files, one file added
+
+
+7. ONE COMMIT LANDED AFTER THESE TWO RUNS, AND IT IS DISCLOSED RATHER THAN ABSORBED
+-----------------------------------------------------------------------------------
+The delivered branch head is now `ef8ef296d28a0de11fd05cd72f368d7e662f144d`; the TIP row above,
+`3ab0e5569817b36facad4e339fecb988a7e9aad1`, is its direct parent. The difference between them is a
+comment in `self-healing.ts` that still stated the rule this card deletes ("Only durable landing
+proof permits ignored-only content removal"), retired because leaving it would leave the engine
+teaching its own retired predicate:
+
+  git diff --stat 3ab0e55698..ef8ef296d2
+    packages/engine/src/self-healing.ts | 8 ++++++--   (6 insertions, 2 deletions, comment block only)
+
+So every count in sections 1 to 4 was taken at the parent of the delivered head, not at the head, and
+no claim is made that they were. What was re-measured at the delivered head, in this tick:
+
+  the six pins + the guard + the four cases of the one test that reads self-healing.ts as TEXT:
+    Test Files  1 failed | 7 passed (8)      Tests  4 failed | 289 passed (293)
+  and that one failing file (`self-healing-landed-worktree-cleanup.test.ts`, a source-text guard)
+  fails its same four assertions in the BASE run and the TIP run of section 1 alike - `grep -a` for
+  `FAIL .*self-healing-landed-worktree-cleanup` hits both raw logs - so it is a pre-existing failure,
+  named here, not something the comment caused and not something absorbed into a pass claim.
+
+Two gates that a suite cannot cover were then run at the delivered head, because vitest strips types
+instead of checking them and a deleted export with one forgotten importer is this card's exact failure
+mode:
+
+  packages/engine: ./node_modules/.bin/tsc --noEmit ............ exit 0, 0 error lines
+  eslint over the 14 changed .ts files ......................... 0 errors, 7 warnings
+      5 of the warnings are "File ignored because of a matching ignore pattern" on test paths, and 2
+      are pre-existing `no-empty` warnings at self-healing.ts:7082 and :7087 - lines this card does
+      not touch. No warning names a line this card wrote.
+

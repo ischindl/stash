@@ -1,0 +1,214 @@
+STAS-396 STEP 1 / AC1 - ONE DETACHED SCRATCH CHECKOUT, DERIVED TOOLING, THREE GATES
+every coordinate below was printed inside this run (AC0) and is qualified with the
+repository it belongs to. The trunk is read BY REF NAME, never through a checkout HEAD.
+
+==========================================================================================
+1. R2 - THE SCRATCH CHECKOUT (a nested LINKED worktree of the engine repo, not a clone)
+==========================================================================================
+command   : git --git-dir=$HOME/git/Fusion/.git worktree add --detach \
+              "$PWD/.engine/stas-396-engine" refs/heads/<branch>
+             (verbatim output: "Preparing worktree (detached HEAD 1677ee018a)" /
+              "HEAD is now at 1677ee018a fix(STAS-394): compose fix titles idempotently
+               and record fix ancestry in lineage"   rc=0)
+seam      : $PWD/.engine/stas-396-engine
+ignore proof: git check-ignore -v .engine/stas-396-engine  ->
+             .git/info/exclude:33:/.engine/      .engine/stas-396-engine     rc=0
+             The rule pre-existed this card (the STAS-370 block), so no ignore file was
+             edited, tracked or created. The review-clean probe therefore cannot see the
+             seam, and this lane's tracked diff stays free of engine files.
+checkout state  : HEAD = 1677ee018a5d3aee0e74c0669676a1db40c690c5   (ENGINE repo object)
+                  symbolic ref = HEAD, i.e. DETACHED - no branch is occupied here
+                  git status --porcelain = 0 lines (clean)
+                  gitlink = gitdir: <Fusion>/.git/worktrees/stas-396-engine
+                  Linked, not cloned, so the ref this card moves is the operator-visible
+                  ref, and the delivery ref stays still while a tested candidate exists.
+
+WHO HOLDS WHAT (git worktree list --porcelain on the ENGINE repo, 132 entries;
+               raw/engine-worktree-list.txt)
+  exactly 1 checkout holds refs/heads/main : the PRIMARY checkout <Fusion repo root>
+      -> that checkout is NEVER a working surface for this card
+  exactly 0 checkouts hold the delivery branch, so no other card's checkout is involved
+      and nothing of anyone else's is pruned.
+The engine repo also exposes 5 remotes (git remote -v):
+      fork   https://github.com/ischindl/Fusion.git
+      gitlab https://gitlab.digitalsystems.eu/fusion/RunFusion.git
+      lan    http://192.168.12.60:6610/fusion.git
+      origin https://github.com/Runfusion/Fusion.git
+      origin-ssh git@github.com:Runfusion/Fusion.git
+This card pushes to none of them; ls-remote is the only remote operation it performs.
+
+HOOK SURFACE read before merging (a merge commits, so the hooks that fire matter):
+  git config --get core.hooksPath = <unset>  rc=1, so hooks resolve in the engine's
+  shared common dir .git/hooks, 22 entries, 8 of them non-sample:
+    commit-msg, post-checkout, post-commit, post-merge, post-rewrite, pre-commit,
+    prepare-commit-msg, pre-push
+  Neither reference-transaction nor pre-merge-commit is installed (both counted 0), so
+  the git update-ref compare-and-swap in Step 5 fires no hook, and git merge will not
+  run a pre-merge-commit gate.
+  post-merge and post-commit are 'lan-backup:managed-hook' scripts whose first guard is
+      [ "$(git rev-parse --abbrev-ref HEAD)" = "main" ] || exit 0
+  In this DETACHED checkout that guard exits early, so this card's merge cannot reach the
+  `lan` remote. Recorded here because it is the only network-capable hook in the repo and
+  because it is the candidate writer of the mirror entry the closed card disclosed (see
+  guardrails-and-gap.txt).
+  pre-commit / prepare-commit-msg both bail when git rev-parse --git-path fusion-task-id
+  is absent; in this checkout it is ABSENT
+  (<Fusion>/.git/worktrees/stas-396-engine/fusion-task-id), so the identity hooks are
+  inert here. No hook is installed, edited, or bypassed by this card.
+
+==========================================================================================
+2. DEPENDENCY INSTALL IN THE ENGINE CHECKOUT - the repository's own documented command
+==========================================================================================
+documented at : README.md, section "## Development" (the line at README.md:669)
+                   pnpm install                  # Install dependencies
+command run   : pnpm install   (workspace root of the scratch checkout)
+rc            : 0
+result excerpt: "Scope: all 38 workspace projects" / "Lockfile is up to date, resolution
+                 step is skipped" / "Packages: +1482" / "Done in 7.3s using pnpm v10.33.0"
+              : one warning, verbatim: "Ignored build scripts: @swc/core@1.15.40,
+                 agent-browser@0.26.0." - not acted on; the four instruments below are
+                 the evidence that the install is sufficient, and all four ran.
+marker file   : node_modules/.modules.yaml  present, 103018 bytes, mtime 2026-11-08 01:05
+raw           : raw/pnpm-install.txt (full stdout+stderr)
+No package manager was assumed: the repository is pnpm-workspace based and the four
+instruments below are read out of its own package.json files.
+
+==========================================================================================
+3. R4 - THE FOUR INSTRUMENTS, DERIVED FROM THIS TREE'S OWN FILES (not carried over)
+==========================================================================================
+I1 affected package's test script
+   packages/core/package.json  name = @fusion/core  version = 0.78.0-beta.9
+   scripts["test"] = "vitest run --silent=passed-only --reporter=dot"
+   invoked as  : pnpm --filter @fusion/core test
+I2 typecheck, first package
+   packages/core/package.json  scripts["typecheck"] = "tsc --noEmit"
+   invoked as  : pnpm --filter @fusion/core typecheck
+I3 typecheck, second package
+   packages/engine/package.json name = @fusion/engine version = 0.78.0-beta.9
+   scripts["typecheck"] = "tsc --noEmit"
+   invoked as  : pnpm --filter @fusion/engine typecheck
+I4 root static gate
+   root package.json name = fusion-workspace version = 0.78.0-beta.9
+   scripts["test:gate:static"] = a ' && ' chain of node scripts/check-*.mjs validators
+   invoked as  : pnpm test:gate:static
+   validators  : 23 counted in THIS tree, enumerated one per line in raw/ac1-validators.txt
+DELTA vs the inherited claim C16: the validator count measured here (23) is NOT the
+   inherited 20. The count is re-derived from this tree's script text and the difference is
+   printed rather than absorbed; the three added names are not identified here because
+   doing so would need the closed card tip's own script text, which is not what AC2 runs.
+baseline tool probe: git ls-files scripts/suite-baseline.mjs -> 0 lines. NOT TRACKED at
+   this tree, so there is no capture / capture-files / check subcommand to use. The
+   failing-file list in Step 2 is therefore built from the run's own raw output with the
+   documented binary-safe, colour-free form. (Memory said this was absent at one trunk;
+   measured here, at the branch tip, it is absent - probe, not fact, resolved.)
+Other scripts noted, deliberately NOT used: root "test" is scripts/test-changed.mjs (a
+   changed-files runner, not a package suite) and root "typecheck" is a -r fan-out over
+   all packages; AC2/R4 asks for the two named packages, so I2/I3 are the derived pair.
+
+==========================================================================================
+4. AC1 - THE THREE GATES, READ BEFORE ANYTHING WAS TOUCHED
+==========================================================================================
+All commands below ran as  git --git-dir=<Fusion>/.git ...   against the ENGINE repo, so
+no checkout's HEAD supplied a branch tip.
+
+4.1 branch discovered live (not inherited) - for-each-ref refs/heads/ | grep -i stas-394
+      1677ee018a5d3aee0e74c0669676a1db40c690c5 commit  refs/heads/stas-394-fix-title-idempotence
+    exactly one line, rc=0. Name used from here on is the one it printed. (C10 CONFIRMED)
+
+4.2 tips and merge-base                                            raw/ac1-gates.txt
+      refs/heads/main                        = ee995fcc85013a990752307d0f253e9d6fe5ebf4 rc=0
+      refs/heads/stas-394-fix-title-idempotence
+                                             = 1677ee018a5d3aee0e74c0669676a1db40c690c5 rc=0
+      merge-base(main, branch)               = 1d4bcc61847562837b44854bccea95b783d8b943 rc=0
+    (C11 CONFIRMED, C12 CONFIRMED - the merge-base is still the closed card's base even
+     though the trunk has moved 8 commits past it)
+
+4.3 divergence, the three-dot form
+      git rev-list --left-right --count refs/heads/main...refs/heads/stas-394-fix-title-idempotence
+      -> 8      1        rc=0
+      left  = 8 trunk commits the branch lacks;  right = 1 branch commit trunk lacks.
+    (C5 said "7 1" at 2026-11-07T21:45Z. Re-measured: 8 1. DELTA, and the DELTA is the
+     trunk moving by exactly one commit since the card was written, not the branch
+     changing - right side unchanged at 1.)
+
+4.4 ancestry, BOTH directions
+      git merge-base --is-ancestor refs/heads/main  <branch>  -> rc=1   NOT an ancestor
+      git merge-base --is-ancestor <branch>  refs/heads/main  -> rc=1   NOT an ancestor
+    (C4 CONFIRMED at the level that matters: the branch is not in the trunk. The pair
+     together says neither contains the other, i.e. a genuine join is required and a
+     fast-forward is impossible.)
+
+4.5 content census of the fix at the trunk - the landing test that survives a squash-merge
+    Path-scoped to the branch's own 11 changed paths (raw/ac1-census.txt):
+      git grep -c composeFixTitle  refs/heads/main -- <11 paths>  rc=1  hit_lines=0  total_hits=0
+      git grep -c FIX_TITLE_PREFIX refs/heads/main -- <11 paths>  rc=1  hit_lines=0  total_hits=0
+      git grep -c composeFixTitle  <branch tip>     -- <11 paths>  rc=0  hit_lines=11 total_hits=20
+      git grep -c FIX_TITLE_PREFIX <branch tip>     -- <11 paths>  rc=0  hit_lines=3  total_hits=6
+    Wider net, whole-tree (would the fix exist somewhere else at trunk, e.g. relocated):
+      git grep -l composeFixTitle  refs/heads/main   -> 0 files
+      git grep -l FIX_TITLE_PREFIX refs/heads/main   -> 0 files
+      git grep -l composeFixTitle  <branch tip>      -> 11 files
+      git grep -l FIX_TITLE_PREFIX <branch tip>      -> 3 files
+    The module itself:
+      git ls-tree refs/heads/main -- packages/core/src/tasks/fix-title.ts -> 0 lines ABSENT
+      git ls-tree <branch tip>    -- packages/core/src/tasks/fix-title.ts -> 1 line  PRESENT
+    (C18: the path the closed card named is on the branch's own path list, so the list and
+     the remembered name agree; the list remains the authority.)
+
+4.6 textual-collision probe
+      git merge-tree --write-tree --name-only refs/heads/main <branch>
+      rc = 0    CONFLICT lines = 0
+      output verbatim, whole of it, one line:
+        9bc1e0c46caf67f4ad62e2d6495e6dcbfb65486e
+      which is the written tree OID; git prints a conflicted file list and CONFLICT lines
+      only when rc is nonzero. (C6 CONFIRMED at the newly measured trunk.)
+
+4.7 the branch's own changed-path list, from the measured merge-base to the measured tip
+      git diff --name-only <merge-base> <branch tip>   -> 11 entries      (C7 CONFIRMED)
+       1  .changeset/stas-394-fix-title-idempotence.md
+       2  docs/missions.md
+       3  docs/workflow-steps.md
+       4  packages/core/src/__tests__/mission-fix-title-composition.test.ts
+       5  packages/core/src/async-stores/async-mission-store.ts
+       6  packages/core/src/index.gate.ts
+       7  packages/core/src/index.ts
+       8  packages/core/src/missions/mission-store.ts
+        9  packages/core/src/tasks/fix-title.ts
+      10  packages/core/src/tasks/remediation-steps.ts
+      11  packages/engine/src/workflows/human-merge-approval-boundary.ts
+    (listed verbatim from raw/ac1-changed-paths.txt, which is the authority)
+
+4.8 collision diff - did the trunk touch ANY of those 11 paths since the merge-base?
+      git diff --name-only <merge-base> refs/heads/main -- <the 11 paths>
+      rc = 0    lines = 0    (empty, printed empty in raw/ac1-collision-diff.txt)
+    Context, measured and not assumed: the trunk DID touch 28 paths since the merge-base,
+    all of them RUFU-871 project-runtime work, and the newest trunk commit touches 6 paths
+    (.changeset/rufu-871-runtime-flags-cold-read.md, packages/core/src/central/central-core.ts,
+    packages/core/src/task-store/__tests__/project-runtime-enabled-flags.test.ts,
+    packages/core/src/task-store/async/async-settings.ts,
+    packages/dashboard/src/routes/__tests__/project-runtime-cold-read.test.ts,
+    packages/dashboard/src/routes/register-project-routes.ts). None of the 28 intersects
+    the branch's 11. (C8 CONFIRMED at the newly measured trunk.)
+
+==========================================================================================
+5. VERDICT - exactly one of the four named
+==========================================================================================
+VERDICT: G1 MECHANICAL.
+
+  G0 landed      REJECTED - the fix's content is NOT present at trunk: both symbols score
+                 0 hits path-scoped AND 0 files whole-tree, and packages/core/src/tasks/
+                 fix-title.ts is absent from refs/heads/main. Ancestry agrees (rc=1).
+  G0b ambiguous  REJECTED - the two predicates do not disagree. Content says absent and
+                 ancestry says absent; there is nothing for an operator to arbitrate.
+  G2 colliding   REJECTED - merge-tree rc=0 with 0 CONFLICT lines, and the collision diff
+                 over the branch's own 11 paths is empty (0 lines).
+  G1 mechanical  ACCEPTED - the trunk lacks the fix, the collision diff is empty, and
+                 merge-tree is clean. The absorption proceeds.
+
+Consequence recorded before proceeding: an --ff-only of this branch into the trunk cannot
+succeed and would be wrong regardless, because the trunk is not an ancestor of the branch
+(4.4, rc=1). The landing leg is a join, which is exactly what the operator's printed
+command says.
+
+STEP-1 TRUNK SNAPSHOT, for expiry arithmetic: refs/heads/main = ee995fcc85013a990752307d0f253e9d6fe5ebf4
+[ENGINE repo]. Step 3 re-reads it before merging and re-prints the collision pair if it moved.

@@ -1,0 +1,47 @@
+STAS-395 bundle build and verification - every print produced in this run
+$ git bundle create <evidence>/stas-395-delivery.bundle f1247e8aef367c248ebb0b9d339bf0b9bd0a6421..refs/heads/stas-395-measure-same-agent-duplicate-intake refs/heads/stas-395-measure-same-agent-duplicate-intake
+  rc=0
+  bundle_sha256=4d6d828f9d73b72f2e5ca226ba04aa9129f9fd502b43782aee0b33708f542ebe
+  bundle_bytes=7453
+
+$ git bundle list-heads <bundle>
+  rc=0
+  e038ea90e247532e4cdc84af33657fb5337adb7f refs/heads/stas-395-measure-same-agent-duplicate-intake
+
+$ git bundle verify <bundle>
+  rc=0
+  The bundle contains this ref:
+e038ea90e247532e4cdc84af33657fb5337adb7f refs/heads/stas-395-measure-same-agent-duplicate-intake
+The bundle requires this ref:
+f1247e8aef367c248ebb0b9d339bf0b9bd0a6421 
+The bundle uses this hash algorithm: sha1
+
+$ git log --format='%h %s' f1247e8aef367c248ebb0b9d339bf0b9bd0a6421..refs/heads/stas-395-measure-same-agent-duplicate-intake  -> /home/schindler/git/stash/.fusion/worktrees/stas-395/stas-395-evidence/stas-395-delivery-commits.txt
+  commit_count=4
+  e038ea90e2 test(STAS-395): describe the prior stubbing in prose, keeping the mock census at zero
+  bc8c9da52d test(STAS-395): print one observed-verdict line per executed case
+  054df66fe7 test(STAS-395): print the scratch store root and database per case
+  f9ea6e9054 test(STAS-395): measure the same-agent duplicate-intake lane on a real store
+
+$ git format-patch f1247e8aef367c248ebb0b9d339bf0b9bd0a6421..refs/heads/stas-395-measure-same-agent-duplicate-intake --stdout -> /home/schindler/git/stash/.fusion/worktrees/stas-395/stas-395-evidence/stas-395-delivery.patch
+  patch_bytes=25221
+
+$ base64 <bundle> -> stas-395-delivery.bundle.b64 ; base64 -d -> round-trip copy
+  original_sha256=4d6d828f9d73b72f2e5ca226ba04aa9129f9fd502b43782aee0b33708f542ebe
+  decoded_sha256 =4d6d828f9d73b72f2e5ca226ba04aa9129f9fd502b43782aee0b33708f542ebe
+  byte_equal=True
+
+$ git bundle list-heads <decoded copy>
+  rc=0
+  e038ea90e247532e4cdc84af33657fb5337adb7f refs/heads/stas-395-measure-same-agent-duplicate-intake
+$ git bundle verify <decoded copy>
+  rc=0
+  The bundle contains this ref:
+e038ea90e247532e4cdc84af33657fb5337adb7f refs/heads/stas-395-measure-same-agent-duplicate-intake
+The bundle requires this ref:
+f1247e8aef367c248ebb0b9d339bf0b9bd0a6421 
+The bundle uses this hash algorithm: sha1
+
+delivered tip carried by the bundle = e038ea90e247532e4cdc84af33657fb5337adb7f
+prerequisite (must already be in the receiving repo) = f1247e8aef367c248ebb0b9d339bf0b9bd0a6421
+prerequisite is an ancestor of refs/heads/main: rc=0 (0 means yes)

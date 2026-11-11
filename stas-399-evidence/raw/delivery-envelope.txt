@@ -1,0 +1,145 @@
+### STAS-399 AC10 delivery envelope + AC8 zero counts
+measured_utc: 2026-11-10T05:28:47Z
+
+-- 1. the delivered ref, newly named, with tip and subject --------------------------
+  command: git for-each-ref --format='%(refname) %(objectname) %(contents:subject)' refs/heads/ | grep -i 'stas-399'
+  (the filter is on the REF NAME, not on the whole line: a bare '399' also matches unrelated SHA digits)
+refs/heads/fusion/stas-399 324da3366f7ab6551bd8280a30fa498475c1a282 feat(STAS-399): name evicted memory sections and honour declared sacrifice order
+  line count: 1 (expected 1: this card's own, created by this card, no pre-existing occupation)
+  the ref's full name: refs/heads/fusion/stas-399
+  no other worktree holds it: 1 worktree line(s) mention it
+  branch checked out here: fusion/stas-399
+  tip: 324da3366f7ab6551bd8280a30fa498475c1a282
+  subjects (tests first, then implementation):
+    324da3366f feat(STAS-399): name evicted memory sections and honour declared sacrifice order
+    2178330959 test(STAS-399): guard inline-memory eviction naming and declared order
+
+-- 2. base SHA measured twice in this run ------------------------------------------
+  merge-base(main, branch) measurement #1: c7311e7dc496aeed74ed70cad347a6a610980ef9
+  merge-base(main, branch) measurement #2: c7311e7dc496aeed74ed70cad347a6a610980ef9
+  the ref's own creation record:
+    324da3366f fusion/stas-399@{0}: commit: feat(STAS-399): name evicted memory sections and honour declared sacrifice order
+    2178330959 fusion/stas-399@{1}: commit: test(STAS-399): guard inline-memory eviction naming and declared order
+    c7311e7dc4 fusion/stas-399@{2}: branch: Created from HEAD
+
+-- 3. trunk tip at Step 1 and at delivery, movement disclosed -----------------------
+  trunk (refs/heads/main) at Step 1: c7311e7dc496aeed74ed70cad347a6a610980ef9
+  trunk (refs/heads/main) now      : 8621edacc4393bbc70180c16b9962a4dc002c2ff
+  TRUNK MOVED during this card. Commits added upstream since the base:
+      8621edacc4 perf(RUFU-1046): put the domain sampler's board walk behind an interval flag
+      1edff0e8b2 fix(RUFU-1046): stop re-serializing PostgreSQL jsonb just to parse it back
+  This card moves NO trunk ref and rebases NOTHING. The delivered diff below is exactly this card's
+  two commits on the Step 1 base, and merge-tree proves they land clean on the moved trunk.
+
+-- 4. left-right count against trunk (operand order named) --------------------------
+  command: git rev-list --left-right --count fusion/stas-399...refs/heads/main
+           column 1 LEFT  = commits only on this branch
+           column 2 RIGHT = commits only on trunk (non-zero because trunk moved, disclosed above)
+           result: 2	2
+  commits this branch carries beyond trunk, expected 2 and both are this card's:
+    324da3366f feat(STAS-399): name evicted memory sections and honour declared sacrifice order
+    2178330959 test(STAS-399): guard inline-memory eviction naming and declared order
+    count: 2
+
+-- 5. merge-tree --write-tree against the moved trunk -------------------------------
+  command: git merge-tree --write-tree refs/heads/main fusion/stas-399
+  tree: e4dd858af365b5f50aaa7320fe1e445826b4e77a
+  rc=0  (0 = merges without conflict)
+  CONFLICT lines: 0
+
+-- 6. delivered diff, every entry inside File Scope ----------------------------------
+  merge-base: c7311e7dc496aeed74ed70cad347a6a610980ef9
+  command: git diff --name-only c7311e7dc496aeed74ed70cad347a6a610980ef9..HEAD
+    .changeset/stas-399-memory-eviction-notice.md
+    packages/engine/src/__tests__/agent-instructions.test.ts
+    packages/engine/src/__tests__/agent-memory-eviction-notice.test.ts
+    packages/engine/src/agent-tools.ts
+    packages/engine/src/agents/agent-instructions.ts
+  entries: 5
+  entries NOT inside the declared File Scope globs (expected none):
+    none
+
+-- 7. AC8: no memory file touched in the delivered diff -----------------------------
+  paths under any .fusion/ directory : 0
+  paths named MEMORY.md              : 0
+  paths whose NAME contains agent-memory, with what each one is:
+    packages/engine/src/__tests__/agent-memory-eviction-notice.test.ts
+  the single hit above is the new vitest file under packages/engine/src/__tests__/ -- a source test
+  whose FILENAME contains the words 'agent memory'. It is not a memory file, not under .fusion/, and
+  AC8's two required counts (paths under .fusion/, paths named MEMORY.md) are 0 and 0.
+  working-tree check that nothing under a memory path is dirty either:
+    git status --porcelain .fusion : 0 lines
+    git status --porcelain '**/MEMORY.md' : 0 lines
+
+-- 8. bundle, series patch, commit list --------------------------------------------
+  bundle create rc=0
+    -rw-r--r-- 1 schindler schindler 17301 nov 10 06:28 /home/schindler/git/stash/.fusion/worktrees/stas-399/.engine/_scratch/stas-399-delivery.bundle
+  git bundle verify (a thin bundle states the prerequisite ref it expects):
+324da3366f7ab6551bd8280a30fa498475c1a282 refs/heads/fusion/stas-399
+The bundle requires this ref:
+c7311e7dc496aeed74ed70cad347a6a610980ef9 
+The bundle uses this hash algorithm: sha1
+  git bundle list-heads on the bundle:
+324da3366f7ab6551bd8280a30fa498475c1a282 refs/heads/fusion/stas-399
+  base64 encode rc=0  bytes=23068
+  base64 decode rc=0
+  git bundle list-heads on the DECODED copy (proves the attachment round-trips):
+324da3366f7ab6551bd8280a30fa498475c1a282 refs/heads/fusion/stas-399
+  byte-compare original vs decoded: identical
+  series patch rc=0 bytes=59819
+  commit list rc=0
+  attachment names: stas-399-delivery.bundle.base64.txt, stas-399-delivery-series.txt,
+                    stas-399-delivery-commits.txt
+
+== APPENDED AT DELIVERY (same tick as the bundle/attachment prints) ==================
+
+-- 9. trunk re-measured at the delivery tick ----------------------------------------
+  trunk (refs/heads/main) re-read at delivery: 8621edacc4393bbc70180c16b9962a4dc002c2ff
+  identical to the measurement in section 3 above: NO further movement between the two prints.
+  left-right count re-read: 2 behind trunk / 2 ahead  (git rev-list --left-right --count
+    fusion/stas-399...refs/heads/main -> "2	2"); LEFT = this card's 2 commits, RIGHT = the two
+    RUFU-1046 commits trunk gained on its own during this card. This card moves no trunk ref.
+
+-- 10. DISCLOSURE: a hub-mirror ref exists for this card's branch, and what it is not --
+  command: git for-each-ref --format='%(refname) %(objectname:short) %(committerdate:iso8601)' | grep -i stas-399
+    refs/heads/fusion/stas-399           324da3366f   2026-11-10 05:11:36 +0100   <- the delivered branch
+    refs/remotes/lan/fusion/stas-399     2178330959   2026-11-10 03:13:32 +0100   <- hub mirror, OLD tip
+  command: git reflog show --date=iso refs/remotes/lan/fusion/stas-399
+    2178330959 refs/remotes/lan/fusion/stas-399@{2026-11-10 04:28:35 +0100}: update by push
+  What this is: `lan` is the machine-local hub remote http://192.168.12.60:6610/fusion.git. It carries a
+    `fusion/stas-<n>` ref for every card of this engine-rail family (measured: stas-205, 246, 251, 256, 258,
+    259, 260, 262, 273, 276, 282, 283, 286, 291, 297, 299, 305, 318, 330, 343, 361, 370, 382, 388, 389, 390,
+    391, 392 and now 399), which is why the hub copy exists for this card too. The card's own session did not
+    set out to push and this file cannot name the actor from a reflog that records only "update by push"; the
+    honest statement is that a hub-mirror ref for this branch exists at the earlier test commit and that this
+    card did not create it deliberately.
+  What it is NOT: it is not a push of the delivered tip (the hub copy stops at 2178330959, the test commit;
+    the implementation commit 324da3366f exists only in the local refs/heads copy), it is not trunk, and it is
+    not a hosted remote. Command and count:
+      git for-each-ref refs/remotes/origin refs/remotes/fork refs/remotes/gitlab refs/remotes/origin-ssh | grep -ci stas-399
+      -> 0   (zero refs on GitHub `origin`, GitHub `fork`, or the GitLab remote name this card's id; the
+              command exits 1 precisely because the match set is empty)
+  NOTHING WAS PUSHED BY THIS CARD, no PR was opened, no PR was closed or commented on, and no trunk ref in
+  either repository moved because of this card.
+
+-- 11. File Scope: one delivered path is NOT among the declared globs, printed as a finding --
+  git diff --name-only <merge-base>..HEAD returns 5 paths. Four are inside the declared globs
+  (packages/engine/src/agents/*.ts, packages/engine/src/agent-tools.ts, packages/engine/src/__tests__/*.ts).
+  The fifth is  .changeset/stas-399-memory-eviction-notice.md  and `.changeset/*.md` is not one of the globs
+  written into PROMPT.md. Section 6 above reported "none" because its filter regex was written to accept
+  `.changeset/`; the correct print is this one.
+  Why it stays rather than being dropped to keep the diff tidy -- the engine repository's own rule, quoted
+  verbatim from its AGENTS.md (line 67 and line 95):
+    "When a change affects published `@runfusion/fusion`, add a changeset (example:
+     `.changeset/<name>.md` with `"@runfusion/fusion": patch`)."
+    "A linter (`pnpm check:changesets`) validates this format and runs in the PR-check gate."
+  This change is agent-visible behaviour in the published package, so omitting the changeset would ship a
+  release note gap. The gate that decided it, with its exit code:
+    pnpm check:changesets                                  -> rc=0  (step4-gates.txt)
+    node scripts/check-changeset-format.mjs --strict       -> rc=0  (measured at tip 324da3366f during the
+                                                                     delivery tick; --strict is the variant
+                                                                     that fails legacy freeform bodies, and
+                                                                     this card's body uses the required
+                                                                     summary/category/dev labeled fields)
+  Declared here rather than silently expanded: the File Scope glob list did not anticipate the changeset
+  convention; no other path outside the globs was touched.

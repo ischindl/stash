@@ -1,0 +1,54 @@
+# STAS-391 — the package suite at the base and at this card's tip
+# base pinned for every read in this file: 06b1768b18f38a9b4d0d5b35467204e25bfe4396
+# Regenerate: bash stas-391-engine-evidence/generate.sh   (run from the card worktree root)
+
+Only the summary lines are kept: vitest runs files concurrently, so a per-case
+listing of a whole suite interleaves differently on every run and would make this
+file non-reproducible. The per-case list this card relies on is single-file and in
+raw/red-green.txt.
+
+The suite's prior state is pinned here at the base the change was authored on, and
+the same suite is run again at the branch tip, so the delta is a measured pair
+rather than a claim.
+
+## At the base 06b1768b18f38a9b4d0d5b35467204e25bfe4396
+The nested checkout is on the branch while this file is generated, so the base is
+reproduced by checking this branch's own files back to their base blobs. That is the
+whole base: the diff below is the branch's entire footprint, so swapping those files
+swaps the tree.
+  $ git -C .engine/stas-391-engine diff --name-only 06b1768b18f38a9b4d0d5b35467204e25bfe4396 eb20a6bfc583786b8c31cfe4f677237ebae54e10
+      packages/pi-claude-cli/src/__tests__/tool-result-authority.test.ts
+      packages/pi-claude-cli/src/tool-result-authority.ts
+        rc=0
+
+Test Files  15 passed (15)
+Tests  376 passed (376)
+vitest rc=0
+Restored to the tip — porcelain lines after the restore, 0 expected:
+0
+
+## At the branch tip eb20a6bfc583786b8c31cfe4f677237ebae54e10
+Same command, same lane, one commit later. The expected delta is zero: the
+equality pin is replaced by the announcement pin rather than added beside it, so
+identical counters are the proof that no case was quietly dropped on the way.
+Test Files  15 passed (15)
+Tests  376 passed (376)
+vitest rc=0
+
+## The repo's line-count guardrail, measured at the base
+It is a root-level gate (`node scripts/check-file-line-count.mjs`), not part of the
+package's own test script, which is only `vitest run --reporter=dot`. The verdict
+is repo-wide; what this card needs to know is whether either of its own files is on
+the list, on either revision.
+rc=1
+files named in the report: 126
+of which in packages/pi-claude-cli: 0
+Neither of this card's files is on the list at the base or at the tip; the module
+grows 120 lines to 127 and the guardrail caps new source files at 2000. The rc=1
+is a repo-wide pre-existing state this card neither caused nor can repair.
+
+## The module boundary this card's prompt cannot be re-pointed at
+Recorded because it is the reason the red/green above had to be authored on a
+branch: the prompt builder imports the authority module statically, so a scratch
+copy of the module can never be the thing the prompt path loads.
+45:import { markToolResultAsUntrusted } from "./tool-result-authority.js";

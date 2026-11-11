@@ -1,0 +1,574 @@
+# STAS-392 — Suite baseline at the delivered tips, by failing-name set
+# generated: 2026-11-05T18:54:42Z
+# The claim this supports is 'this diff added zero failures', never 'the suite is green'.
+
+admissible for: the ref this checkout has checked out at run time, named here:
+fusion/stas-392-empty-tool-result-announcement = 037a480cc562ef994aac0b19215613cb93e2b500
+(the measurement belongs to the working tree, so only that tip is spoken for)
+
+  $ (cd packages/pi-claude-cli && NO_COLOR=1 ./node_modules/.bin/vitest run src (whole package tree))
+RUN  <vitest> <package-dir>
+✓ src/__tests__/process-manager.test.ts > buildClaudeSpawnArgs > builds args including model and optional session/mcp flags 
+✓ src/__tests__/process-manager.test.ts > spawnClaude > spawns claude with all required CLI flags 
+✓ src/__tests__/process-manager.test.ts > spawnClaude > passes stream-json for both input-format and output-format 
+✓ src/__tests__/process-manager.test.ts > spawnClaude > sets stdio to pipe for stdin, stdout, and stderr 
+✓ src/__tests__/process-manager.test.ts > spawnClaude > passes cwd from options when provided 
+✓ src/__tests__/process-manager.test.ts > spawnClaude > writes system prompt to temp file and passes path via --append-system-prompt 
+✓ src/__tests__/process-manager.test.ts > spawnClaude > temp file contains the system prompt text 
+✓ src/__tests__/process-manager.test.ts > spawnClaude > does not include --append-system-prompt when no system prompt 
+✓ src/__tests__/process-manager.test.ts > spawnClaude > returns the spawned ChildProcess 
+✓ src/__tests__/process-manager.test.ts > effort flag > includes --effort and high in args when effort is high 
+✓ src/__tests__/process-manager.test.ts > effort flag > includes --effort and max in args when effort is max 
+✓ src/__tests__/process-manager.test.ts > effort flag > includes --effort and low in args when effort is low 
+✓ src/__tests__/process-manager.test.ts > effort flag > does NOT include --effort when effort is undefined 
+✓ src/__tests__/process-manager.test.ts > effort flag > does NOT include --effort when options is undefined 
+✓ src/__tests__/process-manager.test.ts > effort flag > is backward compatible - existing calls without effort still work 
+✓ src/__tests__/process-manager.test.ts > writeUserMessage > writes correct NDJSON user message to stdin 
+✓ src/__tests__/process-manager.test.ts > writeUserMessage > appends newline to the JSON 
+✓ src/__tests__/process-manager.test.ts > writeUserMessage > calls stdin.end() after writing user message 
+✓ src/__tests__/process-manager.test.ts > writeUserMessage > sends string content in NDJSON when given string 
+✓ src/__tests__/process-manager.test.ts > writeUserMessage > sends array content in NDJSON when given ContentBlock[] 
+✓ src/__tests__/process-manager.test.ts > cleanupProcess > kills the process with SIGKILL after  grace period 
+✓ src/__tests__/process-manager.test.ts > cleanupProcess > does not kill if process is already killed 
+✓ src/__tests__/process-manager.test.ts > captureStderr > returns a function that accumulates stderr data 
+✓ src/__tests__/process-manager.test.ts > captureStderr > returns empty string when no stderr data 
+✓ src/__tests__/process-manager.test.ts > validateCliPresenceAsync > resolves ok=true when claude --version exits 0 
+✓ src/__tests__/process-manager.test.ts > validateCliPresenceAsync > resolves ok=false with install message when spawn errors 
+✓ src/__tests__/process-manager.test.ts > validateCliPresenceAsync > resolves ok=false when claude --version exits non-zero 
+✓ src/__tests__/process-manager.test.ts > validateCliPresenceAsync > resolves ok=false instead of rejecting when claude spawn throws synchronously 
+✓ src/__tests__/process-manager.test.ts > validateCliAuthAsync > resolves true when claude auth status exits 0 
+✓ src/__tests__/process-manager.test.ts > validateCliAuthAsync > resolves false and warns when claude auth status fails 
+✓ src/__tests__/process-manager.test.ts > validateCliAuthAsync > resolves false instead of rejecting when claude auth spawn throws synchronously 
+✓ src/__tests__/process-manager.test.ts > CLI flags > spawnClaude does NOT include --permission-mode or dontAsk in args 
+✓ src/__tests__/process-manager.test.ts > CLI flags > spawnClaude does NOT include --permission-prompt-tool in args 
+✓ src/__tests__/process-manager.test.ts > mcp-config flag > spawnClaude with mcpConfigPath includes --mcp-config followed by the path 
+✓ src/__tests__/process-manager.test.ts > mcp-config flag > spawnClaude without mcpConfigPath does NOT include --mcp-config in args 
+✓ src/__tests__/process-manager.test.ts > mcp-config flag > spawnClaude NEVER includes --strict-mcp-config in args 
+✓ src/__tests__/process-manager.test.ts > mcp-config flag > backward compatibility - existing calls with only effort/cwd still work 
+✓ src/__tests__/process-manager.test.ts > forceKillProcess > calls proc.kill('SIGKILL') on live process 
+✓ src/__tests__/process-manager.test.ts > forceKillProcess > no-ops when proc.killed is true 
+✓ src/__tests__/process-manager.test.ts > forceKillProcess > no-ops when proc.exitCode is not null 
+✓ src/__tests__/process-manager.test.ts > process registry > registerProcess adds proc and killAllProcesses kills it 
+✓ src/__tests__/process-manager.test.ts > process registry > proc exit event removes from registry 
+✓ src/__tests__/process-manager.test.ts > process registry > killAllProcesses clears set and handles already-dead processes 
+✓ src/__tests__/process-manager.test.ts > resume session flag > includes --resume followed by session ID when resumeSessionId is provided 
+✓ src/__tests__/process-manager.test.ts > resume session flag > does NOT include --resume when resumeSessionId is undefined 
+✓ src/__tests__/process-manager.test.ts > resume session flag > does not include --session-id when --resume is provided 
+✓ src/__tests__/process-manager.test.ts > resume session flag > includes both --resume and --effort when both are provided 
+✓ src/__tests__/process-manager.test.ts > resume session flag > includes both --resume and --mcp-config when both are provided 
+✓ src/__tests__/process-manager.test.ts > cleanupSystemPromptFile > deletes the temp file when it exists 
+✓ src/__tests__/process-manager.test.ts > cleanupSystemPromptFile > does not throw when file does not exist 
+✓ src/__tests__/prompt-builder.test.ts > buildPrompt > returns empty string for empty messages array 
+✓ src/__tests__/prompt-builder.test.ts > buildPrompt > produces 'USER:\n{text}' for a single user text message 
+✓ src/__tests__/prompt-builder.test.ts > buildPrompt > produces 'ASSISTANT:\n{text}' for a single assistant text message 
+✓ src/__tests__/prompt-builder.test.ts > buildPrompt > labels a tool result with its Claude tool name and frames its payload as untrusted data 
+✓ src/__tests__/prompt-builder.test.ts > buildPrompt > produces correctly ordered labeled blocks for mixed conversation 
+✓ src/__tests__/prompt-builder.test.ts > buildPrompt > extracts text from array content blocks in user messages 
+✓ src/__tests__/prompt-builder.test.ts > buildPrompt > serializes assistant mixed content (text + thinking + toolCall) with Claude name mapping 
+✓ src/__tests__/prompt-builder.test.ts > buildPrompt > inserts placeholder text for image blocks in non-final user messages 
+✓ src/__tests__/prompt-builder.test.ts > buildPrompt > handles toolCall with no arguments (maps pi name to Claude name) 
+✓ src/__tests__/prompt-builder.test.ts > buildPrompt > handles tool result with array content blocks 
+✓ src/__tests__/prompt-builder.test.ts > buildPrompt > tool name and argument reverse mapping > maps pi tool name to Claude name in toolCall serialization 
+✓ src/__tests__/prompt-builder.test.ts > buildPrompt > tool name and argument reverse mapping > translates pi arguments to Claude format for edit tool 
+✓ src/__tests__/prompt-builder.test.ts > buildPrompt > tool name and argument reverse mapping > maps pi tool name to Claude name in tool result label 
+✓ src/__tests__/prompt-builder.test.ts > buildPrompt > tool name and argument reverse mapping > prefixes custom (non-built-in) tool names with MCP prefix 
+✓ src/__tests__/prompt-builder.test.ts > buildPrompt > tool name and argument reverse mapping > handles toolCall with string arguments (raw unparsed) 
+✓ src/__tests__/prompt-builder.test.ts > image passthrough (HIST-02) > single user message with text and image returns ContentBlock[] 
+✓ src/__tests__/prompt-builder.test.ts > image passthrough (HIST-02) > multi-turn with images only in final user message returns ContentBlock[] 
+✓ src/__tests__/prompt-builder.test.ts > image passthrough (HIST-02) > multi-turn with images in non-final user message uses placeholder and returns string 
+✓ src/__tests__/prompt-builder.test.ts > image passthrough (HIST-02) > multi-turn with images in both non-final and final user messages 
+✓ src/__tests__/prompt-builder.test.ts > image passthrough (HIST-02) > no images returns string (backward compatible) 
+✓ src/__tests__/prompt-builder.test.ts > image passthrough (HIST-02) > image block without data/mimeType uses placeholder 
+✓ src/__tests__/prompt-builder.test.ts > image passthrough (HIST-02) > buildPrompt with custom tool result prompt (images in earlier messages) returns string 
+✓ src/__tests__/prompt-builder.test.ts > tool result image handling > tool result with image block triggers ContentBlock[] path with image passthrough 
+✓ src/__tests__/prompt-builder.test.ts > tool result image handling > tool result image in string path gets placeholder text 
+✓ src/__tests__/prompt-builder.test.ts > tool result image handling > tool result with only text blocks works as before 
+✓ src/__tests__/prompt-builder.test.ts > custom tool history replay > toolCall with custom tool name 'deploy' uses plain format (no MCP prefix) 
+✓ src/__tests__/prompt-builder.test.ts > custom tool history replay > toolCall with built-in name 'read' still produces 'Read' (not MCP-prefixed) 
+✓ src/__tests__/prompt-builder.test.ts > custom tool history replay > toolResult for custom tool 'deploy' uses plain name (no MCP prefix) 
+✓ src/__tests__/prompt-builder.test.ts > custom tool history replay > toolResult for built-in 'read' still produces TOOL RESULT with Claude name 
+✓ src/__tests__/prompt-builder.test.ts > custom tool history replay > custom tool arguments pass through without translation 
+✓ src/__tests__/prompt-builder.test.ts > buildSystemPrompt > returns context systemPrompt when no AGENTS.md found 
+✓ src/__tests__/prompt-builder.test.ts > buildSystemPrompt > appends AGENTS.md content when found 
+✓ src/__tests__/prompt-builder.test.ts > buildSystemPrompt > sanitizes .pi references to .claude in AGENTS.md content 
+✓ src/__tests__/prompt-builder.test.ts > buildSystemPrompt > returns empty string when no systemPrompt and no AGENTS.md 
+✓ src/__tests__/acp-driver.test.ts > streamViaAcp — ACP→pi translation (U11) > feeds ACP token usage (incl. cache tokens) into the done message (item 2) 
+✓ src/__tests__/acp-driver.test.ts > streamViaAcp — ACP→pi translation (U11) > ignores a malformed/untrusted usage payload (string/NaN/negative) 
+✓ src/__tests__/cli-cwd-contract.test.ts > resolveRequiredCwd — the shared contract > refuses a missing directory and names the lane that forgot it 
+✓ src/__tests__/cli-cwd-contract.test.ts > resolveRequiredCwd — the shared contract > refuses a relative directory, because spawn would resolve it against the process directory 
+✓ src/__tests__/cli-cwd-contract.test.ts > resolveRequiredCwd — the shared contract > returns an absolute directory verbatim — no resolve(), no normalize() 
+✓ src/__tests__/cli-cwd-contract.test.ts > spawnClaude — refusal before the child exists > throws a named error and never spawns when no directory is given 
+✓ src/__tests__/cli-cwd-contract.test.ts > spawnClaude — refusal before the child exists > spawns in the declared checkout 
+✓ src/__tests__/cli-cwd-contract.test.ts > streamViaCli — no serve-root inheritance > throws synchronously for a bare call and spawns nothing 
+✓ src/__tests__/cli-cwd-contract.test.ts > streamViaCli — no serve-root inheritance > still refuses when the caller passes other options but no directory 
+✓ src/__tests__/cli-cwd-contract.test.ts > streamViaCli — no serve-root inheritance > forwards an explicit checkout verbatim into the child's cwd 
+✓ src/__tests__/cli-cwd-contract.test.ts > streamViaAcp — neither the bridge child nor session/new inherits the process directory > throws synchronously, spawning no bridge and opening no session 
+✓ src/__tests__/prompt-builder.test.ts > buildSystemPrompt > walks up directories to find AGENTS.md in parent 
+✓ src/__tests__/prompt-builder.test.ts > buildSystemPrompt > sanitizes empty AGENTS.md content gracefully 
+✓ src/__tests__/prompt-builder.test.ts > buildSystemPrompt > sanitizes AGENTS.md with only whitespace content 
+✓ src/__tests__/prompt-builder.test.ts > buildSystemPrompt > sanitizes AGENTS.md with special regex characters 
+✓ src/__tests__/prompt-builder.test.ts > buildSystemPrompt > handles readFileSync error gracefully (skip silently) 
+✓ src/__tests__/prompt-builder.test.ts > buildSystemPrompt > appends tool result instruction when messages contain toolResult 
+✓ src/__tests__/prompt-builder.test.ts > buildSystemPrompt > rewrites bare custom tool references to MCP-prefixed names 
+✓ src/__tests__/prompt-builder.test.ts > buildSystemPrompt > treats ls as custom and rewrites to mcp__custom-tools__ls 
+✓ src/__tests__/prompt-builder.test.ts > buildSystemPrompt > custom tools addendum instructs direct MCP calls without ToolSearch prerequisite 
+✓ src/__tests__/prompt-builder.test.ts > buildSystemPrompt > does not rewrite identifier substrings that happen to overlap a tool name 
+✓ src/__tests__/prompt-builder.test.ts > buildResumePrompt > returns empty string for empty messages array 
+✓ src/__tests__/prompt-builder.test.ts > buildResumePrompt > returns just the user message text for a single user message 
+✓ src/__tests__/prompt-builder.test.ts > buildResumePrompt > extracts only the last user message from a multi-turn conversation 
+✓ src/__tests__/prompt-builder.test.ts > buildResumePrompt > includes tool results preceding the final user message 
+✓ src/__tests__/prompt-builder.test.ts > buildResumePrompt > includes multiple tool results preceding the final user message 
+✓ src/__tests__/prompt-builder.test.ts > buildResumePrompt > handles custom tool results with plain name format 
+✓ src/__tests__/prompt-builder.test.ts > buildResumePrompt > returns empty string when no user message found 
+✓ src/__tests__/prompt-builder.test.ts > buildResumePrompt > handles content blocks array for user message 
+✓ src/__tests__/prompt-builder.test.ts > buildResumePrompt > returns ONLY the trailing tool result during a multi-iteration tool loop 
+✓ src/__tests__/prompt-builder.test.ts > buildResumePrompt > returns empty string mid-loop when only an assistant turn exists since the last delta 
+✓ src/__tests__/prompt-builder.test.ts > buildResumePrompt > handles images in the final user message by returning ContentBlock[] 
+✓ src/__tests__/cli-cwd-contract.test.ts > streamViaAcp — neither the bridge child nor session/new inherits the process directory > passes the declared checkout to the bridge child AND to session/new 
+✓ src/__tests__/acp-driver.test.ts > streamViaAcp — ACP→pi translation (U11) > does not emit usage on a tool-use (break-early) turn 
+✓ src/__tests__/acp-driver.test.ts > streamViaAcp — ACP→pi translation (U11) > translates agent_message_chunk text into pi text events + done(stop) 
+✓ src/__tests__/acp-driver.test.ts > streamViaAcp — ACP→pi translation (U11) > breaks early on a tool_call: emits toolcall_start + done(toolUse), no execution 
+✓ src/__tests__/cli-cwd-contract.test.ts > streamViaAcp — neither the bridge child nor session/new inherits the process directory > treats a changed directory as a different warm session, and never sends process.cwd() 
+✓ src/__tests__/cli-cwd-contract.test.ts > streamViaAcp — neither the bridge child nor session/new inherits the process directory > never names this process's directory in any spawn argv, spawn option, or session/new payload 
+✓ src/__tests__/tool-result-authority.test.ts > tool result stays data on the model-visible path > marks the measured payload (an unprefixed imperative in bash stdout) as untrusted data, because on 2026-11-04 that exact shape arrived in a bash result on this platform and no rule told the model to read it instead of obeying it 
+✓ src/__tests__/tool-result-authority.test.ts > tool result stays data on the model-visible path > labels a payload opening with System: as directive-shaped while keeping it byte-for-byte data, because a directive-shaped prefix is a severity signal, not a permission to obey or to drop the payload 
+✓ src/__tests__/tool-result-authority.test.ts > tool result stays data on the model-visible path > labels a payload opening with Directives: as directive-shaped while keeping it byte-for-byte data, because a directive-shaped prefix is a severity signal, not a permission to obey or to drop the payload 
+✓ src/__tests__/tool-result-authority.test.ts > tool result stays data on the model-visible path > labels a payload opening with Instruction: as directive-shaped while keeping it byte-for-byte data, because a directive-shaped prefix is a severity signal, not a permission to obey or to drop the payload 
+✓ src/__tests__/tool-result-authority.test.ts > tool result stays data on the model-visible path > classifies a tool result that only discusses a directive-shaped string as ordinary tool data, because this card's own evidence text is that input and must survive unchanged 
+✓ src/__tests__/tool-result-authority.test.ts > tool result stays data on the model-visible path > marks a result on the resumed-session delta too, because a resumed turn is where a fresh bash payload actually reaches the model 
+✓ src/__tests__/tool-result-authority.test.ts > an empty tool result carries the provenance of its emptiness > says the command produced no output when the tool delivered zero bytes, because an empty output that stays silent cannot be told apart from a dropped payload and turns a probe into a false negative 
+✓ src/__tests__/tool-result-authority.test.ts > an empty tool result carries the provenance of its emptiness > refuses to render a payload that was never delivered, because the empty string this site used to return made 'nothing was delivered' read as 'the command printed nothing' 
+✓ src/__tests__/tool-result-authority.test.ts > an empty tool result carries the provenance of its emptiness > announces that no content was delivered when the content-block array is empty, because the upstream runtime normalises a content-less untyped result to `content: []` (createToolResultMessage writes `result.content ?? []`) and pi-ai normalises a null content the same way, so an empty array is an expected input on every custom and MCP tool and a throw there deletes the whole prompt instead of one payload 
+✓ src/__tests__/tool-result-authority.test.ts > the marking fails loud instead of passing raw text through > propagates a failure inside the marking step to the caller, because a guard that swallowed its own error would send unmarked payload text to the model 
+✓ src/__tests__/acp-driver.test.ts > streamViaAcp — ACP→pi translation (U11) > does NOT break early on an internal ToolSearch; breaks on the real fn_* tool (U9 sequence) 
+✓ src/__tests__/tool-result-authority.test.ts > the invariant lives in exactly one production module > is the only production source stating the zero-authority rule, because the same sentence written into a second layer is two rules that can disagree 
+✓ src/__tests__/tool-result-authority.test.ts > the invariant lives in exactly one production module > owns the directive-shape label list alone, because a second copy of the predicate is a second definition of what counts as a directive 
+✓ src/__tests__/provider.test.ts > provider registration (default export) > registers provider with ID pi-claude-cli 
+✓ src/__tests__/provider.test.ts > provider registration (default export) > registers provider with correct config shape 
+✓ src/__tests__/provider.test.ts > provider registration (default export) > derives models from getModels('anthropic') with correct fields 
+✓ src/__tests__/provider.test.ts > provider registration (default export) > does not synthesize former fallback rows when Pi omits them 
+✓ src/__tests__/provider.test.ts > provider registration (default export) > projects a controlled Pi catalog exactly once and retains all projected fields 
+✓ src/__tests__/provider.test.ts > streamViaCli > returns an AssistantMessageEventStream 
+✓ src/__tests__/provider.test.ts > streamViaCli > logs PID and spawn args when debug mode is enabled 
+✓ src/__tests__/provider.test.ts > streamViaCli > spawns subprocess and writes user message to stdin 
+✓ src/__tests__/provider.test.ts > streamViaCli > stdin close behavior > stdin.end() is called after writeUserMessage 
+✓ src/__tests__/provider.test.ts > streamViaCli > stdin close behavior > unexpected control_request on stdout is logged and ignored 
+✓ src/__tests__/provider.test.ts > streamViaCli > handles full text streaming sequence via NDJSON 
+✓ src/__tests__/provider.test.ts > streamViaCli > handles result error by pushing error event 
+✓ src/__tests__/provider.test.ts > streamViaCli > calls cleanupProcess after receiving result 
+✓ src/__tests__/provider.test.ts > streamViaCli > kills subprocess when abort signal fires 
+✓ src/__tests__/provider.test.ts > streamViaCli > thinking effort wiring > passes effort to spawnClaude when options.reasoning is provided on non-Opus model 
+✓ src/__tests__/provider.test.ts > streamViaCli > thinking effort wiring > passes elevated effort to spawnClaude when options.reasoning is provided on Opus model 
+✓ src/__tests__/provider.test.ts > streamViaCli > thinking effort wiring > does not pass effort when reasoning is undefined 
+✓ src/__tests__/provider.test.ts > streamViaCli > thinking effort wiring > passes medium effort for medium reasoning on non-Opus 
+✓ src/__tests__/provider.test.ts > streamViaCli > thinking effort wiring > passes high effort for medium reasoning on Opus (elevated) 
+✓ src/__tests__/provider.test.ts > streamViaCli > mcpConfigPath passthrough > passes mcpConfigPath to spawnClaude options 
+✓ src/__tests__/provider.test.ts > streamViaCli > break-early logic > kills subprocess at message_stop when built-in tool_use seen and emits done event 
+✓ src/__tests__/provider.test.ts > streamViaCli > break-early logic > kills subprocess at message_stop when custom-tools MCP tool seen 
+✓ src/__tests__/provider.test.ts > streamViaCli > break-early logic > does NOT break-early when stream has no tool_use blocks 
+✓ src/__tests__/provider.test.ts > streamViaCli > break-early logic > does NOT break-early for internal Claude Code tools (ToolSearch, Task, etc.) 
+✓ src/__tests__/provider.test.ts > streamViaCli > break-early logic > does NOT break-early for pi-known tools inside sub-agents (parent_tool_use_id set) 
+✓ src/__tests__/provider.test.ts > streamViaCli > break-early logic > does NOT break-early when only user MCP tools are seen (not custom-tools) 
+✓ src/__tests__/provider.test.ts > streamViaCli > subprocess error handling > pushes done event when subprocess emits error (e.g. spawn failure) 
+✓ src/__tests__/provider.test.ts > streamViaCli > subprocess error handling > pushes error event when subprocess crashes with non-zero exit code 
+✓ src/__tests__/provider.test.ts > streamViaCli > subprocess error handling > includes stderr in error event on crash 
+✓ src/__tests__/provider.test.ts > streamViaCli > subprocess error handling > FN-3815: routes close stderr logging by exit code=+0 
+✓ src/__tests__/provider.test.ts > streamViaCli > subprocess error handling > FN-3815: routes close stderr logging by exit code=42 
+✓ src/__tests__/provider.test.ts > streamViaCli > subprocess error handling > warns when subprocess closes successfully with no content events 
+✓ src/__tests__/acp-driver.test.ts > streamViaAcp — ACP→pi translation (U11) > R17 auth-signal: sets on a 'Not logged in' turn, clears on a real response, ignores long answers 
+✓ src/__tests__/acp-driver.test.ts > streamViaAcp — ACP→pi translation (U11) > ends with done even when the turn produces no content 
+✓ src/__tests__/provider.test.ts > streamViaCli > subprocess error handling > does not push error on normal close (code 0) 
+✓ src/__tests__/provider.test.ts > streamViaCli > subprocess error handling > does not push error after break-early (broken flag) 
+✓ src/__tests__/provider.test.ts > streamViaCli > inactivity timeout > kills subprocess and pushes error after 1800s of no output 
+✓ src/__tests__/provider.test.ts > streamViaCli > inactivity timeout > resets timer on each stdout line 
+✓ src/__tests__/provider.test.ts > streamViaCli > inactivity timeout > clears timer on normal completion 
+✓ src/__tests__/provider.test.ts > streamViaCli > abort handler fix > abort signal sends SIGKILL not SIGTERM 
+✓ src/__tests__/provider.test.ts > streamViaCli > abort signal already aborted > kills subprocess immediately when signal is already aborted 
+✓ src/__tests__/provider.test.ts > streamViaCli > resume behavior > uses --resume for follow-up quick-chat turns when sessionId is present 
+✓ src/__tests__/provider.test.ts > streamViaCli > MCP config with custom tool results > keeps MCP config even when conversation ends with custom tool result 
+✓ src/__tests__/provider.test.ts > streamViaCli > MCP config with custom tool results > does NOT suppress MCP config when conversation ends with user message 
+✓ src/__tests__/provider.test.ts > streamViaCli > effectiveReason override logic > overrides toolUse stopReason to stop when no pi-known tool calls in content 
+✓ src/__tests__/provider.test.ts > streamViaCli > effectiveReason override logic > keeps toolUse stopReason when pi-known tool calls are present 
+✓ src/__tests__/provider.test.ts > streamViaCli > effectiveReason override logic > handles undefined output.content without crashing 
+✓ src/__tests__/provider.test.ts > streamViaCli > effectiveReason override logic > passes through length stopReason unchanged 
+✓ src/__tests__/provider.test.ts > streamViaCli > session resume via options.sessionId > passes --resume when sessionId option is provided on subsequent turn 
+✓ src/__tests__/provider.test.ts > streamViaCli > session resume via options.sessionId > passes --session-id on first turn when sessionId provided 
+✓ src/__tests__/provider.test.ts > streamViaCli > session resume via options.sessionId > does not pass --resume or --session-id when no sessionId option 
+✓ src/__tests__/provider.test.ts > streamViaCli > session resume via options.sessionId > uses buildResumePrompt when sessionId is provided (sends only new content) 
+✓ src/__tests__/provider.test.ts > streamViaCli > session resume via options.sessionId > does not pass system prompt when resuming 
+✓ src/__tests__/acp-driver.test.ts > connection reuse (item 1) — gated by FUSION_CLAUDE_ACP_REUSE > reuses one warm bridge connection across turns; turn 2 skips spawn + session/new 
+✓ src/__tests__/acp-driver.test.ts > connection reuse (item 1) — gated by FUSION_CLAUDE_ACP_REUSE > fails a reuse turn FAST when the warm child dies mid-prompt (P0: no 30min hang) 
+✓ src/__tests__/acp-driver.test.ts > connection reuse (item 1) — gated by FUSION_CLAUDE_ACP_REUSE > does NOT keep the connection warm after a tool-use (break-early) turn — prompt() still pending 
+✓ src/__tests__/mcp-config.test.ts > getCustomToolDefs > filters out all 6 built-in tools and returns only custom tools 
+✓ src/__tests__/mcp-config.test.ts > getCustomToolDefs > returns empty array when all tools are built-in 
+✓ src/__tests__/mcp-config.test.ts > getCustomToolDefs > includes custom tool with correct name, description, inputSchema from parameters 
+✓ src/__tests__/mcp-config.test.ts > getCustomToolDefs > handles pi.getAllTools() returning empty array 
+✓ src/__tests__/mcp-config.test.ts > getCustomToolDefs > returns empty array when pi.getAllTools() returns undefined 
+✓ src/__tests__/mcp-config.test.ts > getCustomToolDefs > returns empty array when pi.getAllTools() returns null 
+✓ src/__tests__/mcp-config.test.ts > toolsFromContext > keeps ls as a custom tool (not filtered as built-in) 
+✓ src/__tests__/mcp-config.test.ts > writeMcpConfig > writes schema file to tmpdir with correct content (JSON array of tool defs) 
+✓ src/__tests__/mcp-config.test.ts > writeMcpConfig > writes config file to tmpdir with mcpServers.custom-tools entry 
+✓ src/__tests__/mcp-config.test.ts > writeMcpConfig > config uses 'command': 'node' format (not 'type': 'http') 
+✓ src/__tests__/mcp-config.test.ts > writeMcpConfig > config args include path to mcp-schema-server.cjs and schema file path 
+✓ src/__tests__/mcp-config.test.ts > writeMcpConfig > returns the config file path 
+✓ src/__tests__/mcp-config.test.ts > writeMcpConfig > includes cacheKey in filenames when provided so distinct tool sets do not collide 
+✓ src/__tests__/event-bridge.test.ts > createEventBridge > pushes start event on first handleEvent call 
+✓ src/__tests__/event-bridge.test.ts > createEventBridge > text content block streaming > pushes text_start on content_block_start with text type 
+✓ src/__tests__/event-bridge.test.ts > createEventBridge > text content block streaming > pushes text_delta on content_block_delta with text_delta type 
+✓ src/__tests__/event-bridge.test.ts > createEventBridge > text content block streaming > pushes text_end on content_block_stop with accumulated text 
+✓ src/__tests__/event-bridge.test.ts > createEventBridge > multiple text blocks > tracks multiple text blocks independently 
+✓ src/__tests__/event-bridge.test.ts > createEventBridge > multiple text blocks > preserves the reported dotted model links across text deltas 
+✓ src/__tests__/event-bridge.test.ts > createEventBridge > multiple text blocks > repairs a missing sentence boundary between consecutive text blocks 
+✓ src/__tests__/event-bridge.test.ts > createEventBridge > multiple text blocks > does not insert spaces into lowercase continuations like property access 
+✓ src/__tests__/event-bridge.test.ts > createEventBridge > message_start usage tracking > captures initial usage from message_start 
+✓ src/__tests__/event-bridge.test.ts > createEventBridge > message_start usage tracking > defaults missing usage fields to 0 
+✓ src/__tests__/event-bridge.test.ts > createEventBridge > message_delta handling > captures stop_reason from message_delta 
+✓ src/__tests__/event-bridge.test.ts > createEventBridge > message_delta handling > updates usage from message_delta 
+✓ src/__tests__/event-bridge.test.ts > createEventBridge > message_stop (no-op, done pushed by provider) > does not push done (provider pushes it after readline closes) 
+✓ src/__tests__/event-bridge.test.ts > createEventBridge > stop reason mapping > maps end_turn to stop 
+✓ src/__tests__/event-bridge.test.ts > createEventBridge > stop reason mapping > maps max_tokens to length 
+✓ src/__tests__/event-bridge.test.ts > createEventBridge > stop reason mapping > maps tool_use to toolUse 
+✓ src/__tests__/event-bridge.test.ts > createEventBridge > stop reason mapping > maps unknown stop reasons to stop 
+✓ src/__tests__/event-bridge.test.ts > createEventBridge > tool_use content block streaming > pushes toolcall_start with mapped pi name on content_block_start 
+✓ src/__tests__/event-bridge.test.ts > createEventBridge > tool_use content block streaming > pushes toolcall_delta with raw JSON fragment on input_json_delta 
+✓ src/__tests__/event-bridge.test.ts > createEventBridge > tool_use content block streaming > accumulates partial JSON across multiple deltas 
+✓ src/__tests__/event-bridge.test.ts > createEventBridge > tool_use content block streaming > pushes toolcall_end with fully parsed and argument-mapped ToolCall on block_stop 
+✓ src/__tests__/event-bridge.test.ts > createEventBridge > tool_use content block streaming > emits {} for parameterless MCP tool calls (no input_json_delta) 
+✓ src/__tests__/event-bridge.test.ts > createEventBridge > tool_use content block streaming > tracks multiple tool_use blocks independently by Claude event.index 
+✓ src/__tests__/event-bridge.test.ts > createEventBridge > tool_use content block streaming > tracks tool_use block interleaved with text block correctly 
+✓ src/__tests__/event-bridge.test.ts > createEventBridge > tool_use content block streaming > handles partial JSON parse failure during delta gracefully (no crash) 
+✓ src/__tests__/event-bridge.test.ts > createEventBridge > tool_use content block streaming > emits toolcall_end with raw string arguments when final JSON parse fails 
+✓ src/__tests__/event-bridge.test.ts > createEventBridge > tool_use content block streaming > getOutput().stopReason is toolUse when stop_reason is tool_use 
+✓ src/__tests__/event-bridge.test.ts > createEventBridge > tool_use content block streaming > output.content includes ToolCall objects alongside TextContent 
+✓ src/__tests__/event-bridge.test.ts > createEventBridge > thinking and other content block types > emits thinking_start for thinking blocks 
+✓ src/__tests__/event-bridge.test.ts > createEventBridge > thinking and other content block types > emits thinking_delta for thinking content 
+✓ src/__tests__/event-bridge.test.ts > createEventBridge > thinking and other content block types > accumulates thinking text across multiple deltas 
+✓ src/__tests__/event-bridge.test.ts > createEventBridge > thinking and other content block types > repairs a missing sentence boundary between thinking deltas 
+✓ src/__tests__/event-bridge.test.ts > createEventBridge > thinking and other content block types > emits thinking_end for thinking block stop 
+✓ src/__tests__/event-bridge.test.ts > createEventBridge > thinking and other content block types > accumulates signature_delta on thinking block thinkingSignature 
+✓ src/__tests__/event-bridge.test.ts > createEventBridge > thinking and other content block types > tracks thinking block interleaved with text block correctly 
+✓ src/__tests__/event-bridge.test.ts > createEventBridge > MCP prefix stripping via mapClaudeToolNameToPi > strips mcp__custom-tools__ prefix from tool_use name in toolcall_start 
+✓ src/__tests__/event-bridge.test.ts > createEventBridge > MCP prefix stripping via mapClaudeToolNameToPi > strips mcp__custom-tools__ prefix in toolcall_end 
+✓ src/__tests__/event-bridge.test.ts > createEventBridge > MCP prefix stripping via mapClaudeToolNameToPi > handles MCP-prefixed triage tool names 
+✓ src/__tests__/event-bridge.test.ts > createEventBridge > internal Claude Code tools are filtered > skips ToolSearch tool_use blocks (not a pi-known tool) 
+✓ src/__tests__/event-bridge.test.ts > createEventBridge > internal Claude Code tools are filtered > skips Task, Agent, and other internal tools 
+✓ src/__tests__/event-bridge.test.ts > createEventBridge > internal Claude Code tools are filtered > allows built-in tools (Read, Write, etc.) 
+✓ src/__tests__/event-bridge.test.ts > createEventBridge > internal Claude Code tools are filtered > silently drops deltas and stop events for filtered tools 
+✓ src/__tests__/event-bridge.test.ts > createEventBridge > unknown event types > silently ignores unknown event types (after start) 
+✓ src/__tests__/event-bridge.test.ts > createEventBridge > complete text streaming sequence > produces correct pi event sequence for a full conversation turn 
+✓ src/__tests__/event-bridge.test.ts > createEventBridge > output initialization > initializes output with correct defaults 
+✓ src/__tests__/event-bridge.test.ts > createEventBridge > stopReason mapping (provider reads via getOutput) > stopReason is toolUse for tool_use 
+✓ src/__tests__/event-bridge.test.ts > createEventBridge > stopReason mapping (provider reads via getOutput) > stopReason is length for max_tokens 
+✓ src/__tests__/event-bridge.test.ts > createEventBridge > delta without matching block > handles text_delta arriving with no matching block (index mismatch) 
+✓ src/__tests__/event-bridge.test.ts > createEventBridge > delta without matching block > handles input_json_delta arriving with no matching block 
+✓ src/__tests__/event-bridge.test.ts > createEventBridge > delta without matching block > handles thinking_delta arriving with no matching block 
+✓ src/__tests__/event-bridge.test.ts > createEventBridge > delta without matching block > handles signature_delta arriving with no matching block 
+✓ src/__tests__/event-bridge.test.ts > createEventBridge > delta without matching block > handles content_block_stop arriving with no matching block 
+✓ src/__tests__/event-bridge.test.ts > createEventBridge > unknown content block type in content_block_start > silently ignores unknown content block types 
+✓ src/__tests__/event-bridge.test.ts > createEventBridge > message_delta without usage > handles message_delta with stop_reason but no usage 
+✓ src/__tests__/acp-driver.test.ts > connection reuse (item 1) — gated by FUSION_CLAUDE_ACP_REUSE > cold-starts (no warm reuse) when the resume delta is empty (P1: no empty-prompt hang) 
+✓ src/__tests__/acp-driver.test.ts > connection reuse (item 1) — gated by FUSION_CLAUDE_ACP_REUSE > does NOT reuse when the flag is off (default): each turn spawns a fresh bridge 
+✓ src/__tests__/acp-driver.test.ts > buildBridgeEnv — R17 auth opt-in (item 3) > does NOT forward auth vars by default (secure default) 
+✓ src/__tests__/acp-driver.test.ts > buildBridgeEnv — R17 auth opt-in (item 3) > forwards a single auth token when opted in 
+✓ src/__tests__/acp-driver.test.ts > buildBridgeEnv — R17 auth opt-in (item 3) > prefers CLAUDE_CODE_OAUTH_TOKEN and forwards only one token 
+✓ src/__tests__/acp-driver.test.ts > buildBridgeEnv — R17 auth opt-in (item 3) > forwards ANTHROPIC_AUTH_TOKEN (middle precedence) when no OAuth token 
+✓ src/__tests__/acp-driver.test.ts > buildBridgeEnv — R17 auth opt-in (item 3) > treats a whitespace-only higher-preference token as absent (no shadowing, no blank forward) 
+✓ src/__tests__/acp-driver.test.ts > buildBridgeEnv — R17 auth opt-in (item 3) > reads the auth token from process.env, never a caller-supplied value (no token substitution) 
+✓ src/__tests__/tool-mapping.test.ts > tool-mapping > TOOL_MAPPINGS > exports 6 tool mappings 
+✓ src/__tests__/tool-mapping.test.ts > tool-mapping > mapClaudeToolNameToPi > maps Read to read 
+✓ src/__tests__/tool-mapping.test.ts > tool-mapping > mapClaudeToolNameToPi > maps Write to write 
+✓ src/__tests__/tool-mapping.test.ts > tool-mapping > mapClaudeToolNameToPi > maps Edit to edit 
+✓ src/__tests__/tool-mapping.test.ts > tool-mapping > mapClaudeToolNameToPi > maps Bash to bash 
+✓ src/__tests__/tool-mapping.test.ts > tool-mapping > mapClaudeToolNameToPi > maps Grep to grep 
+✓ src/__tests__/tool-mapping.test.ts > tool-mapping > mapClaudeToolNameToPi > maps Glob to find 
+✓ src/__tests__/tool-mapping.test.ts > tool-mapping > mapClaudeToolNameToPi > passes through unknown tool names unchanged 
+✓ src/__tests__/tool-mapping.test.ts > tool-mapping > mapClaudeToolNameToPi > is case-insensitive for Claude tool names 
+✓ src/__tests__/tool-mapping.test.ts > tool-mapping > mapPiToolNameToClaude > maps read to Read 
+✓ src/__tests__/tool-mapping.test.ts > tool-mapping > mapPiToolNameToClaude > maps write to Write 
+✓ src/__tests__/tool-mapping.test.ts > tool-mapping > mapPiToolNameToClaude > maps edit to Edit 
+✓ src/__tests__/tool-mapping.test.ts > tool-mapping > mapPiToolNameToClaude > maps bash to Bash 
+✓ src/__tests__/tool-mapping.test.ts > tool-mapping > mapPiToolNameToClaude > maps grep to Grep 
+✓ src/__tests__/tool-mapping.test.ts > tool-mapping > mapPiToolNameToClaude > maps find to Glob 
+✓ src/__tests__/tool-mapping.test.ts > tool-mapping > mapPiToolNameToClaude > maps glob to Glob (asymmetry: both find and glob map to Glob) 
+✓ src/__tests__/tool-mapping.test.ts > tool-mapping > mapPiToolNameToClaude > passes through unknown tool names unchanged 
+✓ src/__tests__/tool-mapping.test.ts > tool-mapping > translateClaudeArgsToPi > renames file_path to path for Read 
+✓ src/__tests__/tool-mapping.test.ts > tool-mapping > translateClaudeArgsToPi > renames file_path to path for Write 
+✓ src/__tests__/tool-mapping.test.ts > tool-mapping > translateClaudeArgsToPi > renames file_path, old_string, new_string for Edit 
+✓ src/__tests__/tool-mapping.test.ts > tool-mapping > translateClaudeArgsToPi > passes through Bash args unchanged (no renames) 
+✓ src/__tests__/tool-mapping.test.ts > tool-mapping > translateClaudeArgsToPi > renames head_limit to limit for Grep 
+✓ src/__tests__/tool-mapping.test.ts > tool-mapping > translateClaudeArgsToPi > passes through Glob args unchanged (no renames) 
+✓ src/__tests__/tool-mapping.test.ts > tool-mapping > translateClaudeArgsToPi > passes through args for unknown tools unchanged 
+✓ src/__tests__/tool-mapping.test.ts > tool-mapping > translateClaudeArgsToPi > preserves unknown args alongside renamed args 
+✓ src/__tests__/tool-mapping.test.ts > tool-mapping > translatePiArgsToClaude > renames path to file_path for read 
+✓ src/__tests__/tool-mapping.test.ts > tool-mapping > translatePiArgsToClaude > renames path, oldText, newText for edit 
+✓ src/__tests__/tool-mapping.test.ts > tool-mapping > translatePiArgsToClaude > renames limit to head_limit for grep 
+✓ src/__tests__/tool-mapping.test.ts > tool-mapping > translatePiArgsToClaude > passes through unknown args alongside renamed args 
+✓ src/__tests__/tool-mapping.test.ts > tool-mapping > translatePiArgsToClaude > passes through args for unknown tools unchanged 
+✓ src/__tests__/tool-mapping.test.ts > tool-mapping > MCP prefix stripping > strips mcp__custom-tools__ prefix from myTool 
+✓ src/__tests__/tool-mapping.test.ts > tool-mapping > MCP prefix stripping > strips mcp__custom-tools__ prefix from deploy 
+✓ src/__tests__/tool-mapping.test.ts > tool-mapping > MCP prefix stripping > handles empty name after prefix 
+✓ src/__tests__/tool-mapping.test.ts > tool-mapping > MCP prefix stripping > does NOT strip other MCP server prefixes 
+✓ src/__tests__/tool-mapping.test.ts > tool-mapping > MCP prefix stripping > built-in mappings still work alongside MCP prefix stripping 
+✓ src/__tests__/tool-mapping.test.ts > tool-mapping > MCP prefix stripping > CUSTOM_TOOLS_MCP_PREFIX is the correct string 
+✓ src/__tests__/tool-mapping.test.ts > tool-mapping > isCustomToolName > returns true for custom tool names 
+✓ src/__tests__/tool-mapping.test.ts > tool-mapping > isCustomToolName > returns false for all 6 built-in tool names 
+✓ src/__tests__/tool-mapping.test.ts > tool-mapping > translateClaudeArgsToPi with MCP prefix > MCP-prefixed custom tool args pass through unchanged 
+✓ src/__tests__/stream-parser.test.ts > parseLine > valid JSON parsing > parses a valid stream_event message 
+✓ src/__tests__/stream-parser.test.ts > parseLine > valid JSON parsing > parses a valid result message 
+✓ src/__tests__/stream-parser.test.ts > parseLine > valid JSON parsing > parses a valid system message 
+✓ src/__tests__/stream-parser.test.ts > parseLine > valid JSON parsing > parses a valid control_request message 
+✓ src/__tests__/stream-parser.test.ts > parseLine > empty and whitespace lines > returns null for empty string 
+✓ src/__tests__/stream-parser.test.ts > parseLine > empty and whitespace lines > returns null for whitespace-only line 
+✓ src/__tests__/stream-parser.test.ts > parseLine > empty and whitespace lines > returns null for tab-only line 
+✓ src/__tests__/stream-parser.test.ts > parseLine > empty and whitespace lines > returns null for newline-only line 
+✓ src/__tests__/stream-parser.test.ts > parseLine > non-JSON lines (debug noise) > returns null for SandboxDebug output 
+✓ src/__tests__/stream-parser.test.ts > parseLine > non-JSON lines (debug noise) > returns null for plain text 
+✓ src/__tests__/stream-parser.test.ts > parseLine > non-JSON lines (debug noise) > returns null for lines starting with [ 
+✓ src/__tests__/stream-parser.test.ts > parseLine > non-JSON lines (debug noise) > returns null for lines starting with # 
+✓ src/__tests__/stream-parser.test.ts > parseLine > malformed JSON > returns null for truncated JSON without throwing 
+✓ src/__tests__/stream-parser.test.ts > parseLine > malformed JSON > returns null for invalid JSON syntax without throwing 
+✓ src/__tests__/stream-parser.test.ts > parseLine > malformed JSON > returns null for JSON with trailing comma without throwing 
+✓ src/__tests__/stream-parser.test.ts > parseLine > non-object JSON > returns null for JSON array 
+✓ src/__tests__/stream-parser.test.ts > parseLine > non-object JSON > returns null for JSON string 
+✓ src/__tests__/stream-parser.test.ts > parseLine > non-object JSON > returns null for JSON number 
+✓ src/__tests__/stream-parser.test.ts > parseLine > non-object JSON > returns null for JSON null 
+✓ src/__tests__/stream-parser.test.ts > parseLine > non-object JSON > returns null for JSON boolean 
+✓ src/__tests__/stream-parser.test.ts > parseLine > whitespace handling > trims leading whitespace before parsing 
+✓ src/__tests__/stream-parser.test.ts > parseLine > whitespace handling > trims trailing whitespace before parsing 
+✓ src/__tests__/stream-parser.test.ts > parseLine > whitespace handling > trims both leading and trailing whitespace 
+✓ src/__tests__/stream-parser.test.ts > parseLine > resilience > never throws regardless of input 
+✓ src/__tests__/acp-dispatch.test.ts > streamSimple kill-switch dispatch (U11/R9/R14) > defaults to the -p path (streamViaCli) when the kill-switch is OFF 
+✓ src/__tests__/acp-dispatch.test.ts > streamSimple kill-switch dispatch (U11/R9/R14) > stays on -p when the flag is set but NO bridge path is provided 
+✓ src/__tests__/acp-dispatch.test.ts > streamSimple kill-switch dispatch (U11/R9/R14) > forwards current transcript tools to the CLI prompt adapter 
+✓ src/__tests__/acp-dispatch.test.ts > streamSimple kill-switch dispatch (U11/R9/R14) > dispatches to the ACP bridge when the flag AND a bridge path are set 
+✓ src/__tests__/thinking-config.test.ts > isOpusModel > returns true for claude-opus-4-6-20260301 
+✓ src/__tests__/thinking-config.test.ts > isOpusModel > returns false for claude-sonnet-4-5-20250929 
+✓ src/__tests__/thinking-config.test.ts > isOpusModel > returns true for future Opus models (forward-compatible) 
+✓ src/__tests__/thinking-config.test.ts > isOpusModel > returns false for non-Opus model strings 
+✓ src/__tests__/thinking-config.test.ts > mapThinkingEffort > undefined reasoning > returns undefined when reasoning is undefined 
+✓ src/__tests__/thinking-config.test.ts > mapThinkingEffort > undefined reasoning > returns undefined regardless of model 
+✓ src/__tests__/thinking-config.test.ts > mapThinkingEffort > standard (non-Opus) model mapping > maps minimal to low 
+✓ src/__tests__/thinking-config.test.ts > mapThinkingEffort > standard (non-Opus) model mapping > maps low to low 
+✓ src/__tests__/thinking-config.test.ts > mapThinkingEffort > standard (non-Opus) model mapping > maps medium to medium 
+✓ src/__tests__/thinking-config.test.ts > mapThinkingEffort > standard (non-Opus) model mapping > maps high to high 
+✓ src/__tests__/thinking-config.test.ts > mapThinkingEffort > standard (non-Opus) model mapping > maps xhigh to high (downgrade for non-Opus) 
+✓ src/__tests__/thinking-config.test.ts > mapThinkingEffort > standard (non-Opus) model mapping > maps max to high (downgrade for non-Opus) 
+✓ src/__tests__/thinking-config.test.ts > mapThinkingEffort > Opus model mapping (elevated) > maps minimal to low 
+✓ src/__tests__/thinking-config.test.ts > mapThinkingEffort > Opus model mapping (elevated) > maps low to low 
+✓ src/__tests__/thinking-config.test.ts > mapThinkingEffort > Opus model mapping (elevated) > maps medium to high (shifted up) 
+✓ src/__tests__/thinking-config.test.ts > mapThinkingEffort > Opus model mapping (elevated) > maps high to max (shifted up) 
+✓ src/__tests__/thinking-config.test.ts > mapThinkingEffort > Opus model mapping (elevated) > maps xhigh to max 
+✓ src/__tests__/thinking-config.test.ts > mapThinkingEffort > Opus model mapping (elevated) > maps max to max 
+✓ src/__tests__/thinking-config.test.ts > mapThinkingEffort > thinkingBudgets warning > logs console.warn when thinkingBudgets is provided with entries 
+✓ src/__tests__/thinking-config.test.ts > mapThinkingEffort > thinkingBudgets warning > does not warn when thinkingBudgets is undefined 
+✓ src/__tests__/thinking-config.test.ts > mapThinkingEffort > thinkingBudgets warning > does not warn when thinkingBudgets is empty object 
+✓ src/__tests__/thinking-config.test.ts > mapThinkingEffort > thinkingBudgets warning > still returns correct effort level when budgets trigger warning 
+✓ src/__tests__/thinking-config.test.ts > mapThinkingEffort > no modelId defaults to non-Opus behavior > uses standard mapping when modelId is undefined 
+✓ src/__tests__/thinking-config.test.ts > mapThinkingEffort > no modelId defaults to non-Opus behavior > does not return max for xhigh when modelId is undefined 
+✓ src/__tests__/thinking-config.test.ts > mapThinkingEffort > no modelId defaults to non-Opus behavior > does not return max for max when modelId is undefined 
+✓ src/__tests__/control-handler.test.ts > control-handler > exported constants > exports TOOL_EXECUTION_DENIED_MESSAGE 
+✓ src/__tests__/control-handler.test.ts > control-handler > exported constants > exports MCP_PREFIX 
+✓ src/__tests__/control-handler.test.ts > control-handler > denies custom MCP tools (mcp__custom-tools__*) > denies mcp__custom-tools__weather 
+✓ src/__tests__/control-handler.test.ts > control-handler > denies custom MCP tools (mcp__custom-tools__*) > denies mcp__custom-tools__deploy 
+✓ src/__tests__/control-handler.test.ts > control-handler > allows user MCP tools and other tools > allows user MCP tool mcp__database__query 
+✓ src/__tests__/control-handler.test.ts > control-handler > allows user MCP tools and other tools > allows built-in tool Read 
+✓ src/__tests__/control-handler.test.ts > control-handler > allows user MCP tools and other tools > allows internal tools like ToolSearch 
+✓ src/__tests__/control-handler.test.ts > control-handler > allows user MCP tools and other tools > allows unknown tools 
+✓ src/__tests__/control-handler.test.ts > control-handler > response format > includes matching request_id 
+✓ src/__tests__/control-handler.test.ts > control-handler > response format > returns a JSON-serializable response object 
+✓ src/__tests__/control-handler.test.ts > control-handler > response format > deny response includes message field 
+✓ src/__tests__/control-handler.test.ts > control-handler > response format > allow response does not include a message field 
+✓ src/__tests__/control-handler.test.ts > control-handler > malformed input > returns denied decision object for missing request_id 
+✓ src/__tests__/control-handler.test.ts > control-handler > malformed input > returns denied decision object for missing request object 
+✓ src/__tests__/setup-test-isolation.test.ts > test isolation setup > overrides process.env.HOME to a temp directory 
+✓ src/__tests__/setup-test-isolation.test.ts > test isolation setup > resolves homedir() to the temp HOME 
+✓ src/__tests__/setup-test-isolation.test.ts > test isolation setup > resolves ~/.pi/agent/AGENTS.md under the temp HOME 
+✓ src/__tests__/tool-channel-authority.test.ts > a tool result cannot write the frame it is delivered in (AC2) > cannot terminate its own envelope, because on 2026-11-05 a payload holding the closing tag twice and the opening tag once turned one authored close tag into three and put the text after it outside any frame 
+✓ src/__tests__/tool-channel-authority.test.ts > a tool result cannot write the frame it is delivered in (AC2) > cannot extend the frame either, because an opening tag the payload writes is a second envelope the assembler never authored and a reader cannot tell which one is real 
+✓ src/__tests__/tool-channel-authority.test.ts > a tool result cannot write the frame it is delivered in (AC2) > still reaches the model byte-for-byte once the documented escaping is undone, because neutralising a delimiter must not quietly edit the report a tool actually printed 
+✓ src/__tests__/tool-channel-authority.test.ts > a tool result cannot write the frame it is delivered in (AC2) > survives the ordinary case of a tool reading this very guard back, because the guard's own source contains these literals and refusing that output would break a routine read for every agent on this provider 
+✓ src/__tests__/tool-channel-authority.test.ts > a tool result cannot mint a role key (AC1) > cannot produce a line-initial USER: the model could read as a new user turn, because the assembled string is handed over as the text of one user message and the only thing separating roles from data is that the assembler writes these keys 
+✓ src/__tests__/tool-channel-authority.test.ts > a tool result cannot mint a role key (AC1) > cannot produce a line-initial ASSISTANT: either, because a forged assistant turn is how a payload gets its own words attributed to the assistant 
+✓ src/__tests__/tool-channel-authority.test.ts > a tool result cannot mint a role key (AC1) > cannot mint the section key the assembler also emits, because `TOOL RESULT (<name>):` is a third key and not only the two the report named 
+✓ src/__tests__/tool-channel-authority.test.ts > a tool result cannot mint a role key (AC1) > cannot mint a role key on the resumed-session delta, because that is where a fresh bash payload actually reaches the model and there the forged key was the only line-initial one besides the tool section 
+✓ src/__tests__/tool-channel-authority.test.ts > a tool result cannot mint a role key (AC1) > keeps a role word that merely appears inside a sentence untouched, because prose about a role is data and rewriting it would be the sledgehammer this card forbids 
+✓ src/__tests__/tool-channel-authority.test.ts > an ordinary payload is not rewritten (the anti-sledgehammer guard) > reaches the model byte-for-byte when it carries neither a frame delimiter nor a line-initial role key, because every payload the landed tests already pin must keep passing unchanged 
+✓ src/__tests__/tool-channel-authority.test.ts > an ordinary payload is not rewritten (the anti-sledgehammer guard) > delivers an untyped tool's empty content array as the same zero-byte notice the empty string gets, because upstream authors `content: []` for a content-less untyped result rather than anyone typing a wrong payload, so fail-loud narrows only for that state 
+✓ src/__tests__/execsync-guard.test.ts > process-manager execSync guard > keeps Claude CLI probing non-blocking 
+Test Files  16 passed (16)
+Tests  387 passed (387)
+        rc=0
+
+## the same run at the other delivered line, so neither tip speaks for the other
+
+### refs/heads/fusion/stas-390-tool-channel-authority = e6b1fe4c7f4bafa36727e33e8df7c400e87c6a91
+  $ (cd packages/pi-claude-cli && NO_COLOR=1 ./node_modules/.bin/vitest run src at refs/heads/fusion/stas-390-tool-channel-authority)
+RUN  <vitest> <package-dir>
+Test Files  16 passed (16)
+Tests  387 passed (387)
+        rc=0
+
+### refs/heads/fusion/stas-392-empty-tool-result-announcement = 037a480cc562ef994aac0b19215613cb93e2b500
+  $ (cd packages/pi-claude-cli && NO_COLOR=1 ./node_modules/.bin/vitest run src at refs/heads/fusion/stas-392-empty-tool-result-announcement)
+RUN  <vitest> <package-dir>
+Test Files  16 passed (16)
+Tests  387 passed (387)
+        rc=0
+
+the checkout is left on: fusion/stas-392-empty-tool-result-announcement
+## failing-name set at this tip, derived from the run above
+
+      (empty — no test in packages/pi-claude-cli/src failed at this tip)
+      skipped entries: 0
+
+## line-count guardrail, printed in full and disclosed as repo-wide pre-existing debt
+Whether either path this line owns is an offender is measured, not asserted:
+
+  $ bash -c cd .engine/stas-392-engine && node scripts/check-file-line-count.mjs 2>&1 | grep -c pi-claude-cli || true
+      0
+        rc=0
+
+(a count of 0 means neither packages/pi-claude-cli/src/tool-result-authority.ts, nor packages/pi-claude-cli/src/__tests__/tool-result-authority.test.ts, nor packages/pi-claude-cli/src/__tests__/tool-channel-authority.test.ts is on the offender list)
+and the guardrail's own exit code, printed in full below, is pre-existing repo-wide debt
+that this card neither created nor ratchets down with --update.
+
+  $ bash -c cd .engine/stas-392-engine && node scripts/check-file-line-count.mjs
+      [check-file-line-count] note: 18 baseline entr(ies) can be tightened (files shrank, dropped under the cap, or were deleted). Run with --update to ratchet the baseline down.
+      [check-file-line-count] 128 file(s) exceed the line-count guardrail:
+      
+      packages/cli/src/__tests__/extension.test.ts: 5514 lines (grandfathered ceiling 4491 — this file grew and must shrink, not expand)
+      packages/cli/src/bin.ts: 2499 lines (grandfathered ceiling 2321 — this file grew and must shrink, not expand)
+      packages/cli/src/commands/__tests__/serve.test.ts: 2462 lines (grandfathered ceiling 2313 — this file grew and must shrink, not expand)
+      packages/cli/src/commands/__tests__/task-lifecycle.test.ts: 2849 lines (cap 2000)
+      packages/cli/src/commands/__tests__/task.test.ts: 4874 lines (grandfathered ceiling 3644 — this file grew and must shrink, not expand)
+      packages/cli/src/commands/dashboard-tui/app.tsx: 4812 lines (grandfathered ceiling 4697 — this file grew and must shrink, not expand)
+      packages/cli/src/commands/dashboard.ts: 4312 lines (grandfathered ceiling 3739 — this file grew and must shrink, not expand)
+      packages/cli/src/commands/task.ts: 3373 lines (grandfathered ceiling 2372 — this file grew and must shrink, not expand)
+      packages/cli/src/extension.ts: 7937 lines (grandfathered ceiling 5694 — this file grew and must shrink, not expand)
+      packages/core/src/__tests__/postgres/embedded-lifecycle.test.ts: 2011 lines (cap 2000)
+      packages/core/src/__tests__/postgres/mission-store.pg.test.ts: 2254 lines (cap 2000)
+      packages/core/src/__tests__/postgres/schema-applier.test.ts: 3561 lines (grandfathered ceiling 2457 — this file grew and must shrink, not expand)
+      packages/core/src/__tests__/postgres/sqlite-migrator.test.ts: 2121 lines (cap 2000)
+      packages/core/src/agents/agent-store.ts: 3789 lines (cap 2000)
+      packages/core/src/async-stores/async-mission-store-queries.ts: 2401 lines (cap 2000)
+      packages/core/src/async-stores/async-mission-store.ts: 3488 lines (cap 2000)
+      packages/core/src/central/central-core.ts: 3238 lines (cap 2000)
+      packages/core/src/index.gate.ts: 3178 lines (grandfathered ceiling 2256 — this file grew and must shrink, not expand)
+      packages/core/src/index.ts: 3906 lines (grandfathered ceiling 2618 — this file grew and must shrink, not expand)
+      packages/core/src/missions/mission-store.ts: 4999 lines (cap 2000)
+      packages/core/src/postgres/embedded-lifecycle.ts: 2448 lines (cap 2000)
+      packages/core/src/postgres/schema-applier.ts: 2311 lines (cap 2000)
+      packages/core/src/postgres/schema/project.ts: 2992 lines (grandfathered ceiling 2227 — this file grew and must shrink, not expand)
+      packages/core/src/postgres/sqlite-migrator.ts: 2500 lines (grandfathered ceiling 2308 — this file grew and must shrink, not expand)
+      packages/core/src/store.ts: 5131 lines (grandfathered ceiling 2820 — this file grew and must shrink, not expand)
+      packages/core/src/task-store/reads.ts: 2461 lines (cap 2000)
+      packages/core/src/task-store/task-mutation-ops.ts: 2116 lines (cap 2000)
+      packages/core/src/types/settings/settings-scope.ts: 2816 lines (cap 2000)
+      packages/core/src/types/task/task-core.ts: 2477 lines (cap 2000)
+      packages/core/src/workflows/workflow-ir.ts: 2062 lines (cap 2000)
+      packages/dashboard/app/App.tsx: 3411 lines (grandfathered ceiling 2136 — this file grew and must shrink, not expand)
+      packages/dashboard/app/components/AgentDetailView.tsx: 6090 lines (grandfathered ceiling 5567 — this file grew and must shrink, not expand)
+      packages/dashboard/app/components/AgentsView.tsx: 2675 lines (grandfathered ceiling 2254 — this file grew and must shrink, not expand)
+      packages/dashboard/app/components/ChatView.tsx: 4597 lines (grandfathered ceiling 4043 — this file grew and must shrink, not expand)
+      packages/dashboard/app/components/GitHubImportModal.tsx: 2534 lines (grandfathered ceiling 2481 — this file grew and must shrink, not expand)
+      packages/dashboard/app/components/GitManagerModal.tsx: 3739 lines (grandfathered ceiling 3560 — this file grew and must shrink, not expand)
+      packages/dashboard/app/components/MissionManager.tsx: 5696 lines (grandfathered ceiling 5149 — this file grew and must shrink, not expand)
+      packages/dashboard/app/components/ModelOnboardingModal.tsx: 3860 lines (grandfathered ceiling 3594 — this file grew and must shrink, not expand)
+      packages/dashboard/app/components/PlanningModeModal.tsx: 5141 lines (grandfathered ceiling 4697 — this file grew and must shrink, not expand)
+      packages/dashboard/app/components/QuickEntryBox.tsx: 2875 lines (grandfathered ceiling 2562 — this file grew and must shrink, not expand)
+      packages/dashboard/app/components/SettingsModal.tsx: 5413 lines (grandfathered ceiling 5257 — this file grew and must shrink, not expand)
+      packages/dashboard/app/components/TaskCard.tsx: 5050 lines (grandfathered ceiling 3896 — this file grew and must shrink, not expand)
+      packages/dashboard/app/components/TaskDetailModal.tsx: 7692 lines (grandfathered ceiling 6528 — this file grew and must shrink, not expand)
+      packages/dashboard/app/components/TaskForm.tsx: 2028 lines (cap 2000)
+      packages/dashboard/app/components/TaskPlannerChatTab.tsx: 2356 lines (cap 2000)
+      packages/dashboard/app/components/TerminalModal.tsx: 3663 lines (grandfathered ceiling 3322 — this file grew and must shrink, not expand)
+      packages/dashboard/app/components/WorkflowNodeEditor.tsx: 5745 lines (grandfathered ceiling 5685 — this file grew and must shrink, not expand)
+      packages/dashboard/app/components/__tests__/AgentsView.test.tsx: 3207 lines (grandfathered ceiling 2854 — this file grew and must shrink, not expand)
+      packages/dashboard/app/components/__tests__/App.test.tsx: 8990 lines (grandfathered ceiling 4663 — this file grew and must shrink, not expand)
+      packages/dashboard/app/components/__tests__/Board.test.tsx: 2245 lines (grandfathered ceiling 2107 — this file grew and must shrink, not expand)
+      packages/dashboard/app/components/__tests__/CustomModelDropdown.test.tsx: 2274 lines (cap 2000)
+      packages/dashboard/app/components/__tests__/GitHubImportModal.test.tsx: 3769 lines (grandfathered ceiling 3221 — this file grew and must shrink, not expand)
+      packages/dashboard/app/components/__tests__/GitManagerModal.test.tsx: 4089 lines (grandfathered ceiling 3790 — this file grew and must shrink, not expand)
+      packages/dashboard/app/components/__tests__/Header.test.tsx: 2309 lines (cap 2000)
+      packages/dashboard/app/components/__tests__/ListView.test.tsx: 5992 lines (grandfathered ceiling 5380 — this file grew and must shrink, not expand)
+      packages/dashboard/app/components/__tests__/MailboxView.test.tsx: 3087 lines (grandfathered ceiling 2646 — this file grew and must shrink, not expand)
+      packages/dashboard/app/components/__tests__/ModelOnboardingModal.test.tsx: 5240 lines (grandfathered ceiling 5146 — this file grew and must shrink, not expand)
+      packages/dashboard/app/components/__tests__/NewTaskModal.test.tsx: 2847 lines (grandfathered ceiling 2081 — this file grew and must shrink, not expand)
+      packages/dashboard/app/components/__tests__/PlanningModeModal.planning-flow.test.tsx: 2356 lines (cap 2000)
+      packages/dashboard/app/components/__tests__/QuickEntryBox.test.tsx: 6633 lines (grandfathered ceiling 5433 — this file grew and must shrink, not expand)
+      packages/dashboard/app/components/__tests__/SettingsModal.scheduling-merge.test.tsx: 2068 lines (cap 2000)
+      packages/dashboard/app/components/__tests__/TaskCard.test.tsx: 9210 lines (grandfathered ceiling 7835 — this file grew and must shrink, not expand)
+      packages/dashboard/app/components/__tests__/TaskChatTab.test.tsx: 3769 lines (grandfathered ceiling 3175 — this file grew and must shrink, not expand)
+      packages/dashboard/app/components/__tests__/TaskDetailModal.inline-editing-and-integrations.test.tsx: 3768 lines (grandfathered ceiling 3438 — this file grew and must shrink, not expand)
+      packages/dashboard/app/components/__tests__/TaskDetailModal.rendering.test.tsx: 3007 lines (grandfathered ceiling 2854 — this file grew and must shrink, not expand)
+      packages/dashboard/app/components/__tests__/TaskDetailModal.responsive-and-dependencies.test.tsx: 2072 lines (grandfathered ceiling 2071 — this file grew and must shrink, not expand)
+      packages/dashboard/app/components/__tests__/TaskForm.test.tsx: 2034 lines (cap 2000)
+      packages/dashboard/app/components/__tests__/TaskPlannerChatTab.test.tsx: 2978 lines (cap 2000)
+      packages/dashboard/app/components/__tests__/TerminalModal.test.tsx: 10110 lines (grandfathered ceiling 9176 — this file grew and must shrink, not expand)
+      packages/dashboard/app/components/__tests__/UsageIndicator.test.tsx: 3231 lines (grandfathered ceiling 2931 — this file grew and must shrink, not expand)
+      packages/dashboard/app/components/__tests__/WorkflowNodeEditor.test.tsx: 4586 lines (grandfathered ceiling 4353 — this file grew and must shrink, not expand)
+      packages/dashboard/app/components/__tests__/WorkflowResultsTab.test.tsx: 2701 lines (grandfathered ceiling 2206 — this file grew and must shrink, not expand)
+      packages/dashboard/app/hooks/__tests__/useChat.test.ts: 7110 lines (grandfathered ceiling 5466 — this file grew and must shrink, not expand)
+      packages/dashboard/app/hooks/__tests__/useTasks.test.ts: 4704 lines (grandfathered ceiling 3766 — this file grew and must shrink, not expand)
+      packages/dashboard/app/hooks/useChat.ts: 3248 lines (cap 2000)
+      packages/dashboard/app/hooks/useTasks.ts: 2310 lines (cap 2000)
+      packages/dashboard/scripts/browser-layout-smoke.mjs: 3287 lines (cap 2000)
+      packages/dashboard/src/__tests__/chat-manager.test.ts: 5751 lines (grandfathered ceiling 3859 — this file grew and must shrink, not expand)
+      packages/dashboard/src/__tests__/file-service.test.ts: 2406 lines (grandfathered ceiling 2310 — this file grew and must shrink, not expand)
+      packages/dashboard/src/__tests__/github.test.ts: 3060 lines (grandfathered ceiling 2467 — this file grew and must shrink, not expand)
+      packages/dashboard/src/__tests__/routes-auth.test.ts: 6306 lines (grandfathered ceiling 5510 — this file grew and must shrink, not expand)
+      packages/dashboard/src/__tests__/routes-automation.test.ts: 3274 lines (grandfathered ceiling 3089 — this file grew and must shrink, not expand)
+      packages/dashboard/src/__tests__/routes-github.test.ts: 5042 lines (grandfathered ceiling 3911 — this file grew and must shrink, not expand)
+      packages/dashboard/src/__tests__/usage.test.ts: 5792 lines (grandfathered ceiling 5427 — this file grew and must shrink, not expand)
+      packages/dashboard/src/chat.ts: 5625 lines (grandfathered ceiling 3134 — this file grew and must shrink, not expand)
+      packages/dashboard/src/github.ts: 5585 lines (grandfathered ceiling 5112 — this file grew and must shrink, not expand)
+      packages/dashboard/src/mission-routes.ts: 4226 lines (grandfathered ceiling 3924 — this file grew and must shrink, not expand)
+      packages/dashboard/src/planning.ts: 4932 lines (grandfathered ceiling 3645 — this file grew and must shrink, not expand)
+      packages/dashboard/src/routes.ts: 2193 lines (grandfathered ceiling 2043 — this file grew and must shrink, not expand)
+      packages/dashboard/src/routes/register-auth-routes.ts: 2368 lines (cap 2000)
+      packages/dashboard/src/routes/register-git-github.ts: 6653 lines (grandfathered ceiling 6342 — this file grew and must shrink, not expand)
+      packages/dashboard/src/routes/register-settings-memory-routes.ts: 2555 lines (grandfathered ceiling 2403 — this file grew and must shrink, not expand)
+      packages/dashboard/src/routes/register-task-workflow-routes.ts: 8671 lines (grandfathered ceiling 5641 — this file grew and must shrink, not expand)
+      packages/dashboard/src/server.ts: 3465 lines (grandfathered ceiling 2883 — this file grew and must shrink, not expand)
+      packages/dashboard/src/usage.ts: 2550 lines (grandfathered ceiling 2435 — this file grew and must shrink, not expand)
+      packages/engine/src/__tests__/cron-runner.test.ts: 2468 lines (grandfathered ceiling 2334 — this file grew and must shrink, not expand)
+      packages/engine/src/__tests__/executor-prompt.test.ts: 3311 lines (grandfathered ceiling 2838 — this file grew and must shrink, not expand)
+      packages/engine/src/__tests__/heartbeat-executor.test.ts: 5515 lines (grandfathered ceiling 4545 — this file grew and must shrink, not expand)
+      packages/engine/src/__tests__/heartbeat-scheduler.test.ts: 3371 lines (grandfathered ceiling 3346 — this file grew and must shrink, not expand)
+      packages/engine/src/__tests__/merger-merge-lifecycle.test.ts: 3770 lines (grandfathered ceiling 3697 — this file grew and must shrink, not expand)
+      packages/engine/src/__tests__/merger-verification.test.ts: 3269 lines (grandfathered ceiling 3177 — this file grew and must shrink, not expand)
+      packages/engine/src/__tests__/mission-execution-loop.test.ts: 3998 lines (grandfathered ceiling 2984 — this file grew and must shrink, not expand)
+      packages/engine/src/__tests__/pi-create-fn-agent.test.ts: 3931 lines (grandfathered ceiling 3292 — this file grew and must shrink, not expand)
+      packages/engine/src/__tests__/pi.test.ts: 3177 lines (cap 2000)
+      packages/engine/src/__tests__/project-engine.test.ts: 4747 lines (grandfathered ceiling 3725 — this file grew and must shrink, not expand)
+      packages/engine/src/__tests__/reviewer.test.ts: 2144 lines (cap 2000)
+      packages/engine/src/__tests__/step-session-executor.test.ts: 4075 lines (grandfathered ceiling 3226 — this file grew and must shrink, not expand)
+      packages/engine/src/__tests__/triage.test.ts: 8402 lines (grandfathered ceiling 7042 — this file grew and must shrink, not expand)
+      packages/engine/src/agent-heartbeat.ts: 8698 lines (grandfathered ceiling 5422 — this file grew and must shrink, not expand)
+      packages/engine/src/agent-tools.ts: 7460 lines (grandfathered ceiling 5437 — this file grew and must shrink, not expand)
+      packages/engine/src/execution/hold-release.ts: 2272 lines (cap 2000)
+      packages/engine/src/execution/step-session-executor.ts: 2338 lines (cap 2000)
+      packages/engine/src/execution/task-revert.ts: 2107 lines (cap 2000)
+      packages/engine/src/executor.ts: 11 lines (grandfathered ceiling 10 — this file grew and must shrink, not expand)
+      packages/engine/src/executor/run-implementation.ts: 4457 lines (cap 2000)
+      packages/engine/src/merge/merger-ai.ts: 5304 lines (cap 2000)
+      packages/engine/src/merger.ts: 11682 lines (grandfathered ceiling 11244 — this file grew and must shrink, not expand)
+      packages/engine/src/missions/mission-execution-loop.ts: 2447 lines (cap 2000)
+      packages/engine/src/pi.ts: 4240 lines (grandfathered ceiling 2900 — this file grew and must shrink, not expand)
+      packages/engine/src/project-engine.ts: 7563 lines (grandfathered ceiling 5580 — this file grew and must shrink, not expand)
+      packages/engine/src/runtimes/in-process-runtime.ts: 4133 lines (grandfathered ceiling 2160 — this file grew and must shrink, not expand)
+      packages/engine/src/scheduler.ts: 4637 lines (grandfathered ceiling 3666 — this file grew and must shrink, not expand)
+      packages/engine/src/self-healing.ts: 24533 lines (grandfathered ceiling 15231 — this file grew and must shrink, not expand)
+      packages/engine/src/triage.ts: 7093 lines (grandfathered ceiling 3645 — this file grew and must shrink, not expand)
+      packages/engine/src/workflows/workflow-graph-executor.ts: 3145 lines (cap 2000)
+      packages/engine/src/worktree/worktree-acquisition.ts: 2447 lines (cap 2000)
+      scripts/__tests__/test-changed.test.mjs: 2328 lines (grandfathered ceiling 2134 — this file grew and must shrink, not expand)
+      scripts/test-changed.mjs: 2070 lines (cap 2000)
+      
+      New source files must stay at or under 2000 lines. Split the file into
+      focused modules. Grandfathered files (in scripts/line-count-baseline.json) may
+      shrink but never grow; refactor them down rather than raising their ceiling.
+      If a larger file is genuinely justified, update the baseline with
+      `node scripts/check-file-line-count.mjs --update` in a reviewed change.
+        rc=1
+

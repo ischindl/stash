@@ -1,0 +1,17 @@
+packages/core/src/async-stores/async-mission-store.ts:3124:  async triageFeature(
+packages/core/src/async-stores/async-mission-store.ts:3242:      const updated = await this.triageFeature(feature.id, undefined, undefined, {
+packages/core/src/missions/mission-store.ts:4577:  async triageFeature(
+packages/core/src/missions/mission-store.ts:4764:      const updated = await this.triageFeature(feature.id, undefined, undefined, {
+packages/dashboard/app/api/legacy.ts:1146:  triageFeature,
+packages/dashboard/app/api/missions/missions.ts:401:export function triageFeature(
+packages/dashboard/app/components/MissionManager.tsx:90:  triageFeature,
+packages/dashboard/app/components/MissionManager.tsx:470:function toMissionBranchOptions(mission?: Mission): Parameters<typeof triageFeature>[4] | undefined {
+packages/dashboard/app/components/MissionManager.tsx:476:  const branchSelection: NonNullable<Parameters<typeof triageFeature>[4]>["branchSelection"] = {
+packages/dashboard/app/components/MissionManager.tsx:480:  const options: NonNullable<Parameters<typeof triageFeature>[4]> = { branchSelection };
+packages/dashboard/app/components/MissionManager.tsx:2384:    } as NonNullable<Parameters<typeof triageFeature>[4]> & { workflowId?: string };
+packages/dashboard/app/components/MissionManager.tsx:2391:      await triageFeature(featureId, undefined, undefined, projectId, missionTriageOptions);
+packages/dashboard/src/mission-routes.ts:3095:        const feature = await missionStore.triageFeature(
+packages/dashboard/src/research-routes.ts:414:      if (req.body?.triage === true) feature = await missionStore.triageFeature(feature.id);
+packages/engine/src/agent-tools.ts:5644:      if (p.triage) feature = await store.getMissionStore().triageFeature(feature.id);
+packages/engine/src/missions/mission-execution-loop.ts:2198:          await this.missionStore.triageFeature(fixFeature.id);
+packages/engine/src/scheduler.ts:4598:              const triaged = await missionStore.triageFeature(ready.id);

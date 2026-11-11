@@ -1,0 +1,227 @@
+STAS-394 STEP 5 — the literal's census at the delivered tip, the suite delta, and the board-record proof
+=========================================================================================
+This file carries AC2, AC5 and AC6 of the spec. AC2 and AC6 are measured here at the tip this card
+delivered, 1677ee018a5d3aee0e74c0669676a1db40c690c5 on refs/heads/stas-394-fix-title-idempotence,
+not at the base the earlier captures were taken on. AC5's byte comparison is measured against the
+Step-0 snapshot in raw/ac5-before.json.
+
+=== AC2: the engine repo, at the DELIVERED TIP, holds the quoted literal in one composer ===
+
+Reproduced by raw/census_classify.py; raw output in raw/census-tip-full.txt (213 hits),
+raw/census-tip-nontest.txt (62 hits) and raw/census-tip-classified.txt (every hit bucketed).
+
+    git grep -n 'Fix: ' -- packages plugins scripts           -> 213 hits
+    of which inside __tests__/ or *.test.ts                    -> 151 hits
+    non-test hits                                              ->  62 hits
+
+The spec predicted "roughly 173 hits across 83 files at the base, nearly all of them test content
+that quotes the literal". At the tip the counts are 213 hits across 108 files, 151 of them test
+content, so the prediction holds and the census below is the interesting half. Every one of the 62
+non-test hits is classified, with the surrounding code line quoted in the raw file:
+
+  ONE production composer module, 2 hits (raw/census-tip-classified.txt lines 21-23):
+    packages/core/src/tasks/fix-title.ts:9    export const FIX_TITLE_PREFIX = "Fix: " as const;
+                                              (the literal's only home in production code; the
+                                              composition at line 28 interpolates this constant)
+    packages/core/src/tasks/fix-title.ts:6    comment prose naming the literal while explaining that
+                                              every site wanting this title calls the helper
+  26 hits are comment prose. They are docstrings, TSDoc lines and narrative comments that discuss a
+    "Fix: " title: 10 in packages/core/src/tasks/remediation-steps.ts, 4 in packages/dashboard-api-
+    contract/src/schemas.ts, plus one-offs in task.ts, async-mission-store.ts, mission-store.ts,
+    remediation-reconcile.ts, human-merge-approval-boundary.ts, dashboard's TaskDetailPanel.tsx and
+    task-mappers.ts, the card-size guard test's own header, and the two skill documents.
+  14 hits are identifier syntax, where the two words only look like the prefix because an identifier
+    ends in "Fix" and a colon follows: postReviewFix:, sendTaskBackForFix:, onRetryFix:,
+    pendingPlanFix:, needsFix:, hasFix:, taskReviewFix:, "onReviewFix", fixTitleFrom() and a CSS
+    comment marker. None of them concatenates anything.
+  6 hits are markdown or shell text: a skill README table cell, an env-var note, a plugin template
+    heading, and two hints in scripts/agent-eval/compare.py ("Fix: run \`pnpm test\` …") plus a
+    stylesheet comment.
+  2 hits are production string literals in a module with no consumer of the parent title:
+    packages/engine/src/spec-validation/task-document-references.ts:132 and :133, an advisory report
+    that begins "Fix: <taskKey> references …" and its follow-up line. They are the only non-test
+    production strings that emit the two words, they do NOT take a parent title as input, they cannot
+    compose onto anything, and the census names them as a separate writer rather than pretending the
+    grep count proves otherwise.
+  2 hits are the same module's own test file, which asserts those two advisory lines.
+
+The second-grep question the spec asked ("does any other module carry the literal") is answered by
+three further passes over the tip, in raw/census-tip-classified.txt:
+  - `git grep -n '\"Fix: '\|'"Fix: "` and the backtick/quote forms: one production module
+    (fix-title.ts:9) plus its own test file and the two spec-validation advisory lines. No other
+    module builds the prefix.
+  - `git grep -n '"Fix "\|Fix: \\u0060\|Fix:${'` across packages plugins scripts: no production site
+    concatenates the prefix anywhere else in the repository.
+  - the 9 files that carry the title-composing words fixTitle|FixTitle|titlePrefix|prefixTitle|
+    remediationTitle|followUpTitle|refineTitle: their full hit lists are in the raw file, and the
+    only composition expression in them is the one inside composeFixTitle().
+
+Verdict: the literal is produced by exactly one production constant, packages/core/src/tasks/fix-title.ts:9,
+and the only expression that puts it on a title is composeFixTitle() in that same file, whose template at
+line 28 interpolates the constant after stripping any layers the subject already carries. It is reached
+from three call sites: followUpTitle in remediation-steps.ts, composeFixTitle through the two mission
+stores, and the engine's human-merge-approval boundary for its escalation title.
+
+=== AC6: the window in which the delivery is mergeable, and the CEO announcement ===
+
+Measured at the delivered tip, in raw/window-prints.txt. Trunk re-read at the moment of measurement:
+refs/heads/main = 42f9762e1c8c8bacd1f7e7a976b7fbb536feaa85 (the trunk moved twice inside this run:
+Step 1 read 1d4bcc6184…, Step 4 read 50cb123e8f…, this step reads 42f9762e1c…). The branch therefore
+sits on the trunk SHA measured at Step 1, which is also the merge-base, and the boundary has to say
+that rather than claim a static window.
+
+    git rev-list --left-right --count refs/heads/main...refs/heads/stas-394-fix-title-idempotence
+      4       1        (trunk carries 4 commits my base does not; my branch carries 1 commit)
+    git merge-base --is-ancestor refs/heads/main refs/heads/stas-394-fix-title-idempotence
+      rc=1             (NOT a fast-forward: the trunk has moved)
+    git merge-tree --write-tree --name-only refs/heads/main refs/heads/stas-394-fix-title-idempotence
+      69d8f9ccce3b2aa31a6ab94f736f1d8a6a488130      rc=0   (mergeable, no collision)
+      CONFLICT lines: 0
+    git diff --name-only 1d4bcc618 refs/heads/main -- <the 11 paths this card changed>
+      (empty output)                                  rc=0   (the trunk did not touch any of them)
+
+So: the fast-forward predicate is NOT clean, and this card does not repair that. The trunk advanced
+between Step 1 and Step 6 through other people's work, which is exactly the "do not resolve anything
+on this card" case. What the two collision predicates do establish is that the advance is disjoint
+from this card's eleven paths, so a normal `git merge` of the branch onto today's trunk is
+conflict-free and nothing of theirs is overwritten. The announce names one command and states whose
+leg it is:
+
+    git -C <Fusion primary checkout> merge --no-ff stas-394-fix-title-idempotence
+
+The CEO was announced with these prints in the same tick as the measurement; the send and its
+message id are in raw/window-send.txt.
+
+=== AC5a: the affected package's suite, measured on my own base and on the delivered tip ===
+
+Both runs are the same command, `pnpm --filter @fusion/core test`, captured verbatim in
+raw/before-suite-raw.txt (Step 1, at base 1d4bcc61847562837b44854bccea95b783d8b943) and
+raw/after-suite-raw.txt (Step 4, at tip 1677ee018a5d3aee0e74c0669676a1db40c690c5). The summary lines
+below are the run's own output:
+
+    BEFORE  Test Files  263 failed | 534 passed | 1 skipped (798)
+            Tests       323 failed | 6998 passed | 1642 skipped (8963)   Duration 278.35s   rc=1
+    AFTER   Test Files  263 failed | 535 passed | 1 skipped (799)
+            Tests       323 failed | 7012 passed | 1642 skipped (8977)   Duration 335.90s   rc=1
+    DELTA   files +1 passed / +1 total; tests +14 passed / +14 total; failures flat at 263 and 323
+
+The +14 is exactly the regression file this branch adds. Re-measured in this card's final step at the
+tip, that file runs 1 test file and 14 tests, all passing, rc=0, with the engine worktree clean before
+and after the run.
+
+That the failing population is the SAME population and not a shuffled one is checked at file-name
+level rather than read off the two totals:
+
+    1. sorted unique failing file names, before -> 263 lines, sha256
+       22e759745a9e536ee93494b05d5159d7431c44ff648f8356d95dee9977d26043
+       sorted unique failing file names, after  -> 263 lines, sha256 identical
+       the diff of the two lists is empty (raw/failing-files-diff.txt, zero bytes)
+    2. FAIL blocks in each raw capture: 551 in before-suite-raw.txt and 551 in after-suite-raw.txt
+    3. the reporter does not enumerate the 323 failing test names, so a per-test comparison is not
+       available from these captures; the file-level set identity above is the strongest evidence
+       available and this card claims nothing beyond it
+
+Why the suite is red before this card touched anything, named by the Step-1 capture rather than
+guessed at: 190 of the 263 failing files are `*.pg.test.ts`, gated on a PostgreSQL instance this host
+refuses, and the raw log prints the cause repeatedly, `PostgresError: password authentication failed
+for user "schindler"` with `code: '28P01', routine: 'auth_failed'`. The other 73 files are listed by
+name in before-suite.txt section 5. That is the baseline the trunk presents on this machine, recorded
+before any change, and it is why a blanket green run is not this card's evidence. What the pair of
+runs proves is the narrower and true claim: zero new failures, the failing set is the identical 263
+files, and the only movement in the whole suite is the file this branch adds.
+
+Targeted proof at the tip, each with the raw capture that holds it:
+    15 impacted core suites            15 files passed, 123 tests passed     raw/green-impacted-core.txt
+    3 human-merge-approval suites       3 files passed,  46 tests passed     raw/green-engine-and-typechecks.txt
+                                         (that capture names human-merge-approval-flow.test.ts among them)
+    new regression file                 1 file passed,   14 tests passed     rc=0, re-measured twice in Step 7,
+                                         at 20:19:28 and again at 20:25:21, worktree clean before and after
+    core typecheck (tsc --noEmit)                                            rc=0
+    engine typecheck (tsc --noEmit)                                          rc=0
+    pnpm test:gate:static (20 blocking gate validators)              STATIC_GATE_RC=0 in that same raw file
+RED at base named 7 failing cases with real assertion messages (red.txt: expected 2 to be 1, expected
+3 to be 1, expected 4 to be 1, and 'Fix: Fix: Ship ...' != 'Fix: Ship ...'); not one of them is a
+module-resolution error, which is what makes the RED usable.
+
+The RED capture ran 9 cases (7 failed, 2 passed) and the file as delivered runs 14, all passing. The
+five extra cases are the composer-level ones added when the fix landed: the four `returns the one-layer
+title for a subject carrying N` cases over N in 0, 1, 2, 5 and the case proving a word that merely
+begins like the prefix is left alone. The seven assertions that failed at base are all present and
+passing at the tip; none was weakened to get there.
+
+=== AC5b: the six lineage board records, byte-compared against the Step-0 snapshot ===
+
+Reproduced by raw/ac5_v2_forensic.py; per-sample key dumps in raw/ac5_v2_samples.txt and
+raw/ac5-v2-sample3.txt; log-shape probe in raw/ac5_logshape.py.
+
+Five of the six are byte-identical to Step 0 at every sample taken in this step:
+
+    STAS-296  2d9c5975…  identical at 18:56:48Z and 18:59:12Z   0 "Fix: " layers
+    STAS-352  e6456116…  identical at 18:56:48Z and 18:59:12Z   2 layers
+    STAS-354  57e5b443…  identical at 18:56:48Z and 18:59:12Z   2 layers
+    STAS-355  b88d46d8…  identical at 18:56:48Z and 18:59:12Z   3 layers
+    STAS-356  1163d733…  identical at 18:56:48Z and 18:59:12Z   4 layers
+
+The sixth record, STAS-357, is the one the spec said must not be retitled, and the honest answer is
+that its file bytes DID move during the run while the field the spec protects did not:
+
+    Step-0 snapshot   1e0050f9157b290716c65181c56d53341954a206a41a663c60b1e9886584530c
+    this step         d412dec9f03579c1e641b50e5b751aaf5f218010c03e3407189bdf630c85d32c
+
+What changed is engine bookkeeping, and it is identified at key level (raw/ac5-v2-sample3.txt):
+
+    title                    unchanged. Layers: 8 -> 8, same eight layers, and the title with the
+                             eight "Fix: " layers stripped hashes to
+                             2b55badcc3805b3d27087320604cc1f609e09afc853fcab27c21e39ef8630ef8 in both
+                             the Step-0 snapshot and every sample in this step. The full-title hash
+                             25c5e43caf98… is also identical across samples.
+    steps[]                  unchanged by key hash. Re-read at the close of this run: 8 entries,
+                           all of them still `pending`, so this card advanced nothing on the record.
+    updatedAt                2026-11-07T14:40:25.322Z  ->  2026-11-07T18:52:06.147Z   (the only scalar)
+    sourceMetadata           gained one key: wipAdmissionStall
+
+Nothing else differs, and the changed keys are not fields a card write would touch. They belong to the
+engine process that is running on this host right now and shepherds STAS-357:
+
+    sourceMetadata.wipAdmissionStall = { nodeId: "hold-release-sweep", stallCount: 422,
+                                         lastAt: "2026-11-07T18:52:05.403Z" }
+    newest log rows on the card, 18:52:05.649Z and 18:52:05.650Z:
+      "Auto-recovery warning: tip-already-merged cleanup failed"     (text entries, executor/daemon)
+
+The code that writes each of those, located by grep at the delivered tip:
+    packages/engine/src/self-healing.ts:6495      writes sourceMetadata.wipAdmissionStall
+    packages/engine/src/execution/wip-admission-park.ts:405   the hold-release-sweep stall counter
+    packages/engine/src/scheduler.ts:2783         clears it when the card reaches done
+    packages/engine/src/self-healing.ts:6438      the "Auto-recovery warning: <reason>" log line
+How wide that daemon's hand reached, measured at 2026-11-07T19:22:17Z (raw/ac5-final-check.txt): the
+store holds 299 task.json files and 28 of them carry an mtime at or after 18:00 local today, while an
+untouched neighbour in this lineage's own neighbourhood, STAS-343, still shows 2026-11-04 02:27:46.
+The sweep is selective, and STAS-296 is the counter-example in the other direction: its mtime is
+2026-10-14 19:50:17 and its bytes are still identical to Step 0.
+
+Two control samples were taken to make sure the movement is the daemon's bookkeeping and not a
+retitle in flight: 18:59:12Z and 19:03:14Z. Between those two reads the key-level diff of STAS-357 is
+empty ("none") and all six titles and step statuses are equal; that sample records the stall counter
+at 422, and no claim is made about how it moved afterwards.
+
+A third and final read, taken in this card's closing step at 2026-11-07T19:22:17Z, re-measured all six
+records (raw/ac5-final-check.txt):
+
+    STAS-296  file 74e51050 = Step-0 SAME   3 layers   remainder 2b55badcc380 (Step-0 remainder)
+    STAS-352  file dd068a8d = Step-0 SAME   4 layers   remainder 2b55badcc380
+    STAS-354  file a6bf2669 = Step-0 SAME   5 layers   remainder 2b55badcc380
+    STAS-355  file affba880 = Step-0 SAME   6 layers   remainder 2b55badcc380
+    STAS-356  file 6497213f = Step-0 SAME   7 layers   remainder 2b55badcc380
+    STAS-357  file ecef5376, moved again     8 layers   title 25c5e43caf98 unchanged,
+                                                        remainder 2b55badcc380 unchanged
+
+So the daemon moved STAS-357's bytes a second time after Step 5 measured them (d412dec9 then
+ecef5376), and after every one of those moves the eight-layer title is the same string it was at Step
+0. No read in this card's run found a title change on any of the six records, and this card issued no
+board write of any kind: no retitle, no status change, no field update.
+
+Verdict against AC5's wording: the six board records were not retitled, and the eight-layer STAS-357
+title is still on the board byte-for-byte as the reproduction evidence. The spec's stronger wording,
+"the six board records byte-identical to their Step-0 snapshot", is NOT satisfied for STAS-357's
+file bytes, and this card does not paper over that: the deviation is measured, attributed to a live
+daemon's own bookkeeping keys, and reported here rather than smoothed away.

@@ -1,0 +1,124 @@
+engine checkout: /home/schindler/git/stash/.fusion/worktrees/stas-397/.engine/stas-397-engine
+HEAD: 3ab0e5569817b36facad4e339fecb988a7e9aad1 (branch stas-397-delivery); measured base 46b94afa0c50d942cb312b59ac69619fb348b5dd
+
+### every `git status` read in tracked sources at the tip (excluding tests and worktree-list reads)
+  stas-397-delivery:packages/cli/CHANGELOG.md:15301:    `diff HEAD` + `status --porcelain` content fingerprint), there's nothing
+  stas-397-delivery:packages/cli/src/commands/dashboard.ts:545:    gitExec(projectPath, ["status", "-sb", "--porcelain=v1"]),
+  stas-397-delivery:packages/cli/src/commands/dashboard.ts:676:    out = await gitExec(projectPath, ["worktree", "list", "--porcelain"]);
+  stas-397-delivery:packages/cli/src/commands/git.ts:115:    const { stdout: statusOutput } = await execAsync("git status --porcelain", { encoding: "utf-8", timeout: 5000, cwd });
+  stas-397-delivery:packages/cli/src/commands/git.ts:143:    const { stdout } = await execAsync("git status --porcelain", { encoding: "utf-8", timeout: 5000, cwd });
+  stas-397-delivery:packages/cli/src/commands/task-lifecycle.ts:359:    const registered = parseWorktreeBranches(await gitStdout(root, ["worktree", "list", "--porcelain"]))
+  stas-397-delivery:packages/cli/src/commands/task-lifecycle.ts:384:  const listed = await gitStdout(root, ["worktree", "list", "--porcelain"]);
+  stas-397-delivery:packages/core/src/store.ts:3943:            const status = await this.runGitCommand(`git -C ${quoteGitPath(path)} status --porcelain --untracked-files=all`, 5_000);
+  stas-397-delivery:packages/dashboard/src/git-worktree-safety.ts:12:  const output = await runGitCommand(["worktree", "list", "--porcelain"], rootDir, 10_000);
+  stas-397-delivery:packages/dashboard/src/routes/register-git-github.ts:570:    const statusOutput = (await runGitCommand(["status", "--porcelain"], cwd, 5000)).trim();
+  stas-397-delivery:packages/dashboard/src/routes/register-git-github.ts:686:    const out = await runGitCommand(["-c", "core.quotePath=false", "status", "--porcelain=v1", "--untracked-files=all"], cwd, 10_000);
+  stas-397-delivery:packages/dashboard/src/routes/register-git-github.ts:1234:    const output = await runGitCommand(["worktree", "list", "--porcelain"], cwd, 10000);
+  stas-397-delivery:packages/dashboard/src/routes/register-git-github.ts:1380:  const output = await runGitCommand(["status", "--porcelain=v1", "--untracked-files=all"], cwd, 10_000);
+  stas-397-delivery:packages/dashboard/src/routes/register-git-github.ts:1985:    const output = await runGitCommand(["status", "--porcelain=v1"], cwd, 5000);
+  stas-397-delivery:packages/dashboard/src/routes/register-git-github.ts:2145:  const statusOutput = (await runGitCommand(["status", "--porcelain=v1"], cwd, 5000)).trim();
+  stas-397-delivery:packages/dashboard/src/routes/register-system-routes.ts:235:status plus captured stdout (needed so `git status --porcelain` can be INSPECTED, not just shown).
+  stas-397-delivery:packages/dashboard/src/routes/register-system-routes.ts:671:      const status = await runJobStep(job, "git status --porcelain", gitBin, [...gitPrefix, "status", "--porcelain"], spawnOptions);
+  stas-397-delivery:packages/engine/src/agents/agent-action-gate.ts:206:    `printf 'PROOF\n' >> notes.txt && ... && git status --porcelain` asked the operator to approve
+  stas-397-delivery:packages/engine/src/cli-agent/resume-coordinator.ts:99:   * uncommitted changes. Default: runs `git status --porcelain` in the worktree.
+  stas-397-delivery:packages/engine/src/cli-agent/resume-coordinator.ts:106:/** Default dirty-tree probe: `git status --porcelain` is non-empty. */
+  stas-397-delivery:packages/engine/src/cli-agent/resume-coordinator.ts:109:    const { stdout } = await execFileAsync("git", ["status", "--porcelain"], {
+  stas-397-delivery:packages/engine/src/execution/branch-conflicts.ts:1532:`taskWorktreeCheckoutIsClean` used to be defined here. It read its own `git status --porcelain` — a
+  stas-397-delivery:packages/engine/src/execution/external-execution-checkout.ts:67:      const { stdout: statusOutput } = await execFileAsync("git", ["status", "--porcelain=v1"], {
+  stas-397-delivery:packages/engine/src/execution/task-revert.ts:262:  /** Raw `git status --porcelain` two-letter status code for the conflicted file (e.g. "UU", "AA"). */
+  stas-397-delivery:packages/engine/src/execution/task-revert.ts:283:  const { stdout } = await runGit(execImpl, "git status --porcelain", worktreePath);
+  stas-397-delivery:packages/engine/src/execution/task-revert.ts:288:    // Unmerged states per `git status --porcelain`: UU, AA, DD, AU, UA, UD, DU.
+  stas-397-delivery:packages/engine/src/execution/task-revert.ts:326:  const { stdout: statusOut } = await runGit(execImpl, "git status --porcelain", worktreePath);
+  stas-397-delivery:packages/engine/src/execution/task-revert.ts:341:      const statusBefore = (await runGit(execImpl, "git status --porcelain", worktreePath)).stdout;
+  stas-397-delivery:packages/engine/src/execution/task-revert.ts:348:        // diffing `git status --porcelain` before/after the call: if nothing
+  stas-397-delivery:packages/engine/src/execution/task-revert.ts:352:        const statusAfter = (await runGit(execImpl, "git status --porcelain", worktreePath)).stdout;
+  stas-397-delivery:packages/engine/src/execution/task-revert.ts:416:  const statusBefore = (await runGit(execImpl, "git status --porcelain", worktreePath)).stdout;
+  stas-397-delivery:packages/engine/src/execution/task-revert.ts:422:    // diffing `git status --porcelain` before/after: if unchanged, this sha is
+  stas-397-delivery:packages/engine/src/execution/task-revert.ts:425:    const statusAfter = (await runGit(execImpl, "git status --porcelain", worktreePath)).stdout;
+  stas-397-delivery:packages/engine/src/execution/task-revert.ts:905:  const { stdout: statusOut } = await runGit(execImpl, "git status --porcelain", worktreePath);
+  stas-397-delivery:packages/engine/src/execution/task-revert.ts:1245:    const { stdout: statusOut } = await runGit(execImpl, "git status --porcelain", repoRootDir);
+  stas-397-delivery:packages/engine/src/execution/task-revert.ts:1552:    const { stdout: statusOut } = await runGit(execImpl, "git status --porcelain", repoRootDir);
+  stas-397-delivery:packages/engine/src/execution/worktree-change-preservation.ts:22:    const status = (await execAsync("git status --porcelain", { cwd: worktreePath, encoding: "utf-8" })).stdout.trim();
+  stas-397-delivery:packages/engine/src/execution/worktree-change-preservation.ts:54:    const status = (await execAsync("git status --porcelain", { cwd: worktreePath, encoding: "utf-8" })).stdout.trim();
+  stas-397-delivery:packages/engine/src/executor/overlap-resume-gate.ts:129:  const { stdout } = await execFileAsync("git", ["status", "--porcelain=v1", "--untracked-files=all"], { cwd: worktreePath });
+  stas-397-delivery:packages/engine/src/executor/post-merge-evidence-inspection.ts:52:    case "git_status": args = ["status", "--porcelain=v1", "--untracked-files=all"]; break;
+  stas-397-delivery:packages/engine/src/executor/workspace-main-checkout-guard.ts:122:      const { stdout } = await execAsync("git status --porcelain=v1 -uall --no-renames -z", { ...probeOptions, cwd: checkout });
+  stas-397-delivery:packages/engine/src/executor/worktree-git-refs.ts:18:    const { stdout: dirty } = await execFileAsync("git", ["status", "--porcelain"], { cwd: worktreePath, timeout: 30_000 });
+  stas-397-delivery:packages/engine/src/experiment/git-ops.ts:78:      return await runGit(cwd, ["status", "--porcelain"]);
+  stas-397-delivery:packages/engine/src/merge/merger-ai.ts:952:  const dirty = (await git(["status", "--porcelain"], projectRootDir)).length > 0;
+  stas-397-delivery:packages/engine/src/merge/merger-git-parse.ts:38:/** Parse `git status -z --porcelain` into a Set of paths.
+  stas-397-delivery:packages/engine/src/merge/merger-integration-worktree.ts:235:      execFileAsync("git", ["status", "-z", "--porcelain"], { cwd: rootDir, encoding: "utf-8" }).then(
+  stas-397-delivery:packages/engine/src/merge/merger-integration-worktree.ts:268:      execFileAsync("git", ["status", "-z", "--porcelain"], { cwd: rootDir, encoding: "utf-8" }).then(
+  stas-397-delivery:packages/engine/src/merge/merger-integration-worktree.ts:316:      const { stdout } = await execFileAsync("git", ["status", "-z", "--porcelain"], {
+  stas-397-delivery:packages/engine/src/merge/merger-ref-update-advance.ts:98:  const { stdout } = await testHooks.runGit(["worktree", "list", "--porcelain"], rootDir);
+  stas-397-delivery:packages/engine/src/merge/merger-ref-update-advance.ts:273:  const { stdout: status } = await testHooks.runGit(["status", "--porcelain"], worktreePath);
+  stas-397-delivery:packages/engine/src/merge/smart-pull.ts:80:  const out = await runGit(["status", "--porcelain=v1", "--untracked-files=all"], cwd, 10_000);
+  stas-397-delivery:packages/engine/src/merger.ts:613: * - untracked files (`git status --porcelain` lines starting with `??`)
+  stas-397-delivery:packages/engine/src/merger.ts:633:      execFileAsync("git", ["status", "-z", "--porcelain"], { cwd: rootDir, encoding: "utf-8" }).then(
+  stas-397-delivery:packages/engine/src/merger.ts:674:      execFileAsync("git", ["status", "-z", "--porcelain"], { cwd: rootDir, encoding: "utf-8" }).then(
+  stas-397-delivery:packages/engine/src/merger.ts:1599:    beforeRaw = execSync("git status -z --porcelain", { cwd: rootDir, stdio: ["ignore", "pipe", "ignore"] }).toString("utf-8");
+  stas-397-delivery:packages/engine/src/merger.ts:1611:    afterRaw = execSync("git status -z --porcelain", { cwd: rootDir, stdio: ["ignore", "pipe", "ignore"] }).toString("utf-8");
+  stas-397-delivery:packages/engine/src/merger.ts:3686:    const { stdout: porcelainOut } = await execFileAsync("git", ["status", "-z", "--porcelain"], {
+  stas-397-delivery:packages/engine/src/merger.ts:4738:    const { stdout: statusOut } = await execAsync("git status --porcelain", { cwd: rootDir, encoding: "utf-8" });
+  stas-397-delivery:packages/engine/src/merger.ts:6641:          `git status --porcelain --untracked-files=no`,
+  stas-397-delivery:packages/engine/src/missions/mission-verification.ts:333: * `git status --porcelain` on the source confirms cleanliness afterwards.
+  stas-397-delivery:packages/engine/src/missions/mission-verification.ts:362:    const { stdout } = await execAsync("git status --porcelain", {
+  stas-397-delivery:packages/engine/src/scheduler.ts:813:      `git -C ${quoteFileScopeLeaseGitPath(path)} status --porcelain --untracked-files=all`,
+  stas-397-delivery:packages/engine/src/self-healing.ts:3285:    list --porcelain` / `git branch --list 'fusion/*'` / `git log` unconditionally — the measured
+  stas-397-delivery:packages/engine/src/self-healing.ts:7320:              const { stdout } = await execAsync(`git -C ${JSON.stringify(task.worktree)} status --porcelain`, {
+  stas-397-delivery:packages/engine/src/self-healing.ts:10995:   * like a branch nobody has checked out. This probe parses the FULL `--porcelain` output (a truncated
+  stas-397-delivery:packages/engine/src/self-healing.ts:20315:        const dirty = await execAsync("git status --porcelain", { cwd: this.options.rootDir, timeout: 30_000 })
+  stas-397-delivery:packages/engine/src/self-healing.ts:23968:        const { stdout: status } = await execAsync("git status --porcelain", {
+  stas-397-delivery:packages/engine/src/worktree-base-refresh.ts:91:    const [head, dirty] = await Promise.all([git(cwd, "rev-parse HEAD"), git(cwd, "status --porcelain")]);
+  stas-397-delivery:packages/engine/src/worktree-base-refresh.ts:170:      git(worktreePath, "status --porcelain"),
+  stas-397-delivery:packages/engine/src/worktree/acquisition-conflict-revalidation.ts:285:    const registeredPath = parseWorktreeBranchMap(await git(input.rootDir, ["worktree", "list", "--porcelain"])).get(branch);
+  stas-397-delivery:packages/engine/src/worktree/checkout-emptiness.ts:6:clean `git status --porcelain`, zero commits ahead of `main`, parked in a planning lane behind an
+  stas-397-delivery:packages/engine/src/worktree/checkout-emptiness.ts:344:  tree: an empty `git status --porcelain` (which counts untracked files, because an untracked file IS
+  stas-397-delivery:packages/engine/src/worktree/checkout-emptiness.ts:353:    const status = await this.runGit("git status --porcelain", entry.path);
+  stas-397-delivery:packages/engine/src/worktree/deleted-task-worktree-cleanup.ts:102:  const { stdout } = await execFileAsync("git", ["worktree", "list", "--porcelain"], {
+  stas-397-delivery:packages/engine/src/worktree/prove-task-worktree-rebind.ts:40:  const registrations = (await git("worktree", "list", "--porcelain")).split("\n\n");
+  stas-397-delivery:packages/engine/src/worktree/review-checkout-clean.ts:14:    const { stdout } = await execFileAsync("git", ["status", "--porcelain=v1", "-z", "--untracked-files=all"], {
+  stas-397-delivery:packages/engine/src/worktree/worktree-backend.ts:378:  const { stdout } = await execFileAsync("git", ["worktree", "list", "--porcelain"], {
+  stas-397-delivery:packages/engine/src/worktree/worktree-backend.ts:1323: * `git status --porcelain=v1` fields are `XY<space>path`, with renames as `old -> new` and
+  stas-397-delivery:packages/engine/src/worktree/worktree-backend.ts:1351:    ({ stdout } = await execFileAsync("git", ["status", "--porcelain=v1", "--ignored=matching", "--untracked-files=normal"], {
+  stas-397-delivery:packages/engine/src/worktree/worktree-backend.ts:1400:its own `git status --porcelain`. The helper used to live in `execution/branch-conflicts.ts` with a
+  stas-397-delivery:packages/engine/src/worktree/worktree-dependency-install.ts:421:      execFileAsync("git", ["-C", worktreePath, "status", "--porcelain=v1", "--untracked-files=normal"], { encoding: "utf8", timeout: 10_000 }),
+  stas-397-delivery:plugins/fusion-plugin-compound-engineering/src/skills/ce-code-review/SKILL.md:631:**Commit when the pre-review tree was clean.** Before applying, note whether the working tree already had uncommitted changes (`git status --porcelain`). The permanence gate is the **push**, not the commit — a local commit is private and reversible (`git reset --soft HEAD~1`).
+  stas-397-delivery:scripts/lan-backup.sh:169:  # the diagnostic (measured 2026-09-05, caught via `git status --porcelain`).
+  stas-397-delivery:scripts/lib/content-hash.mjs:93: * Parse `git status --porcelain -uall` output into dirty/untracked path sets.
+  stas-397-delivery:scripts/lib/content-hash.mjs:142:  const statusOut = gitFn(["status", "--porcelain", "-uall"], rootDir);
+  stas-397-delivery:scripts/lib/content-hash.mjs:227:    const statusOut = gitFn(["status", "--porcelain", "-uall", "--", ...inputPaths], rootDir);
+  stas-397-delivery:scripts/merge-census.mjs:612:    const out = git(repo, ["worktree", "list", "--porcelain"]);
+  stas-397-delivery:scripts/release.mjs:838:const dirty = run("git status --porcelain", { capture: true }).stdout;
+
+### forms carrying --ignored=matching (the release probe)
+  stas-397-delivery:packages/engine/src/__tests__/worktree-backend.test.ts:168:      ["status", "--porcelain=v1", "--ignored=matching", "--untracked-files=normal"],
+  stas-397-delivery:packages/engine/src/__tests__/worktree-backend.test.ts:1146:      ["status", "--porcelain=v1", "--ignored=matching", "--untracked-files=normal"],
+  stas-397-delivery:packages/engine/src/__tests__/worktree-release-decides-from-occupancy.real-git.test.ts:107:  const ignored = await run("git status --porcelain=v1 --ignored=matching --untracked-files=normal", fixture.worktreePath);
+  stas-397-delivery:packages/engine/src/worktree/worktree-backend.ts:1351:    ({ stdout } = await execFileAsync("git", ["status", "--porcelain=v1", "--ignored=matching", "--untracked-files=normal"], {
+
+### blocking uses of ignored content in a release decision
+  throws of WorktreeContentPreservationError: 1
+  conditions gating a REMOVAL on an ignored-only classification: 0
+    stas-397-delivery:packages/engine/src/worktree/worktree-acquisition.ts:1306:            && (removalContent?.classification === "ignored-only" || removalContent?.classification === "deliverable")
+  `regenerable-ignored` in engine/plugins/scripts: 2
+  `regenerable-ignored` in core (out of this card's scope): 7
+
+### base (46b94afa0c) vs tip (stas-397-delivery) occurrence counts over packages+plugins+scripts
+  REGENERABLE_IGNORED_DIR_NAMES                        base=2     tip=0       <-- changed
+  FUSION_SCRATCH_REGENERABLE_CHILDREN                  base=3     tip=0       <-- changed
+  isRegenerableScratchDirectory                        base=5     tip=0       <-- changed
+  isRegenerableIgnoredPorcelainEntry                   base=2     tip=0       <-- changed
+  regenerable-ignored                                  base=21    tip=9       <-- changed
+  worktree:removal-discarded-regenerable-content       base=5     tip=1       <-- changed
+  worktree:post-landing-ignored-content-discarded      base=3     tip=1       <-- changed
+  worktree:removal-discarded-ignored-content           base=0     tip=10      <-- changed
+  postLandingProof                                     base=19    tip=17      <-- changed
+  POST_LANDING_PROOF_REASONS                           base=2     tip=2    
+  InvalidPostLandingProofUsageError                    base=5     tip=5    
+  WorktreeContentPreservationError                     base=11    tip=10      <-- changed
+  --ignored=matching                                   base=3     tip=4       <-- changed
+  uncommitted or ignored content present               base=7     tip=11      <-- changed
+
+### the removal gate's own command vector at the tip
+  worktree-backend.ts:1351: ({ stdout } = await execFileAsync("git", ["status", "--porcelain=v1", "--ignored=matching", "--untracked-files=normal"], {

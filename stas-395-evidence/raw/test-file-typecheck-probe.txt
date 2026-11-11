@@ -1,0 +1,29 @@
+src/__test-utils__/pg-teardown-diagnostics.ts(171,11): error TS2345: Argument of type 'number | Timeout' is not assignable to parameter of type 'Timeout'.
+  Type 'number' is not assignable to type 'Timeout'.
+src/__test-utils__/pg-teardown-diagnostics.ts(179,18): error TS2345: Argument of type 'number | Timeout' is not assignable to parameter of type 'Timeout'.
+  Type 'number' is not assignable to type 'Timeout'.
+src/__test-utils__/pg-teardown-diagnostics.ts(202,7): error TS2322: Type 'number | Timeout' is not assignable to type 'Timeout | undefined'.
+  Type 'number' is not assignable to type 'Timeout'.
+src/__test-utils__/pg-teardown-diagnostics.ts(203,13): error TS2345: Argument of type 'Timeout | undefined' is not assignable to parameter of type 'Timeout'.
+  Type 'undefined' is not assignable to type 'Timeout'.
+src/__test-utils__/pg-teardown-diagnostics.ts(221,13): error TS2345: Argument of type 'number | Timeout' is not assignable to parameter of type 'Timeout'.
+  Type 'number' is not assignable to type 'Timeout'.
+src/__test-utils__/pg-teardown-diagnostics.ts(226,20): error TS2345: Argument of type 'number | Timeout' is not assignable to parameter of type 'Timeout'.
+  Type 'number' is not assignable to type 'Timeout'.
+src/__test-utils__/pg-timeout-boundary-observer.ts(129,3): error TS2322: Type '{ [x: string]: unknown; }' is not assignable to type 'ProcessEnv'.
+  'string' index signatures are incompatible.
+    Type 'unknown' is not assignable to type 'string | undefined'.
+src/__test-utils__/pg-timeout-boundary-observer.ts(404,5): error TS2322: Type 'number | Timeout' is not assignable to type 'Timeout | undefined'.
+  Type 'number' is not assignable to type 'Timeout'.
+src/__test-utils__/pg-timeout-boundary-observer.ts(443,5): error TS2322: Type 'number | Timeout' is not assignable to type 'Timeout | undefined'.
+  Type 'number' is not assignable to type 'Timeout'.
+src/__test-utils__/pg-timeout-boundary-observer.ts(459,7): error TS2322: Type 'number | Timeout' is not assignable to type 'Timeout | undefined'.
+  Type 'number' is not assignable to type 'Timeout'.
+src/__test-utils__/pg-timeout-boundary-observer.ts(462,5): error TS2322: Type 'number | Timeout' is not assignable to type 'Timeout | undefined'.
+  Type 'number' is not assignable to type 'Timeout'.
+src/__test-utils__/pg-timeout-boundary-observer.ts(466,5): error TS2322: Type 'number | Timeout' is not assignable to type 'Timeout | undefined'.
+  Type 'number' is not assignable to type 'Timeout'.
+src/__test-utils__/pg-timeout-boundary-observer.ts(493,13): error TS2345: Argument of type 'number | Timeout' is not assignable to parameter of type 'Timeout | undefined'.
+  Type 'number' is not assignable to type 'Timeout'.
+src/__test-utils__/pg-timeout-boundary-observer.ts(496,22): error TS2345: Argument of type 'number | Timeout' is not assignable to parameter of type 'Timeout'.
+  Type 'number' is not assignable to type 'Timeout'.

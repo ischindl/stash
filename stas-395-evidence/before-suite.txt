@@ -1,0 +1,41 @@
+STAS-395 Step 1 - the affected package's baseline, re-printed in the close tick
+measured_by=raw/before_suite.py
+engine_checkout_head_sha_now=e038ea90e247532e4cdc84af33657fb5337adb7f
+engine_refs_heads_main_re_read_now=ee995fcc85013a990752307d0f253e9d6fe5ebf4
+baseline_measured_on_sha=f1247e8aef367c248ebb0b9d339bf0b9bd0a6421 (the trunk head this card checked out with
+  git --git-dir=$HOME/git/Fusion/.git worktree add --detach "$PWD/.engine/stas-395-engine" refs/heads/main)
+
+=== the provisioning command the repository documents, and the markers that prove it landed ===
+$ grep -n '"install"' package.json   rc=1
+  | (no install script declared; pnpm bootstrap is the documented route)
+  marker=node_modules/.modules.yaml present=True mtime=2026-11-08T00:14:38+0100
+  marker=packages/core/node_modules/vitest present=True mtime=2026-11-07T22:06:06+0100
+  marker=node_modules/.bin/vitest present=False mtime=
+  vitest binary resolved by the package: packages/core/node_modules/.bin/vitest present=True
+
+=== the test command, derived from the package, not restated ===
+$ grep -n '"test"' packages/core/package.json   rc=0
+  | 79:    "test": "vitest run --silent=passed-only --reporter=dot",
+$ pnpm --filter @fusion/core test
+    (pnpm runs the package script, which is exactly `vitest run --silent=passed-only --reporter=dot`)
+
+=== the baseline counts, with the exit status read outside any pipe ===
+  ⎯⎯⎯⎯⎯⎯ Failed Tests 323 ⎯⎯⎯⎯⎯⎯
+  Test Files  263 failed | 535 passed | 1 skipped (799)
+  Tests  323 failed | 7002 passed | 1642 skipped (8967)
+  exit_status=1  (echoed by the run command itself; the trunk is red on this host and this card does not make it green)
+
+=== the named causes of the red baseline, not a smoothed total ===
+  FAIL_lines_in_raw_run_capture=552
+  pg-gated vs non-pg split and every non-pg failing file named individually in census-and-suites.txt section [7]
+  host cause for the pg-gated class, verbatim from this card's own default-route run (raw/ac5-newfile-default-route.txt):
+    PostgresError: password authentication failed for user "schindler"
+  the documented pg route (docs/testing.md, pnpm pg:test:up) authenticates against a throwaway
+  postmaster at postgresql://localhost:55432 and creates its own per-run databases; `pnpm pg:test:status`
+  against the *default* target on this host reports health=admin-ddl-denied, which is why the plain
+  route cannot run any pg suite here, this card's file included.
+
+=== provenance of the two runs this card compares ===
+  before: raw/ac5-before-suite-close-tick.txt (this tick, sha=f1247e8aef367c248ebb0b9d339bf0b9bd0a6421, exit_status=1)
+  before (earlier tick, kept for continuity): raw/before-suite-raw.txt and raw/before-suite-base-run.txt
+  after:  raw/ac5-after-suite-close-tick.txt (this tick, sha=delivered tip, exit_status=1)

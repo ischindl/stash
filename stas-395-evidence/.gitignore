@@ -1,0 +1,15 @@
+# Scratch measurement generators. The captures they emit (*.txt) are the deliverable;
+# the generators stay on disk untracked so the lane stays clean (same rule as stas-394-evidence).
+raw/*.py
+raw/__pycache__/
+raw/.*
+raw/*.log
+*.log
+# The engine-side delivery artifacts travel as attachments on the card, not as content in this
+# repository: the delivered branch lives in the engine repository and this repository carries no
+# engine source. Their sha256, head and prerequisite are printed in window-announcement.txt.
+stas-395-delivery.bundle
+stas-395-delivery.bundle.b64
+stas-395-delivery.patch
+stas-395-delivery.bundle.b64.txt
+stas-395-delivery.patch.txt

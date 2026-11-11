@@ -1,0 +1,93 @@
+STAS-394 STEP 6 — the announcement as sent, with the prints it quotes.
+
+TRANSPORT: fn_send_message, called after the measurement tick printed at 2026-11-07T19:10:41Z (raw/window-prints.txt).
+RESULT (verbatim): Message sent to agent-94d01490 (ID: msg-c06d6b7a)
+
+First two attempts were refused by the transport and are quoted verbatim, because the refusal is part of the record:
+  1) 'ERROR: Message content exceeds 2000 character limit'   (draft carried both prose and a structured copy)
+  2) 'ERROR: mail_kind report requires report'                (kind declared without the structured payload)
+Neither refusal delivered anything; the third send is the one announcement this card made.
+
+----- MESSAGE BODY AS SENT (to CEO, agent-94d01490) -----
+STAS-394 dodane. Predikaty namerane v tomto ticku (19:10:41Z), kazde rc je rc vlastneho volania.
+
+dodany ref, discovery cez for-each-ref: refs/heads/stas-394-fix-title-idempotence = 1677ee018a5d3aee0e74c0669676a1db40c690c5
+trunk (druhe citanie v ticku): refs/heads/main = 42f9762e1c8c8bacd1f7e7a976b7fbb536feaa85, prve citanie identicke
+merge-base: 1d4bcc61847562837b44854bccea95b783d8b943
+rev-list --left-right --count main...delivered: 4 1
+merge-base --is-ancestor main delivered: rc=1. Fast-forward NIE JE mozny, trunk poskočil o 4 commity nad moj base uz pocas tohto runu. Rebase nerobim, lebo by osamel SHA, ktore menuju red.txt a green.txt.
+
+kolizny predikat 1: git merge-tree --write-tree --name-only refs/heads/main refs/heads/stas-394-fix-title-idempotence -> rc=0, riadkov CONFLICT: 0
+kolizny predikat 2: git diff --name-only 1d4bcc618 refs/heads/main nad 11 zmenenymi cestami -> prazdny, rc=0
+
+testy @fusion/core: pred 263 failing suborov a 6998 passing testov, po 263 failing a 7012 passing. Mnozina failing suborov je byte-identicka, sha256 22e75974..., diff rc=0. Delta je +1 subor a +14 passing, to je presne nove regresne suite, a 0 novych zlyhani.
+
+jeden prikaz pre operatora v primary checkoute enginu:
+git -C <Fusion primary checkout> merge --no-ff stas-394-fix-title-idempotence
+
+Oprava nie je na trunku a nie je ziva v beziacej doske, kym sa tato leg neuskutocni a kym sa build neprebuilduje a nespusti znova. refs/heads/main tato karta nikdy nepisla. Titulky STAS-357 a piatich surodencov som nedotkol.
+
+Nahlasujem aj to, co neviem prehliadnut: na zrkadle `lan` existuje refs/remotes/lan/stas-394-fix-title-idempotence na dodanom SHA, reflog zaznamena update by push o 2026-11-07 19:52:09 +0100. Tento run ziaden push ani PR nevykonal a na github remote `origin` nie je ziaden ref s stas-394 (ls-remote). Dve miesta v kode enginu vedia push: packages/engine/src/merge/pr-response-run-ops.ts:202 a packages/engine/src/merge/merger-ai.ts:4791, ich autora z vnutra neurcim.
+----- END MESSAGE -----
+
+----- PRINTS QUOTED BY THAT MESSAGE -----
+STAS-394 STEP 6 WINDOW, measured 2026-11-07T19:10:41Z
+cwd = /home/schindler/git/stash/.fusion/worktrees/stas-394/.engine/stas-394-engine
+
+== delivered ref, discovered by for-each-ref rather than by the spec's wording ==
+  pattern=refs/heads/fusion/: 84 refs scanned, 0 carrying this card's id
+  pattern=refs/heads/: 257 refs scanned, 1 carrying this card's id
+    refs/heads/stas-394-fix-title-idempotence 1677ee018a5d3aee0e74c0669676a1db40c690c5 fix(STAS-394): compose fix titles idempotently and record fix ancestry in lineage
+
+== AC6: the trunk measured twice inside this tick ==
+$ git rev-parse refs/heads/main
+  42f9762e1c8c8bacd1f7e7a976b7fbb536feaa85
+  rc=0   [trunk reading 1]
+
+$ git rev-parse refs/heads/stas-394-fix-title-idempotence
+  1677ee018a5d3aee0e74c0669676a1db40c690c5
+  rc=0   [delivered]
+
+$ git merge-base refs/heads/main refs/heads/stas-394-fix-title-idempotence
+  1d4bcc61847562837b44854bccea95b783d8b943
+  rc=0   [merge-base]
+
+== AC6 predicate set ==
+$ git rev-list --left-right --count refs/heads/main...refs/heads/stas-394-fix-title-idempotence
+  4	1
+  rc=0   [left=trunk-only right=delivered-only]
+
+$ git merge-base --is-ancestor refs/heads/main refs/heads/stas-394-fix-title-idempotence
+  rc=1   [fast-forward possible iff rc=0]
+
+$ git merge-tree --write-tree --name-only refs/heads/main refs/heads/stas-394-fix-title-idempotence
+  69d8f9ccce3b2aa31a6ab94f736f1d8a6a488130
+  rc=0   [collision predicate 1]
+
+  CONFLICT lines in merge-tree output: 0
+
+$ git diff --name-only 1d4bcc61847562837b44854bccea95b783d8b943 refs/heads/main -- .changeset/stas-394-fix-title-idempotence.md docs/missions.md docs/workflow-steps.md packages/core/src/__tests__/mission-fix-title-composition.test.ts packages/core/src/async-stores/async-mission-store.ts packages/core/src/index.gate.ts packages/core/src/index.ts packages/core/src/missions/mission-store.ts packages/core/src/tasks/fix-title.ts packages/core/src/tasks/remediation-steps.ts packages/engine/src/workflows/human-merge-approval-boundary.ts
+  rc=0   [collision predicate 2: empty means the trunk did not touch this card's paths since the merge-base]
+
+== this card's changed paths (base -> delivered) ==
+  .changeset/stas-394-fix-title-idempotence.md
+  docs/missions.md
+  docs/workflow-steps.md
+  packages/core/src/__tests__/mission-fix-title-composition.test.ts
+  packages/core/src/async-stores/async-mission-store.ts
+  packages/core/src/index.gate.ts
+  packages/core/src/index.ts
+  packages/core/src/missions/mission-store.ts
+  packages/core/src/tasks/fix-title.ts
+  packages/core/src/tasks/remediation-steps.ts
+  packages/engine/src/workflows/human-merge-approval-boundary.ts
+  count=11
+$ git rev-parse refs/heads/main
+  42f9762e1c8c8bacd1f7e7a976b7fbb536feaa85
+  rc=0   [trunk reading 2]
+
+TRUNK_STABLE_INSIDE_TICK=yes
+TRUNK_READING_1=42f9762e1c8c8bacd1f7e7a976b7fbb536feaa85
+TRUNK_READING_2=42f9762e1c8c8bacd1f7e7a976b7fbb536feaa85
+DELIVERED_SHA=1677ee018a5d3aee0e74c0669676a1db40c690c5
+MERGE_BASE=1d4bcc61847562837b44854bccea95b783d8b943

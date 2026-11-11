@@ -1,0 +1,62 @@
+### STAS-399 AC9: failing-file NAME SETS, before vs after, per affected package, hashed and diffed
+
+Both captures come from the tracked suite files in this directory, produced by the identical command in the
+identical nested checkout, with the repository's throwaway trust-auth Postgres cluster exported in the same
+command (FUSION_PG_TEST_URL_BASE=postgresql://localhost:25499), NO_COLOR=1, and the exit status read apart
+from any pipe (the `.rc` files beside each capture).
+
+  engine  before: before-engine-suite.txt   base  c7311e7dc4  exit_status 1
+  engine  after : after-engine-suite-r1.txt sha 217833095935ff88da3f5c4996c9eb85f1908dba (tree edited)  exit 1
+  core    before: before-core-suite.txt     base  c7311e7dc4  exit_status 1
+  core    after : after-core-suite-r1.txt   same sha          exit_status 1
+
+Totals read off each capture's own summary lines (Test Files / Tests), never inferred:
+  engine before  Test Files 111 failed | 1316 passed | 2 skipped (1429);  Tests 427 failed | 17822 passed | 17 skipped | 1 todo
+  engine after   Test Files 113 failed | 1315 passed | 2 skipped (1430);  Tests 431 failed | 17832 passed | 17 skipped | 1 todo
+  core   before  Test Files  26 failed |  790 passed | 1 skipped ( 817);  Tests  54 failed |  9156 passed | 7 skipped
+  core   after   Test Files  26 failed |  790 passed | 1 skipped ( 817);  Tests  54 failed |  9156 passed | 7 skipped
+  (the engine after-run carries one extra file because this card ADDS a test file; the core numbers are
+   byte-identical, and core source is untouched by this card -- see carrier-census.txt)
+
+Name-set extraction (deterministic, printed here so it can be re-run):
+  command: python3 over the two captures of each package, matching  FAIL\s+(\|project\|\s+)?(<path>.test.ts)
+           on lines containing FAIL, collecting the UNIQUE FILE PATHS (a file that fails on 9 tests counts
+           once), sorting, sha256 of the newline-joined set, then a two-direction set difference.
+
+  engine  before_failing_files = 111   sha256 = 5c14ca8893c87e17726e3eb738a6db72ec874a81fbbcab22881daa09e01fbad2
+  engine  after_failing_files  = 113   sha256 = d14676566a75eca93ab27bd04e3db2c6ab296e9d1bd9e7831029a59141e5a312
+          only_in_after  (3):
+            src/__tests__/reliability-interactions/explicit-duplicate-marker-sweep.test.ts
+            src/__tests__/workspace-e2e.test.ts
+            src/__tests__/workspace-merger-lease.test.ts
+          only_in_before (1):
+            src/__tests__/reliability-interactions/self-defeating-dep-reconcile.test.ts
+
+  core    before_failing_files =  26   sha256 = 9233a689764658794d7e5b285b8cded6aa378650e96d60055b9f62e5fae6bd17
+  core    after_failing_files  =  26   sha256 = 9233a689764658794d7e5b285b8cded6aa378650e96d60055b9f62e5fae6bd17
+          only_in_after (0): none      only_in_before (0): none
+          set-difference return code both directions: 0   (hashes are equal, so the diff is empty by construction)
+
+engine name-set difference: classified, not absorbed. Each of the 3 after-only files was re-run ALONE with
+the same command shape and the same pg base, in the run captured in ac9-flake-classification.txt:
+  explicit-duplicate-marker-sweep.test.ts   -> 1 file passed, 18 tests passed,  exit_status 0
+  workspace-e2e.test.ts                     -> 1 file passed,  5 tests passed,  exit_status 0
+  workspace-merger-lease.test.ts            -> 1 file passed, 14 tests passed,  exit_status 0
+  self-defeating-dep-reconcile.test.ts      -> fails alone too, AND it is in the BEFORE set: a pre-existing
+                                               failure that happened to pass inside the after-run. Named,
+                                               not absorbed, not counted as an improvement claim.
+  VERDICT: the engine after-run has 0 genuinely new failing files. The 3 appearances are load-induced
+  timeouts of a 35-minute whole-package run (each passes in isolation on the same tree); the pre-existing
+  failing set is otherwise unchanged, and no gate was skipped to get there.
+
+Static gates, each with its own exit code, re-confirmed on the delivered tip 324da3366f7ab6551bd8280a30fa498475c1a282:
+  node scripts/check-nonlatin-tracked-text.mjs                rc=0   at 2026-11-10T05:24:18Z
+  pnpm test:gate:static (includes the script above + check-prompt-volatility)   rc=0  (step4-gates.txt)
+  pnpm check:changesets (check-changeset-format.mjs)          rc=0   (step4-gates.txt)
+  pnpm check:fnxc-future-dates                               rc=0   (step4-gates.txt)
+  eslint over the changed paths                              rc=0   (step4-gates.txt; 3 warnings, all
+                                                                     "file ignored by config", 0 errors)
+  both package typechecks                                             (typecheck-both-packages.txt)
+  check:line-count                                            rc=1 at BASE and at TIP alike: pre-existing,
+                                                                     outside pretest, this card shrinks the
+                                                                     offending file by 3 lines (line-count-note.txt)

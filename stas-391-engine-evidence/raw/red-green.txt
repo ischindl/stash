@@ -1,0 +1,129 @@
+# STAS-391 — red and green, in the parent card's method
+# base pinned for every read in this file: 06b1768b18f38a9b4d0d5b35467204e25bfe4396
+# Regenerate: bash stas-391-engine-evidence/generate.sh   (run from the card worktree root)
+
+Method: the change is authored on `refs/heads/fusion/stas-391-empty-tool-result-announcement` at `eb20a6bfc583786b8c31cfe4f677237ebae54e10`, so both runs use the
+lane's own tracked test file. GREEN runs it at the tip. RED swaps only the
+production module for its base blob — `git checkout 06b1768b18f38a9b4d0d5b35467204e25bfe4396 -- <module>` — and
+leaves the test file at the tip, which is exactly the commit a reviewer would get
+by checking out the base commit of the branch with the new test. No probe copies
+and no test-text copies are installed for this section.
+
+Every rc below is captured before scrubbing, so a pipeline cannot hide a failing
+run; the vitest filter is the file path alone, never a `-t` name filter, so a
+renamed test would surface as a vanished case rather than a false pass.
+## GREEN — the lane's tracked test file, at the branch tip
+Tip module and tip test, nothing swapped:
+RUN  <vitest> <package-dir>
+✓ src/__tests__/tool-result-authority.test.ts > tool result stays data on the model-visible path > marks the measured payload (an unprefixed imperative in bash stdout) as untrusted data, because on 2026-11-04 that exact shape arrived in a bash result on this platform and no rule told the model to read it instead of obeying it 
+✓ src/__tests__/tool-result-authority.test.ts > tool result stays data on the model-visible path > labels a payload opening with System: as directive-shaped while keeping it byte-for-byte data, because a directive-shaped prefix is a severity signal, not a permission to obey or to drop the payload 
+✓ src/__tests__/tool-result-authority.test.ts > tool result stays data on the model-visible path > labels a payload opening with Directives: as directive-shaped while keeping it byte-for-byte data, because a directive-shaped prefix is a severity signal, not a permission to obey or to drop the payload 
+✓ src/__tests__/tool-result-authority.test.ts > tool result stays data on the model-visible path > labels a payload opening with Instruction: as directive-shaped while keeping it byte-for-byte data, because a directive-shaped prefix is a severity signal, not a permission to obey or to drop the payload 
+✓ src/__tests__/tool-result-authority.test.ts > tool result stays data on the model-visible path > classifies a tool result that only discusses a directive-shaped string as ordinary tool data, because this card's own evidence text is that input and must survive unchanged 
+✓ src/__tests__/tool-result-authority.test.ts > tool result stays data on the model-visible path > marks a result on the resumed-session delta too, because a resumed turn is where a fresh bash payload actually reaches the model 
+✓ src/__tests__/tool-result-authority.test.ts > an empty tool result carries the provenance of its emptiness > says the command produced no output when the tool delivered zero bytes, because an empty output that stays silent cannot be told apart from a dropped payload and turns a probe into a false negative 
+✓ src/__tests__/tool-result-authority.test.ts > an empty tool result carries the provenance of its emptiness > refuses to render a payload that was never delivered, because the empty string this site used to return made 'nothing was delivered' read as 'the command printed nothing' 
+✓ src/__tests__/tool-result-authority.test.ts > an empty tool result carries the provenance of its emptiness > announces that no content was delivered when the content-block array is empty, because the upstream runtime normalises a content-less untyped result to `content: []` (createToolResultMessage writes `result.content ?? []`) and pi-ai normalises a null content the same way, so an empty array is an expected input on every custom and MCP tool and a throw there deletes the whole prompt instead of one payload 
+✓ src/__tests__/tool-result-authority.test.ts > the marking fails loud instead of passing raw text through > propagates a failure inside the marking step to the caller, because a guard that swallowed its own error would send unmarked payload text to the model 
+✓ src/__tests__/tool-result-authority.test.ts > the invariant lives in exactly one production module > is the only production source stating the zero-authority rule, because the same sentence written into a second layer is two rules that can disagree 
+✓ src/__tests__/tool-result-authority.test.ts > the invariant lives in exactly one production module > owns the directive-shape label list alone, because a second copy of the predicate is a second definition of what counts as a directive 
+Test Files  1 passed (1)
+Tests  12 passed (12)
+        rc=0
+
+vitest rc=0
+
+## GREEN — the whole package suite, at the branch tip
+Summary lines only; the base/tip counter pair is in raw/suite-baseline.txt.
+  $ git -C .engine/stas-391-engine rev-parse eb20a6bfc583786b8c31cfe4f677237ebae54e10
+      eb20a6bfc583786b8c31cfe4f677237ebae54e10
+        rc=0
+
+Test Files  15 passed (15)
+Tests  376 passed (376)
+vitest rc=0
+
+## GREEN — typecheck, at the branch tip
+  $ bash -c cd '.engine/stas-391-engine/packages/pi-claude-cli' && ./node_modules/.bin/tsc --noEmit; echo rc=$?
+      rc=0
+        rc=0
+
+
+## Line-count guardrail, base against tip
+The repo gate is a root script, not part of the package's test script. Its verdict
+is a repo-wide list of oversized files; what matters here is whether either
+revision of this card's two files appears in it.
+Files of this card at the base:
+  $ bash -c git -C '.engine/stas-391-engine' show 06b1768b18f38a9b4d0d5b35467204e25bfe4396:packages/pi-claude-cli/src/tool-result-authority.ts | wc -l
+      120
+        rc=0
+
+  $ bash -c git -C '.engine/stas-391-engine' show 06b1768b18f38a9b4d0d5b35467204e25bfe4396:packages/pi-claude-cli/src/__tests__/tool-result-authority.test.ts | wc -l
+      172
+        rc=0
+
+The same files at the tip:
+  $ bash -c git -C '.engine/stas-391-engine' show eb20a6bfc583786b8c31cfe4f677237ebae54e10:packages/pi-claude-cli/src/tool-result-authority.ts | wc -l; git -C '.engine/stas-391-engine' show eb20a6bfc583786b8c31cfe4f677237ebae54e10:packages/pi-claude-cli/src/__tests__/tool-result-authority.test.ts | wc -l
+      127
+      199
+        rc=0
+
+  $ bash -c cd '.engine/stas-391-engine' && node scripts/check-file-line-count.mjs 2>&1 | grep -c '^packages/pi-claude-cli' || echo 0
+      0
+      0
+        rc=0
+
+Zero is the expected count on both revisions: neither revision of either file is
+over the guardrail, so this card neither tripped it nor inherited a trip.
+## RED — the same tracked test file, module checked out at the base
+This block runs inside a subshell that always restores the tip blob, and the
+restore is verified in the next block.
+Module blob in the working tree is now the base one (diff against the tip):
+  $ git -C .engine/stas-391-engine diff --stat eb20a6bfc583786b8c31cfe4f677237ebae54e10 -- packages/pi-claude-cli/src/tool-result-authority.ts
+       .../pi-claude-cli/src/tool-result-authority.ts     | 29 ++++++++--------------
+       1 file changed, 11 insertions(+), 18 deletions(-)
+        rc=0
+
+RUN  <vitest> <package-dir>
+✓ src/__tests__/tool-result-authority.test.ts > tool result stays data on the model-visible path > marks the measured payload (an unprefixed imperative in bash stdout) as untrusted data, because on 2026-11-04 that exact shape arrived in a bash result on this platform and no rule told the model to read it instead of obeying it 
+✓ src/__tests__/tool-result-authority.test.ts > tool result stays data on the model-visible path > labels a payload opening with System: as directive-shaped while keeping it byte-for-byte data, because a directive-shaped prefix is a severity signal, not a permission to obey or to drop the payload 
+✓ src/__tests__/tool-result-authority.test.ts > tool result stays data on the model-visible path > labels a payload opening with Directives: as directive-shaped while keeping it byte-for-byte data, because a directive-shaped prefix is a severity signal, not a permission to obey or to drop the payload 
+✓ src/__tests__/tool-result-authority.test.ts > tool result stays data on the model-visible path > labels a payload opening with Instruction: as directive-shaped while keeping it byte-for-byte data, because a directive-shaped prefix is a severity signal, not a permission to obey or to drop the payload 
+✓ src/__tests__/tool-result-authority.test.ts > tool result stays data on the model-visible path > classifies a tool result that only discusses a directive-shaped string as ordinary tool data, because this card's own evidence text is that input and must survive unchanged 
+✓ src/__tests__/tool-result-authority.test.ts > tool result stays data on the model-visible path > marks a result on the resumed-session delta too, because a resumed turn is where a fresh bash payload actually reaches the model 
+✓ src/__tests__/tool-result-authority.test.ts > an empty tool result carries the provenance of its emptiness > says the command produced no output when the tool delivered zero bytes, because an empty output that stays silent cannot be told apart from a dropped payload and turns a probe into a false negative 
+✓ src/__tests__/tool-result-authority.test.ts > an empty tool result carries the provenance of its emptiness > refuses to render a payload that was never delivered, because the empty string this site used to return made 'nothing was delivered' read as 'the command printed nothing' 
+× src/__tests__/tool-result-authority.test.ts > an empty tool result carries the provenance of its emptiness > announces that no content was delivered when the content-block array is empty, because the upstream runtime normalises a content-less untyped result to `content: []` (createToolResultMessage writes `result.content ?? []`) and pi-ai normalises a null content the same way, so an empty array is an expected input on every custom and MCP tool and a throw there deletes the whole prompt instead of one payload 
+→ tool result payload has no content to mark: the content-block array is empty, so no payload was delivered
+✓ src/__tests__/tool-result-authority.test.ts > the marking fails loud instead of passing raw text through > propagates a failure inside the marking step to the caller, because a guard that swallowed its own error would send unmarked payload text to the model 
+✓ src/__tests__/tool-result-authority.test.ts > the invariant lives in exactly one production module > is the only production source stating the zero-authority rule, because the same sentence written into a second layer is two rules that can disagree 
+✓ src/__tests__/tool-result-authority.test.ts > the invariant lives in exactly one production module > owns the directive-shape label list alone, because a second copy of the predicate is a second definition of what counts as a directive 
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+FAIL  src/__tests__/tool-result-authority.test.ts > an empty tool result carries the provenance of its emptiness > announces that no content was delivered when the content-block array is empty, because the upstream runtime normalises a content-less untyped result to `content: []` (createToolResultMessage writes `result.content ?? []`) and pi-ai normalises a null content the same way, so an empty array is an expected input on every custom and MCP tool and a throw there deletes the whole prompt instead of one payload
+Error: tool result payload has no content to mark: the content-block array is empty, so no payload was delivered
+❯ readToolResultText src/tool-result-authority.ts:78:11
+76|   }
+77|   if (content.length === 0) {
+78|     throw new Error(
+|           ^
+79|       "tool result payload has no content to mark: the content-block a…
+80|     );
+❯ markToolResultAsUntrusted src/tool-result-authority.ts:109:16
+❯ toolResultContentToText src/prompt-builder.ts:583:10
+❯ buildPrompt src/prompt-builder.ts:344:18
+❯ promptWithToolResult src/__tests__/tool-result-authority.test.ts:30:10
+❯ src/__tests__/tool-result-authority.test.ts:147:20
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+Test Files  1 failed (1)
+vitest rc=1
+
+## The checkout is back at the tip — proven, not asserted
+Porcelain lines after the run (0 expected):
+0
+Byte-difference of the working tree against the tip for both files (no output means
+both are identical to the tip):
+both files match the tip
+  $ git -C .engine/stas-391-engine rev-parse HEAD
+      eb20a6bfc583786b8c31cfe4f677237ebae54e10
+        rc=0
+

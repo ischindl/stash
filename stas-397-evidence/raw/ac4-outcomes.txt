@@ -1,0 +1,14 @@
+AC4-PRINT ============== released/refused, printed, not asserted ==============
+AC4-PRINT state=ignored-only                 outcome=released (removed=true), directory still on disk = false
+AC4-PRINT discard-record-type=worktree:removal-discarded-ignored-content
+AC4-PRINT discard-record-metadata={"taskId":"STAS-397","reason":"self-healing-branch-conflict","entryCount":2,"discardedIgnoredPaths":[".venv/","stashai.egg-info/"]}
+AC4-PRINT state=tracked-modified             outcome=refused (WorktreeContentPreservationError: preserving /tmp/fusion-test-workers-bF28Nj/redir-476233/stas-397-probe-R8ryvc/.worktrees/tracked-modified: uncommitted or ignored content present)
+AC4-PRINT state=tracked-modified             content-preserved=true
+AC4-PRINT state=untracked                    outcome=refused (WorktreeContentPreservationError: preserving /tmp/fusion-test-workers-bF28Nj/redir-476233/stas-397-probe-jLGWuN/.worktrees/untracked: uncommitted or ignored content present)
+AC4-PRINT state=untracked                    content-preserved=true
+AC4-PRINT state=quoted-untracked             porcelain=?? "we\"ird.md"
+AC4-PRINT state=quoted-untracked             outcome=refused (WorktreeContentPreservationError: preserving /tmp/fusion-test-workers-bF28Nj/redir-476233/stas-397-probe-FhzKgF/.worktrees/quoted-untracked: uncommitted or ignored content present)
+AC4-PRINT state=quoted-untracked             content-preserved=true
+AC4-PRINT ================================================================
+ Test Files  1 passed (1)
+      Tests  1 passed (1)

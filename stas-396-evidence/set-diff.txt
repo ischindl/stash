@@ -1,0 +1,81 @@
+STAS-396 STEP 4 / AC4 - SET DIFFERENCE, BOTH DIRECTIONS, WITH THE ATTRIBUTION ARITHMETIC
+AC4 is a name-set difference and not the word green. The two lists below are the only
+baselines this card accepts: the AC2 list measured in this session on this host, and the AC4
+list measured in this session on this host. A total (264, 7021, 552) is never the gate.
+
+==========================================================================================
+1. THE TWO HASHES
+==========================================================================================
+AC2 baseline  raw/failfiles-before-suite.txt   264 names   sha256
+              188d9514386cb41831ca13ad8ef655733f853b8cfb7a9ba609b29ecf5046438a
+              measured on 1677ee018a5d3aee0e74c0669676a1db40c690c5  [branch tip as found]
+AC4 candidate raw/failfiles-after-suite.txt    264 names   sha256
+              188d9514386cb41831ca13ad8ef655733f853b8cfb7a9ba609b29ecf5046438a
+              measured on cfe6daa16d9833c11031ae01dd97d5fef5b04928  [joined / candidate tip]
+
+The two hashes are EQUAL, so the failing-file name set is byte-identical across the join, and
+both lists carry the same 264 names. Same extraction form used for both, colour-free and
+binary-safe:
+    grep -aoE 'FAIL +src/[^ ]+\.test\.ts' <raw> | sed 's/FAIL *//' | sort -u
+Same composition on both sides: 190 names ending .pg.test.ts and 74 names that are not
+pg-gated. Same 16 auth_failed lines and the same 2 unhandled Postgres 28P01 errors in both
+raw captures. Same 552 individual FAIL blocks in both raw captures.
+
+==========================================================================================
+2. THE DIFFERENCE, BOTH DIRECTIONS
+==========================================================================================
+$ comm -23 <candidate> <baseline>     names failing NOW but not before   -> 0   (raw/setdiff-new-failures.txt is empty)
+$ comm -13 <candidate> <baseline>     names that STOPPED failing         -> 0   (raw/setdiff-stopped-failing.txt is empty)
+
+  NEW FAILURES INTRODUCED BY THE JOIN : 0
+  FIXED BY THE JOIN                   : 0   (allowed and named; there are none to name)
+
+==========================================================================================
+3. THE ATTRIBUTION ARITHMETIC, and why no trunk-tip run was made
+==========================================================================================
+AC4 requires a per-name single-file attribution run at the trunk tip for EVERY name in the
+first list, and only for those names. The first list holds 0 names, therefore:
+    attribution runs required = 0        attribution runs executed = 0
+No detach to the trunk tip happened during Step 4 and none was needed; the scratch checkout
+stayed at the candidate tip for all four instruments, which is also what keeps the tested tip
+and the SHA the GREEN capture names the same object.
+The same rule was applied to the other three instruments: both typechecks and the static gate
+returned 0 at the candidate, so no inherited-or-introduced question arises for them and none
+was measured at the trunk tip. Had any of them been nonzero at the candidate, AC4 requires
+running it at the trunk tip and labelling it, and that label would have gated Step 5.
+Reaching another tree, if it had been needed, is by checkout --detach and never by git stash,
+because the engine's stash list is shared across all its worktrees on this host.
+
+==========================================================================================
+4. POSTGRES - why no throwaway cluster was started
+==========================================================================================
+190 of the 264 names are pg-gated and fail on this host's authentication baseline
+(PostgresError: password authentication failed for user "schindler", code 28P01), identically
+on both sides. AC4 needs a database only to attribute a NEW failure, and there are none, so the
+repository's own throwaway cluster (root scripts pg:test:up / pg:test:status / pg:test:down ->
+scripts/pg-test-server.mjs) was neither started nor needed. Its existence is recorded so the
+absence is not read as a silent skip: no row was skipped, every one of the 264 names appears on
+both sides of the difference.
+
+==========================================================================================
+5. THE SAME CANDIDATE SET AGAINST THE INHERITED LIST, printed for completeness
+==========================================================================================
+Against raw/failfiles-inherited-394-tip.lst (the closed card's 263-name tip list, re-read from
+the STASH repo with git show, hashing 22e759745a9e536ee93494b05d5159d7431c44ff648f8356d95dee9977d26043):
+    failing at the candidate, absent there  : 1
+        + src/__tests__/workflow-prompt-overrides-memo.test.ts
+    present there, not failing at the candidate : 0
+That single name is the SAME single DELTA AC2 already reported against the same inherited list,
+and it is present on BOTH sides of this card's own comparison, so it cancels inside AC4 and has
+no effect on the introduced count. It was attributed in before-suite.txt by re-running that
+file alone at the branch tip, where it passed 12 of 12 with exit 0, while its full-suite failure
+is a memo-TTL timing bound (AssertionError: expected 1 to be 2). Because it appears identically
+before and after the join, it is a property of this host under load and not of either tree.
+
+==========================================================================================
+6. GATE RESULT
+==========================================================================================
+introduced = 0     ->  AC4 MET  ->  the Step 5 compare-and-swap is permitted.
+Printed at the gate, before any ref was moved: refs/heads/stas-394-fix-title-idempotence still
+= 1677ee018a5d3aee0e74c0669676a1db40c690c5, the AC1 old value this card will carry as the
+expected value of its own update-ref.

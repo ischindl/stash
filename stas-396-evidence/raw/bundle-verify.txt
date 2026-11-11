@@ -1,0 +1,7 @@
+stas-396-evidence/raw/decoded.bundle is okay
+The bundle contains this ref:
+cfe6daa16d9833c11031ae01dd97d5fef5b04928 refs/heads/stas-394-fix-title-idempotence
+The bundle requires these 2 refs:
+1d4bcc61847562837b44854bccea95b783d8b943 
+ee995fcc85013a990752307d0f253e9d6fe5ebf4 
+The bundle uses this hash algorithm: sha1

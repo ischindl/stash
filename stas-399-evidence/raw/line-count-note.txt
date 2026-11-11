@@ -1,0 +1,27 @@
+### STAS-399: the root `check:line-count` guardrail at base and at tip (rc=1 at BOTH, pre-existing, named not absorbed)
+
+command: node scripts/check-file-line-count.mjs   (the repo's grandfathered-file ratchet)
+result:  rc=1 at tip, listing 129 files over their ceilings + 17 that could be tightened.
+         This gate is NOT part of `pretest` or `test:gate:static` (both scripts printed in step4-gates.txt
+         show what those gates actually run), so it does not gate this card; it is printed because a
+         grandfathered file appears in its output.
+
+what this card did to that file, measured with `git show <ref>:<path> | wc -l`:
+  packages/engine/src/agent-tools.ts   BASE c7311e7dc4 = 7,515 lines   TIP 324da3366f = 7,512 lines
+  its grandfathered ceiling            = 5,437 lines (scripts/line-count-baseline.json:95)
+  So the file was already 2,078 lines over its ceiling BEFORE this card, and this card makes it 3 lines
+  SHORTER by deleting the three private constant declarations and adding one import line. The guardrail's
+  message text ("this file grew and must shrink") is a static string for any file over its ceiling, not a
+  diff verdict; the two numbers above are the diff verdict.
+
+files this card grew, and whether they are over any cap:
+  packages/engine/src/agents/agent-instructions.ts   985 -> 1,196 lines   not in the gate's exceeding list
+                                                                  (the "new source files stay at or under
+                                                                  2,000 lines" rule is satisfied)
+  packages/engine/src/__tests__/agent-instructions.test.ts  reconciled pins only; not in the exceeding list
+  packages/engine/src/__tests__/agent-memory-eviction-notice.test.ts  new test file; not in the exceeding list
+grep of the full gate output for the files this card edits returns exactly one line, the pre-existing
+agent-tools.ts entry (see line-count-gate.txt for the raw output).
+
+VERDICT: no new violation is introduced, one pre-existing violation is 3 lines smaller, and the gate's
+non-zero status is unchanged by this card. Not absorbed, not silenced, no baseline entry was raised.

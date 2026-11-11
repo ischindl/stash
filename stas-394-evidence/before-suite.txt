@@ -1,0 +1,327 @@
+STAS-394 STEP 1 - ENGINE SCRATCH CHECKOUT ON THE LIVE TRUNK + BASELINE SUITE
+every number below was printed inside this run (AC0); no SHA is inherited from the spec.
+
+== 1. PROVISIONING (one nested LINKED worktree, not a clone) ==
+command : git --git-dir=$HOME/git/Fusion/.git worktree add --detach "$PWD/.engine/stas-394-engine" refs/heads/main
+seam    : $PWD/.engine/stas-394-engine  (the repository common-exclude file
+          .git/info/exclude:33 holds "/.engine/", so the seam is a working surface,
+          never a deliverable of this card)
+
+live trunk re-read at this step : git --git-dir=$HOME/git/Fusion/.git rev-parse refs/heads/main
+                                   1d4bcc61847562837b44854bccea95b783d8b943   rc=0
+worktree HEAD                   : 1d4bcc61847562837b44854bccea95b783d8b943   (detached)
+worktree git status --porcelain : 0 lines (clean)
+engine worktree count           : 127 entries in git worktree list --porcelain
+                                  (the primary checkout holds refs/heads/main at the same
+                                   SHA and is NOT a working surface for this card)
+
+MEASUREMENT NOTE, printed not smoothed: the trunk MOVED inside this card's run. This
+provisioning originally checked out 7c14f53184a2f8e3a95c5b38eb2125ef52dd0acf, which is the
+SHA the Step-2 discovery census was read against. The worktree reflog prints the move:
+  1d4bcc6184 HEAD@{0}: checkout: moving from 7c14f53184a2f8e3a95c5b38eb2125ef52dd0acf to 1d4bcc61847562837b44854bccea95b783d8b943
+  7c14f53184 HEAD@{1}:
+Per AC0 the step re-measured and continued: the composing site was re-grepped at
+1d4bcc6184 and every hit stands at the same file and line (see composition-site.txt,
+section 10). Nothing in this card writes refs/heads/main.
+
+== 2. BRANCH OCCUPANCY, derived live (not assumed) ==
+git --git-dir=$HOME/git/Fusion/.git for-each-ref refs/heads/ filtered on stas-394 / stas394
+  -> 0 lines, rc=1. No ref of this card's id exists in the engine repo, so the delivered
+     branch name is free and no predecessor ref is being displaced.
+
+== 3. DEPENDENCY INSTALL, documented command, measured result ==
+the repository documents it: README.md:669  "pnpm install                  # Install dependencies"
+command run : pnpm install   (workspace root of the linked worktree)
+result      : bootstrap complete, evidenced by node_modules/.modules.yaml present in the
+              linked worktree and by the suite below transforming 798 test files.
+no package manager was assumed: the repository is pnpm-based (pnpm workspace root;
+packages/core/package.json declares the test script quoted below).
+
+== 4. BASELINE TEST RUN OF THE AFFECTED PACKAGE (before any change by this card) ==
+affected package : @fusion/core 0.78.0-beta.9   (holds the winning composer,
+                   packages/core/src/missions/mission-store.ts)
+test command, derived from the repository and not carried over from a sibling card:
+  packages/core/package.json  "scripts.test" = "vitest run --silent=passed-only --reporter=dot"
+invoked as      : pnpm --filter @fusion/core test
+SHA measured on : 1d4bcc61847562837b44854bccea95b783d8b943
+raw output      : raw/before-suite-raw.txt (full stdout+stderr of the run, 204 KB)
+
+  Test Files  263 failed | 534 passed | 1 skipped (798)
+        Tests  323 failed | 6998 passed | 1642 skipped (8963)
+       Errors  2 errors
+     Duration  278.35s (transform 62.24s, setup 249.79s, import 952.05s, tests 259.02s)
+
+   exit status 1 (ERR_PNPM_RECURSIVE_RUN_FIRST_FAIL). The trunk is NOT green on this host;
+   that is the baseline this card is measured against, recorded rather than smoothed.
+
+== 5. THE 263 PRE-EXISTING FAILURES, listed by name (AC5: none absorbed into a total) ==
+classification measured on the list: 190 of 263 files are *.pg.test.ts, i.e. gated on a
+PostgreSQL instance. The raw log prints why they cannot pass here, verbatim and repeatedly:
+  PostgresError: password authentication failed for user "schindler"
+  Serialized Error: { severity_local: 'FATAL', code: '28P01', routine: 'auth_failed' }
+The remaining 73 files are listed below exactly as the 190 pg-gated ones are; Step 5 re-runs
+the identical command and must reproduce this list to satisfy AC5.
+
+src/chat/__tests__/chat-memory-focus.test.ts
+src/chat/__tests__/chat-message-tie-pagination.pg.test.ts
+src/config/__tests__/default-workflow-write-validation.test.ts
+src/task-store/__tests__/lifecycle-outbox-writer.test.ts
+src/__tests__/agent-activity-writers.test.ts
+src/__tests__/agent-store-builtin-role-provisioning-pool.test.ts
+src/__tests__/agent-store-pause-marker-clear.test.ts
+src/__tests__/agent-store-routing-policy.test.ts
+src/__tests__/architecture-hot-paths.test.ts
+src/__tests__/builtin-adjacency-matches-legacy-transitions.test.ts
+src/__tests__/builtin-workflows.test.ts
+src/__tests__/coding-ideas-move.test.ts
+src/__tests__/complete-column-gate-move-guard.pg.test.ts
+src/__tests__/custom-review-lane-merge-blocker.test.ts
+src/__tests__/delete-task-if-planning.test.ts
+src/__tests__/excluded-awaited-run-audit-store-sites.test.ts
+src/__tests__/gitlab-source-issue-storage.test.ts
+src/__tests__/in-review-entry-audit.test.ts
+src/__tests__/lifecycle-move-provenance-emit.test.ts
+src/__tests__/live-move-path-undeclared-target.test.ts
+src/__tests__/merge-blocker-renamed-review-lane.test.ts
+src/__tests__/merge-path-lanes-resolved.test.ts
+src/__tests__/mission-store-sync-deprecated.test.ts
+src/__tests__/moves-flag-equivalence.test.ts
+src/__tests__/move-task-if-planning.test.ts
+src/__tests__/no-selection-default-workflow-move.test.ts
+src/__tests__/postgres/activity-log-parity.pg.test.ts
+src/__tests__/postgres/agent-activity-cursor-contract.pg.test.ts
+src/__tests__/postgres/agent-activity-events.pg.test.ts
+src/__tests__/postgres/agent-instructions.pg.test.ts
+src/__tests__/postgres/agent-logs-and-monitor.pg.test.ts
+src/__tests__/postgres/agent-project-isolation.pg.test.ts
+src/__tests__/postgres/agent-ratings-project-isolation.pg.test.ts
+src/__tests__/postgres/agent-wake-getagent.pg.test.ts
+src/__tests__/postgres/allocator-cross-project.test.ts
+src/__tests__/postgres/approval-request-audit-project-isolation.pg.test.ts
+src/__tests__/postgres/approval-request-lifecycle.pg.test.ts
+src/__tests__/postgres/approval-request-list-ordering.pg.test.ts
+src/__tests__/postgres/archive-reintegration.pg.test.ts
+src/__tests__/postgres/artifacts-documents-evals.pg.test.ts
+src/__tests__/postgres/async-store-events.pg.test.ts
+src/__tests__/postgres/boot-backlog-attribution.pg.test.ts
+src/__tests__/postgres/central-archive-secrets.test.ts
+src/__tests__/postgres/central-core-backend.test.ts
+src/__tests__/postgres/chat-store-agent-target-switch.pg.test.ts
+src/__tests__/postgres/chat-store-content-search-edit.pg.test.ts
+src/__tests__/postgres/chat-store-pagination.pg.test.ts
+src/__tests__/postgres/cli-session-store.pg.test.ts
+src/__tests__/postgres/command-center-activity-durable-agents.pg.test.ts
+src/__tests__/postgres/command-center-analytics.pg.test.ts
+src/__tests__/postgres/command-center-remaining-analytics.pg.test.ts
+src/__tests__/postgres/comments-retriage-renamed-lanes.pg.test.ts
+src/__tests__/postgres/completed-task-pagination.pg.test.ts
+src/__tests__/postgres/configuration-revision-heartbeat.pg.test.ts
+src/__tests__/postgres/connection-pool-concurrency.pg.test.ts
+src/__tests__/postgres/connection.test.ts
+src/__tests__/postgres/create-task-reserved-id.pg.test.ts
+src/__tests__/postgres/credential-instance-selection.pg.test.ts
+src/__tests__/postgres/data-layer.test.ts
+src/__tests__/postgres/dependency-satisfied-renamed-board.pg.test.ts
+src/__tests__/postgres/dispatch-wake.pg.test.ts
+src/__tests__/postgres/duplicate-and-sibling-lanes.pg.test.ts
+src/__tests__/postgres/fts-replacement.test.ts
+src/__tests__/postgres/github-check-states.pg.test.ts
+src/__tests__/postgres/github-tracking-settings.pg.test.ts
+src/__tests__/postgres/gitlab-issue-analytics.pg.test.ts
+src/__tests__/postgres/goal-store.pg.test.ts
+src/__tests__/postgres/handoff-to-review-atomicity.pg.test.ts
+src/__tests__/postgres/health-session-statement-cap.pg.test.ts
+src/__tests__/postgres/human-merge-approval.pg.test.ts
+src/__tests__/postgres/human-merge-approval-races.pg.test.ts
+src/__tests__/postgres/human-plan-approval.pg.test.ts
+src/__tests__/postgres/hybrid-step-storage-contract.pg.test.ts
+src/__tests__/postgres/ideation-store.pg.test.ts
+src/__tests__/postgres/import-translation-cache.pg.test.ts
+src/__tests__/postgres/incomplete-pg-ports.pg.test.ts
+src/__tests__/postgres/in-review-stall-observation-fence.pg.test.ts
+src/__tests__/postgres/insight-run-execution.pg.test.ts
+src/__tests__/postgres/insight-store.pg.test.ts
+src/__tests__/postgres/issue-analytics-renamed-lanes.pg.test.ts
+src/__tests__/postgres/legacy-adoption-runtime-marker.test.ts
+src/__tests__/postgres/lineage-approval-invalidation.pg.test.ts
+src/__tests__/postgres/list-read-projection-parity.pg.test.ts
+src/__tests__/postgres/list-tasks-derive-optout.pg.test.ts
+src/__tests__/postgres/list-tasks-field-declaration.pg.test.ts
+src/__tests__/postgres/list-tasks-inflight-coalescing.pg.test.ts
+src/__tests__/postgres/list-tasks-selection-batching.pg.test.ts
+src/__tests__/postgres/list-tasks-workflow-ir-fanout.pg.test.ts
+src/__tests__/postgres/llm-telemetry-usage-events.pg.test.ts
+src/__tests__/postgres/memory-recall-graph-cross-reference.pg.test.ts
+src/__tests__/postgres/memory-recall-store.pg.test.ts
+src/__tests__/postgres/merge-queue-lease-renamed-review-lane.pg.test.ts
+src/__tests__/postgres/merge-queue-peek-order.pg.test.ts
+src/__tests__/postgres/merge-queue-renamed-review-column.pg.test.ts
+src/__tests__/postgres/merge-queue-renamed-review-lane.pg.test.ts
+src/__tests__/postgres/merge-queue-traitless-and-unresolvable.pg.test.ts
+src/__tests__/postgres/message-store.pg.test.ts
+src/__tests__/postgres/mission-autopilot.pg.test.ts
+src/__tests__/postgres/mission-store.pg.test.ts
+src/__tests__/postgres/mission-validation-repair.pg.test.ts
+src/__tests__/postgres/monitor-trait-storm-guard.pg.test.ts
+src/__tests__/postgres/moves-intake-only-hard-cancel.pg.test.ts
+src/__tests__/postgres/moves-review-set-from-producer.pg.test.ts
+src/__tests__/postgres/move-task-preserve-status.pg.test.ts
+src/__tests__/postgres/near-duplicate-clear-renamed-terminal.pg.test.ts
+src/__tests__/postgres/note-store.pg.test.ts
+src/__tests__/postgres/open-revert-task-lanes.pg.test.ts
+src/__tests__/postgres/operational-maintenance.pg.test.ts
+src/__tests__/postgres/overlap-wait-clear-unresolved-vocabulary.pg.test.ts
+src/__tests__/postgres/overlap-wait-persistence.pg.test.ts
+src/__tests__/postgres/overlap-wait-release.pg.test.ts
+src/__tests__/postgres/patchnode-ledger.pg.test.ts
+src/__tests__/postgres/pg-backup-migration-bookkeeping.pg.test.ts
+src/__tests__/postgres/pg-connection-budget.pg.test.ts
+src/__tests__/postgres/pg-harness-ddl-concurrency.pg.test.ts
+src/__tests__/postgres/pg-test-harness-template-concurrency.pg.test.ts
+src/__tests__/postgres/pg-test-harness.test.ts
+src/__tests__/postgres/plan-evidence-version-collision.pg.test.ts
+src/__tests__/postgres/planning-lifecycle-advisory-lock.pg.test.ts
+src/__tests__/postgres/planning-session-claim.pg.test.ts
+src/__tests__/postgres/postgres-health.test.ts
+src/__tests__/postgres/proactive-step-status.pg.test.ts
+src/__tests__/postgres/productivity-analytics-renamed-lanes.pg.test.ts
+src/__tests__/postgres/project-identity.test.ts
+src/__tests__/postgres/project-ownership-declaration-drift.pg.test.ts
+src/__tests__/postgres/project-ownership-runtime-scope.pg.test.ts
+src/__tests__/postgres/project-schema-ownership-declarations.pg.test.ts
+src/__tests__/postgres/project-schema-ownership-declarations-remaining.pg.test.ts
+src/__tests__/postgres/proposal-claim-lookup.pg.test.ts
+src/__tests__/postgres/queued-episode-transition.pg.test.ts
+src/__tests__/postgres/refine-duplicate-task.pg.test.ts
+src/__tests__/postgres/renamed-board-reopen.pg.test.ts
+src/__tests__/postgres/research-execution.pg.test.ts
+src/__tests__/postgres/research-store.pg.test.ts
+src/__tests__/postgres/review-lane-entry-lifecycle.pg.test.ts
+src/__tests__/postgres/review-remediation-budget-fence.pg.test.ts
+src/__tests__/postgres/run-audit-sink-saturation.pg.test.ts
+src/__tests__/postgres/runtime-lifecycle-async.test.ts
+src/__tests__/postgres/runtime-persistence-async.test.ts
+src/__tests__/postgres/runtime-task-orchestration-async.test.ts
+src/__tests__/postgres/satellite-stores.pg.test.ts
+src/__tests__/postgres/schema-applier-isolation.test.ts
+src/__tests__/postgres/schema-applier.test.ts
+src/__tests__/postgres/script-ops.pg.test.ts
+src/__tests__/postgres/secrets-roundtrip.test.ts
+src/__tests__/postgres/settings-persistence.pg.test.ts
+src/__tests__/postgres/shared-pg-harness.test.ts
+src/__tests__/postgres/signal-ingestion.pg.test.ts
+src/__tests__/postgres/soft-delete-resurrection-FN-5233.pg.test.ts
+src/__tests__/postgres/sqlite-migrator.test.ts
+src/__tests__/postgres/stale-review-callback-waiver-receipts.pg.test.ts
+src/__tests__/postgres/startup-factory-integration.test.ts
+src/__tests__/postgres/store-attachments.pg.test.ts
+src/__tests__/postgres/store-comments.pg.test.ts
+src/__tests__/postgres/store-dependency-cycle.pg.test.ts
+src/__tests__/postgres/store-effective-node-fields.pg.test.ts
+src/__tests__/postgres/store-github-tracking.pg.test.ts
+src/__tests__/postgres/store-gitlab-tracking-hydration.pg.test.ts
+src/__tests__/postgres/store-in-review-stalled.pg.test.ts
+src/__tests__/postgres/store-in-review-stall.pg.test.ts
+src/__tests__/postgres/store-list-modified.pg.test.ts
+src/__tests__/postgres/store-list.pg.test.ts
+src/__tests__/postgres/store-move-approval-hold-clear.pg.test.ts
+src/__tests__/postgres/store-movement.pg.test.ts
+src/__tests__/postgres/store-open-provenance.pg.test.ts
+src/__tests__/postgres/store-pr-infos.pg.test.ts
+src/__tests__/postgres/store-review-bypass-hydration.pg.test.ts
+src/__tests__/postgres/store-review-comments.pg.test.ts
+src/__tests__/postgres/store-run-mutation-context.pg.test.ts
+src/__tests__/postgres/store-safe-defaults.pg.test.ts
+src/__tests__/postgres/store-search.pg.test.ts
+src/__tests__/postgres/store-self-defeating-dep.pg.test.ts
+src/__tests__/postgres/store-self-delete-guard.pg.test.ts
+src/__tests__/postgres/store-self-spawned-dep.pg.test.ts
+src/__tests__/postgres/store-sqlite-residue-fixes.pg.test.ts
+src/__tests__/postgres/store-stale-paused-renamed-hold.pg.test.ts
+src/__tests__/postgres/store-stale-paused-renamed-review.pg.test.ts
+src/__tests__/postgres/store-stale-paused-review.pg.test.ts
+src/__tests__/postgres/store-stale-paused-todo.pg.test.ts
+src/__tests__/postgres/store-stalled-review.pg.test.ts
+src/__tests__/postgres/store-stuck-kill-reset.pg.test.ts
+src/__tests__/postgres/store-task-age-staleness.pg.test.ts
+src/__tests__/postgres/store-task-stall-reason.pg.test.ts
+src/__tests__/postgres/store-update-step-order.pg.test.ts
+src/__tests__/postgres/store-wip-admission-park-clear.pg.test.ts
+src/__tests__/postgres/sync-db-residue-backend.pg.test.ts
+src/__tests__/postgres/sync-workflow-ir-is-always-default.pg.test.ts
+src/__tests__/postgres/task-assignee-link.pg.test.ts
+src/__tests__/postgres/task-deleted-outbox-consumer.pg.test.ts
+src/__tests__/postgres/task-dependency-mutation.pg.test.ts
+src/__tests__/postgres/task-follow-up.pg.test.ts
+src/__tests__/postgres/task-lifecycle-e2e.pg.test.ts
+src/__tests__/postgres/task-list-read-project-scope.pg.test.ts
+src/__tests__/postgres/task-log-dedupe.pg.test.ts
+src/__tests__/postgres/task-log-projections.pg.test.ts
+src/__tests__/postgres/task-log-shape-repair.pg.test.ts
+src/__tests__/postgres/task-log-side-table.pg.test.ts
+src/__tests__/postgres/task-move-hard-cancel-ordering.pg.test.ts
+src/__tests__/postgres/task-node-override.pg.test.ts
+src/__tests__/postgres/task-proposal-claim.pg.test.ts
+src/__tests__/postgres/task-queue-order.pg.test.ts
+src/__tests__/postgres/task-queue-pagination.pg.test.ts
+src/__tests__/postgres/task-recommendations.pg.test.ts
+src/__tests__/postgres/task-reset-publication.pg.test.ts
+src/__tests__/postgres/task-search-vector-dictionary.pg.test.ts
+src/__tests__/postgres/taskstore-lifecycle.test.ts
+src/__tests__/postgres/taskstore-persistence.test.ts
+src/__tests__/postgres/taskstore-remaining.test.ts
+src/__tests__/postgres/task-update-prompt-return.pg.test.ts
+src/__tests__/postgres/team-analytics-renamed-lanes.pg.test.ts
+src/__tests__/postgres/terminal-failure-auto-recovery-store.pg.test.ts
+src/__tests__/postgres/todo-store.pg.test.ts
+src/__tests__/postgres/transition-pending-and-status-clear.pg.test.ts
+src/__tests__/postgres/u15-engine-dashboard-consumers.test.ts
+src/__tests__/postgres/unplanned-execution-block.pg.test.ts
+src/__tests__/postgres/vanished-task-presence.pg.test.ts
+src/__tests__/postgres/verification-cache.pg.test.ts
+src/__tests__/postgres/whiteboard-store.pg.test.ts
+src/__tests__/postgres/wip-entry-stale-planning-failure-clear.pg.test.ts
+src/__tests__/postgres/workflow-analytics-renamed-lanes.pg.test.ts
+src/__tests__/postgres/workflow-authoritative-reads.pg.test.ts
+src/__tests__/postgres/workflow-capacity-invariant.pg.test.ts
+src/__tests__/postgres/workflow-continuation-slot.pg.test.ts
+src/__tests__/postgres/workflow-create.pg.test.ts
+src/__tests__/postgres/workflow-definition-list-get-coherence.pg.test.ts
+src/__tests__/postgres/workflow-definitions.pg.test.ts
+src/__tests__/postgres/workflow-events-outbox.pg.test.ts
+src/__tests__/postgres/workflow-identity-migration.pg.test.ts
+src/__tests__/postgres/workflow-reconciliation-production-shape.pg.test.ts
+src/__tests__/postgres/workflow-run-step-instances.pg.test.ts
+src/__tests__/postgres/workflow-settings-project-identity.pg.test.ts
+src/__tests__/postgres/workflows-project-isolation.pg.test.ts
+src/__tests__/postgres/workflow-step-result-reset-fence.pg.test.ts
+src/__tests__/postgres/workspace-coordination-leases.pg.test.ts
+src/__tests__/postgres/workspace-leases.pg.test.ts
+src/__tests__/postgres/workspace-review-evidence-publish.pg.test.ts
+src/__tests__/postgres/workspace-worktrees-concurrent-merge.pg.test.ts
+src/__tests__/reads-selection-cache-threading.test.ts
+src/__tests__/retry-release-vs-drag-park.test.ts
+src/__tests__/runtime-persistence-async.test.ts
+src/__tests__/schema-mutation-lock-timeout.test.ts
+src/__tests__/settings-revision-attribution.test.ts
+src/__tests__/settings-workspace-toggle-side-effect.test.ts
+src/__tests__/skip-bypass-taint-persistence.test.ts
+src/__tests__/store-bypass-review.test.ts
+src/__tests__/store-create-intake-column.test.ts
+src/__tests__/store-gitlab-tracking-reconcile.test.ts
+src/__tests__/store-overlap-repair-lanes-resolved.test.ts
+src/__tests__/store-phantom-reservation-reconcile.test.ts
+src/__tests__/store-reservation-atomicity.test.ts
+src/__tests__/store-resume-step.test.ts
+src/__tests__/store-thinking-levels.test.ts
+src/__tests__/store-wedge-pending.test.ts
+src/__tests__/symbol-locks.test.ts
+src/__tests__/task-assignee-changed.test.ts
+src/__tests__/task-detail-prompt-resilience.test.ts
+src/__tests__/task-lane-cache-emitter-preservation.test.ts
+src/__tests__/task-recommendations-list.test.ts
+src/__tests__/task-symbol-resolution.test.ts
+src/__tests__/task-updated-lanes-emit-surfaces.test.ts
+src/__tests__/workflow-work-item-cas.test.ts
+src/__tests__/workflow-work-items-conditional-seed.test.ts
+src/__tests__/worktree-capacity-limit.test.ts

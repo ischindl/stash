@@ -1,0 +1,97 @@
+### STAS-399 delivery envelope, the STASH repository side (evidence only, no product code)
+measured_utc: 2026-11-10T05:30:43Z
+repository: /home/schindler/git/stash/.fusion/worktrees/stas-399
+branch: fusion/stas-399   tip: e76c59a4787a9dac22466da7d5eb7a4be9b46c3e
+base commit this card's evidence commit sits on: 7a5f7fed42ffc7ab1240bc4cab840d5f07c6d138
+
+-- AC10: working tree clean of tracked changes -------------------------------------
+  command: git status --porcelain | grep -v '^??'   (porcelain filtered of untracked entries)
+  result: 0 lines
+  untracked entries remaining, listed for full disclosure:
+    ?? stas-399-evidence/raw/delivery-envelope-stash.txt
+
+-- AC8 for this repository: what this card's commit contains ------------------------
+  command: git diff --name-only 7a5f7fed42ffc7ab1240bc4cab840d5f07c6d138..HEAD
+    stas-399-evidence/raw/ac-prints-from-test.txt
+    stas-399-evidence/raw/ac4-base-vs-tip-eviction.txt
+    stas-399-evidence/raw/ac4-compat-reconciliation.txt
+    stas-399-evidence/raw/ac9-flake-classification.txt
+    stas-399-evidence/raw/ac9-name-set-diff.txt
+    stas-399-evidence/raw/after-core-suite-r1.txt
+    stas-399-evidence/raw/after-core-suite-r1.txt.rc
+    stas-399-evidence/raw/after-engine-suite-r1.txt
+    stas-399-evidence/raw/after-engine-suite-r1.txt.rc
+    stas-399-evidence/raw/before-core-suite.txt
+    stas-399-evidence/raw/before-core-suite.txt.rc
+    stas-399-evidence/raw/before-engine-suite.txt
+    stas-399-evidence/raw/before-engine-suite.txt.rc
+    stas-399-evidence/raw/carrier-census.txt
+    stas-399-evidence/raw/carrier-diff-stat.txt
+    stas-399-evidence/raw/carrier-diff.txt
+    stas-399-evidence/raw/claims-recheck.txt
+    stas-399-evidence/raw/conflict-statement.txt
+    stas-399-evidence/raw/delivery-envelope.txt
+    stas-399-evidence/raw/guard-green-first-pass.txt
+    stas-399-evidence/raw/guard-green.txt
+    stas-399-evidence/raw/guard-green.txt.rc
+    stas-399-evidence/raw/guard-red-first-assertion.txt
+    stas-399-evidence/raw/guard-red-first-assertion.txt.rc
+    stas-399-evidence/raw/guard-red.txt
+    stas-399-evidence/raw/guard-red.txt.rc
+    stas-399-evidence/raw/line-count-gate.txt
+    stas-399-evidence/raw/line-count-note.txt
+    stas-399-evidence/raw/notice-cost-base.txt
+    stas-399-evidence/raw/numeral-census.txt
+    stas-399-evidence/raw/numeral-tip.txt
+    stas-399-evidence/raw/pin-agent-instructions-first-pass.txt
+    stas-399-evidence/raw/pin-agent-instructions-green.txt
+    stas-399-evidence/raw/pin-agent-instructions-green.txt.rc
+    stas-399-evidence/raw/pin-agent-self-improve-green.txt
+    stas-399-evidence/raw/pin-agent-self-improve-green.txt.rc
+    stas-399-evidence/raw/placement-arithmetic.txt
+    stas-399-evidence/raw/step4-gates.txt
+    stas-399-evidence/raw/typecheck-both-packages.txt
+  entries: 39
+  paths under any .fusion/ directory: 0
+  paths named MEMORY.md             : 0
+  paths outside stas-399-evidence/  : 0
+  working-tree dirt under memory paths (both repositories' rules are the same here):
+    git status --porcelain .fusion                 : 0 lines
+    git status --porcelain | grep MEMORY.md        : 0 lines
+
+-- AC10: nothing left this machine --------------------------------------------------
+  No push, no PR opened, no trunk ref moved, no release, no version bump.
+  every ref in this repo that mentions stas-399 (heads and remotes):
+    refs/heads/fusion/stas-399 e76c59a4787a9dac22466da7d5eb7a4be9b46c3e
+  trunk tips, unchanged by this card:
+    refs/heads/main c9f1061da0cc34a0851f5a4d407eb146be93eeb2
+    refs/remotes/origin/main 3691d14c4e1e5e5e18250d804e631ff6e5943aae
+  engine-side trunk state is printed in delivery-envelope.txt (trunk moved there on its own, disclosed)
+
+== APPENDED AFTER THIS FILE WAS ITSELF COMMITTED (the self-count this file cannot print about itself) ==
+  This file was untracked when the counts above ran, so it excluded itself from its own diff. The final
+  measurement, taken after its own commit, is:
+    entries in the card's evidence diff: 40 (39 above + this file), ALL under stas-399-evidence/,
+    paths under any .fusion/ directory: 0,
+    paths named MEMORY.md: 0,
+    paths outside stas-399-evidence/: 0.
+  The engine-side delivered diff is unaffected: 5 paths, printed in delivery-envelope.txt sections 6 and 11.
+
+== LATER CORRECTION, printed after one more evidence commit (a count that aged within the same step) ==
+  The "40 entries" above aged the moment the card added a second and third evidence commit
+  (480c0e7cb, then 66985cc4e "record the guard and pin re-run at the delivered tip"). The final count is:
+    entries in the card's evidence diff (7a5f7fed42..HEAD): 41, all under stas-399-evidence/,
+    paths under any .fusion/ directory: 0, paths named MEMORY.md: 0, paths outside stas-399-evidence/: 0,
+    porcelain filtered of untracked entries: 0 lines.
+  Stated as a rule for the next reader of this file: an evidence file cannot print its own final entry
+  count, because the commit that carries the print is the commit that changes it. The final numbers are the
+  ones in this block, re-measured after the last evidence commit, and the engine-side delivered diff
+  (5 paths, delivery-envelope.txt) was never affected by any of this.
+
+== FINAL, printed inside the commit that reaches the count it states ==
+  Step 7 adds one more tracked evidence file, closing-prints.txt, and this file is already tracked, so the
+  entry count is stated for the commit that carries both:
+    entries over 7a5f7fed42..HEAD: 42, all under stas-399-evidence/;
+    paths under any .fusion/ directory: 0; paths named MEMORY.md: 0; paths outside stas-399-evidence/: 0.
+  Re-measured after that commit and re-printed in the card's completion summary, so the self-reference is
+  closed by a second measurement rather than by trust.

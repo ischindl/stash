@@ -1,0 +1,90 @@
+### STAS-399 Step 7: the closing prints, as measurements and not as claims
+
+Every number below is read out of the tracked captures in this directory, each of which names the command,
+the SHA it ran on, and its exit status taken apart from any pipe. Nothing here is remembered from earlier in
+the run, and no memory file was read to produce it.
+
+1. len() BEFORE and AFTER on the fixture corpus (AC5 probe, the CEO scope's measured SHAPE, never its text)
+     [AC5-probe] lenBefore=50047 lenAfter=48221
+   Same corpus, same section lengths, same composition entry point (`resolveAgentInstructions`), one
+   difference: three bulk sections declare `sacrifice-first` on their heading line. Source:
+   ac-prints-from-test.txt. The composed string got SHORTER by 1,826 chars while gaining the named rule,
+   because the sacrificed bulk (3 x ~5,000 chars) is larger than the rule section it bought back.
+
+2. THE DROPPED-HEADING LIST, and which decision evicted each one
+   a. Declared order, marker present -- 3 victims, every one evicted by the `sacrifice-first` heading token:
+        Bulk capture A sacrifice-first
+        Bulk capture B sacrifice-first
+        Bulk capture C sacrifice-first
+      print: [AC4-declared] dropped=[...]  (ac-prints-from-test.txt)
+   b. Positional rule, no marker anywhere, same-shaped corpus -- 11 victims at base and 12 at the delivered
+      tip, always the OLDEST sections in file order:
+        Durable merge rules  +  Tick 01 .. Tick 10            (base c7311e7dc4: 11)
+        ... plus Tick 11                                       (tip 324da3366f: 12)
+      The base set is an ORDERED PREFIX of the tip set (base_is_ordered_prefix_of_tip=true for all six
+      fixtures), so no section the positional rule would have kept is preferred over one it would have
+      sacrificed. The one extra victim is the notice's own price (1,024 chars = the named reserve), it is
+      named in the notice, and ac4-compat-reconciliation.txt states why AC4's literal "set difference 0 and
+      0" and D1's "the notice is paid out of the budget" cannot both hold for an over-budget corpus.
+   c. Every dropped heading is named while the notice fits:
+        [AC2]         sections=56 dropped=9  named=9  elided=0
+        [AC2-elision] dropped=95  named=17  elided=78       (17 printed names + 78 elided = 95 dropped)
+      A name list the budget cannot carry reports its own elision count instead of shrinking silently.
+   d. Nothing dropped means nothing reported: the zero-drop case composes NO notice at all (asserted by
+      absence, not by counting an empty string), and the two degenerate files -- a heading-less blob and a
+      body that is one giant section -- compose without error at identical drop counts (0 base, 0 tip).
+
+3. RETRIEVAL PROBE, the prompt-assembly assertion the operator asked for
+     RULE = "staged-index FF-blocker: never fast-forward a dirty index"
+     before (positional rule):  expect(prompt).not.toContain(RULE)   -> absent, 11 victims, rule among them
+     after  (declared order):   expect(prompt).toContain(RULE)       -> present, `## Durable merge rules`
+                                is in the render and the three marked bulk sections are not
+     rules recovered by the declared order          = 1
+     rules recovered by editing any memory file     = 0   (this card edits none: 0 paths under .fusion/ and
+                                                          0 paths named MEMORY.md in either delivered diff)
+
+4. THE SHIPPED NUMERAL, ITS UNIT, AND ITS DEFINITION COUNT
+     50,000 CHARACTERS, i.e. the value String.length yields (UTF-16 code units). NOT bytes.
+     definitions of this concept in tracked sources:  BASE 2  ->  TIP 1
+     the single definition: packages/engine/src/agents/agent-instructions.ts `export const MAX_MEMORY_LENGTH`
+     the removed duplicate: two private redeclarations in packages/engine/src/agent-tools.ts, deleted in
+     favour of an import (not commented, not aliased). Enforced in-repo: the guard test reads both files from
+     disk and asserts the declaration count is 1, and prints [AC6-census] MAX_MEMORY_LENGTH declarations=1.
+     A second, DIFFERENT number shares the surface and is named apart: MEMORY_CLAMP_NOTICE_BUDGET_CHARS =
+     1,024 chars, the notice reserve subtracted from content, never added on top of it.
+
+5. THE POLICY CONFLICT, DISPOSITION IN ONE SENTENCE (AC7's documented branch)
+   The rule that binds a prompt is MAX_MEMORY_LENGTH = 50,000 CHARACTERS per memory source, because that is
+   the number the render is compared against; the 64 KB ceiling the agent-facing policy states exists nowhere
+   in this repository in code or in docs, so it is prose policy rather than a competing rule, and the winner
+   is named in the comment at the constant itself. The numeral did not move -- no ruling naming a new number
+   arrived -- and the cost of the ruling is printed so it can be taken in one sentence: +15,536 chars per
+   over-budget source (worst case +31,072 for both sources), about +3,884 estimated tokens per source at the
+   4-chars/token heuristic, +5,810 chars (about +1,453 estimated tokens) realised on the measured CEO shape;
+   and that one-line change would NOT move the four dashboard write guards that hold the literal 50000 in a
+   different package, so any ruling must name those four sites too. Full print: conflict-statement.txt.
+
+6. WHICH CEILING ACTUALLY BOUND THE MEASURED CASE (the whole chain, in order)
+   [1] on-disk file 53,640 chars / 55,686 bytes (input, no limit) -> [2] MEMORY_LONG_TERM_BYTE_BUDGET 32,768
+   BYTES, reports and schedules consolidation, never refuses -> [3] write-side REJECT caps 50,000 CHARS
+   (engine tool via the imported constant; four separate dashboard literals) -> [4] MAX_MEMORY_LENGTH 50,000
+   CHARS, TRUNCATE newest-keeping, PER SOURCE  *** THIS IS THE MEMBER THAT BOUND ***  -> [5]
+   CHAT_MEMORY_CAP_CHARS 8,000 CHARS, demote-to-index, chat lane only -> [6] agentMemoryInclusionMode, a
+   switch with no numeral, which short-circuits before [4] in index/off. The budget is PER SOURCE, so a
+   full-mode prompt can carry up to 2 x 50,000 chars of memory plus framing; that is why the length invariant
+   is asserted per clamped source. Full chain: carrier-census.txt, conflict-statement.txt.
+
+7. SCOPE OF HANDS OFF MEMORY
+   No agent's scope was consolidated, consolidated-away, reordered, archived or shortened by this card, in
+   either repository. The surviving-content question for any specific scope -- including the scope whose
+   measurements shaped the fixtures -- belongs to that scope's own owner, in that owner's heartbeat, and this
+   card neither performs nor pre-empts it.
+
+8. LIVENESS
+   delivered, liveness unverified. Landing this branch, rebuilding, and restarting the daemon are the
+   operator's legs; none of them ran here, and a prompt-assembly change cannot reach a running agent until
+   all three have. Nothing was pushed to a hosted remote, no PR was opened, closed or commented on, and no
+   trunk ref in either repository moved because of this card. Two disclosures are printed rather than
+   smoothed: the changeset is the one delivered path outside the declared File Scope globs (required by the
+   engine's own AGENTS.md), and a machine-local hub ref for this branch exists at the older test commit.
+   See delivery-envelope.txt sections 10 and 11.

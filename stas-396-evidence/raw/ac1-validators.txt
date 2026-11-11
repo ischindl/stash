@@ -1,0 +1,24 @@
+root package.json scripts["test:gate:static"] split on " && " -> 23 validators
+ 1. node scripts/check-no-nohup.mjs
+ 2. node scripts/check-no-cwd-relative-dashboard-test-reads.mjs
+ 3. node scripts/check-no-kill-4040.mjs
+ 4. node scripts/check-no-getdatabase.mjs
+ 5. node scripts/check-prerebase-inert.mjs
+ 6. node scripts/check-capacity-pool-id.mjs
+ 7. node scripts/check-cli-runtime-routing.mjs
+ 8. node scripts/check-no-node-only-core-imports-in-dashboard.mjs
+ 9. node scripts/check-pi-versions-pinned.mjs
+10. node scripts/check-workspace-package-graph.mjs
+11. node scripts/check-docker-workspace-manifests.mjs
+12. node scripts/check-lockfile-importers.mjs
+13. node scripts/check-no-test-timeout-appeasement.mjs
+14. node scripts/check-no-comment-assertions-in-tests.mjs
+15. node scripts/check-changeset-format.mjs
+16. node scripts/check-mock-completeness.mjs
+17. node scripts/check-inert-sync-lane-conversions.mjs
+18. node scripts/check-runtime-skill-loader-drift.mjs
+19. node scripts/check-fusion-skill-sync.mjs
+20. node scripts/check-retention-coverage.mjs
+21. node scripts/check-changeset-migration-references.mjs
+22. node scripts/check-nonlatin-tracked-text.mjs
+23. node scripts/check-prompt-volatility.mjs

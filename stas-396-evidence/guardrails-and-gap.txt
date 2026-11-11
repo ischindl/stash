@@ -1,0 +1,128 @@
+STAS-396 STEP 6 / AC6 - NOTHING ELSE MOVED, NOTHING WAS PUSHED, AND THE STAS-395 GAP IS ANSWERED
+raw transcripts: raw/guardrails-run.txt (blocks a-d) and raw/main-reflog-run.txt (the repaired
+print in block (a)). All SHAs are stated with their repository.
+
+DEVIATION, recorded because it happened: line 28 of raw/guardrails.sh nested two command
+substitutions and bash parsed the inner result as a command
+    stas-396-evidence/raw/guardrails.sh: line 28: 0: command not found
+so one count - engine main's reflog entries naming this card - printed empty. It is re-printed
+correctly in raw/main-reflog.sh and quoted below. No other print in the script was affected and
+no guardrail result changed.
+
+==========================================================================================
+BLOCK (a) - the trunk in BOTH repositories, and STAS-395's branch
+==========================================================================================
+engine repo  refs/heads/main = ee995fcc85013a990752307d0f253e9d6fe5ebf4
+   last read by this card (Step 3 re-read, re-printed at Step 5) = ee995fcc85013a990752307d0f253e9d6fe5ebf4
+   equal : YES
+stash  repo  refs/heads/main = de5515fd113e485c05e4d745e992c641aa69511c
+   last read by this card (Step 0: this card's own HEAD and baseCommitSha) = de5515fd113e485c05e4d745e992c641aa69511c
+   equal : YES
+Neither trunk moved during this card, and this card never wrote, moved or deleted either one.
+
+engine `git reflog show refs/heads/main`: rc 0, 288 entries, newest
+    ee995fcc85 refs/heads/main@{0}: cherry-pick: fix(RUFU-871): read project runtime flags under a transaction-local RLS bypass
+  entries whose message names STAS-396      : 0
+  entries naming this card's merge commit   : 0
+So the trunk's own history contains no authored-by-this-card entry; every entry is RUFU-871
+cherry-picks and commits made by the operator, in the engine's primary checkout.
+
+STAS-395's branch, re-discovered live with for-each-ref rather than carried over:
+    e038ea90e247532e4cdc84af33657fb5337adb7f  refs/heads/stas-395-measure-same-agent-duplicate-intake
+    unchanged from this card's first print : YES
+
+blast radius of every write this card made to the engine repository, enumerated rather than
+assumed - every ref in that repo naming the join commit or this card's scratch ref:
+    cfe6daa16d9833c11031ae01dd97d5fef5b04928  refs/heads/stas-394-fix-title-idempotence   [the one ref AC5 moved]
+    cfe6daa16d9833c11031ae01dd97d5fef5b04928  refs/stas-396-candidate                     [this card's scratch ref]
+Two refs, both accounted for, and the second is deleted in Step 7.
+
+==========================================================================================
+BLOCK (b) - nothing was pushed anywhere; ls-remote was the only remote operation
+==========================================================================================
+remotes configured in the engine repository:
+    fork        https://github.com/ischindl/Fusion.git
+    gitlab      https://gitlab.digitalsystems.eu/fusion/RunFusion.git
+    lan         http://192.168.12.60:6610/fusion.git
+    origin      https://github.com/Runfusion/Fusion.git
+    origin-ssh  git@github.com:Runfusion/Fusion.git
+
+live read of each remote for refs/heads/stas-394-fix-title-idempotence, each rc read outside any pipe:
+    lan         rc 0    1677ee018a5d3aee0e74c0669676a1db40c690c5  refs/heads/stas-394-fix-title-idempotence
+    origin      rc 0    NONE - this remote carries no such ref
+    fork        rc 0    NONE - this remote carries no such ref
+    gitlab      rc 0    NONE - this remote carries no such ref
+    origin-ssh  rc 128  READ FAILED: "git@github.com: Permission denied (publickey)."
+  origin-ssh is the SSH form of the same repository as origin, whose HTTPS form answered and
+  carries no such ref; this card could not authenticate over SSH and did not try to. That is a
+  read failure of the probe, not a push, and it is reported rather than smoothed over.
+
+local remote-tracking ref, printed beside the live reads:
+    1677ee018a5d3aee0e74c0669676a1db40c690c5  refs/remotes/lan/stas-394-fix-title-idempotence
+its reflog, verbatim:
+    1677ee018a refs/remotes/lan/stas-394-fix-title-idempotence@{0}: update by push
+  The live lan value (1677ee018a) equals the AC1 old value, so the LAN mirror still shows the
+  entry the closed card disclosed at 2026-08 and NOT this card's join. Verdict on that
+  disclosure: the SAME ENTRY, no new one; the mirror has not moved again.
+
+  THIS CARD PUSHED NOTHING to any remote. It opened, commented on or closed no pull request.
+  The only remote operation performed in this entire run is git ls-remote, five times, read-only.
+
+==========================================================================================
+BLOCK (c) - the six lineage records, re-census'd by key-level read against Step 0
+==========================================================================================
+same helper shape as Step 0 (raw/lineage_recheck.py): task.json parsed as JSON, a key-level
+read, never a line preview, so daemon bookkeeping that legitimately rewrites other bytes of a
+parked record cannot perturb the guardrail being measured.
+    id          lay step0  verdict    column     remainder sha256
+    STAS-296      3     3  IDENTICAL  done       2b55badcc3805b3d27087320604cc1f609e09afc853fcab27c21e39ef8630ef8
+    STAS-352      4     4  IDENTICAL  done       2b55badcc3805b3d27087320604cc1f609e09afc853fcab27c21e39ef8630ef8
+    STAS-354      5     5  IDENTICAL  done       2b55badcc3805b3d27087320604cc1f609e09afc853fcab27c21e39ef8630ef8
+    STAS-355      6     6  IDENTICAL  done       2b55badcc3805b3d27087320604cc1f609e09afc853fcab27c21e39ef8630ef8
+    STAS-356      7     7  IDENTICAL  done       2b55badcc3805b3d27087320604cc1f609e09afc853fcab27c21e39ef8630ef8
+    STAS-357      8     8  IDENTICAL  todo       2b55badcc3805b3d27087320604cc1f609e09afc853fcab27c21e39ef8630ef8
+    records whose title MOVED = 0        helper rc = 0
+All six leading `Fix: ` layer counts and all six remainder hashes are what Step 0 recorded, and
+the six remainders still hash to one another, which is the shape the eight-layer defect
+produces. STAS-357's eight layers survive untouched BY DESIGN - an idempotent composer repairs
+titles composed in the future and no card here edits an existing record. A moved title would be
+reported immediately and never repaired here; none moved.
+
+==========================================================================================
+BLOCK (d) - the STAS-395 gap table, and the verdict it earns
+==========================================================================================
+four refs under census, each re-read live in this run:
+    R1 old branch tip = 1677ee018a5d3aee0e74c0669676a1db40c690c5   (STAS-394's delivery commit)
+    R2 trunk tip      = ee995fcc85013a990752307d0f253e9d6fe5ebf4   (engine refs/heads/main)
+    R3 delivered tip  = cfe6daa16d9833c11031ae01dd97d5fef5b04928   (the branch after this card's swap)
+    R4 STAS-395 tip   = e038ea90e247532e4cdc84af33657fb5337adb7f   (its branch, discovered live)
+
+    pattern                                  ref  git grep -c, non-test .ts files
+    composeFixTitle                          R1    13 hits across 7 files
+    composeFixTitle                          R2     0 hits across 0 files
+    composeFixTitle                          R3   13 hits across 7 files
+    composeFixTitle                          R4     0 hits across 0 files
+    sourceParentTaskId: lineageParentTaskId  R1    2 hits across 2 files
+    sourceParentTaskId: lineageParentTaskId  R2    0 hits across 0 files
+    sourceParentTaskId: lineageParentTaskId  R3    2 hits across 2 files
+    sourceParentTaskId: lineageParentTaskId  R4    0 hits across 0 files
+
+  the producer write, verbatim, at the two refs that have it (R1 and R3) and at neither of the
+  other two, whose sections printed nothing:
+    packages/core/src/async-stores/async-mission-store.ts:3202:  ? { source: { sourceType: "unknown" as const, sourceParentTaskId: lineageParentTaskId } }
+    packages/core/src/missions/mission-store.ts:4688:            ? { source: { sourceType: "unknown" as const, sourceParentTaskId: lineageParentTaskId } }
+
+  git merge-base --is-ancestor refs/heads/stas-394-fix-title-idempotence \
+                               refs/heads/stas-395-measure-same-agent-duplicate-intake  ->  rc = 1
+
+VERDICT, two lines, exactly as asked:
+  1. STAS-395 measures the lane that ends in flagSameAgentDuplicate, and its base predates this
+     fix, so its per-row verdicts are base-independent: R4 carries 0 hits for the composer and 0
+     for the producer write, and the ancestry rc is 1, so the card's own observation of the lane
+     cannot have been caused or masked by the fix it was cut before.
+  2. Any claim that the PRODUCTION creation path reaches that lane IS affected on that base: the
+     producer write of source.sourceParentTaskId is absent from R4's tree, so on STAS-395's base
+     the production mission follow-up path never populates the field that opens the lane, and such
+     a claim would need the tree at R3 (or trunk after the operator lands this branch) to be true.
+STAS-395 was read from here and written to never: no edit to its PROMPT.md, its branch, or its
+lane position.

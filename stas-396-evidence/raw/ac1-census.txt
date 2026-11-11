@@ -1,0 +1,56 @@
+trunk=ee995fcc85013a990752307d0f253e9d6fe5ebf4
+tip  =1677ee018a5d3aee0e74c0669676a1db40c690c5
+merge-base=1d4bcc61847562837b44854bccea95b783d8b943   branch paths=11
+
+--- PATH-SCOPED census (the AC1 landing test; scoped to the branch's own 11 paths) ---
+AT TRUNK               refs/heads       pattern=composeFixTitle  rc=1  hit_lines=0  total_hits=0
+AT TRUNK               refs/heads       pattern=FIX_TITLE_PREFIX rc=1  hit_lines=0  total_hits=0
+AT TIP                 1677ee018a       pattern=composeFixTitle  rc=0  hit_lines=11  total_hits=20
+    1677ee018a5d3aee0e74c0669676a1db40c690c5:.changeset/stas-394-fix-title-idempotence.md:1
+    1677ee018a5d3aee0e74c0669676a1db40c690c5:docs/missions.md:1
+    1677ee018a5d3aee0e74c0669676a1db40c690c5:docs/workflow-steps.md:1
+    1677ee018a5d3aee0e74c0669676a1db40c690c5:packages/core/src/__tests__/mission-fix-title-composition.test.ts:4
+    1677ee018a5d3aee0e74c0669676a1db40c690c5:packages/core/src/async-stores/async-mission-store.ts:2
+    1677ee018a5d3aee0e74c0669676a1db40c690c5:packages/core/src/index.gate.ts:1
+    1677ee018a5d3aee0e74c0669676a1db40c690c5:packages/core/src/index.ts:1
+    1677ee018a5d3aee0e74c0669676a1db40c690c5:packages/core/src/missions/mission-store.ts:3
+    1677ee018a5d3aee0e74c0669676a1db40c690c5:packages/core/src/tasks/fix-title.ts:2
+    1677ee018a5d3aee0e74c0669676a1db40c690c5:packages/core/src/tasks/remediation-steps.ts:2
+    1677ee018a5d3aee0e74c0669676a1db40c690c5:packages/engine/src/workflows/human-merge-approval-boundary.ts:2
+AT TIP                 1677ee018a       pattern=FIX_TITLE_PREFIX rc=0  hit_lines=3  total_hits=6
+    1677ee018a5d3aee0e74c0669676a1db40c690c5:packages/core/src/index.gate.ts:1
+    1677ee018a5d3aee0e74c0669676a1db40c690c5:packages/core/src/index.ts:1
+    1677ee018a5d3aee0e74c0669676a1db40c690c5:packages/core/src/tasks/fix-title.ts:4
+
+--- WHOLE-TREE census (wider net: would the fix be present somewhere else at trunk?) ---
+  AT TRUNK   refs/heads       pattern=composeFixTitle  files_with_hits=0
+  AT TRUNK   refs/heads       pattern=FIX_TITLE_PREFIX files_with_hits=0
+  AT TIP     1677ee018a       pattern=composeFixTitle  files_with_hits=11
+      .changeset/stas-394-fix-title-idempotence.md
+      docs/missions.md
+      docs/workflow-steps.md
+      packages/core/src/__tests__/mission-fix-title-composition.test.ts
+      packages/core/src/async-stores/async-mission-store.ts
+      packages/core/src/index.gate.ts
+      packages/core/src/index.ts
+      packages/core/src/missions/mission-store.ts
+      packages/core/src/tasks/fix-title.ts
+      packages/core/src/tasks/remediation-steps.ts
+      packages/engine/src/workflows/human-merge-approval-boundary.ts
+  AT TIP     1677ee018a       pattern=FIX_TITLE_PREFIX files_with_hits=3
+      packages/core/src/index.gate.ts
+      packages/core/src/index.ts
+      packages/core/src/tasks/fix-title.ts
+
+--- the constant itself: does the trunk have any home for FIX_TITLE_PREFIX? ---
+cat-file -e refs/heads/main:packages/core/src/tasks/fix-title.ts rc=128 (1 = file absent at trunk)
+cat-file -e <tip>:packages/core/src/tasks/fix-title.ts            rc=0 (0 = file present at tip)
+
+--- what trunk did add since the branch base, by path (any overlap with the branch?) ---
+  newest-commit touches: .changeset/rufu-871-runtime-flags-cold-read.md
+  newest-commit touches: packages/core/src/central/central-core.ts
+  newest-commit touches: packages/core/src/task-store/__tests__/project-runtime-enabled-flags.test.ts
+  newest-commit touches: packages/core/src/task-store/async/async-settings.ts
+  newest-commit touches: packages/dashboard/src/routes/__tests__/project-runtime-cold-read.test.ts
+  newest-commit touches: packages/dashboard/src/routes/register-project-routes.ts
+  trunk-touched paths since base = 28

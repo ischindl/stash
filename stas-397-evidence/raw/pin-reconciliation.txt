@@ -1,0 +1,120 @@
+
+==============================================================================
+PIN  packages/engine/src/__tests__/worktree-backend.test.ts
+  lines removed  74   lines added  79
+  --- REMOVED assertion/title lines (18 shown of 74 changed lines)
+    expect(classifyWorktreeRemovalContent(porcelain, options)).toBe(expected);
+    it("reports proven Fusion scratch as regenerable from the child probe", async () => {
+    await expect(probeWorktreeRemovalContent("/repo/.worktrees/fn-298")).resolves.toMatchObject({
+    describe("isRegenerableScratchDirectory", () => {
+    expect(isRegenerableScratchDirectory(entryName, childNames)).toBe(expected);
+    it("permits non-regenerable ignored content after a proven landing without force", async () => {
+    type: "worktree:post-landing-ignored-content-discarded",
+    it("removes regenerable ignored content during defensive cleanup and audits the discard", async () => {
+    type: "worktree:removal-discarded-regenerable-content",
+    it("removes proven Fusion scratch and audits it as regenerable", async () => {
+    expect(audit.git).toHaveBeenCalledWith({
+    type: "worktree:removal-discarded-regenerable-content",
+    it("preserves non-regenerable ignored content without landing proof and audits it", async () => {
+    })).rejects.toThrow(/preserving/);
+    expect(audit.git).toHaveBeenCalledWith({
+    type: "worktree:removal-preserved",
+    it("routes regenerable defensive removal through worktrunk without force", async () => {
+    type: "worktree:removal-discarded-regenerable-content",
+  --- ADDED assertion/title lines (16 shown of 79 changed lines)
+    expect(classifyWorktreeRemovalContent(porcelain)).toBe(expected);
+    it("releases ignored content without carrying a landing proof, naming the proof when one exists", async () => {
+    type: "worktree:removal-discarded-ignored-content",
+    it("releases ignored content during defensive cleanup and audits the discard by name", async () => {
+    type: "worktree:removal-discarded-ignored-content",
+    expect(audit.git).not.toHaveBeenCalledWith(expect.objectContaining({ type: "worktree:removal-preserved" }));
+    it("releases Fusion scratch as ordinary ignored content, probing no child directory", async () => {
+    expect(audit.git).toHaveBeenCalledWith(expect.objectContaining({
+    type: "worktree:removal-discarded-ignored-content",
+    expect(readdirMock).not.toHaveBeenCalled();
+    it("releases the wedged shape - a virtualenv beside an unlisted egg-info directory, no proof carried", async () => {
+    })).resolves.toMatchObject({ removed: true });
+    expect(audit.git).toHaveBeenCalledWith(expect.objectContaining({
+    type: "worktree:removal-discarded-ignored-content",
+    it("routes ignored-content defensive removal through worktrunk without force", async () => {
+    type: "worktree:removal-discarded-ignored-content",
+  file path in the delivered diff: __tests__/worktree-backend.test.ts
+
+==============================================================================
+PIN  packages/engine/src/__tests__/reliability-interactions/worktree-defensive-removal-preservation.real-git.test.ts
+  lines removed  16   lines added  61
+  --- REMOVED assertion/title lines (10 shown of 16 changed lines)
+    it("pool-prune removes ignored content under a regenerable directory", async () => {
+    it("preserves Fusion scratch with an unexpected child", async () => {
+    await expect(removeWorktree({ rootDir: root, worktreePath, settings: {}, reason: RemovalReason.PoolPrune })).rejects.toThrow(/preserving/);
+    expect(await pathExists(worktreePath)).toBe(true);
+    it("preserves Fusion scratch alongside an ignored env file", async () => {
+    await expect(removeWorktree({ rootDir: root, worktreePath, settings: {}, reason: RemovalReason.PoolPrune })).rejects.toThrow(/preserving/);
+    expect(await pathExists(worktreePath)).toBe(true);
+    await expect(removeWorktree({ rootDir: root, worktreePath, settings: {}, reason })).rejects.toThrow(/preserving/);
+    expect(await readFile(join(worktreePath, ".env"), "utf-8")).toBe("TOKEN=ignored\n");
+    it("removes non-regenerable ignored content after a durable landing proof", async () => {
+  --- ADDED assertion/title lines (20 shown of 61 changed lines)
+    import type { RunAuditor } from "../../util/run-audit.js";
+    rule is that the git calls are real, and the auditor is the thing under observation, not a stand-in
+    function collectAuditEvents(): { events: Array<{ type: string; metadata?: Record<string, unknown> }>; auditor: RunAuditor } {
+    auditor: { git: async (event: { type: string; metadata?: Record<string, unknown> }) => { events.push(event); } } as unknown as RunAuditor,
+    it("pool-prune removes ignored content under a build directory", async () => {
+    it("releases an ignored Fusion scratch directory whatever it holds, naming it in the discard record", async () => {
+    const { events, auditor } = collectAuditEvents();
+    await expect(removeWorktree({ rootDir: root, worktreePath, settings: {}, reason: RemovalReason.PoolPrune, audit: auditor })).resolves.toMatchObject({ 
+    expect(await pathExists(worktreePath)).toBe(false);
+    expect(events).toContainEqual(expect.objectContaining({
+    type: "worktree:removal-discarded-ignored-content",
+    it("releases Fusion scratch alongside an ignored env file and names both in the discard record", async () => {
+    const { events, auditor } = collectAuditEvents();
+    await expect(removeWorktree({ rootDir: root, worktreePath, settings: {}, reason: RemovalReason.PoolPrune, audit: auditor })).resolves.toMatchObject({ 
+    expect(await pathExists(worktreePath)).toBe(false);
+    expect(events).toContainEqual(expect.objectContaining({
+    type: "worktree:removal-discarded-ignored-content",
+    await expect(removeWorktree({ rootDir: root, worktreePath, settings: {}, reason })).resolves.toMatchObject({ removed: true });
+    expect(await pathExists(worktreePath)).toBe(false);
+    it("removes ignored content that a durable landing proof accompanies, recording the proof", async () => {
+  file path in the delivered diff: __tests__/reliability-interactions/worktree-defensive-removal-preservation.real-git.test.ts
+
+==============================================================================
+PIN  packages/engine/src/__tests__/worktree-acquisition-pinned.test.ts
+  lines removed   1   lines added   3
+  --- REMOVED assertion/title lines (0 shown of 1 changed lines)
+  --- ADDED assertion/title lines (0 shown of 3 changed lines)
+  file path in the delivered diff: __tests__/worktree-acquisition-pinned.test.ts
+
+==============================================================================
+PIN  packages/engine/src/__tests__/worktree-doc-accuracy.test.ts
+  lines removed   2   lines added   8
+  --- REMOVED assertion/title lines (1 shown of 2 changed lines)
+    expect(countOccurrences(backend, "worktree:removal-preserved")).toBeGreaterThanOrEqual(2);
+  --- ADDED assertion/title lines (1 shown of 8 changed lines)
+    expect(countOccurrences(backend, "worktree:removal-preserved")).toBeGreaterThanOrEqual(1);
+  file path in the delivered diff: __tests__/worktree-doc-accuracy.test.ts
+
+==============================================================================
+PIN  packages/engine/src/__tests__/post-landing-worktree-cleanup.test.ts
+  no diff — this pin is untouched by the card (printed so the census is complete)
+
+==============================================================================
+PIN  packages/engine/src/__tests__/merger-ai.test.ts
+  no diff — this pin is untouched by the card (printed so the census is complete)
+
+==============================================================================
+whole-diff sanity: files this card changed at all
+.changeset/stas-397-worktree-release-occupancy.md
+packages/engine/src/__tests__/reliability-interactions/worktree-defensive-removal-preservation.real-git.test.ts
+packages/engine/src/__tests__/worktree-acquisition-pinned.test.ts
+packages/engine/src/__tests__/worktree-backend.test.ts
+packages/engine/src/__tests__/worktree-doc-accuracy.test.ts
+packages/engine/src/__tests__/worktree-release-decides-from-occupancy.real-git.test.ts
+packages/engine/src/auto-recovery-handlers/branch-worktree.ts
+packages/engine/src/execution/branch-conflicts.ts
+packages/engine/src/executor/overlap-acquisition-park.ts
+packages/engine/src/executor/worktree-branch-conflict-handle.ts
+packages/engine/src/executor/worktree-create-conflict.ts
+packages/engine/src/self-healing.ts
+packages/engine/src/util/run-audit.ts
+packages/engine/src/worktree/worktree-acquisition.ts
+packages/engine/src/worktree/worktree-backend.ts

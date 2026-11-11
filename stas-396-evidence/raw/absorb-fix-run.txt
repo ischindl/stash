@@ -1,0 +1,26 @@
+=== scratch ref still free before creating it ===
+  lines = 0
+
+=== create the scratch ref, message via -m ===
+  update-ref rc = 0
+  refs/stas-396-candidate = cfe6daa16d9833c11031ae01dd97d5fef5b04928
+  candidate tip printed above is the same object as the checkout HEAD: YES
+
+=== 6f re-printed: three-dot divergence of the candidate against the trunk ===
+  main...candidate = 0	2
+  rc(trunk is ancestor of candidate) = 0
+
+=== checkout state re-printed ===
+  HEAD      = cfe6daa16d9833c11031ae01dd97d5fef5b04928
+  symbolic  = HEAD (detached)
+  porcelain = 0 lines
+  delivery ref still = 1677ee018a5d3aee0e74c0669676a1db40c690c5
+
+=== the merge commit object, printed whole ===
+commit cfe6daa16d9833c11031ae01dd97d5fef5b04928
+parents: 1677ee018a5d3aee0e74c0669676a1db40c690c5 ee995fcc85013a990752307d0f253e9d6fe5ebf4
+author: Imrich Schindler <ischindl@progis.sk> Sun Nov 8 01:21:54 2026 +0100
+committer: Imrich Schindler <ischindl@progis.sk> Sun Nov 8 01:21:54 2026 +0100
+subject: Merge branch 'refs/heads/main' into HEAD
+body:
+

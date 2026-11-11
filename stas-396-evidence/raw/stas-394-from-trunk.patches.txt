@@ -1,0 +1,467 @@
+From 1677ee018a5d3aee0e74c0669676a1db40c690c5 Mon Sep 17 00:00:00 2001
+From: Imrich Schindler <ischindl@progis.sk>
+Date: Sat, 7 Nov 2026 19:17:28 +0100
+Subject: [PATCH] fix(STAS-394): compose fix titles idempotently and record fix
+ ancestry in lineage
+
+A composed fix title was the raw material for the next composition, so each
+generation added one more leading "Fix: " layer onto the same words. One
+lineage family on a real board reached three through eight layers, and the
+board clamps a card label at 80 characters.
+
+packages/core/src/tasks/fix-title.ts now owns the prefix and exposes
+composeFixTitle, which strips any leading layers before it prefixes, so
+composing twice is the same as composing once. All four composing call sites
+route through it: the generated fix feature title in async-mission-store.ts
+(the live path), its deprecated synchronous twin in mission-store.ts,
+formatRemediationStepName, and the fix-step name in the human merge approval
+boundary. A subject carrying no prefix composes byte-identically to before.
+
+Ancestry leaves the label. triageFeature now writes the parent card of a
+generated fix feature into the card's existing source.sourceParentTaskId
+lineage field, derived from generatedFromFeatureId, which this creation path
+left empty while other paths already populate it. No new column, no migration,
+no new SourceType.
+
+The test drives the real createGeneratedFixFeature and triageFeature rather
+than the helper. It failed at base 1d4bcc618 with only the test present (seven
+assertions on the extra layer and the missing lineage link) and passes here;
+the test ships in this commit so no commit on this branch is red.
+
+Refs: STAS-394 (STAS-296/352/354/355/356/357 lineage family)
+---
+ .changeset/stas-394-fix-title-idempotence.md  |   7 +
+ docs/missions.md                              |   2 +
+ docs/workflow-steps.md                        |   2 +
+ .../mission-fix-title-composition.test.ts     | 162 ++++++++++++++++++
+ .../src/async-stores/async-mission-store.ts   |  17 +-
+ packages/core/src/index.gate.ts               |   1 +
+ packages/core/src/index.ts                    |   1 +
+ packages/core/src/missions/mission-store.ts   |  22 ++-
+ packages/core/src/tasks/fix-title.ts          |  29 ++++
+ packages/core/src/tasks/remediation-steps.ts  |   3 +-
+ .../human-merge-approval-boundary.ts          |   3 +-
+ 11 files changed, 244 insertions(+), 5 deletions(-)
+ create mode 100644 .changeset/stas-394-fix-title-idempotence.md
+ create mode 100644 packages/core/src/__tests__/mission-fix-title-composition.test.ts
+ create mode 100644 packages/core/src/tasks/fix-title.ts
+
+diff --git a/.changeset/stas-394-fix-title-idempotence.md b/.changeset/stas-394-fix-title-idempotence.md
+new file mode 100644
+index 0000000000..dd645f936f
+--- /dev/null
++++ b/.changeset/stas-394-fix-title-idempotence.md
+@@ -0,0 +1,7 @@
++---
++"@runfusion/fusion": patch
++---
++
++summary: Follow-up and fix-round titles stop stacking the "Fix: " prefix one layer per generation.
++category: fix
++dev: `packages/core/src/tasks/fix-title.ts` now owns the prefix and exposes `composeFixTitle`, which removes any leading layers before it prefixes, so composing twice is the same as composing once. All four composing call sites route through it: the generated fix feature title in `async-mission-store.ts`, its synchronous twin in `mission-store.ts`, `formatRemediationStepName`, and the fix-step name in the human merge approval boundary. Output for a subject that carries no prefix is byte-identical to before. Ancestry moves out of the label: triaging a generated fix feature now writes its parent card into the card's existing `source.sourceParentTaskId` lineage field, which this path left empty before.
+diff --git a/docs/missions.md b/docs/missions.md
+index 71942ea10c..1f41dbeeca 100644
+--- a/docs/missions.md
++++ b/docs/missions.md
+@@ -647,6 +647,8 @@ interface MissionFixFeatureLineage {
+ }
+ ```
+ 
++The fix feature's title is composed from its parent feature's title through `composeFixTitle()` (`packages/core/src/tasks/fix-title.ts`), which strips any leading `Fix: ` layers before prefixing. That normalization is what keeps a chain of generated fixes at one layer: an additive prefix made each generation's title the next generation's raw material, and one lineage family on a real board accumulated eight layers before the label's 80-character clamp ate the words that identify the work. Ancestry is deliberately not in the label — it is `generatedFromFeatureId` on the feature, and triaging a generated fix feature writes its parent card's id into the new card's `source.sourceParentTaskId`.
++
+ The fix feature is **auto-planned** (converted to tasks) for immediate execution. Each fix increments the **canonical root feature's** `implementationAttemptCount`; generated fixes never receive a fresh budget. With the default retry budget of 3 (`DEFAULT_IMPLEMENTATION_RETRY_BUDGET`), requests 1–3 mint one remediation each and request 4 mints nothing, records `budget-exhausted`, and blocks the root.
+ 
+ Missing, cyclic, or legacy blocked lineage fails closed. A pre-migration blocked root without an explicit stop reason cannot mint remediation and cannot be implicitly resumed.
+diff --git a/docs/workflow-steps.md b/docs/workflow-steps.md
+index c613bc5323..44a905ee84 100644
+--- a/docs/workflow-steps.md
++++ b/docs/workflow-steps.md
+@@ -1471,6 +1471,8 @@ A provably empty singular Code Review diff is a definite review input. When `noC
+ 
+ `builtin:review-gated-coding` is an opt-in coding workflow. Its task steps contain implementation work only. Verification, Code Review, and Documentation & Delivery run in that order as review-column gates. A failed Verification appends `Fix: Fix failing <label>` remediation steps, while a failed Code Review appends `Fix: <finding title>` remediation steps to the end of the task list. Their durable `remediation` provenance records the gate, finding, affected file, and wave; for Code Review, `remediation.detail` retains the finding body. Step names are never used to classify remediation.
+ 
++Both names come from `composeFixTitle` (`packages/core/src/tasks/fix-title.ts`), the module that owns the `Fix: ` prefix. It strips any leading layers before it prefixes, so a fix round over a finding whose title already carries the prefix is named one layer, not two. That normalization matters because a composed title is the raw material for the next composition: an engine-authored fix feature's title is built from its parent feature's title, so an additive prefix used to add one layer per generation.
++
+ Review-to-fix remediation waves continue while actionable evidence changes and the resolved revision budget has room. Missing actionable findings, out-of-scope findings, duplicate-only open remediation, unchanged Code Review input, and unchanged normalized Verification measurements are recorded on the card and released as non-blocking rather than returning the task to implementation without work or creating an engine-authored human hold. Standard Code Review is bounded to three rounds unless workflow values or authored node policy override it. `parse-steps` uses `preserveRemediationSteps` to stop before replacement writes when live remediation exists, while `implementationOnlySteps` only audits gate-like plan steps and never deletes them.
+ 
+ ### Merge-boundary evidence recovery (FN-9345)
+diff --git a/packages/core/src/__tests__/mission-fix-title-composition.test.ts b/packages/core/src/__tests__/mission-fix-title-composition.test.ts
+new file mode 100644
+index 0000000000..68e5db5e04
+--- /dev/null
++++ b/packages/core/src/__tests__/mission-fix-title-composition.test.ts
+@@ -0,0 +1,162 @@
++/*
++FNXC:FixTitleIdempotence 2026-11-07-19:10:
++STAS-394: `createGeneratedFixFeature` composed the new feature's title as `Fix: ` + the parent
++feature's CURRENT title, and that feature title is what `triageFeature` copies verbatim onto the
++board card. Each generation therefore read a parent title already carrying its own inherited layer,
++so one more layer was baked into the label every generation. Measured on this host: STAS-296, 352,
++354, 355, 356 and 357 carry 3, 4, 5, 6, 7 and 8 leading `Fix: ` layers with a byte-identical
++remainder, and the card label budget is 80 characters.
++
++The invariant this pins: composing a fix title over a subject that already carries the prefix adds
++NO second layer, so composing twice is the same as composing once, and ancestry travels in the
++lineage field instead of the label.
++
++WHY THE SYNC STORE IS THE DRIVER. These are real-path calls, not a copy of the logic: the
++composition expression and the createTask call below are the shipped code. The synchronous store is
++the only one of the two twins a test can boot here (the async store's harness is `pgDescribe`-gated
++and this host cannot authenticate to PostgreSQL), and its contract is the same one; see
++`mission-store-sync-deprecated.test.ts` for the deprecation ratchet and `composition-site.txt`
++section 11 in the STAS-394 evidence for the census.
++*/
++
++import { describe, expect, it, vi } from "vitest";
++import type { Database } from "../db/db.js";
++import { MissionStore } from "../missions/mission-store.js";
++import type { MissionFeature } from "../missions/mission-types.js";
++import type { TaskStore } from "../store.js";
++import type { TaskCreateInput } from "../types/task/task-core.js";
++import { formatRemediationStepName } from "../tasks/remediation-steps.js";
++import { composeFixTitle } from "../tasks/fix-title.js";
++
++const FIX_PREFIX = "Fix: ";
++const SUBJECT = "Ship folder sharing to agent MCP access";
++const NOW = "2026-11-07T00:00:00.000Z";
++
++/** Exact leading occurrences, the same count the board census used. */
++function leadingLayers(title: string): number {
++  let rest = title;
++  let layers = 0;
++  while (rest.startsWith(FIX_PREFIX)) {
++    rest = rest.slice(FIX_PREFIX.length);
++    layers += 1;
++  }
++  return layers;
++}
++
++function layersOf(n: number): string {
++  return FIX_PREFIX.repeat(n);
++}
++
++/** Every `run()` call is captured so the assertion reads the bytes the store persists. */
++function capturingDb() {
++  const runs: { sql: string; args: unknown[] }[] = [];
++  const db = {
++    prepare: (sql: string) => ({
++      get: () => undefined,
++      run: (...args: unknown[]) => {
++        runs.push({ sql, args });
++        return { changes: 1 };
++      },
++    }),
++    bumpLastModified: () => undefined,
++    transaction: (callback: () => unknown) => callback(),
++    transactionImmediate: (callback: () => unknown) => callback(),
++  } as unknown as Database;
++  return { db, runs };
++}
++
++/** The persisted title of the generated fix feature, read off the mission_features INSERT. */
++function titleWrittenByTheComposer(parentTitle: string): string {
++  const { db, runs } = capturingDb();
++  const store = new MissionStore("/tmp/fusion-fix-title-composition", db);
++  const parent: MissionFeature = {
++    id: "F-PARENT", sliceId: "SL-1", title: parentTitle, status: "in-progress",
++    loopState: "validating", implementationAttemptCount: 0, validatorAttemptCount: 1,
++    lastValidatorRunId: "VR-1", lastValidatorStatus: "failed", createdAt: NOW, updatedAt: NOW,
++  };
++  vi.spyOn(store, "getFeature").mockReturnValue(parent);
++  vi.spyOn(store, "getValidatorRun").mockReturnValue({ id: "VR-1", featureId: "F-PARENT" } as never);
++  vi.spyOn(store, "findGeneratedFixFeature").mockReturnValue(undefined);
++  vi.spyOn(store, "findOpenGeneratedFixFeature").mockReturnValue(undefined);
++  vi.spyOn(store, "updateFeature").mockReturnValue(parent);
++  vi.spyOn(store, "emit").mockImplementation(() => true);
++
++  const child = store.createGeneratedFixFeature("F-PARENT", "VR-1", ["CA-1"], "assertion CA-1 failed");
++
++  const insert = runs.find((run) => run.sql.includes("INSERT INTO mission_features"));
++  expect(insert, "the composer must write the feature row").toBeDefined();
++  // Column order of that INSERT: id, sliceId, title, ...
++  const writtenTitle = insert!.args[2];
++  expect(writtenTitle).toBe(child.title);
++  return writtenTitle;
++}
++
++describe("STAS-394 fix-title composition stays at one layer", () => {
++  it.each([0, 1, 2, 3])("composes at most one layer over a parent carrying %i", (layers) => {
++    const composed = titleWrittenByTheComposer(`${layersOf(layers)}${SUBJECT}`);
++    expect(leadingLayers(composed)).toBe(1);
++    expect(composed).toBe(`${FIX_PREFIX}${SUBJECT}`);
++  });
++
++  it("composing twice is the same as composing once", () => {
++    const once = titleWrittenByTheComposer(SUBJECT);
++    const twice = titleWrittenByTheComposer(once);
++    expect(twice).toBe(once);
++  });
++});
++
++describe("STAS-394 remediation step names take the same single layer", () => {
++  it.each([0, 1, 2])("names a fix round over a finding already carrying %i layers", (layers) => {
++    const named = formatRemediationStepName({ title: `${layersOf(layers)}${SUBJECT}` });
++    expect(leadingLayers(named)).toBe(1);
++    expect(named).toBe(`${FIX_PREFIX}${SUBJECT}`);
++  });
++});
++
++describe("STAS-394 the composer itself is idempotent", () => {
++  it.each([0, 1, 2, 5])("returns the one-layer title for a subject carrying %i", (layers) => {
++    const subject = `${layersOf(layers)}${SUBJECT}`;
++    expect(composeFixTitle(subject)).toBe(`${FIX_PREFIX}${SUBJECT}`);
++    expect(composeFixTitle(composeFixTitle(subject))).toBe(composeFixTitle(subject));
++  });
++
++  it("leaves a word that merely begins like the prefix alone", () => {
++    expect(composeFixTitle("Fixes the report")).toBe(`${FIX_PREFIX}Fixes the report`);
++  });
++});
++
++describe("STAS-394 triage records ancestry in the existing lineage field", () => {
++  it("passes the parent card as sourceParentTaskId when triaging a generated fix feature", async () => {
++    const { db } = capturingDb();
++    const createTask = vi.fn(async (input: TaskCreateInput) => ({ id: "STAS-CHILD", ...input }) as never);
++    const taskStore = {
++      getRootDir: () => "/tmp/fusion-fix-title-composition",
++      findRecentTasksByContentFingerprint: async () => [],
++      createTask,
++      updateTask: async () => undefined,
++    } as unknown as TaskStore;
++
++    const store = new MissionStore("/tmp/fusion-fix-title-composition", db, taskStore);
++    const fixFeature: MissionFeature = {
++      id: "F-FIX", sliceId: "SL-1", title: `${FIX_PREFIX}${SUBJECT}`, status: "defined",
++      generatedFromFeatureId: "F-PARENT", createdAt: NOW, updatedAt: NOW,
++    };
++    const parentFeature: MissionFeature = {
++      id: "F-PARENT", sliceId: "SL-1", title: SUBJECT, status: "done",
++      taskId: "STAS-PARENT", createdAt: NOW, updatedAt: NOW,
++    };
++    vi.spyOn(store, "getFeature").mockImplementation((id: string) => (
++      id === "F-FIX" ? fixFeature : parentFeature
++    ));
++    vi.spyOn(store, "buildEnrichedDescription").mockReturnValue(undefined);
++    vi.spyOn(store, "getSlice").mockReturnValue(undefined);
++    vi.spyOn(store, "getMilestone").mockReturnValue(undefined);
++    vi.spyOn(store, "getMission").mockReturnValue(undefined);
++    vi.spyOn(store, "linkFeatureToTask").mockReturnValue(fixFeature);
++
++    await store.triageFeature("F-FIX");
++
++    expect(createTask).toHaveBeenCalledTimes(1);
++    expect(createTask.mock.calls[0][0].source?.sourceParentTaskId).toBe("STAS-PARENT");
++  });
++});
+diff --git a/packages/core/src/async-stores/async-mission-store.ts b/packages/core/src/async-stores/async-mission-store.ts
+index 9d59a6d83d..0a1426afe6 100644
+--- a/packages/core/src/async-stores/async-mission-store.ts
++++ b/packages/core/src/async-stores/async-mission-store.ts
+@@ -70,6 +70,7 @@ import type {
+ } from "../missions/mission-store.js";
+ import { reconcileDeterministicDuplicate, runDeterministicDuplicateGuard } from "../duplicates/duplicate-guard.js";
+ import { resolveEntryPointBranchAssignment } from "../branch/branch-assignment.js";
++import { composeFixTitle } from "../tasks/fix-title.js";
+ 
+ 
+ /*
+@@ -2474,7 +2475,7 @@ export class AsyncMissionStore extends EventEmitter<MissionStoreEvents> {
+       const feature: MissionFeature = {
+         id: this.generateId("F"),
+         sliceId: source.sliceId,
+-        title: title ?? `Fix: ${source.title}`,
++        title: title ?? composeFixTitle(source.title),
+         description: [source.description, causeText ?? (reasonText ? `## Verification failure detail\n${reasonText}` : undefined)].filter(Boolean).join("\n\n") || undefined,
+         acceptanceCriteria: source.acceptanceCriteria,
+         status: "defined",
+@@ -3133,6 +3134,17 @@ export class AsyncMissionStore extends EventEmitter<MissionStoreEvents> {
+     if (feature.status !== "defined") {
+       throw new Error(`Feature ${featureId} is already ${feature.status} (status must be "defined" to triage)`);
+     }
++
++    /*
++    FNXC:FixTitleIdempotence 2026-11-07-19:20: STAS-394, mirroring the synchronous store.
++    Ancestry goes into the lineage field the store already has (`source.sourceParentTaskId`), read
++    from the parent feature this generated fix feature already names. `sourceType` is written
++    explicitly as the value createTask already defaults to, so no other provenance byte moves.
++    */
++    const lineageParentTaskId = feature.generatedFromFeatureId
++      ? (await getFeature(this.db, feature.generatedFromFeatureId))?.taskId
++      : undefined;
++
+     let description: string;
+     if (taskDescription) description = taskDescription;
+     else description = (await this.buildEnrichedDescription(featureId)) || feature.title;
+@@ -3186,6 +3198,9 @@ export class AsyncMissionStore extends EventEmitter<MissionStoreEvents> {
+         });
+         const createdTask = await this.taskStore.createTask({
+           title: taskTitle || feature.title,
++          ...(lineageParentTaskId
++            ? { source: { sourceType: "unknown" as const, sourceParentTaskId: lineageParentTaskId } }
++            : {}),
+           description,
+           branch: branchAssignment.workingBranch,
+           ...(branchAssignment.workingBranch ? {branchWriteOrigin: branchAssignment.branchWriteOrigin ?? "engine" as const} : {}),
+diff --git a/packages/core/src/index.gate.ts b/packages/core/src/index.gate.ts
+index dc4c98741c..973c3501d0 100644
+--- a/packages/core/src/index.gate.ts
++++ b/packages/core/src/index.gate.ts
+@@ -1003,6 +1003,7 @@ export {
+   remediationDeclaredFiles,
+ } from "./tasks/remediation-steps.js";
+ export type { RemediationStepInput } from "./tasks/remediation-steps.js";
++export { FIX_TITLE_PREFIX, composeFixTitle } from "./tasks/fix-title.js";
+ /*
+ FNXC:ReviewRevisionWait 2026-09-30-07:57 (RUFU-280 code-review remediation, P1): mirrored into BOTH barrels — `getInReviewStallReason` imports this predicate from `@fusion/core`, which the engine-core gate project resolves through THIS file, so an omission here TypeErrors the stall classifier in the merge gate.
+ FNXC:ReviewRevisionWaitHorizon 2026-11-05-18:05 (RUFU-447): `REVIEW_REVISION_PARK_DEFER_HORIZON_MS` joined the list with the predicate's broadened clause; the two barrels must carry the identical symbol set or the gate lane diverges from the default one.
+diff --git a/packages/core/src/index.ts b/packages/core/src/index.ts
+index 425761ed25..af3e45f89b 100644
+--- a/packages/core/src/index.ts
++++ b/packages/core/src/index.ts
+@@ -1243,6 +1243,7 @@ export {
+   remediationDeclaredFiles,
+ } from "./tasks/remediation-steps.js";
+ export type { RemediationStepInput } from "./tasks/remediation-steps.js";
++export { FIX_TITLE_PREFIX, composeFixTitle } from "./tasks/fix-title.js";
+ /*
+ FNXC:ReviewRevisionWait 2026-09-29-14:12 (RUFU-280): the authored-REVISE-with-pending-remediation predicate, exported beside the remediation helpers it consumes so the narrow-vs-broad predicate pair stays adjacent.
+ FNXC:ReviewRevisionWaitHorizon 2026-11-05-18:05 (RUFU-447): the defer horizon is exported because it is the bound a reader needs to interpret the predicate's absence — without it, "this card stopped being deferred" is unanswerable. Same named list in BOTH barrels.
+diff --git a/packages/core/src/missions/mission-store.ts b/packages/core/src/missions/mission-store.ts
+index 4281c84575..c4b8557094 100644
+--- a/packages/core/src/missions/mission-store.ts
++++ b/packages/core/src/missions/mission-store.ts
+@@ -63,6 +63,7 @@ import type {
+ } from "./mission-types.js";
+ import { reconcileDeterministicDuplicate, runDeterministicDuplicateGuard } from "../duplicates/duplicate-guard.js";
+ import { resolveEntryPointBranchAssignment } from "../branch/branch-assignment.js";
++import { composeFixTitle } from "../tasks/fix-title.js";
+ // ── Constants ────────────────────────────────────────────────────────
+ 
+ /**
+@@ -3498,7 +3499,8 @@ export class MissionStore extends EventEmitter<MissionStoreEvents> {
+    * @param failureReason - Optional observed-vs-expected detail (R6) appended to
+    *   the Fix Feature description so the remediation agent sees what behavior was
+    *   wrong rather than only which assertion ids failed.
+-   * @param title - Optional title for the fix feature (defaults to "Fix: {sourceTitle}")
++   * @param title - Optional title for the fix feature; defaults to the composed fix title over the
++   *   source feature's title (see `composeFixTitle`, which keeps that composition at one layer)
+    * @returns The created fix feature, or throws if retry budget is exhausted
+    * @throws Error if source feature not found
+    */
+@@ -3596,7 +3598,7 @@ export class MissionStore extends EventEmitter<MissionStoreEvents> {
+     const fixFeature: MissionFeature = {
+       id: fixFeatureId,
+       sliceId: sourceFeature.sliceId,
+-      title: title ?? `Fix: ${sourceFeature.title}`,
++      title: title ?? composeFixTitle(sourceFeature.title),
+       description: fixDescription,
+       acceptanceCriteria: sourceFeature.acceptanceCriteria,
+       status: "defined",
+@@ -4598,6 +4600,19 @@ export class MissionStore extends EventEmitter<MissionStoreEvents> {
+       throw new Error(`Feature ${featureId} is already ${feature.status} (status must be "defined" to triage)`);
+     }
+ 
++    /*
++    FNXC:FixTitleIdempotence 2026-11-07-19:20: STAS-394.
++    A generated fix feature already names its parent through `generatedFromFeatureId`, and that
++    parent's linked card is this card's predecessor. Record it in the lineage field the store
++    already has instead of leaving ancestry to the title, which a composed prefix used to mutate
++    one layer per generation. `sourceType` is written explicitly as the value createTask already
++    defaults to (task-creation.ts `input.source?.sourceType ?? "unknown"`), so this adds lineage
++    and changes no other provenance byte.
++    */
++    const lineageParentTaskId = feature.generatedFromFeatureId
++      ? this.getFeature(feature.generatedFromFeatureId)?.taskId
++      : undefined;
++
+     // Build description: use custom description if provided, otherwise use enriched description
+     let description: string;
+     if (taskDescription) {
+@@ -4669,6 +4684,9 @@ export class MissionStore extends EventEmitter<MissionStoreEvents> {
+ 
+         const createdTask = await this.taskStore.createTask({
+           title: taskTitle || feature.title,
++          ...(lineageParentTaskId
++            ? { source: { sourceType: "unknown" as const, sourceParentTaskId: lineageParentTaskId } }
++            : {}),
+           description,
+           branch: branchAssignment.workingBranch,
+           ...(branchAssignment.workingBranch ? {branchWriteOrigin: branchAssignment.branchWriteOrigin ?? "engine" as const} : {}),
+diff --git a/packages/core/src/tasks/fix-title.ts b/packages/core/src/tasks/fix-title.ts
+new file mode 100644
+index 0000000000..c929004a5c
+--- /dev/null
++++ b/packages/core/src/tasks/fix-title.ts
+@@ -0,0 +1,29 @@
++/**
++ * The engine's fix-title prefix and the one rule for putting it on a title.
++ *
++ * `createGeneratedFixFeature` composes a remediation feature's title from its parent feature's
++ * title, and `triageFeature` copies that feature title verbatim onto the board card, so this
++ * string reaches operators. It is exported from here alone; every site that wants a `Fix: ` title
++ * calls {@link composeFixTitle} instead of re-typing the literal.
++ */
++export const FIX_TITLE_PREFIX = "Fix: " as const;
++
++/**
++ * Compose the title of fix work about `subject`, carrying exactly one prefix layer.
++ *
++ * The leading layers are stripped before the prefix is applied, so a subject that already carries
++ * it comes back unchanged and composing twice is the same as composing once. That normalization is
++ * the whole point: a composed title used to become the next generation's raw material, so each
++ * generation stacked one more layer onto the same words. One lineage family on one board reached
++ * three through eight leading layers, and the board clamps a card label at 80 characters.
++ *
++ * Ancestry belongs to the lineage fields the store already has — `generatedFromFeatureId` for a
++ * feature and `sourceParentTaskId` for the card it triages into — never to the label.
++ */
++export function composeFixTitle(subject: string): string {
++  let base = subject;
++  while (base.startsWith(FIX_TITLE_PREFIX)) {
++    base = base.slice(FIX_TITLE_PREFIX.length);
++  }
++  return `${FIX_TITLE_PREFIX}${base}`;
++}
+diff --git a/packages/core/src/tasks/remediation-steps.ts b/packages/core/src/tasks/remediation-steps.ts
+index bf4194db34..29709a2f38 100644
+--- a/packages/core/src/tasks/remediation-steps.ts
++++ b/packages/core/src/tasks/remediation-steps.ts
+@@ -1,4 +1,5 @@
+ import type { TaskStep } from "../types/task/task-log.js";
++import { composeFixTitle } from "./fix-title.js";
+ 
+ export interface RemediationStepInput {
+   name?: string;
+@@ -20,7 +21,7 @@ export interface RemediationStepInput {
+ export function formatRemediationStepName(input: { title?: string; detail?: string; name?: string }): string {
+   const source = [input.title, input.detail, input.name].find((value) => value?.trim()) ?? "review finding";
+   const detail = source.replace(/\s+/g, " ").trim();
+-  return `Fix: ${detail || "review finding"}`;
++  return composeFixTitle(detail || "review finding");
+ }
+ 
+ /** Structural provenance, rather than a step name, classifies appended review work. */
+diff --git a/packages/engine/src/workflows/human-merge-approval-boundary.ts b/packages/engine/src/workflows/human-merge-approval-boundary.ts
+index 8a9038a23c..97ddbd6771 100644
+--- a/packages/engine/src/workflows/human-merge-approval-boundary.ts
++++ b/packages/engine/src/workflows/human-merge-approval-boundary.ts
+@@ -33,6 +33,7 @@ import {
+ import { mirrorPlanToProjectDb } from "../plan-artifact-writeback.js";
+ import {
+   buildHumanMergeHoldMarker,
++  composeFixTitle,
+   describeHumanMergeHoldSignature,
+   getHumanMergeApprovalBlocker,
+   hasCurrentHumanMergeApproval,
+@@ -316,7 +317,7 @@ export async function publishHumanMergeCorrection(
+   }
+ 
+   const appended = await deps.store.appendRemediationSteps(taskId, plan.steps.map((step) => ({
+-    name: `Fix: ${step.title}`,
++    name: composeFixTitle(step.title),
+     status: "pending" as const,
+     remediation: {
+       wave: rejection.remediationGeneration,
+-- 
+2.56.0
+

@@ -1,0 +1,17 @@
+
+> fusion-workspace@0.78.0-beta.9 test:gate:static /home/schindler/git/stash/.fusion/worktrees/stas-396/.engine/stas-396-engine
+> node scripts/check-no-nohup.mjs && node scripts/check-no-cwd-relative-dashboard-test-reads.mjs && node scripts/check-no-kill-4040.mjs && node scripts/check-no-getdatabase.mjs && node scripts/check-prerebase-inert.mjs && node scripts/check-capacity-pool-id.mjs && node scripts/check-cli-runtime-routing.mjs && node scripts/check-no-node-only-core-imports-in-dashboard.mjs && node scripts/check-pi-versions-pinned.mjs && node scripts/check-workspace-package-graph.mjs && node scripts/check-docker-workspace-manifests.mjs && node scripts/check-lockfile-importers.mjs && node scripts/check-no-test-timeout-appeasement.mjs && node scripts/check-no-comment-assertions-in-tests.mjs && node scripts/check-changeset-format.mjs && node scripts/check-mock-completeness.mjs && node scripts/check-inert-sync-lane-conversions.mjs && node scripts/check-runtime-skill-loader-drift.mjs && node scripts/check-fusion-skill-sync.mjs && node scripts/check-retention-coverage.mjs && node scripts/check-changeset-migration-references.mjs && node scripts/check-nonlatin-tracked-text.mjs && node scripts/check-prompt-volatility.mjs
+
+check-capacity-pool-id: ok (1879 files inspected)
+check-cli-runtime-routing: ok
+docker workspace manifests: all 37 staged before pnpm install
+[check-lockfile-importers] 38 lockfile importers, 38 manifests, 442 dependency records in sync
+✅ @fusion/dashboard mock completeness: all hardcoded mocks cover source imports.
+✅ @fusion/engine mock completeness: all hardcoded mocks cover source imports.
+inert-sync-lane: 0 guard(s) consuming a sync-resolved lane across 0 file(s)
+[check-runtime-skill-loader-drift] Claude and Grok loaders match as a clean rename-diff (342 lines).
+retention coverage OK: 111 module-scope Map/Set declarations classified (38 census-registered, 4 bounded, 13 carrying expiry evidence)
+  pending root packages/engine/src: 136 module-scope declarations, 50 still unclassified (not yet gated — RUFU-257 classified the crashing process first)
+  pending root packages/core/src: 144 module-scope declarations, 44 still unclassified (not yet gated — RUFU-257 classified the crashing process first)
+  pending root packages/cli/src: 10 module-scope declarations, 3 still unclassified (not yet gated — RUFU-257 classified the crashing process first)
+changeset migration references: 9 reference(s) resolve against /home/schindler/git/stash/.fusion/worktrees/stas-396/.engine/stas-396-engine/packages/core/src/postgres/migrations

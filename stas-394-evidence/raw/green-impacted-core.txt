@@ -1,0 +1,10 @@
+
+ RUN  v4.1.10 /home/schindler/git/stash/.fusion/worktrees/stas-394/.engine/stas-394-engine/packages/core
+
+···························································································································
+
+ Test Files  15 passed (15)
+      Tests  123 passed (123)
+   Start at  19:17:43
+   Duration  7.63s (transform 16.36s, setup 4.48s, import 28.66s, tests 257ms, environment 2ms)
+

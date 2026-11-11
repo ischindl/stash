@@ -1,0 +1,154 @@
+STAS-394 STEP 3 - the test file present at RED, verbatim
+engine path: packages/core/src/__tests__/mission-fix-title-composition.test.ts
+engine HEAD at RED: 1d4bcc61847562837b44854bccea95b783d8b943
+sha256: 78152936f1ebb0a477bc2e33d62aa135c5bf1b4b51bb75c6a6a26714df97e657
+
+/*
+FNXC:FixTitleIdempotence 2026-11-07-19:10:
+STAS-394: `createGeneratedFixFeature` composed the new feature's title as `Fix: ` + the parent
+feature's CURRENT title, and that feature title is what `triageFeature` copies verbatim onto the
+board card. Each generation therefore read a parent title already carrying its own inherited layer,
+so one more layer was baked into the label every generation. Measured on this host: STAS-296, 352,
+354, 355, 356 and 357 carry 3, 4, 5, 6, 7 and 8 leading `Fix: ` layers with a byte-identical
+remainder, and the card label budget is 80 characters.
+
+The invariant this pins: composing a fix title over a subject that already carries the prefix adds
+NO second layer, so composing twice is the same as composing once, and ancestry travels in the
+lineage field instead of the label.
+
+WHY THE SYNC STORE IS THE DRIVER. These are real-path calls, not a copy of the logic: the
+composition expression and the createTask call below are the shipped code. The synchronous store is
+the only one of the two twins a test can boot here (the async store's harness is `pgDescribe`-gated
+and this host cannot authenticate to PostgreSQL), and its contract is the same one; see
+`mission-store-sync-deprecated.test.ts` for the deprecation ratchet and `composition-site.txt`
+section 11 in the STAS-394 evidence for the census.
+*/
+
+import { describe, expect, it, vi } from "vitest";
+import type { Database } from "../db/db.js";
+import { MissionStore } from "../missions/mission-store.js";
+import type { MissionFeature } from "../missions/mission-types.js";
+import type { TaskStore } from "../store.js";
+import type { TaskCreateInput } from "../types/task/task-core.js";
+import { formatRemediationStepName } from "../tasks/remediation-steps.js";
+
+const FIX_PREFIX = "Fix: ";
+const SUBJECT = "Ship folder sharing to agent MCP access";
+const NOW = "2026-11-07T00:00:00.000Z";
+
+/** Exact leading occurrences, the same count the board census used. */
+function leadingLayers(title: string): number {
+  let rest = title;
+  let layers = 0;
+  while (rest.startsWith(FIX_PREFIX)) {
+    rest = rest.slice(FIX_PREFIX.length);
+    layers += 1;
+  }
+  return layers;
+}
+
+function layersOf(n: number): string {
+  return FIX_PREFIX.repeat(n);
+}
+
+/** Every `run()` call is captured so the assertion reads the bytes the store persists. */
+function capturingDb() {
+  const runs: { sql: string; args: unknown[] }[] = [];
+  const db = {
+    prepare: (sql: string) => ({
+      get: () => undefined,
+      run: (...args: unknown[]) => {
+        runs.push({ sql, args });
+        return { changes: 1 };
+      },
+    }),
+    bumpLastModified: () => undefined,
+    transaction: (callback: () => unknown) => callback(),
+    transactionImmediate: (callback: () => unknown) => callback(),
+  } as unknown as Database;
+  return { db, runs };
+}
+
+/** The persisted title of the generated fix feature, read off the mission_features INSERT. */
+function titleWrittenByTheComposer(parentTitle: string): string {
+  const { db, runs } = capturingDb();
+  const store = new MissionStore("/tmp/fusion-fix-title-composition", db);
+  const parent: MissionFeature = {
+    id: "F-PARENT", sliceId: "SL-1", title: parentTitle, status: "in-progress",
+    loopState: "validating", implementationAttemptCount: 0, validatorAttemptCount: 1,
+    lastValidatorRunId: "VR-1", lastValidatorStatus: "failed", createdAt: NOW, updatedAt: NOW,
+  };
+  vi.spyOn(store, "getFeature").mockReturnValue(parent);
+  vi.spyOn(store, "getValidatorRun").mockReturnValue({ id: "VR-1", featureId: "F-PARENT" } as never);
+  vi.spyOn(store, "findGeneratedFixFeature").mockReturnValue(undefined);
+  vi.spyOn(store, "findOpenGeneratedFixFeature").mockReturnValue(undefined);
+  vi.spyOn(store, "updateFeature").mockReturnValue(parent);
+  vi.spyOn(store, "emit").mockImplementation(() => true);
+
+  const child = store.createGeneratedFixFeature("F-PARENT", "VR-1", ["CA-1"], "assertion CA-1 failed");
+
+  const insert = runs.find((run) => run.sql.includes("INSERT INTO mission_features"));
+  expect(insert, "the composer must write the feature row").toBeDefined();
+  // Column order of that INSERT: id, sliceId, title, ...
+  const writtenTitle = insert!.args[2];
+  expect(writtenTitle).toBe(child.title);
+  return writtenTitle;
+}
+
+describe("STAS-394 fix-title composition stays at one layer", () => {
+  it.each([0, 1, 2, 3])("composes at most one layer over a parent carrying %i", (layers) => {
+    const composed = titleWrittenByTheComposer(`${layersOf(layers)}${SUBJECT}`);
+    expect(leadingLayers(composed)).toBe(1);
+    expect(composed).toBe(`${FIX_PREFIX}${SUBJECT}`);
+  });
+
+  it("composing twice is the same as composing once", () => {
+    const once = titleWrittenByTheComposer(SUBJECT);
+    const twice = titleWrittenByTheComposer(once);
+    expect(twice).toBe(once);
+  });
+});
+
+describe("STAS-394 remediation step names take the same single layer", () => {
+  it.each([0, 1, 2])("names a fix round over a finding already carrying %i layers", (layers) => {
+    const named = formatRemediationStepName({ title: `${layersOf(layers)}${SUBJECT}` });
+    expect(leadingLayers(named)).toBe(1);
+    expect(named).toBe(`${FIX_PREFIX}${SUBJECT}`);
+  });
+});
+
+describe("STAS-394 triage records ancestry in the existing lineage field", () => {
+  it("passes the parent card as sourceParentTaskId when triaging a generated fix feature", async () => {
+    const { db } = capturingDb();
+    const createTask = vi.fn(async (input: TaskCreateInput) => ({ id: "STAS-CHILD", ...input }) as never);
+    const taskStore = {
+      getRootDir: () => "/tmp/fusion-fix-title-composition",
+      findRecentTasksByContentFingerprint: async () => [],
+      createTask,
+      updateTask: async () => undefined,
+    } as unknown as TaskStore;
+
+    const store = new MissionStore("/tmp/fusion-fix-title-composition", db, taskStore);
+    const fixFeature: MissionFeature = {
+      id: "F-FIX", sliceId: "SL-1", title: `${FIX_PREFIX}${SUBJECT}`, status: "defined",
+      generatedFromFeatureId: "F-PARENT", createdAt: NOW, updatedAt: NOW,
+    };
+    const parentFeature: MissionFeature = {
+      id: "F-PARENT", sliceId: "SL-1", title: SUBJECT, status: "done",
+      taskId: "STAS-PARENT", createdAt: NOW, updatedAt: NOW,
+    };
+    vi.spyOn(store, "getFeature").mockImplementation((id: string) => (
+      id === "F-FIX" ? fixFeature : parentFeature
+    ));
+    vi.spyOn(store, "buildEnrichedDescription").mockReturnValue(undefined);
+    vi.spyOn(store, "getSlice").mockReturnValue(undefined);
+    vi.spyOn(store, "getMilestone").mockReturnValue(undefined);
+    vi.spyOn(store, "getMission").mockReturnValue(undefined);
+    vi.spyOn(store, "linkFeatureToTask").mockReturnValue(fixFeature);
+
+    await store.triageFeature("F-FIX");
+
+    expect(createTask).toHaveBeenCalledTimes(1);
+    expect(createTask.mock.calls[0][0].source?.sourceParentTaskId).toBe("STAS-PARENT");
+  });
+});

@@ -1,0 +1,122 @@
+STAS-394 - CLOSING SUMMARY, written at the delivered tip, claiming nothing beyond what was measured
+====================================================================================================
+Every coordinate below was printed inside this run (AC0). Nothing here says the fix is live, because
+it is not: the delivery ends at a branch, and the trunk leg plus the rebuild leg belong to the
+operator.
+
+== 1. THE MECHANISM, DECIDED BY BOARD DATA, NOT BY PREFERENCE ==
+
+Two shapes were on the table:
+  A. composition at child-creation time, reading the parent feature's CURRENT title as raw material;
+  B. mutation of the same record once per fix round.
+
+The board decided it. STAS-355 carries six prefix layers while its own postReviewFixCount is 0 - a
+record that never completed a fix round cannot have mutated itself six times. STAS-352 (4 layers / 1
+fix round), STAS-354 (5 / 1) and STAS-356 (7 / 6) corroborate; only STAS-296 (3) and STAS-357 (8)
+coincidentally have counter equal to layers. Across the whole family the layer count climbs exactly
+one per generation (3, 4, 5, 6, 7, 8) while the remainder of the title hashes identically
+(2b55badcc3805b3d27087320604cc1f609e09afc853fcab27c21e39ef8630ef8 in all six). Mechanism A.
+
+== 2. THE COMPOSING EXPRESSION, NAMED WITH FILE AND LINE ==
+
+Measured at base 1d4bcc61847562837b44854bccea95b783d8b943 (first read at provisioning as
+7c14f53184a2f8e3a95c5b38eb2125ef52dd0acf), four production concatenations of the literal existed:
+
+  packages/core/src/async-stores/async-mission-store.ts:2477   title: title ?? `Fix: ${source.title}`,
+  packages/core/src/missions/mission-store.ts:3599             title: title ?? `Fix: ${sourceFeature.title}`,
+  packages/core/src/tasks/remediation-steps.ts:23              return `Fix: ${detail || "review finding"}`;
+  packages/engine/src/workflows/human-merge-approval-boundary.ts:319   name: `Fix: ${step.title}`,
+
+The first two are the accumulating ones: they read a parent's already-composed title. All four now
+call the helper.
+
+== 3. WHAT THE HELPER GUARANTEES ==
+
+packages/core/src/tasks/fix-title.ts:9 holds the literal as the exported constant FIX_TITLE_PREFIX -
+its only home in production code - and composeFixTitle() at line 23 strips every leading layer
+before applying exactly one:
+
+    while (base.startsWith(FIX_TITLE_PREFIX)) { base = base.slice(FIX_TITLE_PREFIX.length); }
+    return `${FIX_TITLE_PREFIX}${base}`;
+
+Composing a title twice is therefore the same as composing it once; feeding it STAS-357's real
+eight-layer title returns it with one layer and the same words. Ancestry leaves the label rather than
+riding on it: triageFeature now writes the parent card of a generated fix feature into the card's
+existing source.sourceParentTaskId lineage field, derived from generatedFromFeatureId, which this
+creation path left empty while other paths already populate it. No new column, no migration, no new
+SourceType - the field is already populated on other records of this same board.
+
+== 4. THE DELIVERY ==
+
+    branch   refs/heads/stas-394-fix-title-idempotence   (newly named; no stas-394* ref existed before)
+    tip      1677ee018a5d3aee0e74c0669676a1db40c690c5    <- the SHA the GREEN capture names
+    base     1d4bcc61847562837b44854bccea95b783d8b943    (= the trunk read at Step 1, the merge-base,
+                                                          and the base the RED capture names)
+    content  one commit, 11 files, 244 insertions, 5 deletions, regression test included
+
+RED at base named 7 failures with real assertion messages (expected 2 to be 1, expected 3 to be 1,
+'Fix: Fix: Ship ...' != 'Fix: Ship ...'), never a module-resolution error; each has a passing case at
+the tip. At the tip: the new suite 14/14, 15 impacted core suites and 3 engine suites green, core and
+engine typechecks rc=0, the repo's 20 static gate validators rc=0. The affected package's whole suite
+moved from 263 failing files / 6998 passing tests to 263 failing files / 7012 passing tests, with the
+failing-file set identical by hash (22e759745a9e536ee93494b05d5159d7431c44ff648f8356d95dee9977d26043,
+diff rc=0) - zero new failures. That 263-file red is this machine's own baseline and the Step-1 capture
+names its cause: 190 of the 263 are postgres-gated specs failing on `password authentication failed`
+with code 28P01, and the other 73 are listed by name. It was recorded before this card changed
+anything.
+
+== 5. WHAT IS NOT TRUE YET, STATED PLAINLY ==
+
+  - The invariant holds on NO trunk. refs/heads/main in the engine is
+    42f9762e1c8c8bacd1f7e7a976b7fbb536feaa85 and does not contain this commit. The card never wrote
+    it; the four trunk-only commits over my base are other people's RUFU-871 work, visible in
+    `git reflog show refs/heads/main`. In the stash repository main is still 869d86b241e1d1a157cc1ca3d
+    471dbcbc209f22, the SHA recorded at run start.
+  - The remaining leg is the operator's, in the engine's primary checkout (the linked worktree holds
+    no trunk ref):  git -C <Fusion primary checkout> merge --no-ff stas-394-fix-title-idempotence
+    Not --ff-only: the trunk advanced 4 commits over the measured base inside this run, so a
+    fast-forward cannot succeed. The card deliberately did not rebase, because that would orphan the
+    SHAs its own RED and GREEN captures name. The collision pair says the merge is safe:
+    merge-tree --write-tree --name-only rc=0 with zero CONFLICT lines, and an empty trunk diff across
+    all eleven changed paths.
+  - The running board is not fixed even after that merge. The engine process serving this board was
+    started from some earlier build and exposes its revision on no agent-readable surface, so until
+    the operator rebuilds and restarts it, follow-up titles on this board are still composed the old
+    way. Liveness of this fix is unverified by design, not by oversight.
+
+== 6. WHAT WAS DELIBERATELY LEFT ALONE ==
+
+  - The six board records. STAS-357 still reads the prefix eight times before the words that identify
+    the work, and its siblings keep 3, 4, 5, 6 and 7 layers. The remainder is the same string in all
+    six records: "Folder-share", an arrow glyph, then 'agent MCP access + skill "Publish & share"
+    working E2E', hashing 2b55badcc3805b3d27087320604cc1f609e09afc853fcab27c21e39ef8630ef8 in every
+    one of them. Guardrail (c) from the claimant, accepted by the CEO: a hand edit is not a fix, the
+    card sits in the approval lane, and the layers are the reproduction evidence. Title hash
+    25c5e43caf98... is unchanged across every read in this run, and the record's 8 steps are identical
+    by key hash and still all `pending`.
+    One honest deviation: STAS-357's file bytes DID move during the run (Step-0 hash 1e0050f9... to
+    d412dec9...). Key-level inspection shows only two keys changed, both engine bookkeeping -
+    updatedAt, and a new sourceMetadata.wipAdmissionStall (nodeId "hold-release-sweep", stallCount
+    422) written by packages/engine/src/self-healing.ts:6495 - alongside two "Auto-recovery warning:
+    tip-already-merged cleanup failed" log rows at 18:52:05Z. The closing read at 19:22:17Z found the
+    daemon had moved that record's bytes once more (now ecef5376) with the title still identical, and
+    28 of the store's 299 card files carrying a same-day mtime while an untouched neighbour such as
+    STAS-343 still shows 2026-11-04. No title, no step status, no field this card could write.
+  - The 80-character label truncation, untouched: it lives in
+    packages/core/src/ai/ai-summarize.ts (deriveTaskLabelFromDescription, MAX_TASK_LABEL_LENGTH = 220
+    at :1237) and is called with the 80 argument at packages/engine/src/agent-tools.ts:1757, 1819,
+    1923, 6618 and packages/cli/src/extension.ts:2199, 2289 - and it clamps only the
+    description-derived fallback label (task.ts:68 renders an existing title in full). The damage in
+    this defect is the composed bytes, not the display, so widening the budget would have hidden the
+    symptom while the cause kept composing.
+  - No schema field, no migration, no dependency edge onto STAS-384, no PR, no push by this card.
+
+== 7. DISCLOSED BECAUSE IT CANNOT BE UNSAID ==
+
+refs/heads/stas-394-fix-title-idempotence is published on the LAN mirror at the delivered SHA, with a
+remote-tracking reflog entry "update by push 2026-11-07 19:52:09 +0100". This card issued no push and
+no pull request - the GitHub remote origin carries no ref with stas-394 in it, checked with ls-remote.
+Two production engine paths can push (packages/engine/src/merge/pr-response-run-ops.ts:202,
+packages/engine/src/merge/merger-ai.ts:4791) and the mirror pre-dates this card with 364 refs, so the
+writer cannot be identified from inside this worktree. It went to the CEO inside msg-c06d6b7a rather
+than being left out of the record.

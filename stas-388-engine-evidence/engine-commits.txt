@@ -1,0 +1,27 @@
+# Commits on the delivered engine branch, oldest first
+base: 0efa71d679ebdbafe24e7c63147427587a557b19
+tip:  6a59cf4d51feaa0293869d4343d6395c3f37d6ff
+
+b6e6cb73f1b63fb6d63d87cab9f753cc316da103 2026-11-05T01:15:31+01:00 STAS-388: give the tool-result channel zero authority at its prompt assembly site
+6a59cf4d51feaa0293869d4343d6395c3f37d6ff 2026-11-05T02:12:25+01:00 STAS-388: stop calling content:[] a dropped payload, and close the envelope a payload could write
+
+# changed files (the authoritative engine-side scope list)
+  packages/pi-claude-cli/src/__tests__/prompt-builder.test.ts
+  packages/pi-claude-cli/src/__tests__/tool-result-authority.test.ts
+  packages/pi-claude-cli/src/prompt-builder.ts
+  packages/pi-claude-cli/src/tool-result-authority.ts
+
+# landing boundary, measured not intended
+merge-base(tip, refs/heads/main) = b6e6cb73f1b63fb6d63d87cab9f753cc316da103
+refs/heads/main                  = b6e6cb73f1b63fb6d63d87cab9f753cc316da103
+commits in main not in tip       = 0
+main...tip (behind ahead)         = 0	1
+# equality of the first two lines is what makes the operator's --ff-only possible.
+
+# how trunk reached the state above — the reflog of refs/heads/main, newest first.
+# The reviewed commit was fast-forwarded onto trunk by the engine's own merge lane
+# at the timestamp below; this card's remediation commit is the one commit ahead of
+# it. The card writes no trunk ref: its reflog line is a branch write, not a main write.
+  b6e6cb73f1 refs/heads/main@{2026-11-05T02:07:37+01:00}: merge fusion/stas-388-tool-result-authority: Fast-forward
+  0efa71d679 refs/heads/main@{2026-11-05T00:56:28+01:00}: merge 0efa71d679ebdbafe24e7c63147427587a557b19: Fast-forward
+  c7d02a3e54 refs/heads/main@{2026-11-04T16:24:18+01:00}: merge c7d02a3e5499726565524677c99eb5689cb1b5be: Fast-forward

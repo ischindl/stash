@@ -1,0 +1,31 @@
+### delivered branch, re-read in the Step 5 tick
+branch            : stas-397-delivery
+delivered tip     : ef8ef296d28a0de11fd05cd72f368d7e662f144d
+tip subject   : fix(worktree): retire the landing-proof sentence the deleted gate left in the sweep's prose
+measured tip (AC6): 3ab0e5569817b36facad4e339fecb988a7e9aad1
+parent            : 3ab0e5569817b36facad4e339fecb988a7e9aad1
+
+delta between the AC6-measured tip and the delivered tip:
+ packages/engine/src/self-healing.ts | 8 ++++++--
+ 1 file changed, 6 insertions(+), 2 deletions(-)
+
+name-only diff, base 46b94afa0c ... delivered tip, count:
+.changeset/stas-397-worktree-release-occupancy.md
+packages/engine/src/__tests__/reliability-interactions/worktree-defensive-removal-preservation.real-git.test.ts
+packages/engine/src/__tests__/worktree-acquisition-pinned.test.ts
+packages/engine/src/__tests__/worktree-backend.test.ts
+packages/engine/src/__tests__/worktree-doc-accuracy.test.ts
+packages/engine/src/__tests__/worktree-release-decides-from-occupancy.real-git.test.ts
+packages/engine/src/auto-recovery-handlers/branch-worktree.ts
+packages/engine/src/execution/branch-conflicts.ts
+packages/engine/src/executor/overlap-acquisition-park.ts
+packages/engine/src/executor/worktree-branch-conflict-handle.ts
+packages/engine/src/executor/worktree-create-conflict.ts
+packages/engine/src/self-healing.ts
+packages/engine/src/util/run-audit.ts
+packages/engine/src/worktree/worktree-acquisition.ts
+packages/engine/src/worktree/worktree-backend.ts
+count = 15
+
+guard + 6 pins + the pre-existing source-text file, re-run at the delivered tip:
+  (log .fusion-tmp/stas-397/newtip-pins-rerun.log)

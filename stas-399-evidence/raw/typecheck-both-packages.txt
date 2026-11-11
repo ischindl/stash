@@ -1,0 +1,11 @@
+### STAS-399 Step 4 typecheck (final source state) 2026-11-10T04:08:08Z
+
+> @fusion/engine@0.78.0-beta.9 typecheck /home/schindler/git/stash/.fusion/worktrees/stas-399/.engine/stas-399-engine/packages/engine
+> tsc --noEmit
+
+typecheck_engine rc: 0
+
+> @fusion/core@0.78.0-beta.9 typecheck /home/schindler/git/stash/.fusion/worktrees/stas-399/.engine/stas-399-engine/packages/core
+> tsc --noEmit
+
+typecheck_core rc: 0

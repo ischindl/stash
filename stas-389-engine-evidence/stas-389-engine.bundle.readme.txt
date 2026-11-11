@@ -1,0 +1,28 @@
+stas-389-engine.bundle.txt is the base64 of stas-389-engine.bundle,
+which carries the engine branch fusion/stas-389-tool-channel-authority of repository Fusion,
+3c8ece6606f16ab13174be0e78b2c50e18e62dd8..22f6d6c5b11338f32e15bec81f1338a6c367c757.
+
+  decode:  base64 -d stas-389-engine.bundle.txt > stas-389-engine.bundle
+  verify:  git bundle verify stas-389-engine.bundle
+  fetch:   git fetch stas-389-engine.bundle refs/heads/fusion/stas-389-tool-channel-authority
+  apply:   git merge --ff-only FETCH_HEAD   (fast-forward is possible
+           because merge-base(tip, main) equals main — see engine-commits.txt)
+
+heads recorded in the bundle:
+  22f6d6c5b11338f32e15bec81f1338a6c367c757 refs/heads/fusion/stas-389-tool-channel-authority
+
+git bundle verify, run where the prerequisite commit exists:
+  /home/schindler/git/stash/.fusion/worktrees/stas-389/stas-389-engine-evidence/stas-389-engine.bundle is okay
+  The bundle contains this ref:
+  22f6d6c5b11338f32e15bec81f1338a6c367c757 refs/heads/fusion/stas-389-tool-channel-authority
+  The bundle requires this ref:
+  3c8ece6606f16ab13174be0e78b2c50e18e62dd8 
+  The bundle uses this hash algorithm: sha1
+
+size: 6198 bytes binary,
+      8264 bytes base64
+
+This decode -> verify -> fetch path was executed on the card worktree and the
+temporary ref it produced was deleted again, so no revision-write residue is
+left in either checkout. Restore with an absolute path: git -C resolves a
+relative bundle path against the checkout, not where you wrote the file.

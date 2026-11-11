@@ -1,0 +1,10 @@
+
+ RUN  v4.1.10 /home/schindler/git/stash/.fusion/worktrees/stas-396/.engine/stas-396-engine/packages/core
+
+············
+
+ Test Files  1 passed (1)
+      Tests  12 passed (12)
+   Start at  01:18:46
+   Duration  2.01s (transform 1.13s, setup 357ms, import 1.37s, tests 19ms, environment 0ms)
+

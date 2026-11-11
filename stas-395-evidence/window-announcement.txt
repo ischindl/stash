@@ -1,0 +1,111 @@
+STAS-395 AC6 handoff - the delivery envelope as measured in the close tick
+every number below was printed inside this card's run; the capture that printed it is named after each line
+raw prints: raw/ac6-envelope-close-tick.txt, raw/bundle-verification.txt, census-and-suites.txt,
+             verdict-table.txt, mutation-probe.txt, before-suite.txt, raw/ac6-envelope-raw.txt
+
+== WHAT IS DELIVERED ==
+delivered_ref=refs/heads/stas-395-measure-same-agent-duplicate-intake
+  (discovered with `git for-each-ref` over all namespaces, not from the name this spec suggested;
+   refs/heads/ entries carrying this card's id = 1)
+delivered_tip=e038ea90e247532e4cdc84af33657fb5337adb7f
+commit_count_over_base=4   (raw/ac6-envelope-close-tick.txt)
+delivery_base=f1247e8aef367c248ebb0b9d339bf0b9bd0a6421
+delivered_files=1  production_files=0
+  packages/core/src/__tests__/postgres/same-agent-duplicate-intake-real-store.pg.test.ts
+This is a test-only branch. It changes no production behaviour, edits no docs, changelog or gate
+validator, and adds no migration. The delivered tip IS the whole delivery: the invariant "the
+same-agent duplicate-intake lane is measured" becomes true on this branch only.
+
+== LANDING PREDICATES, PRINTED IN THE SAME TICK AS THIS HANDOFF ==
+refs/heads/main re-read this tick        = ee995fcc85 (rc=0)
+  full sha: ee995fcc85013a990752307d0f253e9d6fe5ebf4   subject: fix(RUFU-871): read project runtime flags under a transaction-local RLS bypass
+base is an ancestor of trunk             = rc 0  (git merge-base --is-ancestor)
+trunk commits since the base             = 1
+main...delivered ahead-behind            = 1  4   (git rev-list --left-right --count)
+merge-tree --write-tree main..delivered  = rc 0, CONFLICT lines 0, tree 4632368f2320007374ffcff21016a9cc2c33d4a1
+trunk movement over the changed path     = empty (git diff --name-only <merge-base> main -- <test path>, rc 0)
+merge-base with STAS-394 branch          = 1d4bcc61847562837b44854bccea95b783d8b943
+left-right count delivered...stas-394    = 11  1
+merge-tree delivered..stas-394           = rc 0, CONFLICT lines 0
+files this card changed                  = 1
+files STAS-394 changed over its merge-base = 11
+shared files touched by both             = 0     <- the number that says the two lines do not fight
+engine checkout `git status --porcelain` = 0 lines
+STAS-394 ref discovered live             = refs/heads/stas-394-fix-title-idempotence 1677ee018a
+
+== BUNDLE ==
+file=stas-395-delivery.bundle  bytes=7453  sha256=4d6d828f9d73b72f2e5ca226ba04aa9129f9fd502b43782aee0b33708f542ebe
+git bundle list-heads  rc=0  -> e038ea90e2 refs/heads/stas-395-measure-same-agent-duplicate-intake
+git bundle verify      rc=0  -> requires prerequisite f1247e8aef367c248ebb0b9d339bf0b9bd0a6421
+base64 round-trip      original sha256 == decoded sha256, byte_equal=True; list-heads and verify on the
+                       decoded copy both rc=0 and name the same head and the same prerequisite
+the prerequisite is an ancestor of refs/heads/main  rc=0, so `git fetch <bundle> <ref>` needs nothing else
+
+attachments on this card, as the attachment surface accepts them:
+  1794097194578-stas-395-delivery-commits.txt   commit list, 4 lines
+  1794097217329-stas-395-delivery.bundle.b64.txt  the encoded bundle, base64, decode with `base64 -d`
+  1794097226887-stas-395-delivery.patch.txt       the series patch (git format-patch --stdout)
+Tool constraint, reported not routed around: the attachment surface refuses the .bundle, .b64 and
+.patch extensions - "Unsupported file type: .bundle. Supported: .png, .jpg, .jpeg, .gif, .webp,
+.txt, .log, .json, .yaml, .yml, .toml, .csv, .xml" - so the encoded bundle and the series patch were
+attached under a .txt suffix. The copies are byte-identical to the originals, sha256 printed:
+  bundle.b64   cb07fa18e0019f2c8d6342b60bf6b219825052ba76bb14fb780e0636628db5b2 (both copies)
+  series patch e31a2db20c70cfd87242449dd48297b92c3e250600412432a735bbcefafc57a1 (both copies)
+Decode recipe: `base64 -d stas-395-delivery.bundle.b64.txt > s.bundle && git bundle verify s.bundle`.
+
+== WHAT THE MEASUREMENT SAID ==
+executed cases on this host = 6, skipped = 0, on the documented route under the heading
+  "Local PostgreSQL test server provisioning" in docs/testing.md, target postgresql://localhost:55432
+  (scratch databases named per run, e.g. fusion_stas395_same_agent_3850957_1_i9nshd, store root under
+   /tmp/fusion-test-workers-*/ - never a live board directory, never a database this repository names)
+verdicts   fail-open 4 | control (lane not run) 1 | rejected 1
+rejected_total_printed=1, which is NOT the 0 the Original Description expected. The inherited claim
+  that the tombstone branch is gated on a non-null sourceAgentId is true, and the inference drawn
+  from it is wrong: with sourceAgentId populated, matching a tombstoned record inside the sticky
+  window, the lane writes an intake:resurrection-blocked run-audit row, soft-deletes the new card
+  through the store's own delete path - which also moves it out of `todo` into `archived` - and
+  throws TombstonedTaskResurrectionError out of createTask. This card reports that and changed no
+  production code. The narrower true statement for the mission-triage producer is that it leaves
+  sourceAgentId empty, so its own cards take the drop-the-tombstone arm and fail open.
+falsifiability = neutralising the load-bearing call site at packages/core/src/task-store/task-creation.ts:1072
+  turns 3 of the 6 tests red (first failure: AssertionError: expected undefined to be 'KB-001' at
+  line 189); `git checkout HEAD -- <file>` restores 0 failures and a 0-line porcelain. The :1504 arm
+  was also neutralised and stayed green: only :1072 is on the path this test walks.
+suite delta = Test Files 799 -> 800, Tests 8967 -> 8973, failing files 263 -> 264, failing tests 323 -> 323,
+  both runs exit status 1. Excluding this card's own file the failing-file set is identical by hash
+  (8fc5b5e4ac8d8d24 in both, diff rc 0). The one added failing file is this card's file on the plain
+  route, where it dies with the same PostgresError: password authentication failed for user "schindler"
+  as the 190 pre-existing pg-gated files; on the documented pg route the same file is green.
+
+== WHAT IS NOT TRUE AFTER THIS CARD ==
+The lane's behaviour is unchanged - this card measured it and edited nothing outside a test file.
+The new test is NOT live in the running board: nothing was rebuilt, restarted or redeployed, and the
+  running build exposes no revision on any agent-readable surface, so "running build unidentifiable"
+  is inherited verbatim and this card causes no observable change either way.
+A live-board end-to-end observation of the lane firing stays out of scope by policy, not oversight.
+No push, no pull request, no merge, no rebase, no ref move by this card; PRs are operator-gated by
+  this repository's own directive of 2026-08-30.
+No board record was written or retitled by this card.
+
+== DISCLOSURE: A MIRROR REF FOR THIS BRANCH EXISTS AND THIS CARD DID NOT PUSH IT ==
+refs/remotes/lan/stas-395-measure-same-agent-duplicate-intake e038ea90e2
+reflog, verbatim: lan/stas-395-measure-same-agent-duplicate-intake@{0} e038ea90e2 update by push
+remote lan url: http://192.168.12.60:6610/fusion.git
+This card ran no push, no fetch and no prune in the engine repository. The reflog subject says "update
+by push"; the pushing process cannot be identified from inside this worktree, and STAS-394 disclosed
+the same phenomenon on the same remote, so no writer is attributed here.
+
+== THE OPERATOR'S REMAINING LEG, IN THE ENGINE'S PRIMARY CHECKOUT ==
+1. `git -C ~/git/Fusion bundle verify <attached stas-395-delivery.bundle>` or, from the already-present
+   ref, skip straight to review of one file: `git show --stat e038ea90e2`.
+2. Read the delivered test as a characterisation record, not an endorsement: the header comment and
+   each commit message say a red case means the recorded verdict went stale.
+3. Decide separately whether the rejected=1 finding deserves a card of its own. This card changes no
+   behaviour, so the resurrection-block branch stays exactly as measured.
+4. Nothing here needs a rebuild; if you do land it, the next engine build carries the test and the
+   lane's verdict becomes regression-guarded at that point, not before.
+
+== HANDOFF ROUTE ACTUALLY AVAILABLE ON THIS SURFACE ==
+No messaging or mailbox tool exists in this session's tool surface, so the handoff above could not be
+sent as a message. It is delivered in this capture and in this card's log in the same tick that printed
+the predicates. This is the absence of a tool, not a refused call: there was no request to decline.

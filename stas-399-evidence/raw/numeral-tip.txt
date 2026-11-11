@@ -1,0 +1,40 @@
+### STAS-399 Step 5: numeral census AT TIP, base count beside it
+
+command (identical at both refs):
+  git grep -nE "(const|let|var)[A-Za-z_ ]*=\s*50_?000\b" <ref> -- "*.ts" "*.tsx"
+refs: base c7311e7dc496aeed74ed70cad347a6a610980ef9 (live trunk at Step 1) / tip 324da3366f (see below for
+the full SHA), both return codes 0.
+
+  definitions of the numeral 50_000 :  BASE 9   ->  TIP 7
+  definitions of THIS concept (the inline memory prompt budget):  BASE 2  ->  TIP 1   (AC6's target: exactly 1)
+
+  the two removed definitions, both private redeclarations inside packages/engine/src:
+    packages/engine/src/agent-tools.ts:800  const MAX_INSTRUCTIONS_TEXT_LENGTH = 50_000;  -> imported now
+    packages/engine/src/agent-tools.ts:801  const MAX_MEMORY_LENGTH = 50_000;             -> imported now
+  they are deleted in favour of the import at packages/engine/src/agent-tools.ts:36, not commented, not
+  renamed, not aliased. The surviving definition is
+    packages/engine/src/agents/agent-instructions.ts:51  export const MAX_MEMORY_LENGTH = 50_000;
+  with its unit (CHARACTERS as `String.length` yields them, not bytes) stated at the definition.
+
+  enforced in-repo, not remembered: the guard test
+  "defines the inline memory budget numeral in exactly one tracked source file" reads both files from disk
+  and asserts the declaration count is 1. Print from the real run (ac-prints-from-test.txt):
+    [AC6-census] MAX_MEMORY_LENGTH declarations=1
+
+  every remaining hit is classified one line at a time in numeral-census.txt PART 3:
+    this concept            1
+    different concept       5 definitions (retention row cap, cache capacity, auto-summarize default,
+                            codebase-metrics entry cap, instructions-field ceiling)
+    unrelated               1 definition  (terminal scrollback)
+    enforcement-site hits: 11 at base and 11 at tip, unchanged set, all classified; the four dashboard
+                            memory guards are the same VALUE in a different package and are deliberately
+                            NOT merged (see conflict-statement.txt, "THE TRAP").
+
+unit reconciliation printed at tip (no silent unit change anywhere):
+  prompt clamp and the notice reserve            CHARACTERS
+  MEMORY_LONG_TERM_BYTE_BUDGET (untouched)       BYTES
+  chat-lane index demotion (untouched)           branch selection CHARS, clampUtf8 BYTES (pre-existing,
+                                                 pinned by RUFU-443, named apart rather than fixed)
+  full raw numeral census (unfiltered, 141 .ts/.tsx lines at base) is preserved at
+  .engine/_scratch/num_all.txt and num_ts.txt as working material; the tracked evidence is the classified
+  version in numeral-census.txt.

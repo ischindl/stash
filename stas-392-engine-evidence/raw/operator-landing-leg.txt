@@ -1,0 +1,226 @@
+# STAS-392 — AC2/AC6 — the landing leg, in the operator's hands
+# generated: 2026-11-05T18:46:30Z
+# This card writes no trunk ref and pushes nothing. Both commands are ordered:
+
+# 390 first, always. A moved trunk between them voids the second.
+
+## refs/heads/fusion/stas-390-tool-channel-authority = e6b1fe4c7f4bafa36727e33e8df7c400e87c6a91
+  $ git -C .engine/stas-392-engine rev-list --left-right --count refs/heads/main...refs/heads/fusion/stas-390-tool-channel-authority
+      0	2
+        rc=0
+
+  $ git -C .engine/stas-392-engine merge-base --is-ancestor refs/heads/main refs/heads/fusion/stas-390-tool-channel-authority
+      (no output)
+        rc=0
+
+  $ git -C .engine/stas-392-engine merge-tree --write-tree --name-only refs/heads/main refs/heads/fusion/stas-390-tool-channel-authority
+      c7c6a80f22173854de47fea71500da7af6d18b23
+        rc=0
+
+  $ git -C .engine/stas-392-engine log --oneline refs/heads/main..refs/heads/fusion/stas-390-tool-channel-authority
+      e6b1fe4c7f STAS-389: prove frame and role authority are gone, per surface, red then green
+      a38c8be034 STAS-389: stop a tool result from writing its own frame or a role key
+        rc=0
+
+  $ git -C .engine/stas-392-engine diff --shortstat refs/heads/main...refs/heads/fusion/stas-390-tool-channel-authority
+       2 files changed, 275 insertions(+), 6 deletions(-)
+        rc=0
+
+
+## refs/heads/fusion/stas-392-empty-tool-result-announcement = 037a480cc562ef994aac0b19215613cb93e2b500
+  $ git -C .engine/stas-392-engine rev-list --left-right --count refs/heads/main...refs/heads/fusion/stas-392-empty-tool-result-announcement
+      0	3
+        rc=0
+
+  $ git -C .engine/stas-392-engine merge-base --is-ancestor refs/heads/main refs/heads/fusion/stas-392-empty-tool-result-announcement
+      (no output)
+        rc=0
+
+  $ git -C .engine/stas-392-engine merge-tree --write-tree --name-only refs/heads/main refs/heads/fusion/stas-392-empty-tool-result-announcement
+      47c9302a3ce39f4ac23872a58a59857a3afc70fb
+        rc=0
+
+  $ git -C .engine/stas-392-engine log --oneline refs/heads/main..refs/heads/fusion/stas-392-empty-tool-result-announcement
+      037a480cc5 STAS-391: announce an empty tool-result content array instead of crashing prompt assembly
+      e6b1fe4c7f STAS-389: prove frame and role authority are gone, per surface, red then green
+      a38c8be034 STAS-389: stop a tool result from writing its own frame or a role key
+        rc=0
+
+  $ git -C .engine/stas-392-engine diff --shortstat refs/heads/main...refs/heads/fusion/stas-392-empty-tool-result-announcement
+       3 files changed, 333 insertions(+), 22 deletions(-)
+        rc=0
+
+
+## who holds each ref right now (a live checkout of either would block the merge)
+
+  $ git -C .engine/stas-392-engine worktree list
+      /home/schindler/git/Fusion                                                    4fa1ea0e64 [main]
+      /home/schindler/git/Fusion/.fusion/worktrees/rufu-195                         db07e88d0a [fusion/rufu-195]
+      /home/schindler/git/Fusion/.fusion/worktrees/rufu-204                         186448e2e8 [fusion/rufu-204]
+      /home/schindler/git/Fusion/.fusion/worktrees/rufu-217                         490baf1634 [fusion/rufu-217]
+      /home/schindler/git/Fusion/.fusion/worktrees/rufu-250                         3c2f44b9ff [fusion/rufu-250]
+      /home/schindler/git/Fusion/.fusion/worktrees/rufu-252                         6ec6a28c4f [fusion/rufu-252]
+      /home/schindler/git/Fusion/.fusion/worktrees/rufu-253                         e5646f68fe [fusion/rufu-253]
+      /home/schindler/git/Fusion/.fusion/worktrees/rufu-262                         e5646f68fe [fusion/rufu-262]
+      /home/schindler/git/Fusion/.fusion/worktrees/rufu-265                         5424f676c4 [fusion/rufu-265]
+      /home/schindler/git/Fusion/.fusion/worktrees/rufu-342                         cdef171e7a [fusion/rufu-342]
+      /home/schindler/git/Fusion/.fusion/worktrees/rufu-343                         e5fbc45cde [fusion/rufu-343]
+      /home/schindler/git/Fusion/.fusion/worktrees/rufu-408                         c7d02a3e54 [fusion/rufu-408]
+      /home/schindler/git/Fusion/.fusion/worktrees/rufu-430                         f78b3e9156 [fusion/rufu-430]
+      /home/schindler/git/Fusion/.fusion/worktrees/rufu-447                         6b13b0cc78 [fusion/rufu-447]
+      /home/schindler/git/Fusion/.fusion/worktrees/rufu-455                         029e40425a [fusion/rufu-455]
+      /home/schindler/git/Fusion/.fusion/worktrees/rufu-469                         d9103b17a3 [fusion/rufu-469]
+      /home/schindler/git/Fusion/.fusion/worktrees/rufu-685                         1e3265e24b [fusion/rufu-685]
+      /home/schindler/git/Fusion/.fusion/worktrees/rufu-756                         a2ee317208 [fusion/rufu-756]
+      /home/schindler/git/Fusion/.fusion/worktrees/rufu-768                         1e3265e24b [fusion/rufu-768]
+      /home/schindler/git/Fusion/.fusion/worktrees/rufu-791                         16d2379014 [fusion/rufu-791]
+      /home/schindler/git/Fusion/.fusion/worktrees/rufu-799                         05a0e0c786 [fusion/rufu-799]
+      /home/schindler/git/Fusion/.fusion/worktrees/rufu-813                         4fa1ea0e64 [fusion/rufu-813]
+      /home/schindler/git/Fusion/.fusion/worktrees/rufu-871                         0a3cd0bad8 [fusion/rufu-871]
+      /home/schindler/git/Fusion/.fusion/worktrees/rufu-877                         814709352e [fusion/rufu-877]
+      /home/schindler/git/Fusion/.fusion/worktrees/rufu-879                         0a3cd0bad8 [fusion/rufu-879]
+      /home/schindler/git/Fusion/.fusion/worktrees/rufu-885                         8584c966f9 [fusion/rufu-885]
+      /home/schindler/git/Fusion/.fusion/worktrees/rufu-887                         6aff48faff [fusion/rufu-887]
+      /home/schindler/git/Fusion/.fusion/worktrees/rufu-888                         bff234b429 [fusion/rufu-888]
+      /home/schindler/git/Fusion/.fusion/worktrees/rufu-889                         4fa1ea0e64 [fusion/rufu-889]
+      /home/schindler/git/Fusion/.worktrees/misty-pine                              2b33ec8d5e [fusion/rufu-131]
+      /home/schindler/git/fusion-sso                                                8adef1b12a [sso/dsnet-session-login]
+      /home/schindler/git/fusion-worktrees/bwo-sweep                                ef2ad9007b [pr/branch-write-origin-sweep]
+      /home/schindler/git/fusion-worktrees/ds-rtm3-deploy                           5bae097214 [ds/rtm3-deploy]
+      /home/schindler/git/fusion-worktrees/ds-rtm3-deploy-dev                       71a9250817 [ds/rtm3-deploy-dev]
+      /home/schindler/git/fusion-worktrees/fix-zero-step-plan-gate                  d8dab5aaee [fix/zero-step-plan-gate]
+      /home/schindler/git/fusion-worktrees/fusion-rufu-627                          23ec69d76a [fusion/rufu-627]
+      /home/schindler/git/fusion-worktrees/fusion-rufu-707                          e2d54baf29 [fusion/rufu-707]
+      /home/schindler/git/fusion-worktrees/pr-lcm                                   8d054404f3 [pr/lcm]
+      /home/schindler/git/fusion-worktrees/pr-stash                                 01dc4fd5ec [pr/stash-integration]
+      /home/schindler/git/fusion-worktrees/pr-stash-memory                          f1f21ccc94 [pr/stash-memory]
+      /home/schindler/git/fusion-worktrees/rebase-3493-lcm                          6d4226b117 (detached HEAD)
+      /home/schindler/git/fusion-worktrees/rebase-3522-stas103                      15edb7f7a0 (detached HEAD)
+      /home/schindler/git/fusion-worktrees/rtm3-078-sso                             505ebe5c31 [rtm3-0.78-sso]
+      /home/schindler/git/fusion-worktrees/rtm3-rebase-main                         d1a13b2069 [ds/rtm3-deploy-rebased-20261026]
+      /home/schindler/git/fusion-worktrees/rufu-200-empty-checkout-lease            0d550fbe95 [rufu-200-empty-checkout-lease]
+      /home/schindler/git/fusion-worktrees/stas-103-prompt-return                   c8299c0631 [pr/stas-103-prompt-return]
+      /home/schindler/git/fusion-worktrees/vllm-114-proof                           2b14f9b097 (detached HEAD)
+      /home/schindler/git/kb-worktrees/archive-readopt-20261005                     05a8f1ec2b [archive-readopt-20261005]
+      /home/schindler/git/kb-worktrees/emptiness-invalidation                       e0c4d4de52 [fix/emptiness-proof-invalidation]
+      /home/schindler/git/kb-worktrees/fix-inreview-stall-badge-copy                83e8f5f18a [fix-inreview-stall-badge-copy]
+      /home/schindler/git/kb-worktrees/integrate-gitlab                             50c17da760 [fix/rufu-858-log-shape-tripwire]
+      /home/schindler/git/kb-worktrees/integrate-origin                             c53eb7402d [ds/integrate-origin]
+      /home/schindler/git/kb-worktrees/lease-split                                  2cf4c8d9b0 [pr/lease-hold]
+      /home/schindler/git/kb-worktrees/merge-origin-20261013                        f2db502381 [merge/origin-main-20261013]
+      /home/schindler/git/kb-worktrees/merge-origin-20261013-b                      417a61ebf5 [merge/origin-main-20261013b]
+      /home/schindler/git/kb-worktrees/merge-origin-20261015                        f134800008 [merge-origin-20261015]
+      /home/schindler/git/kb-worktrees/modelcfg-split                               0622ac7b07 [pr/model-provider-metadata]
+      /home/schindler/git/kb-worktrees/planner-split                                df5e73c227 [pr/planner-robust]
+      /home/schindler/git/kb-worktrees/pr-board-perf                                7381fc1972 [pr/board-read-perf]
+      /home/schindler/git/kb-worktrees/pr-files-upload                              5be3361706 [pr/files-browser-upload]
+      /home/schindler/git/kb-worktrees/pr-lcm-v2                                    38e28af426 [pr/lcm-v2]
+      /home/schindler/git/kb-worktrees/pr-noninteractive                            7c5d52be75 [pr/noninteractive-git-floor]
+      /home/schindler/git/kb-worktrees/pr3619                                       7972506966 [pr-3619]
+      /home/schindler/git/kb-worktrees/pr3619-rebase                                1847a8404f [rebase/pr3619]
+      /home/schindler/git/kb-worktrees/pr3626-rebase                                944f5607c8 [rebase/chat-guard]
+      /home/schindler/git/kb-worktrees/pr3627-rebase                                f701aa08cf [rebase/chat-gate]
+      /home/schindler/git/kb-worktrees/prod-deploy                                  4fa1ea0e64 [prod-deploy]
+      /home/schindler/git/kb-worktrees/read-queue-coverage                          71b94c521d [perf/read-queue-coverage]
+      /home/schindler/git/kb-worktrees/rtm3-linear                                  9e145fd48c [ds/rtm3-deploy-clean]
+      /home/schindler/git/kb-worktrees/rtm3-priv-deploy                             2b10a1bcaa [ds/rtm3-priv-deploy]
+      /home/schindler/git/kb-worktrees/rtm3-priv-merge-main                         9a4daf4c4e [ds/rtm3-priv-deploy-20261001]
+      /home/schindler/git/kb-worktrees/rufu-565-build-cache-poison                  4f3f8a8e64 [rufu-565-build-cache-poison]
+      /home/schindler/git/kb-worktrees/rufu-595-project-root-memo                   85edcdb3a5 [rufu-595-project-root-memo]
+      /home/schindler/git/kb-worktrees/rufu-615-log-projections                     c4ad2268f4 [fusion/rufu-615-log-projections]
+      /home/schindler/git/kb-worktrees/rufu-615-migration-restack                   2b3766a36c [rufu-615-migration-restack]
+      /home/schindler/git/kb-worktrees/rufu-616-suspend-defer                       33ad8d81d3 [rufu-616-suspend-defer]
+      /home/schindler/git/kb-worktrees/rufu-679-dispatch-lease                      8f734ee83d [rufu-679-dispatch-lease]
+      /home/schindler/git/kb-worktrees/rufu-682-capability-refusal                  4e27a99be0 [rufu-682-capability-decline-refusal]
+      /home/schindler/git/kb-worktrees/rufu-690-archive-presence                    14ba495cb4 [rufu-690-archive-presence]
+      /home/schindler/git/kb-worktrees/rufu-698-budget-fit                          490fd96320 [rufu-698-budget-fit]
+      /home/schindler/git/kb-worktrees/rufu-756                                     4fa1ea0e64 [rufu-756-lane-role-log-projection]
+      /home/schindler/git/kb-worktrees/rufu-768-attempt-counter                     bcb5792a3c [rufu-768-plan-review-attempt-counter]
+      /home/schindler/git/kb-worktrees/rufu-772-trim-hardening                      3292cf8023 [rufu-772-json-string-trim-hardening]
+      /home/schindler/git/kb-worktrees/rufu-773-error-site                          d180504a63 [rufu-773-error-site-capture]
+      /home/schindler/git/kb-worktrees/rufu-805-heartbeat-workspace                 bb83130d5c [rufu-805-heartbeat-workspace]
+      /home/schindler/git/kb-worktrees/rufu-812-plan-review-consumer                b3c182ce06 [rufu-812-plan-review-consumer]
+      /home/schindler/git/kb-worktrees/rufu-823-scheduler-inflight                  05f905d0cc [rufu-828-scheduler-inflight]
+      /home/schindler/git/kb-worktrees/rufu-829-pass-stall-audit                    64c7fadedb [rufu-830-pass-stall-audit]
+      /home/schindler/git/kb-worktrees/rufu-862                                     ccb43ac167 [fix/rufu-862-capacity-refusal-rotation]
+      /home/schindler/git/kb-worktrees/rufu-883                                     6aff48faff [rufu-883-sampler-comment-projection]
+      /home/schindler/git/kb-worktrees/sync-upstream-20260913                       913d6076a4 [sync/upstream-2026-09-13]
+      /home/schindler/git/stash/.fusion/worktrees/stas-246/engine                   4ab32dab9b [fusion/stas-246-trunk-refresh]
+      /home/schindler/git/stash/.fusion/worktrees/stas-262/.engine/stas-262-a2check 05d3c3231f (detached HEAD)
+      /home/schindler/git/stash/.fusion/worktrees/stas-262/.engine/stas-262-engine  04694a4f3e [fusion/stas-262-trunk-merge]
+      /home/schindler/git/stash/.fusion/worktrees/stas-273/.engine/stas-273-engine  4361e0322e [fusion/stas-273-worktree-lifecycle-preservation]
+      /home/schindler/git/stash/.fusion/worktrees/stas-282/.engine/stas-282-engine  85784df04c [fusion/stas-282-premise-evaluation-tree]
+      /home/schindler/git/stash/.fusion/worktrees/stas-392/.engine/stas-392-engine  037a480cc5 [fusion/stas-392-empty-tool-result-announcement]
+        rc=0
+
+## the same list, narrowed to the three refs this card speaks for
+
+  $ bash -c cd .engine/stas-392-engine && git worktree list | grep -E 'stas-39[012]|\[main\]' || echo '      (no worktree holds any of them)'
+      /home/schindler/git/Fusion                                                    4fa1ea0e64 [main]
+      /home/schindler/git/stash/.fusion/worktrees/stas-392/.engine/stas-392-engine  037a480cc5 [fusion/stas-392-empty-tool-result-announcement]
+        rc=0
+
+Reading of that line, stated as a measurement: the 390 ref appears **nowhere**, so it has
+no live holder and nothing blocks merging it. The 392 ref is held by this card's own nested
+checkout, which does not block merging it from elsewhere — a merge into another branch
+never writes a held branch. refs/heads/main is held by the primary checkout, which is where the two
+commands below belong. The predecessor's ref is still registered to STAS-391's nested
+checkout, which Step 0 recorded as prunable ('gitdir file points to non-existent
+location'); this card deliberately did not run git worktree prune, because pruning would
+delete another card's registration.
+
+## the two commands, in this order, from a checkout that is on refs/heads/main
+
+Each merge is preceded by a fresh re-read of trunk, because a trunk that moved between
+the two voids the second: the second leg was rebased onto e6b1fe4c7f4bafa36727e33e8df7c400e87c6a91, so if
+trunk is no longer what the first merge made it, stop and re-run the predicate below
+rather than merging blind.
+
+  git rev-parse refs/heads/main          # must print the trunk this file was generated against
+  git merge --ff-only fusion/stas-390-tool-channel-authority
+  git rev-parse refs/heads/main          # must now equal the 390 tip printed above
+  git merge --ff-only fusion/stas-392-empty-tool-result-announcement
+
+## why the second leg is safe to merge after the first, stated as a predicate
+
+refs/heads/fusion/stas-392-empty-tool-result-announcement carries refs/heads/fusion/stas-390-tool-channel-authority as an ancestor, so once the first merge lands, trunk is the ground
+the second leg was rebased onto and its merge is a fast-forward too.
+
+  $ git -C .engine/stas-392-engine merge-base --is-ancestor refs/heads/fusion/stas-390-tool-channel-authority refs/heads/fusion/stas-392-empty-tool-result-announcement
+      (no output)
+        rc=0
+
+## AC1 re-probe at the close
+
+  $ git -C .engine/stas-392-engine grep -c neutraliseStructureTokens refs/heads/main -- packages/pi-claude-cli/src
+      (no output)
+        rc=1
+
+## the engine repository's own landing-hygiene rule, probed at the ground
+
+  $ git -C .engine/stas-392-engine grep -n -iE 'landing hygien|ff-only|fast-forward|--ff-only' refs/heads/main -- CLAUDE.md
+      (no output)
+        rc=1
+
+Measured, not assumed: a CLAUDE.md blob exists at this ground but holds no landing-hygiene,
+fast-forward, or merge rule at all, so there is nothing in it to cite. The 'Landing hygiene'
+section this card was pointed at lives in the *stash* repository's CLAUDE.md, and its rules
+bind that repository; importing or duplicating another repository's pinned rule here is what
+the instruction forbids, so the two commands above stand on their own measurements.
+
+## trunk position at run start and run end (AC6: these must be equal)
+
+  run start: 4fa1ea0e64bccc32e2d3116c534706d1b953931c  (read from stas-392-engine-evidence/raw/ac0-roots.txt, Step 0's measurement before any write)
+  run end:   4fa1ea0e64bccc32e2d3116c534706d1b953931c
+  equal:     yes
+
+## what AC1 and AC6 each cost
+
+AC1 is not satisfied by this run and cannot be: it asks for the neutraliser to be on the
+trunk, and only the two merges above put it there. AC6 asks that this card not move the
+trunk. Both cannot hold in the same run, so the honest delivery is FF-ready refs plus a
+trunk left alone, and the counts below are the shape that implies — 0 2 and 0 3 ahead, not
+0 0. A 0 0 reading would mean the operator had already landed them while this ran.
+
+## liveness
+running build unidentifiable — fix liveness unverified

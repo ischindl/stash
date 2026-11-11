@@ -1,0 +1,11 @@
+STAS-394 STEP 6 WINDOW MEASUREMENTS  2026-11-07T19:04:45Z
+== delivered ref discovered, not named from the spec ==
+refs/heads/stas-394-fix-title-idempotence 1677ee018a fix(STAS-394): compose fix titles idempotently and record fix ancestry in lineage
+refs/remotes/lan/stas-394-fix-title-idempotence 1677ee018a fix(STAS-394): compose fix titles idempotently and record fix ancestry in lineage
+FOR_EACH_REF_RC=0
+== trunk re-read at this moment ==
+42f9762e1c8c8bacd1f7e7a976b7fbb536feaa85
+TRUNK_RC=0
+== delivered sha ==
+1677ee018a5d3aee0e74c0669676a1db40c690c5
+DELIVERED_RC=0

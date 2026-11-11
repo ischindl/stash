@@ -1,0 +1,55 @@
+AC5 V2 FORENSIC  sample at 2026-11-07T19:03:14Z
+lane=/home/schindler/git/stash/.fusion/worktrees/stas-394
+store=/home/schindler/git/stash/.fusion/tasks  exists=True
+
+== A. Step-0 recorded hash vs hash measured now (same instrument, one table) ==
+  STAS-296  step0=74e51050b002…  now=74e51050b002…  IDENTICAL
+  STAS-352  step0=dd068a8db275…  now=dd068a8db275…  IDENTICAL
+  STAS-354  step0=a6bf26690222…  now=a6bf26690222…  IDENTICAL
+  STAS-355  step0=affba880914d…  now=affba880914d…  IDENTICAL
+  STAS-356  step0=6497213f9b00…  now=6497213f9b00…  IDENTICAL
+  STAS-357  step0=1e0050f9b11d…  now=d412dec906bd…  MOVED
+  rows moved: ['STAS-357']
+  parsed from the committed Step-0 capture: 6 hashes, 6 layer counts
+
+== B. title bytes of every row, decomposed against Step 0's own printed numbers ==
+  step0 remainder sha256 = 2b55badcc3805b3d27087320604cc1f609e09afc853fcab27c21e39ef8630ef8
+  STAS-296 layers=3 OK  remainder=OK  title_sha=9806b37eb1bd…
+  STAS-352 layers=4 OK  remainder=OK  title_sha=f942e87c618d…
+  STAS-354 layers=5 OK  remainder=OK  title_sha=ed760c07d5d4…
+  STAS-355 layers=6 OK  remainder=OK  title_sha=c7ec99eb5b6c…
+  STAS-356 layers=7 OK  remainder=OK  title_sha=ad2045852010…
+  STAS-357 layers=8 OK  remainder=OK  title_sha=25c5e43caf98…
+  title == prefix*layers + remainder, so equal (layers, remainder) is an equal byte-for-byte title.
+  Guardrail (c) protects the title; it is the field this card may never move.
+
+== C. attribution for the moved row STAS-357 ==
+  log entries now: 248  (entry key shapes carry no author field; see raw/ac5_logshape.py)
+    ts=2026-11-07T14:49:02.320Z action='Auto-recovery warning: tip-already-merged cleanup failed — preserving /home/schindler/git/stash/.fusion/worktrees/stas-357: uncommitted or ignored con'
+    ts=2026-11-07T15:59:58.542Z action='Auto-recovery warning: tip-already-merged cleanup failed — preserving /home/schindler/git/stash/.fusion/worktrees/stas-357: uncommitted or ignored con'
+    ts=2026-11-07T18:25:38.694Z action='Auto-recovery warning: tip-already-merged cleanup failed — preserving /home/schindler/git/stash/.fusion/worktrees/stas-357: uncommitted or ignored con'
+  top-level keys whose leading JSON carries the run date 2026-11-07: ['updatedAt']
+  sourceMetadata keys: ['contentFingerprint', 'fileScope', 'fusionBranchContext', 'intentSignature', 'wipAdmissionStall']
+  wipAdmissionStall = {"code": "awaiting-approval", "signature": "capacity|todo->in-progress", "nodeId": "hold-release-sweep", "fromColumn": "todo", "toColumn": "in-progress", "poolId": "builtin:coding", "occupants": 0, "limit": 4, "lastAt": "2026-11-07T18:52:05.403Z", "firstAt": "2026-11-02T12:24:28.323Z", "stallCount": 422}
+  updatedAt=2026-11-07T18:52:06.147Z status=awaiting-approval column=todo postReviewFixCount=8 (step 0 measured 8)
+
+== D. sample history for this store (each line is one invocation of this script) ==
+  2026-11-07T18:56:48Z  moved=['STAS-357']  STAS-296:74e51050 STAS-352:dd068a8d STAS-354:a6bf2669 STAS-355:affba880 STAS-356:6497213f STAS-357:d412dec9
+  2026-11-07T18:59:12Z  moved=['STAS-357']  STAS-296:74e51050 STAS-352:dd068a8d STAS-354:a6bf2669 STAS-355:affba880 STAS-356:6497213f STAS-357:d412dec9
+  2026-11-07T19:03:14Z  moved=['STAS-357']  STAS-296:74e51050 STAS-352:dd068a8d STAS-354:a6bf2669 STAS-355:affba880 STAS-356:6497213f STAS-357:d412dec9
+  window covered: 2026-11-07T18:56:48Z .. 2026-11-07T19:03:14Z
+    STAS-296: file_stable=True title_stable=True minus-bookkeeping_stable=True minus-daemon-fields_stable=False
+    STAS-352: file_stable=True title_stable=True minus-bookkeeping_stable=True minus-daemon-fields_stable=False
+    STAS-354: file_stable=True title_stable=True minus-bookkeeping_stable=True minus-daemon-fields_stable=False
+    STAS-355: file_stable=True title_stable=True minus-bookkeeping_stable=True minus-daemon-fields_stable=False
+    STAS-356: file_stable=True title_stable=True minus-bookkeeping_stable=True minus-daemon-fields_stable=False
+    STAS-357: file_stable=True title_stable=True minus-bookkeeping_stable=True minus-daemon-fields_stable=False
+
+== F. key-level writer footprint on the moved row, previous sample vs this one ==
+  card=STAS-357  keys whose content differs between samples: none
+  keys count this sample: 58
+
+== E. does git hold an independent baseline for these records? ==
+  ls-files rc=1 stdout='' stderr="error: pathspec '.fusion/tasks/STAS-357/task.json' did not match any file(s) known to git\n"
+  check-ignore rc=0 out='.git/info/exclude:16:.fusion/\t.fusion/tasks/STAS-357/task.json'
+  rc=1 means untracked: no committed baseline exists, so Step 0's hashes are the only baseline.

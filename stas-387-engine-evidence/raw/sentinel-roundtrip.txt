@@ -1,0 +1,74 @@
+# AC0 sentinel round-trip integrity
+# The sentinel is unique and has no natural source in this environment.
+# Integrity is claimed ONLY as byte equality between the expected payload
+# and the captured stdout, printed as an unambiguous repr with a byte
+# count and the exit code. Any unexpected byte in a capture below IS the
+# reproduction, and this card jumps to AC1 with that capture as exhibit.
+
+sentinel=STAS387-SENTINEL-4f9d1c7b6e2a
+session_scope=task-scoped (this STAS-387 executor session, cwd = card worktree)
+expected_payload=sentinel plus one trailing newline
+
+[login-and-rc]
+  command: bash -l -c printf\ \'%s\\n\'\ \'STAS387-SENTINEL-4f9d1c7b6e2a\'
+  exit_code=0
+  stdout-capture-file
+    expected_repr=b'STAS387-SENTINEL-4f9d1c7b6e2a\n'
+    captured_repr=b'STAS387-SENTINEL-4f9d1c7b6e2a\n'
+    expected_bytes=30 captured_bytes=30
+    byte_equal=YES
+  stderr: empty
+  tool_channel_payload_between_markers
+  TOOL_CHANNEL_BEGIN
+STAS387-SENTINEL-4f9d1c7b6e2a
+  TOOL_CHANNEL_END
+[interactive-rc]
+  command: bash -i -c printf\ \'%s\\n\'\ \'STAS387-SENTINEL-4f9d1c7b6e2a\'
+  exit_code=0
+  stdout-capture-file
+    expected_repr=b'STAS387-SENTINEL-4f9d1c7b6e2a\n'
+    captured_repr=b'STAS387-SENTINEL-4f9d1c7b6e2a\n'
+    expected_bytes=30 captured_bytes=30
+    byte_equal=YES
+  stderr_repr=b'bash: cannot set terminal process group (PID): Inappropriate ioctl for device\nbash: no job control in this shell\n'
+  tool_channel_payload_between_markers
+  TOOL_CHANNEL_BEGIN
+STAS387-SENTINEL-4f9d1c7b6e2a
+  TOOL_CHANNEL_END
+[non-login-plain]
+  command: bash -c printf\ \'%s\\n\'\ \'STAS387-SENTINEL-4f9d1c7b6e2a\'
+  exit_code=0
+  stdout-capture-file
+    expected_repr=b'STAS387-SENTINEL-4f9d1c7b6e2a\n'
+    captured_repr=b'STAS387-SENTINEL-4f9d1c7b6e2a\n'
+    expected_bytes=30 captured_bytes=30
+    byte_equal=YES
+  stderr: empty
+  tool_channel_payload_between_markers
+  TOOL_CHANNEL_BEGIN
+STAS387-SENTINEL-4f9d1c7b6e2a
+  TOOL_CHANNEL_END
+[initialised-empty]
+  command: env -i bash --norc --noprofile -c printf\ \'%s\\n\'\ \'STAS387-SENTINEL-4f9d1c7b6e2a\'
+  exit_code=0
+  stdout-capture-file
+    expected_repr=b'STAS387-SENTINEL-4f9d1c7b6e2a\n'
+    captured_repr=b'STAS387-SENTINEL-4f9d1c7b6e2a\n'
+    expected_bytes=30 captured_bytes=30
+    byte_equal=YES
+  stderr: empty
+  tool_channel_payload_between_markers
+  TOOL_CHANNEL_BEGIN
+STAS387-SENTINEL-4f9d1c7b6e2a
+  TOOL_CHANNEL_END
+
+## no-task session shape
+status: not-read from this session.
+instrument_that_would_be_needed: a bash tool call inside an agent session
+  with no task assigned (a heartbeat run). No tool available to this
+  executor exposes one, and anything this card can spawn is task-scoped.
+substitutes_recorded_instead: (1) the initialised-empty shape above is the
+  strictest control for any shell-initialisation emitter, and (2) Step 1
+  reads the engine tool-result assembly path to establish whether it
+  branches on session or task type at all. Both are substitutes, not the
+  live no-task capture, and the live capture is an operator leg.

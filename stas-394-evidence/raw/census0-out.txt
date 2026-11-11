@@ -1,0 +1,179 @@
+====================================================================================================
+LINEAGE CENSUS (task-store records on this host)
+====================================================================================================
+
+-- STAS-296
+   title              : 'Fix: Fix: Fix: Folder-share→agent MCP access + skill "Publish & share" working E2E'
+   title len          : 82
+   prefix layers      : 3
+   remainder          : 'Folder-share→agent MCP access + skill "Publish & share" working E2E'
+   postReviewFixCount  : 3
+   planReviewReplanCount: 0
+   planReviewAttemptCount: '<<ABSENT>>'
+   replanCount         : '<<ABSENT>>'
+   reviewConvergenceStage: 0
+   fixRoundCount       : '<<ABSENT>>'
+   sourceParentTaskId  : absent
+   lineageParentId     : absent
+   parentId            : absent
+   parentTaskId        : absent
+   followUpOf          : absent
+   refineOf            : absent
+   sourceTaskId        : absent
+   sourceMetadata     : {"contentFingerprint": "fdb91cce4b5387c84e9da669b432e2e2f7cb8d5c2e147be5527bec0faa04a571", "fileScope": ["docs/share-mcp-live-proof.md", "backend/scripts/verify_share_mcp_e2e.py", "docs/testing.md", "CHANGELOG.md"], "fusionBranchContext": {"assignmentMode": "shared", "groupId": "BG-MTMY6YSR-9U2MK3", "source": "mission"}, "intentSignature": {"filePaths": ["docs/share-mcp-live-proof.md", "docs/testi
+   lineageId          : 'e8476239-d4a2-4e63-a349-b13f8d7e797e'
+   column             : 'done'   status: None
+   createdAt          : '2026-09-25T21:41:28.605Z'
+   awaitingApprovalReason: None
+
+-- STAS-352
+   title              : 'Fix: Fix: Fix: Fix: Folder-share→agent MCP access + skill "Publish & share" working E2E'
+   title len          : 87
+   prefix layers      : 4
+   remainder          : 'Folder-share→agent MCP access + skill "Publish & share" working E2E'
+   postReviewFixCount  : 1
+   planReviewReplanCount: 0
+   planReviewAttemptCount: '<<ABSENT>>'
+   replanCount         : '<<ABSENT>>'
+   reviewConvergenceStage: 0
+   fixRoundCount       : '<<ABSENT>>'
+   sourceParentTaskId  : absent
+   lineageParentId     : absent
+   parentId            : absent
+   parentTaskId        : absent
+   followUpOf          : absent
+   refineOf            : absent
+   sourceTaskId        : absent
+   sourceMetadata     : {"contentFingerprint": "49024c9fd51bed329fd12112093f0e5d5405ba01ba78c7b9ca53b30cbfcb696f", "fileScope": ["backend/scripts/share_mcp_proof.py", "backend/tests/test_share_mcp.py"], "fusionBranchContext": {"assignmentMode": "shared", "groupId": "BG-MTMY6YSR-9U2MK3", "source": "mission"}, "intentSignature": {"filePaths": [], "identifiers": ["./start.sh", "feat/folder-mcp-sharing", "93ca44d1", "list", 
+   lineageId          : 'e32d1073-e982-48fe-9240-099fecbb9a5f'
+   column             : 'done'   status: None
+   createdAt          : '2026-10-14T17:55:09.287Z'
+   awaitingApprovalReason: None
+
+-- STAS-354
+   title              : 'Fix: Fix: Fix: Fix: Fix: Folder-share→agent MCP access + skill "Publish & share" working E2E'
+   title len          : 92
+   prefix layers      : 5
+   remainder          : 'Folder-share→agent MCP access + skill "Publish & share" working E2E'
+   postReviewFixCount  : 1
+   planReviewReplanCount: 0
+   planReviewAttemptCount: '<<ABSENT>>'
+   replanCount         : '<<ABSENT>>'
+   reviewConvergenceStage: 0
+   fixRoundCount       : '<<ABSENT>>'
+   sourceParentTaskId  : absent
+   lineageParentId     : absent
+   parentId            : absent
+   parentTaskId        : absent
+   followUpOf          : absent
+   refineOf            : absent
+   sourceTaskId        : absent
+   sourceMetadata     : {"contentFingerprint": "8b6b4c7b9621651b6b13c63f91d9437a67fd7cd929ec51d3fcf317026ec4f33b", "duplicateOfTaskIds": ["STAS-296"], "fileScope": ["backend/scripts/share_mcp_proof.py", "backend/tests/test_share_mcp_proof_runner.py", "docs/share-mcp-live-proof.md", "docs/testing.md"], "fusionBranchContext": {"assignmentMode": "shared", "groupId": "BG-MTMY6YSR-9U2MK3", "source": "mission"}, "intentSignatu
+   lineageId          : '33cb49d3-fe64-4b59-9b1e-61198e750ffc'
+   column             : 'done'   status: 'failed'
+   createdAt          : '2026-10-17T03:02:24.811Z'
+   awaitingApprovalReason: None
+
+-- STAS-355
+   title              : 'Fix: Fix: Fix: Fix: Fix: Fix: Folder-share→agent MCP access + skill "Publish & share" working E2E'
+   title len          : 97
+   prefix layers      : 6
+   remainder          : 'Folder-share→agent MCP access + skill "Publish & share" working E2E'
+   postReviewFixCount  : 0
+   planReviewReplanCount: 0
+   planReviewAttemptCount: '<<ABSENT>>'
+   replanCount         : '<<ABSENT>>'
+   reviewConvergenceStage: 0
+   fixRoundCount       : '<<ABSENT>>'
+   sourceParentTaskId  : absent
+   lineageParentId     : absent
+   parentId            : absent
+   parentTaskId        : absent
+   followUpOf          : absent
+   refineOf            : absent
+   sourceTaskId        : absent
+   sourceMetadata     : {"contentFingerprint": "e73ecb9e48c4b4fb664e70aae0d73459b5696234ac36db1f38225cdcbabbb5db", "fileScope": [".gitignore", "backend/scripts/share_mcp_proof.py", "backend/tests/test_share_mcp_proof_runner.py", "docs/share-mcp-live-proof.md"], "fusionBranchContext": {"assignmentMode": "shared", "groupId": "BG-MTMY6YSR-9U2MK3", "source": "mission"}, "intentSignature": {"filePaths": ["docs/share-mcp-live-
+   lineageId          : '798bb7dc-0c22-4012-8bda-19056d5d5d84'
+   column             : 'done'   status: None
+   createdAt          : '2026-10-17T08:07:16.198Z'
+   awaitingApprovalReason: None
+
+-- STAS-356
+   title              : 'Fix: Fix: Fix: Fix: Fix: Fix: Fix: Folder-share→agent MCP access + skill "Publish & share" working E2E'
+   title len          : 102
+   prefix layers      : 7
+   remainder          : 'Folder-share→agent MCP access + skill "Publish & share" working E2E'
+   postReviewFixCount  : 6
+   planReviewReplanCount: 0
+   planReviewAttemptCount: '<<ABSENT>>'
+   replanCount         : '<<ABSENT>>'
+   reviewConvergenceStage: 0
+   fixRoundCount       : '<<ABSENT>>'
+   sourceParentTaskId  : absent
+   lineageParentId     : absent
+   parentId            : absent
+   parentTaskId        : absent
+   followUpOf          : absent
+   refineOf            : absent
+   sourceTaskId        : absent
+   sourceMetadata     : {"contentFingerprint": "081333d508cb53903f90096ce283815e6fc3c795f708d6452bd5e3bd5901a98d", "fusionBranchContext": {"assignmentMode": "shared", "groupId": "BG-MTMY6YSR-9U2MK3", "source": "mission"}, "intentSignature": {"filePaths": [], "identifiers": ["./start.sh", "feat/folder-mcp-sharing", "93ca44d1", "list", "read", "~[external path omitted]", "0217_folder_mcp_tokens", "[external path omitted]",
+   lineageId          : '0159c5fb-ecbe-46f6-9a6b-080afd93e90d'
+   column             : 'done'   status: None
+   createdAt          : '2026-10-17T10:42:34.141Z'
+   awaitingApprovalReason: None
+
+-- STAS-357
+   title              : 'Fix: Fix: Fix: Fix: Fix: Fix: Fix: Fix: Folder-share→agent MCP access + skill "Publish & share" working E2E'
+   title len          : 107
+   prefix layers      : 8
+   remainder          : 'Folder-share→agent MCP access + skill "Publish & share" working E2E'
+   postReviewFixCount  : 8
+   planReviewReplanCount: 0
+   planReviewAttemptCount: '<<ABSENT>>'
+   replanCount         : '<<ABSENT>>'
+   reviewConvergenceStage: 0
+   fixRoundCount       : '<<ABSENT>>'
+   sourceParentTaskId  : absent
+   lineageParentId     : absent
+   parentId            : absent
+   parentTaskId        : absent
+   followUpOf          : absent
+   refineOf            : absent
+   sourceTaskId        : absent
+   sourceMetadata     : {"contentFingerprint": "c6af937462c66ba66677e1c00140bae04268eb4f5cc63f24d9863b78bae85c58", "fileScope": ["docs/testing.md", ".gitignore", "backend/scripts/share_mcp_proof.py", "backend/scripts/share_mcp_live/*", ".stas357-evidence/*", "backend/routers/share_mcp.py", "backend/services/share_mcp_service.py", "backend/services/share_mcp_urls.py", "backend/routers/shares.py", "backend/routers/skills.p
+   lineageId          : 'db7eb6ee-ddc0-43bb-a0c4-87235fa3e670'
+   column             : 'todo'   status: 'awaiting-approval'
+   createdAt          : '2026-10-17T13:56:49.943Z'
+   awaitingApprovalReason: 'plan-review-replan-cap'
+
+====================================================================================================
+R4 LINEAGE-FIELD COMPARISON (claim: populated on these)
+====================================================================================================
+STAS-141: layers=0 column='done' title=None
+      parent-fields={'sourceParentTaskId': 'STAS-122'}
+      sourceMetadata={"contentFingerprint": "b189d46d71511217161d5303357378f7c3adb5886a7ac2eafde14e589be16c0d"}
+STAS-261: layers=0 column='done' title=None
+      parent-fields={'sourceParentTaskId': 'STAS-241'}
+      sourceMetadata={"contentFingerprint": "5ff001d010dd0276c9640de7869c8698bf5fce7a2406dea45457420ef1cc5ec5", "crossParentDiagnosticClaimId": "agent-diagnostic-intent:fd830c1f49f78f655b1260dea831510b4b759fcd0ccd7b3f9aa466dfff3e497a", "executorRoleOverride": true, "intentSignature": {"filePaths": [], "identifiers": ["m
+STAS-282: layers=0 column='done' title=None
+      parent-fields={'sourceParentTaskId': 'STAS-264'}
+      sourceMetadata={"contentFingerprint": "1c43d2a7efcd85918b1624d9365b2fd64f86e8493c6f4bc6c06435003cf8a983", "fileScope": ["packages/core/src/tasks/plan-premises.ts", "packages/engine/src/worktree/worktree-paths.ts", "packages/engine/src/__tests__/plan-premise-evaluation-tree.test.ts", "packages/engine/src/__tests__/
+STAS-315: layers=0 column='done' title='Failure alert na founder steku je mŕtvy: ALERT_SLACK_* chýbajú a alarm hádže výnimku v error-handleri'
+      parent-fields={'sourceParentTaskId': 'STAS-270'}
+      sourceMetadata={"contentFingerprint": "1d7a1c06caf62133be7a4e0cb36b72eb330c9473eab460e13ff18941704a23b2", "fileScope": ["backend/tasks/agent_schedules.py", "backend/services/alert_service.py", "backend/tests/test_agent_schedule_alerts.py", "backend/tests/test_source_sync_claims.py", ".env.example", "docs/security-
+STAS-341: layers=1 column='done' title='Fix: 5 testových zlyhaní na main z zastaraných ciest migrácií po prečíslovaní (0218→0222, 0221→0225) + stamp_only a security_headers'
+      parent-fields={'sourceParentTaskId': 'STAS-285'}
+      sourceMetadata={"contentFingerprint": "ff539f2ec9843bc682a7daf4cf819165e2031fb06ddc18af78617e3f12a6628b", "crossParentDiagnosticClaimId": "agent-diagnostic-intent:f19cdfcc80e0b24a3745c94fbf37997825aaddf30e035d7fdcf81631103635f4", "duplicateMarkerClearCount": 1, "duplicateSource": "triage-marker", "fileScope": ["ba
+STAS-345: layers=0 column='done' title='`stash tools remove` leaves the agent-side MCP entry live — no product way to unregister an agent'
+      parent-fields={'sourceParentTaskId': 'STAS-298'}
+      sourceMetadata={"contentFingerprint": "83ae6068279adcc8e677a97a6ae1e1ef6b146d7670c34118019841719646186e", "crossParentDiagnosticClaimId": "agent-diagnostic-intent:83b7f888db968eb1cc424bbafcd32ce43f6f952a03f2be89fa730f71a7bedd58", "fileScope": ["cli/main.py", "cli/tests/test_tools_remove_retract.py", "cli/tests/tes
+STAS-367: layers=0 column='done' title='Napravovacia dodávka pre STAS-343: braň'
+      parent-fields={'sourceParentTaskId': 'STAS-343'}
+      sourceMetadata={"fileScope": ["docs/architecture.md", "packages/engine/src/agent-tools.ts", "packages/engine/src/execution/hold-release.ts", "packages/engine/src/__tests__/promote-unplanned-refusal.test.ts"], "intentSignature": {"filePaths": ["docs/architecture.md", "packages/engine/src/agent-tools.ts", "packages/
+
+====================================================================================================
+KEY DISCOVERY: every toplevel key on 357 matching lineage/parent/fix/refine/follow
+====================================================================================================
+  lineageId = 'db7eb6ee-ddc0-43bb-a0c4-87235fa3e670'
+  planReviewReplanCount = 0
+  postReviewFixCount = 8

@@ -1,0 +1,77 @@
+# STAS-392 — AC2 — the fast-forward window, printed in the tick it was measured
+# generated: 2026-11-05T18:29:30Z
+# Every predicate below was printed in one command block, and the message body at the
+# end is the text that went out in that same tick — untrimmed, unedited.
+
+admissible for: refs/heads/fusion/stas-390-tool-channel-authority = e6b1fe4c7f4bafa36727e33e8df7c400e87c6a91
+
+  $ git -C .engine/stas-392-engine rev-list --left-right --count refs/heads/main...refs/heads/fusion/stas-390-tool-channel-authority
+      0	2
+        rc=0
+
+  $ git -C .engine/stas-392-engine merge-base --is-ancestor refs/heads/main refs/heads/fusion/stas-390-tool-channel-authority
+      (no output)
+        rc=0
+
+  $ git -C .engine/stas-392-engine log --oneline refs/heads/main..refs/heads/fusion/stas-390-tool-channel-authority
+      e6b1fe4c7f STAS-389: prove frame and role authority are gone, per surface, red then green
+      a38c8be034 STAS-389: stop a tool result from writing its own frame or a role key
+        rc=0
+
+  $ git -C .engine/stas-392-engine diff --shortstat refs/heads/main...refs/heads/fusion/stas-390-tool-channel-authority
+       2 files changed, 275 insertions(+), 6 deletions(-)
+        rc=0
+
+  $ git -C .engine/stas-392-engine rev-parse refs/heads/main
+      4fa1ea0e64bccc32e2d3116c534706d1b953931c
+        rc=0
+
+## the fresh GREEN counter line from Step 2, quoted from raw/red-green.txt
+
+      Test Files  2 passed (2)
+      Tests  23 passed (23)
+## the message actually sent, and through which channel
+
+Instrument deviation, reported rather than papered over: AC2 names `fn_send_message` as the
+channel to the CEO. That tool is not on the Workflow Executor's tool surface — the call
+returned, verbatim:
+
+      Tool fn_send_message not found
+
+So the identical bytes went out through the two operator-visible channels this session does
+have, in the same tick as the prints above:
+
+  1. a card log entry on STAS-392 (live on the board History tab), and
+  2. a registered artifact in the dashboard gallery, discoverable by the CEO agent
+     (agent-94d01490) and by every other lane:
+     "STAS-392 — fast-forward window for the 390 engine line is open (measured this tick)",
+     id d3cddc88-2de2-45db-bd6f-3f8f7579a619.
+
+The message body as sent (1381 characters, inside the 2000-character cap):
+----8<---- message body ----8<----
+STAS-392 — okno na manualný fast-forward 390-ky je otvorené TOHOTO ticku.
+
+Vetva: refs/heads/fusion/stas-390-tool-channel-authority
+Tip:  e6b1fe4c7f4bafa36727e33e8df7c400e87c6a91
+Trunk: refs/heads/main = 4fa1ea0e64bccc32e2d3116c534706d1b953931c (merané tento tick)
+
+Merania z toho istého ticku:
+- rev-list --left-right --count main...390 = 0 2
+- merge-base --is-ancestor main 390 rc=0
+- merge-tree --write-tree --name-only rc=0, žiadny CONFLICT riadok
+- git diff --shortstat main...390 = 2 files changed, 275 insertions(+), 6 deletions(-)
+- git log --oneline main..390 = e6b1fe4c7f a a38c8be034 (obe STAS-389)
+- čerstvý green na novej báze: Test Files 2 passed (2); Tests 23 passed (23), 0 skipped
+  (RED na tej istej báze: 8 failed | 15 passed, len s tool-result-authority.ts checkoutnutým na trunk)
+
+Nohy na pristátie, z checkoutu enginu na refs/heads/main, po čerstvom overení trunku:
+  git rev-parse refs/heads/main
+  git merge --ff-only fusion/stas-390-tool-channel-authority
+
+Okno sa zatvára v rádoch hodín — engine rail merguje 2-4× denne a presne takto zomrel minulý
+zelený stav 390: dva rail mergy po uzavretí karty. Táto karta nezapisovala do refs/heads/main,
+nič netlačila, neotvorila žiadny PR.
+
+PORADIE: druhú líniu (oznam prázdneho tool resultu) nikdy nespúšťajte pred touto. AC1 —
+neutraliseStructureTokens nie je na trunku (git grep -c = 0) — splní až tento merge.
+----8<---- end of message body ----8<----

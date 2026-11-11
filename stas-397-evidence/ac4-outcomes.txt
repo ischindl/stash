@@ -1,0 +1,57 @@
+STAS-397 AC4 - the four outcomes, printed by the engine's own release entry point
+=================================================================================
+
+Produced in this tick at the delivered head `ef8ef296d28a0de11fd05cd72f368d7e662f144d`, by the probe
+kept at `raw/stas-397-ac4-probe.test.ts`. That probe is a printer, not a deliverable: it is copied
+into the engine checkout as a test file, run once, and deleted again, so the branch carries only the
+guard file while this capture carries the words AC4 asks for. The command and the checkout's state
+around it:
+
+  cp raw/stas-397-ac4-probe.test.ts -> packages/engine/src/__tests__/stas-397-ac4-probe.test.ts
+  ./node_modules/.bin/vitest run --project=engine-default --reporter=dot \
+    src/__tests__/stas-397-ac4-probe.test.ts
+  probe_rc=0        Test Files 1 passed (1)       Tests 1 passed (1)
+  the probe file deleted again:  git status --porcelain | wc -l  -> 0
+
+The fixture is the guard file's, unchanged: a real repository, a real linked worktree, a real
+integration ref, and `removeWorktree` driven with `RemovalReason.SelfHealingBranchConflict` - the
+reason the recovery sweep passes - with no landing proof, exactly as the sweep calls it. Mock census
+over the entry point: `vi\.(mock|fn|spyOn|stub|mocked)` -> 0 matches in the guard file, and the only
+seam in this probe is the audit SINK that collects the events the release writes, which is the record
+under observation rather than a stand-in for the code under test.
+
+--------------------------------------------------------------------------------
+THE FOUR STATES, AS PRINTED (verbatim lines, `raw/ac4-outcomes.txt`)
+--------------------------------------------------------------------------------
+  state=ignored-only        outcome=released (removed=true), directory still on disk = false
+  state=tracked-modified    outcome=refused (WorktreeContentPreservationError: preserving ...:
+                              uncommitted or ignored content present)   content-preserved=true
+  state=untracked           outcome=refused (same error class and sentence)  content-preserved=true
+  state=quoted-untracked    porcelain=?? "we\"ird.md"
+                            outcome=refused (same error class and sentence)  content-preserved=true
+
+One `released`, three `refused`. The released fixture is the wedged shape itself: an empty expanded
+untracked read, a tip that is an ancestor of the integration ref, `ahead = 0`, and as its only content
+a `stashai.egg-info/` directory - the unlisted name - sitting beside a `.venv/` directory. Each of the
+other three differs from it by exactly one porcelain class, and each "preserved" is a read of the file
+back off the disk after the refusal, not an assumption. The quoted case is git's own quoting of a path
+containing a double quote, which is the shape a naive prefix test would mis-read as clean.
+
+--------------------------------------------------------------------------------
+THE DISCARD IS RECORDED, NOT SILENT - the literal event the release wrote
+--------------------------------------------------------------------------------
+  discard-record-type     = worktree:removal-discarded-ignored-content
+  discard-record-metadata = {"taskId":"STAS-397","reason":"self-healing-branch-conflict",
+                             "entryCount":2,
+                             "discardedIgnoredPaths":[".venv/","stashai.egg-info/"]}
+
+`discardedIgnoredPaths` names the two directories by name, which is the half of the bargain the old
+refusal used to strike by refusing: nobody reading the audit has to guess what a released checkout
+took with it. `reason` shows the sweep's own reason reached the record, and `entryCount` is the
+ignored-entry count the probe saw, so a future argument about volume has a number attached.
+
+Note on the refusal sentence: it still reads "uncommitted or ignored content present". It is now
+reached only by a tree holding occupancy (`deliverable`), where the word "ignored" is a leftover of the
+retired classification rather than a live reason. Renaming a user-visible error string is not this
+card's call and at least three tests pin the sentence verbatim, so it stays and this line records the
+inaccuracy instead of quietly fixing it.

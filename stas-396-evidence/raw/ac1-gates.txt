@@ -1,0 +1,69 @@
+=== 1. branch discovery (for-each-ref filtered on stas-394) ===
+1677ee018a5d3aee0e74c0669676a1db40c690c5 commit	refs/heads/stas-394-fix-title-idempotence
+rc=0
+
+=== 2. live trunk and branch tips, read BY REF NAME ===
+refs/heads/main = ee995fcc85013a990752307d0f253e9d6fe5ebf4  rc=0
+refs/heads/stas-394-fix-title-idempotence = 1677ee018a5d3aee0e74c0669676a1db40c690c5  rc=0
+merge-base(main,branch) = 1d4bcc61847562837b44854bccea95b783d8b943  rc=0
+
+=== 3. divergence, three-dot form ===
+8	1
+rc=0
+
+=== 4. ancestry, BOTH directions ===
+rc(trunk is ancestor of branch) = 1
+rc(branch is ancestor of trunk) = 1
+
+=== 5. the branch's own changed-path list, count ===
+.changeset/stas-394-fix-title-idempotence.md
+docs/missions.md
+docs/workflow-steps.md
+packages/core/src/__tests__/mission-fix-title-composition.test.ts
+packages/core/src/async-stores/async-mission-store.ts
+packages/core/src/index.gate.ts
+packages/core/src/index.ts
+packages/core/src/missions/mission-store.ts
+packages/core/src/tasks/fix-title.ts
+packages/core/src/tasks/remediation-steps.ts
+packages/engine/src/workflows/human-merge-approval-boundary.ts
+count = 11
+
+=== 6. content census of the fix AT TRUNK, path-scoped to those paths ===
+rc(composeFixTitle at trunk)  = 1
+rc(FIX_TITLE_PREFIX at trunk) = 1
+1677ee018a5d3aee0e74c0669676a1db40c690c5:.changeset/stas-394-fix-title-idempotence.md:1
+1677ee018a5d3aee0e74c0669676a1db40c690c5:docs/missions.md:1
+1677ee018a5d3aee0e74c0669676a1db40c690c5:docs/workflow-steps.md:1
+1677ee018a5d3aee0e74c0669676a1db40c690c5:packages/core/src/__tests__/mission-fix-title-composition.test.ts:4
+1677ee018a5d3aee0e74c0669676a1db40c690c5:packages/core/src/async-stores/async-mission-store.ts:2
+1677ee018a5d3aee0e74c0669676a1db40c690c5:packages/core/src/index.gate.ts:1
+1677ee018a5d3aee0e74c0669676a1db40c690c5:packages/core/src/index.ts:1
+1677ee018a5d3aee0e74c0669676a1db40c690c5:packages/core/src/missions/mission-store.ts:3
+1677ee018a5d3aee0e74c0669676a1db40c690c5:packages/core/src/tasks/fix-title.ts:2
+1677ee018a5d3aee0e74c0669676a1db40c690c5:packages/core/src/tasks/remediation-steps.ts:2
+1677ee018a5d3aee0e74c0669676a1db40c690c5:packages/engine/src/workflows/human-merge-approval-boundary.ts:2
+rc(composeFixTitle at tip)    = 0
+
+=== 7. merge-tree textual-collision probe ===
+merge-tree rc = 0
+CONFLICT lines = 0
+--- merge-tree output verbatim (first 40 lines) ---
+9bc1e0c46caf67f4ad62e2d6495e6dcbfb65486e
+
+=== 8. collision diff: did trunk touch any of the branch's own paths since the merge-base? ===
+rc = 0   collision-diff lines = 0
+--- collision diff verbatim ---
+--- end collision diff ---
+
+=== 9. how far trunk moved since the branch's base ===
+8
+rc=0
+ee995fcc85 fix(RUFU-871): read project runtime flags under a transaction-local RLS bypass
+f1247e8aef feat(RUFU-871): make the project card's runtime control a real toggle
+e4a8f4f1de feat(RUFU-871): project combo shows each project's state by colour and icon
+6c50ce0cae fix(RUFU-871): resolve project runtime state from one batched central settings read
+42f9762e1c fix(RUFU-871): an unreadable project runtime no longer reports as loaded
+50cb123e8f test(RUFU-871): pin the runtime-off entry ordering, label, focus safety, and reachability
+70749fcdee feat(RUFU-871): show and clear the runtime-off state on the project surfaces
+caec591ea5 feat(RUFU-871): project runtime state in the projects projection and display order

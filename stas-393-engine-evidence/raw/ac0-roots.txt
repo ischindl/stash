@@ -1,0 +1,107 @@
+# STAS-393 - AC0 - the ground, measured inside the run from the nested engine checkout
+# generated: 2026-11-11T01:46:12Z
+# produced by stas-393-engine-evidence/generate.sh (capture: ac0)
+# No memorised SHA appears below; every value was printed by the command above it.
+# Checkout: /home/schindler/git/stash/.fusion/worktrees/stas-393/.engine/stas-393-engine - a *linked* worktree of the engine repo.
+# The primary checkout holds refs/heads/main, which is where the operator's
+# fast-forward must run and what this card is forbidden to move.
+
+## the checkout is the engine repo and not its parent (toplevel + tracked-file probe)
+
+  $ git -C /home/schindler/git/stash/.fusion/worktrees/stas-393/.engine/stas-393-engine rev-parse --show-toplevel
+      /home/schindler/git/stash/.fusion/worktrees/stas-393/.engine/stas-393-engine
+        rc=0
+
+  $ git -C /home/schindler/git/stash/.fusion/worktrees/stas-393/.engine/stas-393-engine ls-files --error-unmatch packages/pi-claude-cli/src/tool-result-authority.ts
+      packages/pi-claude-cli/src/tool-result-authority.ts
+        rc=0
+
+## live trunk
+
+  $ git -C /home/schindler/git/stash/.fusion/worktrees/stas-393/.engine/stas-393-engine rev-parse refs/heads/main
+      c025edb9edf4a5eba16b03279ac9c5ba7805a4ef
+        rc=0
+
+  $ git -C /home/schindler/git/stash/.fusion/worktrees/stas-393/.engine/stas-393-engine rev-parse --short refs/heads/main
+      c025edb9ed
+        rc=0
+
+  $ git -C /home/schindler/git/stash/.fusion/worktrees/stas-393/.engine/stas-393-engine status --porcelain | wc -l
+      0
+
+## worktree occupancy, derived live - who holds refs/heads/main and each carried ref
+
+  $ git -C /home/schindler/git/stash/.fusion/worktrees/stas-393/.engine/stas-393-engine worktree list --porcelain | awk /^worktree /{w=\$2} /^branch /{print w\"  \"\$2} | grep -E refs/heads/main\$|stas-38[89]|stas-39
+      /home/schindler/git/Fusion  refs/heads/main
+      /home/schindler/git/stash/.fusion/worktrees/stas-393/.engine/stas-393-engine  refs/heads/fusion/stas-393-tool-result-stack
+      (a carried ref absent from this list has no live holder, so a new branch name
+       is required for the restack: git refuses to rebase a branch a worktree holds)
+
+## carried-ref name DISCOVERED by for-each-ref (a spec's branch name is not a measurement)
+
+  $ git -C /home/schindler/git/stash/.fusion/worktrees/stas-393/.engine/stas-393-engine for-each-ref --format=%(refname) %(objectname:short) %(subject) refs/heads/fusion/ | grep stas-3
+      refs/heads/fusion/stas-305-heartbeat-done-cap 2a31613789 fix(STAS-305): cap repeated heartbeat done signals and fail the run loud
+      refs/heads/fusion/stas-318-schema-skew 0d51e73466 docs(STAS-318): changeset names the checkout-root proof in the handoff
+      refs/heads/fusion/stas-330-wake-comment-delta-consumption 0c2fe67fe4 docs(STAS-330): state the run-open consumption seam and the dormant steering-lane guard
+      refs/heads/fusion/stas-343-admission-honesty 2ae2cd7298 test(STAS-367): teach the CLI barrel mocks the zero-started exports
+      refs/heads/fusion/stas-361-replan-cap-truth a324a562c1 test(stas-361 step 6): prove the drop survives an upgrade, a lying ledger, an old backup, and self-heal
+      refs/heads/fusion/stas-370-post-merge-landing-observability 3324238f35 STAS-370: the two GitLab fixtures were asserting the pre-landing-fact contract
+      refs/heads/fusion/stas-382-reseed-cycle-rearm 0db7438466 docs(STAS-382): tell the truth about the ceiling in the operator docs
+      refs/heads/fusion/stas-388-tool-result-authority 6a59cf4d51 STAS-388: stop calling content:[] a dropped payload, and close the envelope a payload could write
+      refs/heads/fusion/stas-389-tool-channel-authority 22f6d6c5b1 STAS-389: prove frame and role authority are gone, per surface, red then green
+      refs/heads/fusion/stas-390-tool-channel-authority e6b1fe4c7f STAS-389: prove frame and role authority are gone, per surface, red then green
+      refs/heads/fusion/stas-391-empty-tool-result-announcement eb20a6bfc5 STAS-391: announce an empty tool-result content array instead of crashing prompt assembly
+      refs/heads/fusion/stas-392-empty-tool-result-announcement 037a480cc5 STAS-391: announce an empty tool-result content array instead of crashing prompt assembly
+      refs/heads/fusion/stas-393-tool-result-stack f91fd759ce STAS-391: announce an empty tool-result content array instead of crashing prompt assembly
+      refs/heads/fusion/stas-399 324da3366f feat(STAS-399): name evicted memory sections and honour declared sacrifice order
+
+## the carried stack and its position against trunk
+
+  $ git -C /home/schindler/git/stash/.fusion/worktrees/stas-393/.engine/stas-393-engine log --oneline refs/heads/fusion/stas-392-empty-tool-result-announcement | head -6
+      037a480cc5 STAS-391: announce an empty tool-result content array instead of crashing prompt assembly
+      e6b1fe4c7f STAS-389: prove frame and role authority are gone, per surface, red then green
+      a38c8be034 STAS-389: stop a tool result from writing its own frame or a role key
+      4fa1ea0e64 perf(RUFU-756): stop the overseer sweep from loading the log column it never reads
+      c20b8e4eaa RUFU-480: retire the stale-binary schema refusal and make its warn line an operator class
+      06b1768b18 RUFU-441: evict memory snapshots the consolidation sweep produces
+
+  $ git -C /home/schindler/git/stash/.fusion/worktrees/stas-393/.engine/stas-393-engine merge-base refs/heads/main refs/heads/fusion/stas-392-empty-tool-result-announcement
+      4fa1ea0e64bccc32e2d3116c534706d1b953931c
+        rc=0
+
+  $ git -C /home/schindler/git/stash/.fusion/worktrees/stas-393/.engine/stas-393-engine rev-list --left-right --count refs/heads/main...refs/heads/fusion/stas-392-empty-tool-result-announcement
+      118	3
+        rc=0
+      (three dots is the only divergence predicate; rev-list A B without dots is a union)
+
+  $ git -C /home/schindler/git/stash/.fusion/worktrees/stas-393/.engine/stas-393-engine merge-base --is-ancestor refs/heads/main refs/heads/fusion/stas-392-empty-tool-result-announcement
+      (no output)
+        rc=1
+      (both directions printed whenever an rc=1 appears; rc=1 alone is ambiguous)
+
+  $ git -C /home/schindler/git/stash/.fusion/worktrees/stas-393/.engine/stas-393-engine merge-base --is-ancestor refs/heads/fusion/stas-392-empty-tool-result-announcement refs/heads/main
+      (no output)
+        rc=1
+
+## conflict predicate (rc=0 with no CONFLICT line = a clean POSITION, remedy is mechanical)
+      b258d410704d5ec0dbd6e28caf2ff55880ba98da
+        rc=0
+      CONFLICT line count = 0
+      stderr empty (0 bytes)
+
+## git cherry -v (a '+' line is expected and is not a landing predicate)
+      + a38c8be034c85e047fa1ad688b45ee19806735cb STAS-389: stop a tool result from writing its own frame or a role key
+      + e6b1fe4c7f4bafa36727e33e8df7c400e87c6a91 STAS-389: prove frame and role authority are gone, per surface, red then green
+      + 037a480cc562ef994aac0b19215613cb93e2b500 STAS-391: announce an empty tool-result content array instead of crashing prompt assembly
+        rc=0
+
+## AC1 gap proof - the canary pair, same command shape on both symbols
+
+  $ git -C /home/schindler/git/stash/.fusion/worktrees/stas-393/.engine/stas-393-engine grep -c neutraliseStructureTokens refs/heads/main -- packages/pi-claude-cli/src
+      (no output)
+        rc=1
+
+  $ git -C /home/schindler/git/stash/.fusion/worktrees/stas-393/.engine/stas-393-engine grep -c ZERO_BYTES_NOTICE refs/heads/main -- packages/pi-claude-cli/src
+      refs/heads/main:packages/pi-claude-cli/src/tool-result-authority.ts:2
+        rc=0
+      (zero for the first beside non-zero for the second is a real gap, not a malformed command)

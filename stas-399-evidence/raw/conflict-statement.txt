@@ -1,0 +1,115 @@
+### STAS-399 AC7 / D3: the numeral conflict is WRITTEN DOWN WITH A NAMED WINNER (the documented-conflict close)
+
+DISPOSITION IN ONE SENTENCE
+  The rule that binds a prompt is `MAX_MEMORY_LENGTH` = 50,000 CHARACTERS (UTF-16 code units as
+  `String.length` yields them); the 64 KB figure in the agent-facing memory policy governs nothing in this
+  repository and is therefore not a competing rule but an unimplemented prose aspiration, and the winner is
+  named at the constant itself (packages/engine/src/agents/agent-instructions.ts, comment above line 51),
+  which is where AC7's second branch says it must be named.
+
+WHAT THE CARD DELIBERATELY DID NOT DO
+  D3: "Whether that single number stays 50 000 or becomes the policy's 64 KB is a cost decision that belongs
+  to the CEO and the operator, not to a defect fix." No ruling naming a new number arrived before delivery,
+  so the numeral is UNCHANGED and this file is the close. The card ships: one definition, the printed delta,
+  the printed trap, and the one-line change.
+
+DOCS CENSUS, base and tip (same command, return codes read apart from any pipe)
+  command: git grep -ln "MAX_MEMORY_LENGTH" <ref> -- "*.md"
+  BASE  c7311e7dc4: .changeset/rufu-443-inline-memory-clamp.md, docs/memory-plugin-contract.md        rc=0
+  TIP   324da3366f: the same two, plus .changeset/stas-399-memory-eviction-notice.md (this card's)     rc=0
+  command: git grep -lnE "64 ?KB|65[,_]?536" HEAD -- "*.md"
+  RESULT: 5 files, none of them a memory ceiling (CHANGELOG-archive.md, a step-inversion plan,
+          experiment-executor research, an ACP runtime pattern doc, packages/cli/CHANGELOG.md).
+  VERDICT: the policy's 32 KB / 64 KB pair is PROSE POLICY ONLY. What is written down in the engine is a
+          DIFFERENT pair for DIFFERENT surfaces, already documented in docs/memory-plugin-contract.md:
+            - MEMORY_LONG_TERM_BYTE_BUDGET = 32768 BYTES, the write-time working-set bound
+              (constants table line 45; invariant 9),
+            - MAX_MEMORY_LENGTH = 50,000 CHARACTERS, the injection-time clamp (invariant 9).
+          No tracked document states 64 KB as an agent-memory ceiling, so there is no document to update and
+          no doc to reconcile: AC7's first branch ("every tracked document carries the shipped numeral") is
+          already satisfied at base for the docs that mention this ceiling at all, and this card moves no
+          numeral, so it stays satisfied at tip. The prose policy that states 64 KB lives in AGENT MEMORY
+          (the CEO scope's `MEMORY BUDGET` section), which this card is forbidden to edit -- so the conflict
+          is closed where it can be closed: in code, at the constant.
+
+SHIPPED NUMERAL, UNIT, AND DEFINITION COUNT
+  50,000 CHARACTERS (`String.length`, UTF-16 code units). Not bytes. Verb: TRUNCATE (newest-keeping, per
+  source). Definitions of THIS concept in tracked sources: 1 at tip (was 2 at base, both in
+  packages/engine/src/agents/agent-instructions.ts plus one private copy in agent-tools.ts; see
+  numeral-census.txt). The notice reserve is a SECOND, DIFFERENT number on the same surface:
+  MEMORY_CLAMP_NOTICE_BUDGET_CHARS = 1,024 chars, so the content an over-budget source can render is
+  48,976 chars and the notice lives inside the rest.
+
+CEILING CHAIN, ORDERED, BINDING MEMBER MARKED (full version in carrier-census.txt PART 3)
+  [1] on-disk file                53,640 chars / 55,686 bytes      input, no limit
+  [2] MEMORY_LONG_TERM_BYTE_BUDGET 32,768 BYTES                    REPORT + SCHEDULE CONSOLIDATION, never refuses
+  [3] write-side REJECT caps      50,000 CHARS                     REJECT the whole write
+                                                                  (engine: agent-tools.ts via the constant it now
+                                                                   imports; dashboard: FOUR literal 50000 guards)
+  [4] MAX_MEMORY_LENGTH           50,000 CHARS                     TRUNCATE, newest-keeping, PER SOURCE
+                                                                  *** BINDS every engine lane and the measured
+                                                                      CEO scope. ***
+  [5] CHAT_MEMORY_CAP_CHARS        8,000 CHARS                     DEMOTE to bounded index; chat lane only, never
+                                                                  triage/executor/reviewer/merger/heartbeat
+  [6] agentMemoryInclusionMode      no numeral                      SWITCH: index/off short-circuit before [4]
+  [7] MAX_SOUL_LENGTH 10,000 / MAX_INSTRUCTIONS_TEXT_LENGTH 50,000  TRUNCATE, different fields, not merged
+  Budget is PER SOURCE, not combined: `formatMemorySection` clamps the inline `agent.memory` field and the
+  workspace `MEMORY.md` in two separate calls, so a full-mode prompt can legitimately carry up to 2 x 50,000
+  chars of memory plus headers. That is the answer AC2's length invariant depends on and the reason the guard
+  file asserts the invariant per clamped source.
+
+WHAT MOVING TO 65,536 WOULD COST PER WAKE (so the ruling costs one sentence, not an investigation)
+  Ceiling delta, per over-budget memory source: 65,536 - 50,000 = +15,536 chars, and the content budget
+    would rise to 65,536 - 1,024 = 64,512 chars.
+  Per wake, worst case (BOTH sources over budget): +31,072 chars of memory in the prompt.
+  Realised delta on the measured CEO shape, one source over budget: the whole 53,639-char corpus fits, so
+    the gain is exactly the 5,810 chars the positional rule evicts today, i.e. 2 sections, not 15,536.
+  Token estimate at the usual ~4 chars/token heuristic (an ESTIMATE, and the only estimated figure here,
+    labelled as such): +3,884 tokens per over-budget source, +7,768 in the both-sources case, +1,453 for the
+    realised CEO-shape gain.
+  The notice's price is unchanged by a raised numeral: 1,024 chars per clamped source, at most one average
+    section, and it is only paid when something is actually dropped.
+
+THE ONE-LINE CHANGE THAT WOULD ENACT A RULING (printed verbatim, NOT applied)
+  packages/engine/src/agents/agent-instructions.ts:51
+    -export const MAX_MEMORY_LENGTH = 50_000;
+    +export const MAX_MEMORY_LENGTH = 65_536;
+
+THE TRAP: THAT ONE LINE IS NOT THE WHOLE EFFECT, AND SAYING SO IS PART OF AC7
+  It moves the prompt clamp AND the engine's own write-side reject (`agent-tools.ts` now imports the
+  constant, so `fn_update_identity` accepts 65,536 the same moment the clamp does -- that coupling is this
+  card's doing and is the honest consequence of "one number, one definition").
+  It does NOT move the four dashboard write guards, which hold the literal `50000` in their own packages:
+    packages/dashboard/app/components/AgentDetailView.tsx:3155
+    packages/dashboard/src/routes/register-agent-core-routes.ts:295
+    packages/dashboard/src/routes/register-agent-core-routes.ts:854
+    packages/dashboard/src/routes/register-agent-runtime-routes.ts:265
+  A ruling applied as one line would therefore let the engine's own tools write 65,536 chars of memory while
+  the dashboard UI still refuses the same edit at 50,000 -- an asymmetry between two write paths, not between
+  two budgets. Any ruling must name those four sites in the same breath. (carrier-census.txt PART 4 said
+  "three dashboard guards"; four is the measured count in numeral-census.txt PART 3 -- corrected here rather
+  than repeated.)
+  It also does not touch the 32 KiB BYTES consolidation budget, which is the number that decides WHEN an
+  agent's own maintenance consolidates a file. Raising [4] without touching [2] means agents are consolidated
+  to a 32 KiB working set and then allowed to render 64.5 K chars of it: the consolidation incentive does not
+  disappear, it just stops being the binding constraint on prompt size.
+
+UPSTREAM RATIONALE FOR THE CURRENT NUMBER, QUOTED VERBATIM, so a reviewer can judge D3 without re-reading
+history. From commit 378d9d4a83 ("RUFU-443: keep newest memory entries inline and announce omissions"):
+    - Deliberately unchanged: `MAX_MEMORY_LENGTH` (50,000 chars) and `MEMORY_LONG_TERM_BYTE_BUDGET` (32 KiB),
+      `fn_memory_append` write behavior, on-disk memory files, and the chat path's `memoryCapChars`
+      bounded-index branch (it already self-announces).
+and from docs/memory-plugin-contract.md, invariant 9:
+    9. **The budget and the injection clamp are two different numbers governing two different surfaces.**
+       ... Neither implies the other: a file can sit under budget and still be clamped, and "over budget"
+       must never be read as "everything is in the prompt". The clamp is measured in **characters**, not
+       bytes, so multi-byte memory costs more context than the number suggests.
+The card changes neither number and adds no third surface; it makes the existing one honest.
+
+KNOWN, DISCLOSED LAG (and the reason this is not silently patched here)
+  Invariant 9 still describes the notice as carrying "the omitted section and character counts plus the
+  `fn_memory_search` / `fn_memory_get` retrieval path". That remains TRUE of the shipped notice -- it still
+  carries all of it -- but no longer COMPLETE: the notice also names the dropped headings and the rule that
+  chose them. This card is explicitly forbidden from restating its own fix in `docs/` ("a second copy of
+  procedure is the second source of truth this card is fixing"), so the sentence is left for whoever owns
+  that document, and it is filed as a completion recommendation instead of being edited here.

@@ -1,0 +1,217 @@
+STAS-394 STEP 2 - COMPOSING SITE LOCALIZED (engine trunk SHA 7c14f53184a2f8e3a95c5b38eb2125ef52dd0acf)
+all discovery below was read-only: git ls-files + git grep on TRACKED files (never a recursive
+file walk, which would also read .worktrees/* duplicates)
+
+== 1. CANDIDATE DISCOVERY (git ls-files filtered on refine|follow-up|duplicate|post-merge|revision|fix-round) ==
+45 non-test, non-doc production candidates; see raw/discovery-files.txt for the full list.
+R3 candidates named by the spec, resolved:
+  follow-up/refine creation : packages/core/src/task-store/update-task-deps.ts (refineTaskImpl)
+                            : packages/core/src/task-store/follow-up-ops.ts
+  duplicate path            : packages/core/src/duplicates/duplicate-guard.ts, duplicate-intake.ts
+  fix-round path            : packages/core/src/tasks/remediation-steps.ts
+  post-merge builder        : packages/core/src/merge/post-merge-producer-surface.ts, packages/engine/src/merge/*
+
+== 2. PREFIX-LITERAL CENSUS (git grep -n -F 'Fix: ', quoting-agnostic: the substring occurs in
+   double-quoted, single-quoted and backtick-interpolated forms alike) ==
+total hits over packages/ plugins/ scripts/ : 213
+by classification:
+  test files                    : 148
+  markdown / changelog copy     : 22
+  gate-check script copy        : 5
+  production TypeScript         : 36
+
+== 3. THE FOUR PRODUCTION CONCATENATIONS OF THE LITERAL (git grep -n 'Fix: ${') ==
+packages/core/src/async-stores/async-mission-store.ts:2477:        title: title ?? `Fix: ${source.title}`,
+packages/core/src/missions/mission-store.ts:3599:      title: title ?? `Fix: ${sourceFeature.title}`,
+packages/core/src/tasks/remediation-steps.ts:23:  return `Fix: ${detail || "review finding"}`;
+packages/engine/src/workflows/human-merge-approval-boundary.ts:319:    name: `Fix: ${step.title}`,
+
+context for each, verbatim:
+--- C1 packages/core/src/missions/mission-store.ts:3596-3610 (SQLite store, generated fix FEATURE) ---
+    const fixFeature: MissionFeature = {
+      id: fixFeatureId,
+      sliceId: sourceFeature.sliceId,
+      title: title ?? `Fix: ${sourceFeature.title}`,
+      description: fixDescription,
+      acceptanceCriteria: sourceFeature.acceptanceCriteria,
+      status: "defined",
+      createdAt: now,
+      updatedAt: now,
+      loopState: "idle",
+      implementationAttemptCount: 0,
+      validatorAttemptCount: 0,
+      generatedFromFeatureId: sourceFeatureId,
+      generatedFromRunId: runId,
+    };
+--- C2 packages/core/src/async-stores/async-mission-store.ts:2474-2488 (PostgreSQL store, same contract) ---
+      const feature: MissionFeature = {
+        id: this.generateId("F"),
+        sliceId: source.sliceId,
+        title: title ?? `Fix: ${source.title}`,
+        description: [source.description, causeText ?? (reasonText ? `## Verification failure detail\n${reasonText}` : undefined)].filter(Boolean).join("\n\n") || undefined,
+        acceptanceCriteria: source.acceptanceCriteria,
+        status: "defined",
+        createdAt: now,
+        updatedAt: now,
+        loopState: "idle",
+        implementationAttemptCount: 0,
+        validatorAttemptCount: 0,
+        generatedFromFeatureId: sourceFeatureId,
+        generatedFromRunId: runId,
+      };
+--- C3 packages/core/src/tasks/remediation-steps.ts:20-24 (review remediation STEP name) ---
+export function formatRemediationStepName(input: { title?: string; detail?: string; name?: string }): string {
+  const source = [input.title, input.detail, input.name].find((value) => value?.trim()) ?? "review finding";
+  const detail = source.replace(/\s+/g, " ").trim();
+  return `Fix: ${detail || "review finding"}`;
+}
+--- C4 packages/engine/src/workflows/human-merge-approval-boundary.ts:318-320 (human-refusal STEP name) ---
+  const appended = await deps.store.appendRemediationSteps(taskId, plan.steps.map((step) => ({
+    name: `Fix: ${step.title}`,
+    status: "pending" as const,
+
+== 4. CLASSIFICATION ==
+COMPOSER (prepends the literal AND consumes a parent title): C1, C2.
+  Both are createGeneratedFixFeature, i.e. the child is built at CREATION time from
+  sourceFeature.title / source.title - the parent's CURRENT title, already carrying its own
+  inherited layer. They are the SQLite and PostgreSQL twins of one contract.
+CONSUMER (copies an already-composed title, adds nothing):
+  packages/core/src/missions/mission-store.ts:4671 and async triageFeature: title: taskTitle || feature.title
+  -> the board task title is the FEATURE title verbatim. This is how a feature-level layer
+     becomes a card label without any task-level code ever touching the literal.
+COMPOSER-OF-STEP-NAMES (same literal, but onto a finding/plan step title, never onto a card):
+  C3 remediation-steps.ts:23, C4 human-merge-approval-boundary.ts:319. C4 re-implements C3's
+  literal inline; both share the cumulative shape, so both must route through the helper.
+UNRELATED COPY STRING (static text, no concatenation):
+  packages/engine/src/spec-validation/external-integration-evidence.ts:168
+  packages/engine/src/spec-validation/task-document-references.ts:133
+  the 10 remaining TypeScript hits are comments (async-approval-request-store.ts:277,
+  pi-extensions.ts:129, moves.ts:1025, task-artifacts-ops.ts:660, TaskCard.tsx:2749,
+  step-display.ts:18, github.ts:4685, agent-heartbeat.ts:8355+8386, DependencyGraph.tsx:255)
+  and identifier/field names (retry-burned-logger.ts:34 postReviewFix, and the
+  sendTaskBackForFix / requestPreMergeOptionalStepFix dependency-injection keys in
+  append-review-remediation-steps.ts, bounce-verification-failure.ts, execute-workflow-graph.ts,
+  handle-graph-failure.ts, recover-failed-pre-merge-step.ts, request-pre-merge-optional-step-fix.ts,
+  review-arbitration.ts, review-convergence-ladder.ts, run-implementation.ts,
+  workflow-graph-task-runner.ts, project-engine.ts:2735) - not title composition at all.
+CSS COMMENT (styling rationale, no title and no concatenation anywhere in the file):
+  packages/dashboard/app/components/AgentDetailView.css:79
+  packages/dashboard/app/components/MemoryView.css:100
+TEST: 148 hits under __tests__/ and *.test.ts, listed in raw/prefix-hits.txt.
+Accounting check: 148 test + 22 markdown/changelog + 5 .mjs gate-check copy + 36 production
+TypeScript + 2 CSS comments = 213, which is the whole census with nothing unclassified.
+
+== 5. WINNING SITE, NAMED ==
+file    : packages/core/src/missions/mission-store.ts
+line    : 3599
+expr    : title: title ?? `Fix: ${sourceFeature.title}`,
+twin    : packages/core/src/async-stores/async-mission-store.ts:2477
+expr    :         title: title ?? `Fix: ${source.title}`,
+
+== 6. MECHANISM CROSS-CHECK (Step 0 data vs Step 2 code) - THEY AGREE ==
+Step 0 verdict: composition at child-creation time from the parent's current title.
+Step 2 code   : createGeneratedFixFeature builds the child title at creation from
+                sourceFeature.title. No code path mutates an existing task's title with this
+                literal; git grep for the literal shows zero assignment to an existing row.
+No disagreement to adjudicate.
+
+== 7. LINEAGE SURFACE (R4), located by census not assumption ==
+feature level : generatedFromFeatureId - ALREADY written by both composers
+                (mission-store.ts:3608, async-mission-store.ts:2486). Generation is derivable
+                by walking it; mission-store.ts:3535-3544 already walks exactly that chain.
+task level    : sourceParentTaskId - the engine's lineage-parent field on a Task. createTask
+                accepts it as input.source.sourceParentTaskId (task-creation.ts:775, 1343) but
+                triageFeature never passes one, which is why all six cards of this family read
+                ABSENT while seven unrelated cards read populated. This is the field AC3 uses;
+                no new column and no migration.
+
+== 8. EXPLICITLY OUT OF SCOPE, located and reported, NOT edited ==
+board label truncation: packages/core/src/ai/ai-summarize.ts:1362 deriveTaskLabelFromDescription
+  (DEFAULT_TASK_LABEL_MAX_LENGTH = MAX_TITLE_LENGTH at :1234, MAX_TASK_LABEL_LENGTH = 220 at :1237),
+  consumed with the 80 argument at packages/engine/src/agent-tools.ts:1757, 1819, 1923, 6618 and
+  packages/cli/src/extension.ts:2199, 2289. It clamps only the description-derived fallback label;
+  an existing title is rendered in full (task.ts:68: task.title?.trim() || derived).
+  The damage in this defect is the composed bytes, not the display. Untouched.
+
+== 9. SIBLING PREFIX SHAPES WITH THE SAME CUMULATIVE FORM (risk note; listed, different literal) ==
+packages/dashboard/src/chat.ts:5230:      title: `Continue: ${sourceTitle}`,
+packages/dashboard/src/mission-routes.ts:1050:            title: `Milestone: ${milestoneData.title}`,
+packages/dashboard/src/mission-routes.ts:1068:              title: `Slice: ${sliceData.title}`,
+These are not the 'Fix: ' family and are not on the mission remediation loop. Reported, not changed.
+
+== 10. RE-MEASUREMENT AT THE MOVED TRUNK (AC0: the trunk moved twice inside this card's run) ==
+git --git-dir=$HOME/git/Fusion/.git rev-parse refs/heads/main, printed at three moments in-run:
+  7c14f53184a2f8e3a95c5b38eb2125ef52dd0acf   the SHA the discovery census above was read against
+  1d4bcc61847562837b44854bccea95b783d8b943   re-read at Step 1 close (raw/remeasure-tip.txt shows the next one)
+  50cb123e8f1b9b29ef9a872defb3045c61480538   re-read while registering this capture
+Every step that consumes the trunk re-reads it; nothing here is inherited. The census is stable
+across all three: `git grep -n 'Fix: ${' -- packages plugins scripts` returns the identical six
+lines at 1d4bcc618 and at 50cb123e8 (raw/remeasure-tip.txt), i.e. the four production sites above
+and two test fixtures, with no new composer and no line-number drift:
+  packages/core/src/async-stores/async-mission-store.ts:2477   production composer
+  packages/core/src/missions/mission-store.ts:3599             production composer
+  packages/core/src/tasks/remediation-steps.ts:23              production step-name composer
+  packages/engine/src/workflows/human-merge-approval-boundary.ts:319  production step-name composer
+  + 2 test fixtures (remediation-append-reopens-step-ledger.test.ts:52,
+    workspace-code-review-revise-remediation.test.ts:262)
+
+== 11. WHICH TWIN IS LIVE, found by census and not by assumption (corrects section 5's emphasis) ==
+Section 5 named mission-store.ts:3599 first. That ordering understates the async twin, and the
+repository's own ratchet test says why it matters:
+  packages/core/src/__tests__/mission-store-sync-deprecated.test.ts (RUFU-141)
+    "the sync MissionStore is dead in production, and provably stays dead" ... "no production path
+    instantiates or calls the sync MissionStore (packages/core/src/missions/mission-store.ts)" ...
+    "getMissionStoreImpl (task-store/workflow-definitions.ts) constructs only the
+    AsyncDataLayer-backed AsyncMissionStore for the PostgreSQL backend"
+Verified independently in this run: `git grep -l 'new AsyncMissionStore('` returns the production
+constructor only at packages/core/src/task-store/workflow-definitions.ts, and `git grep -ln
+'new MissionStore(' -- packages` returns three test files plus the ratchet itself. This board's own
+environment matches: the suite log prints "external backend resolved (DATABASE_URL set)".
+
+Therefore the corrected AC1 verdict names ONE expression per store, with the live one first:
+  LIVE IN PRODUCTION : packages/core/src/async-stores/async-mission-store.ts:2477
+                       title: title ?? `Fix: ${source.title}`,
+  DEPRECATED TWIN    : packages/core/src/missions/mission-store.ts:3599
+                       title: title ?? `Fix: ${sourceFeature.title}`,
+Both are the same createGeneratedFixFeature contract and BOTH compose cumulatively, so the fix has
+to route both through one helper or the deprecated twin keeps the defect. The deprecated twin is
+also the only one of the two that any test in this repository can drive without a live PostgreSQL
+instance (see Step 3), which is why the regression test is written against it and not against the
+async store: the async store's only existing harness is pgDescribe-gated, and this host cannot
+authenticate to PostgreSQL at all (190 of the 263 baseline failures are pg-gated on
+"password authentication failed"), so an async-store test here would SKIP, and a skipped test is
+not a RED.
+
+== 12. CARD-LEVEL PROVENANCE PROOF: the mission path really authored these six cards ==
+The Step-2 code finding is on the mission path, so the claim that needs data (not code) is that
+these six CARDS came from that path at all. Measured on the board records (raw/lineage_provenance.py
+-> raw/lineage-provenance-out.txt, raw/branchctx.py -> raw/branchctx-out.txt):
+
+  all six family cards : sourceType='unknown'   sourceParentTaskId=None   missionFeatureId=None
+                         sourceMetadata.fusionBranchContext =
+                           {"groupId":"BG-MTMY6YSR-9U2MK3","source":"mission","assignmentMode":"shared"}
+
+  healthy-lineage controls, same board, same field set:
+    STAS-341: sourceType='agent_heartbeat' sourceParentTaskId='STAS-285' fusionBranchContext=null
+    STAS-141: sourceType='api'             sourceParentTaskId='STAS-122' fusionBranchContext=null
+    STAS-367: sourceType='task_refine'     sourceParentTaskId='STAS-343' fusionBranchContext=null
+
+Why this is decisive and not suggestive:
+  * branchContext{source:"mission"} is stamped only by a mission createTask. All six carry it, all
+    three controls do not. The six are mission-triaged; the controls are not.
+  * sourceType='unknown' is the DEFAULT, printed from the engine: task-creation.ts:770
+    `sourceType: input.source?.sourceType ?? "unknown"`. triageFeature passes no `source` at all,
+    which is exactly why the family has no sourceParentTaskId while three other creation paths
+    (agent_heartbeat, api, task_refine) do. The field is not absent from the schema; it is absent
+    from this one call.
+  * No card of this family carries a sourceAgentId, so no agent-authored title can explain the
+    layers: the agent-created paths stamp the agent, and none of these six is stamped.
+  * And no test in the repository asserts the cumulative shape: `git grep -n 'Fix: Fix:' -- packages
+    plugins scripts` returns exactly one line, a mocked scheduler fixture
+    (mission-stranded-feature-retriage.test.ts:155) that never calls the composer. So the old
+    behaviour has no test to inherit.
+
+AC3 CONSEQUENCE, stated before the change: the ancestry field exists (TaskSource.sourceParentTaskId,
+types/task/task-core.ts:897), the createTask call that authors these six cards is the one that omits
+it, and the value to put in it is derivable today from feature.generatedFromFeatureId ->
+parent feature -> its taskId. No new column, no migration.

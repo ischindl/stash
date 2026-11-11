@@ -1,0 +1,86 @@
+# Steps 2 and 3: the incident run, read back from the platform's own records
+# Time basis: run-log rows carry UTC ISO timestamps; file mtimes are local
+# (UTC+01:00). The incident row is 15:24:43Z; the card body wrote 16:24Z,
+# which is that instant in local time -- an hour-label error in the body.
+
+## The spawn argv, from Instrument A's source (the candidate-2 question)
+command: grep -n -A2 'function getBashShellConfig' <runtime>/dist/utils/shell.js
+17:function getBashShellConfig(shell) {
+18-    return isLegacyWslBashPath(shell) ? { shell, args: ["-s"], commandTransport: "stdin" } : { shell, args: ["-c"] };
+19-}
+command: grep -n -B3 -A3 'const child = spawn' <runtime>/dist/core/tools/bash.js
+63:            const child = spawn(shellConfig.shell, commandFromStdin ? shellConfig.args : [...shellConfig.args, command], {
+64-                cwd,
+65-                detached: process.platform !== "win32",
+66-                env: env ?? getShellEnv(),
+# Measured: the tool spawns <shell> with args ['-c'] (['-s'] with stdin
+# transport only on legacy WSL paths). That is non-login and non-interactive,
+# so bash sources no startup file for a tool call: rc-file injection is
+# excluded by the spawn site itself, not only by the Step-0 differential.
+
+## The incident run, identified by content rather than by task
+file=agent-94d01490-runlogs-run-3d8a64bf.jsonl
+  rows=48 type_counts={'text': 23, 'tool': 13, 'tool_result': 12}
+  first_ts=2026-11-04T18:00:33.193Z last_ts=2026-11-04T18:06:46.290Z
+  taskId_values=[''] -- empty means a no-task session
+  bash_call_start_times_utc=['18:02:32.287', '18:03:09.594', '18:03:26.378', '18:03:46.061']
+  LITERAL row_index=34 row_type=text ts=2026-11-04T18:05:00.294Z
+  per_type type=text rows=23 carrying_the_literal=1
+  per_type type=tool rows=13 carrying_the_literal=0
+  per_type type=tool_result rows=12 carrying_the_literal=0
+file=agent-e7428828-runlogs-run-d60fbce1.jsonl
+  rows=60 type_counts={'tool': 25, 'tool_result': 24, 'text': 11}
+  first_ts=2026-11-04T15:20:32.961Z last_ts=2026-11-04T15:24:52.623Z
+  taskId_values=[''] -- empty means a no-task session
+  bash_call_start_times_utc=['15:20:47.407', '15:20:51.661', '15:20:57.719', '15:21:00.142', '15:21:09.907', '15:21:14.207', '15:21:21.045', '15:21:23.432', '15:21:26.010', '15:21:30.090', '15:21:39.761', '15:21:42.415', '15:21:44.550', '15:21:59.512', '15:22:18.741', '15:22:23.896', '15:22:44.012', '15:22:52.047', '15:23:01.154', '15:23:27.259']
+  LITERAL row_index=48 row_type=text ts=2026-11-04T15:24:43.352Z
+  per_type type=text rows=11 carrying_the_literal=1
+  per_type type=tool rows=25 carrying_the_literal=0
+  per_type type=tool_result rows=24 carrying_the_literal=0
+
+## What a persisted tool_result row actually contains (the vacuity test)
+agents_with_run_logs=12
+# The total file count is deliberately not captured: the platform appends a
+# run log for this card's own session while the capture runs, so the number
+# only means something with a timestamp next to it. It is stated as prose in
+# findings.md (9 543 files, measured 2026-11-04) instead of pretending to be
+# a constant.
+  agent=agent-94d01490 runs_on_disk=1884 runs_carrying_the_literal=1
+  agent=agent-e7428828 runs_on_disk=1847 runs_carrying_the_literal=1
+  carrier=agent-94d01490-runlogs-run-3d8a64bf.jsonl
+    type=tool keys=['agent', 'taskId', 'text', 'timestamp', 'type'] text='fn_read_messages' text_len=16
+    type=tool_result keys=['agent', 'durationMs', 'taskId', 'text', 'timestamp', 'type'] text='fn_read_messages' text_len=16
+    type=tool keys=['agent', 'taskId', 'text', 'timestamp', 'type'] text='fn_task_list' text_len=12
+    longest_persisted_tool_result_text_field=16 characters
+  carrier=agent-e7428828-runlogs-run-d60fbce1.jsonl
+    type=tool keys=['agent', 'taskId', 'text', 'timestamp', 'type'] text='fn_read_messages' text_len=16
+    type=tool_result keys=['agent', 'durationMs', 'taskId', 'text', 'timestamp', 'type'] text='fn_read_messages' text_len=16
+    type=tool keys=['agent', 'taskId', 'text', 'timestamp', 'type'] text='bash' text_len=4
+    longest_persisted_tool_result_text_field=16 characters
+# A persisted tool row stores the tool NAME plus timing, not the payload: the
+# text field is 'bash', four characters, and no tool_result field exceeds the
+# longest value printed above. So the absence of the directive from these rows
+# is vacuous -- it measures what the platform persists, not what a command
+# printed. Payload persistence is gated off in the logger by configuration.
+
+## The board's own database, opened read-only (the last payload surface)
+command: python3 sqlite3 connect file:<db>?mode=ro  (no writes, timeout 5s)
+db_bytes=9572352
+tables_total=86
+candidate_tables=20
+columns_scanned=30 tables_with_a_hit=0
+# Zero hits means no row in the board store carries the directive in any
+# text-bearing column of a message-, log-, session-, event- or document-
+# shaped table. Combined with the names-only run-log rows above, no
+# surface on this platform persists a bash call's payload text at all.
+
+## Carrier timeline: nothing retrievable pre-existed the report
+# mtimes local; UTC in brackets. All post-date 15:24:43Z.
+  agent-memory/agent-e7428828/MEMORY.md  mtime_local=2026-11-04 17:26:11[16:26:11Z]
+  agent-memory/agent-cef4c84b/MEMORY.md  mtime_local=2026-11-04 19:19:37[18:19:37Z]
+  artifacts/1793809619149-*  created_from_epoch_ms=1793809619149
+    -> 2026-11-04T16:26:59Z
+# So the packet, the reviewer's memory entry, and the planner's memory entry
+# are all downstream of the report. No artefact readable on this disk carried
+# the directive before the incident -- which does NOT prove none was in the
+# model's context, because that context was never persisted anywhere.

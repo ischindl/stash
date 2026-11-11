@@ -1,0 +1,288 @@
+ee995fcc85 refs/heads/main@{0}: cherry-pick: fix(RUFU-871): read project runtime flags under a transaction-local RLS bypass
+f1247e8aef refs/heads/main@{1}: cherry-pick: feat(RUFU-871): make the project card's runtime control a real toggle
+e4a8f4f1de refs/heads/main@{2}: cherry-pick: feat(RUFU-871): project combo shows each project's state by colour and icon
+6c50ce0cae refs/heads/main@{3}: cherry-pick: fix(RUFU-871): resolve project runtime state from one batched central settings read
+42f9762e1c refs/heads/main@{4}: commit: fix(RUFU-871): an unreadable project runtime no longer reports as loaded
+50cb123e8f refs/heads/main@{5}: cherry-pick: test(RUFU-871): pin the runtime-off entry ordering, label, focus safety, and reachability
+70749fcdee refs/heads/main@{6}: cherry-pick: feat(RUFU-871): show and clear the runtime-off state on the project surfaces
+caec591ea5 refs/heads/main@{7}: cherry-pick: feat(RUFU-871): project runtime state in the projects projection and display order
+1d4bcc6184 refs/heads/main@{8}: cherry-pick: feat(RUFU-871): expose the runtime-off switch as an API, a UI control, and tests
+27df926690 refs/heads/main@{9}: cherry-pick: feat(RUFU-871): per-project runtime OFF switch gated at the engine lane arms
+7c14f53184 refs/heads/main@{10}: cherry-pick: perf(RUFU-871): memoize the prompt-override read behind the selection memo TTL
+13a22722b3 refs/heads/main@{11}: revert: Revert "perf(RUFU-871): memoize the prompt-override read and invalidate IR caches on prompt edits"
+2ff1bf52e1 refs/heads/main@{12}: cherry-pick: perf(RUFU-871): memoize the prompt-override read and invalidate IR caches on prompt edits
+3a3da429b2 refs/heads/main@{13}: cherry-pick: docs(RUFU-871): name the real owner of the fusionBranchContext derivation
+6467f9924f refs/heads/main@{14}: cherry-pick: fix(RUFU-871): correct the i18n call shape in the refused-save toast
+08a7ecd779 refs/heads/main@{15}: cherry-pick: fix(RUFU-871): bound the board row payload and load bodies lazily
+a3a4f7b4c9 refs/heads/main@{16}: cherry-pick: fix(RUFU-871): describe board workflows from the catalog row instead of one read per workflow
+49de25e27a refs/heads/main@{17}: commit: fix(RUFU-871): route the usage poll through the one cached gh probe
+db0c82471f refs/heads/main@{18}: commit: perf(RUFU-871): return the read-attribution stack depth to 6
+669d3842fb refs/heads/main@{19}: merge rufu-871-project-scope-reads: Merge made by the 'ort' strategy.
+23a6ae8811 refs/heads/main@{20}: merge rufu-871-project-scope-reads: Merge made by the 'ort' strategy.
+faecc5a6e4 refs/heads/main@{21}: commit: perf(RUFU-871): stop the hottest whole-board read from hydrating comment bodies
+08608bb72a refs/heads/main@{22}: merge rufu-871-project-scope-reads: Fast-forward
+ad13ed32d9 refs/heads/main@{23}: merge ad13ed32d9a1f6a13fa1249eb6ac9f2b17948dcf: Fast-forward
+6031d25137 refs/heads/main@{24}: commit: feat(RUFU-871): measure the transcript bytes the census priced at 96 per session
+6567db4e38 refs/heads/main@{25}: commit: perf(RUFU-871): batch the scheduler fanout sweep's per-card selection reads
+f95f61af47 refs/heads/main@{26}: commit: perf(RUFU-871): batch the capacity sweep's per-card workflow-selection reads
+aa4be42802 refs/heads/main@{27}: commit: feat(RUFU-871): name the callers behind the selection-read hot path
+a0bd38a1c6 refs/heads/main@{28}: commit: perf(RUFU-871): bound the resolver's no-cache workflow-selection read with a TTL+epoch memo
+ae3c260cdf refs/heads/main@{29}: merge rufu-871-steering-dedup: Fast-forward
+43726e7ce4 refs/heads/main@{30}: merge rufu-871-reliability-aggregate: Fast-forward
+81ea3a41ba refs/heads/main@{31}: commit: fix(RUFU-871): stop the retention census truncating sources and polluting its refusal log
+874cb642d6 refs/heads/main@{32}: commit: fix(RUFU-871): publish the step-output retention sources at engine start
+a1facf81bc refs/heads/main@{33}: commit: feat(RUFU-871): meter step-output text production onto /metrics
+af2720f42a refs/heads/main@{34}: commit: feat(RUFU-871): report engine-owned retained collections into the /metrics retention census
+51fa29e3c2 refs/heads/main@{35}: merge 51fa29e3c2714f8fe3c9f3d02790afc155f6a6b6: Fast-forward
+e684ad8462 refs/heads/main@{36}: merge e684ad846213a5f217257383b0b703fc6d058cc5: Fast-forward
+c0398ab893 refs/heads/main@{37}: merge c0398ab893f92d427e1899a5ceb01ea43d49c01d: Fast-forward
+9f23bbcbcb refs/heads/main@{38}: merge rufu-584-lane-role-log-default: Fast-forward
+5017fb0a85 refs/heads/main@{39}: merge rufu-584-triage-selection-prefill: Fast-forward
+d5a3feaa10 refs/heads/main@{40}: merge rufu-584-review-sweep-batch-resolution: Fast-forward
+be3319990d refs/heads/main@{41}: merge be3319990df09dcd931cc55c35c83f1884c011ce: Fast-forward
+4fa1ea0e64 refs/heads/main@{42}: merge rufu-756-lane-role-log-projection: Fast-forward
+c20b8e4eaa refs/heads/main@{43}: merge c20b8e4eaaed6d01b74af1586a7ca8980fd1d499: Fast-forward
+06b1768b18 refs/heads/main@{44}: merge 06b1768b18f38a9b4d0d5b35467204e25bfe4396: Fast-forward
+af54c70c39 refs/heads/main@{45}: merge af54c70c391e8318e80994c2c4cd10c8f53544f9: Fast-forward
+bff234b429 refs/heads/main@{46}: merge bff234b429c2c204e6028621a78f935e4ca484d7: Fast-forward
+0d31daba2c refs/heads/main@{47}: commit: test(RUFU-307): make the fn_task_done summary fixture charset-legal so the guard cannot refuse it
+6aff48faff refs/heads/main@{48}: merge rufu-883-sampler-comment-projection: Fast-forward
+8f1ecb6e72 refs/heads/main@{49}: merge rufu-883-sampler-comment-projection: Fast-forward
+8584c966f9 refs/heads/main@{50}: merge 8584c966f9361eb254fc00ad78ec572d0d3b49f2: Fast-forward
+3c8ece6606 refs/heads/main@{51}: merge 3c8ece6606f16ab13174be0e78b2c50e18e62dd8: Fast-forward
+b6e6cb73f1 refs/heads/main@{52}: merge fusion/stas-388-tool-result-authority: Fast-forward
+0efa71d679 refs/heads/main@{53}: merge 0efa71d679ebdbafe24e7c63147427587a557b19: Fast-forward
+c7d02a3e54 refs/heads/main@{54}: merge c7d02a3e5499726565524677c99eb5689cb1b5be: Fast-forward
+37b7575e89 refs/heads/main@{55}: merge 37b7575e8970045018e7e48e8625a6bf4a665303: Fast-forward
+0a3cd0bad8 refs/heads/main@{56}: merge 0a3cd0bad8a20d60ab093f8eff83d37b8b2593dd: Fast-forward
+814709352e refs/heads/main@{57}: merge 814709352e38da8047320114ca29e6058b62953e: Fast-forward
+6915227b16 refs/heads/main@{58}: merge 6915227b16b1c4ecf56aa6be1cd1cd9afe779416: Fast-forward
+2d204ad19c refs/heads/main@{59}: merge 2d204ad19c7c1d3d58fb768c7b981d6722b45a97: Fast-forward
+16d2379014 refs/heads/main@{60}: merge 16d2379014e372dffdcd206754140eb64102765c: Fast-forward
+ea73d3510f refs/heads/main@{61}: commit: fix(RUFU-873): name the real post-merge withhold, and scope the refusal line per card
+2db92868d3 refs/heads/main@{62}: merge 2db92868d325874c86c563d714ab321131175c07: Fast-forward
+73dc43d5f6 refs/heads/main@{63}: commit: fix(RUFU-450): bound the post-merge finalize refusal and resolve the delivery surface from git
+30006ab706 refs/heads/main@{64}: reset: moving to 30006ab706
+9c9cc4b90e refs/heads/main@{65}: commit: fix(RUFU-450): bound the post-merge finalize refusal and resolve the delivery surface from git
+30006ab706 refs/heads/main@{66}: merge 30006ab706d09c2589d85c4b6b626720465247d4: Fast-forward
+dae7736097 refs/heads/main@{67}: merge dae77360975fb60b8d76f5a97bdfd3fdb1249199: Fast-forward
+de7b3ac179 refs/heads/main@{68}: merge de7b3ac179a893395598e5ac94b225e2993fff12: Fast-forward
+0801ab1f26 refs/heads/main@{69}: merge fix/unrun-gate-reroute-predicate: Merge made by the 'ort' strategy.
+942217ecb5 refs/heads/main@{70}: merge 942217ecb5353d2d7751bd8c0d90c884e90f044d: Fast-forward
+f238f970df refs/heads/main@{71}: merge adopt/planner-steer-into-main: Merge made by the 'ort' strategy.
+14f7f9a6fd refs/heads/main@{72}: merge 14f7f9a6fd5e0ecd19137f7d3868d8740366440e: Fast-forward
+d971b12d08 refs/heads/main@{73}: merge d971b12d08946eba51bc1e08ee0760b239cc8590: Fast-forward
+075652b251 refs/heads/main@{74}: merge 075652b251496aaf9aa640df1a910a3f4296cd3f: Fast-forward
+f78b3e9156 refs/heads/main@{75}: merge f78b3e9156d45c8aec7e8d17b056483bc99a01f4: Fast-forward
+9d493e6307 refs/heads/main@{76}: merge 9d493e6307d8bcb55454dc39abe439f045b50e2e: Fast-forward
+031e6b46b1 refs/heads/main@{77}: merge 031e6b46b1182af2f5466fec6b5da5b787bdb394: Fast-forward
+b3750783cf refs/heads/main@{78}: merge fix/rufu-862-capacity-refusal-rotation: Merge made by the 'ort' strategy.
+14bd96f1a9 refs/heads/main@{79}: merge fix/rufu-858-log-shape-tripwire: Merge made by the 'ort' strategy.
+b1623c7238 refs/heads/main@{80}: merge fix/rufu-858-task-log-shape: Merge made by the 'ort' strategy.
+fc9e851dcd refs/heads/main@{81}: merge fc9e851dcda338e5e972bc9212588699735c48db: Fast-forward
+7eb5aed394 refs/heads/main@{82}: merge 7eb5aed394b6e545cadcdf2e5b6e48b9c87a137b: Fast-forward
+cdef171e7a refs/heads/main@{83}: merge integrate/gitlab-only-fixes: Merge made by the 'ort' strategy.
+397ab39157 refs/heads/main@{84}: merge 397ab39157: Fast-forward
+0c58e68b06 refs/heads/main@{85}: rebase (abort): returning to refs/heads/main
+397ab39157 refs/heads/main@{86}: fusion landing: RUFU-446 397ab3915710492f594da860cea27b517aeecf11
+0c58e68b06 refs/heads/main@{87}: merge 0c58e68b06007e02791407b90981d2d05260e2ee: Fast-forward
+cc28649c21 refs/heads/main@{88}: merge cc28649c2188ac60491c0d9ff5ed6ba3e6bdad6f: Fast-forward
+6de0e314e5 refs/heads/main@{89}: commit: perf(RUFU-674): widen the health snapshot refresh from 5s to 20s
+64bb4c6dbf refs/heads/main@{90}: merge 64bb4c6dbfb499d19491e94269ec22d450fea18d: Fast-forward
+50f623dc5c refs/heads/main@{91}: commit: fix(RUFU-674): serve /api/health from a snapshot so the probe never awaits
+2c428a6cec refs/heads/main@{92}: merge 2c428a6cecfcf8e40d616d987709dc461508d54d: Fast-forward
+d3a59f0491 refs/heads/main@{93}: merge d3a59f049192ba5a4c15d498f25baa34e9d93bc4: Fast-forward
+7a9981a71f refs/heads/main@{94}: merge 7a9981a71ff269551334d8e65960bb7d9296cf76: Fast-forward
+b5491b3c61 refs/heads/main@{95}: merge b5491b3c614bae04c79e15400ecb34da80f9cfad: Fast-forward
+872ef6c164 refs/heads/main@{96}: merge 872ef6c16449b70c9f1c2a2675227d5d4bd1d09f: Fast-forward
+25be8aabe2 refs/heads/main@{97}: merge 25be8aabe2c198ffa4a5ea7899960ed306e87fbf: Fast-forward
+343155dcab refs/heads/main@{98}: merge 343155dcab05f3c924917e056cdc40b8b9efb68a: Fast-forward
+c18f828d9d refs/heads/main@{99}: commit: fix(RUFU-293): evidence-gate empty-land verdicts and re-prove the premise before the stall-deadlock park
+378d9d4a83 refs/heads/main@{100}: merge 378d9d4a833ab83b9bc7f906a75cf06d73065091: Fast-forward
+05a0e0c786 refs/heads/main@{101}: merge origin/main: Merge made by the 'ort' strategy.
+b79d5a96a7 refs/heads/main@{102}: commit: feat(docker): put fn on PATH inside the image
+23ec69d76a refs/heads/main@{103}: merge fusion/rufu-627: Fast-forward
+7e6ab0b615 refs/heads/main@{104}: merge fusion/rufu-627: Fast-forward
+dd3a23a274 refs/heads/main@{105}: merge dd3a23a274: Fast-forward
+5507da7d58 refs/heads/main@{106}: merge fusion/rufu-627: Fast-forward
+c53eb7402d refs/heads/main@{107}: merge c53eb7402da2871bbd8d51550771c7bf588d7f9a: Fast-forward
+86fd9aa49c refs/heads/main@{108}: merge 86fd9aa49c: Fast-forward
+e2d54baf29 refs/heads/main@{109}: merge fusion/rufu-707: Fast-forward
+5b30acfe5e refs/heads/main@{110}: commit: fix(RUFU-773): name the throw site in verdict-less workflow node failures
+8c0d78e8a0 refs/heads/main@{111}: commit: fix(RUFU-771): refuse non-string entries in persisted review and workspace JSON instead of crashing on trim
+9e086e8e02 refs/heads/main@{112}: commit: fix(RUFU-768): bound planning re-seed cycles so a card that crashes at Plan Review parks instead of looping forever
+1e3265e24b refs/heads/main@{113}: merge 1e3265e24bff716ba27f10142ef0be13b7e566e1: Fast-forward
+5f37037faf refs/heads/main@{114}: commit: feat(RUFU-756): widen the read-attribution chain to six frames so it can name the caller
+7d9ee51757 refs/heads/main@{115}: commit: fix(docker): stage every workspace manifest, and gate the drift that broke the image build
+98b04f869b refs/heads/main@{116}: commit: fix(RUFU-756): attribute a read to a frame chain, not one frame, so a bundled seam cannot report itself
+f16531ded5 refs/heads/main@{117}: commit: feat(RUFU-756): name the caller of the two hot task-store reads
+a2ee317208 refs/heads/main@{118}: commit: feat(RUFU-372): make a capacity suspend name the gate and how full it was
+1a8fd2d9bc refs/heads/main@{119}: commit: feat(RUFU-572): remove the default project from the CLI project router
+1ebf27a1f2 refs/heads/main@{120}: merge 1ebf27a1f25cc4cf10237fbf942f6080ba6afb88: Fast-forward
+a0d750b76a refs/heads/main@{121}: merge a0d750b76a9d53e363b91a3720ebb7604a78bee5: Fast-forward
+c36f480e43 refs/heads/main@{122}: merge c36f480e43d4ad6520b6c657a3125eb86c90deec: Fast-forward
+c87dc287cb refs/heads/main@{123}: merge c87dc287cbcbd7ee85c85504ee8352f9320d1358: Fast-forward
+5206fc2973 refs/heads/main@{124}: commit: fix(RUFU-727): attribute a falsified plan premise to the commit that falsified it
+95e7d35fe7 refs/heads/main@{125}: merge 95e7d35fe7c2bf0dfbac08a4396bdb0b01038d38: Fast-forward
+d5a42de5e0 refs/heads/main@{126}: merge d5a42de5e0702956c07e4ac4b99d29588398e246: Fast-forward
+7b3b62d44f refs/heads/main@{127}: merge 7b3b62d44f583ff9a74ea1138c0cfad16f580eeb: Fast-forward
+c4575ef299 refs/heads/main@{128}: merge c4575ef29918e85eb7d1a93dcf196640300ca7b7: Fast-forward
+d389feb2d9 refs/heads/main@{129}: merge d389feb2d95c8866b25242d74bf0f11ba79d40fc: Fast-forward
+7342c6e705 refs/heads/main@{130}: commit (amend): fix(RUFU-718): name the admission reason on every release surface and arm the owner it waits on
+d74c115ff9 refs/heads/main@{131}: commit: fix(RUFU-718): name the admission reason on every release surface and arm the owner it waits on
+2585ade5af refs/heads/main@{132}: commit (merge): merge: origin/main c85d4f4e07..d09efcdb75 into main
+b7bfb9243a refs/heads/main@{133}: merge land/rufu-698: Fast-forward
+ca55f0b30b refs/heads/main@{134}: 
+080cfdc646 refs/heads/main@{135}: merge 080cfdc646fc1567febf8ac5a51c6d98e150a7a0: Fast-forward
+14ba495cb4 refs/heads/main@{136}: merge rufu-690-archive-presence: Fast-forward
+bc2f242f6b refs/heads/main@{137}: commit: fix(RUFU-687): stop writing the dashboard bearer token into redirected logs
+d7c479353f refs/heads/main@{138}: commit: test(RUFU-689): give the self-healing fakes the workflow epoch the IR cache calls
+37b1755927 refs/heads/main@{139}: commit: fix(RUFU-685): make heartbeat-executor green — re-pin moved memory, release a declined wake binding
+4f3f8a8e64 refs/heads/main@{140}: merge rufu-565-build-cache-poison: Fast-forward
+4e27a99be0 refs/heads/main@{141}: merge rufu-682-capability-decline-refusal: Fast-forward
+e4944ae9e9 refs/heads/main@{142}: merge rufu-682-capability-decline-refusal: Fast-forward
+32fe7c06a0 refs/heads/main@{143}: merge rufu-682-capability-decline-refusal: Fast-forward
+12ab8913f7 refs/heads/main@{144}: merge 12ab8913f79fe164b8d0bb395a72c9bdd6215887: Fast-forward
+2d5c80681e refs/heads/main@{145}: merge 2d5c80681e6878a7a2887c79f8289f2c9116698a: Fast-forward
+ef3a08c7d2 refs/heads/main@{146}: merge ef3a08c7d27d591a80f849968ce304608efb3f59: Fast-forward
+6b8eba828a refs/heads/main@{147}: merge 6b8eba828ae0a6c41f7dfffba573a5db3bc64439: Fast-forward
+8f734ee83d refs/heads/main@{148}: merge rufu-679-dispatch-lease: Fast-forward
+e4b9428da1 refs/heads/main@{149}: revert: Revert "fix(RUFU-616): defer capacity-suspended continuations so a capacity wait stops re-dispatching every scheduler pass"
+a82759faff refs/heads/main@{150}: 
+f134800008 refs/heads/main@{151}: merge merge-origin-20261015: Fast-forward
+90a2a63fbe refs/heads/main@{152}: commit: fix(RUFU-616): defer capacity-suspended continuations so a capacity wait stops re-dispatching every scheduler pass
+b6ff490934 refs/heads/main@{153}: merge b6ff490934abf7b481f414a1a8650221029908cf: Fast-forward
+4a1303c3fa refs/heads/main@{154}: merge 4a1303c3fa9534a85257461b613cecce595f4db8: Fast-forward
+1621515e43 refs/heads/main@{155}: merge 1621515e43472e51ddbb80dad1757a4e09d7bf59: Fast-forward
+7ee3e66406 refs/heads/main@{156}: commit: fix(RUFU-651): a refused spec write names its reason instead of a store outage
+7ce32f4f14 refs/heads/main@{157}: merge 7ce32f4f1425d24336c921ed33b0df366965ccbe: Fast-forward
+8295f8af47 refs/heads/main@{158}: 
+f8f71b9d6c refs/heads/main@{159}: commit: perf(RUFU-615): roll up mission feature counters in SQL instead of reading every feature row
+6efc2090af refs/heads/main@{160}: 
+a751313eb1 refs/heads/main@{161}: 
+a8316e46ad refs/heads/main@{162}: 
+417a61ebf5 refs/heads/main@{163}: merge merge/origin-main-20261013b: Fast-forward
+f2db502381 refs/heads/main@{164}: merge merge/origin-main-20261013: Fast-forward
+0dd24e8d46 refs/heads/main@{165}: merge fusion/stas-299-selfheal-lifecycle: Fast-forward
+b7f51cd251 refs/heads/main@{166}: merge b7f51cd25182e1595a9822b001af28ae1335cdb3: Fast-forward
+47fe311d6d refs/heads/main@{167}: commit: feat(engine): stop decoding the task log in five more self-healing sweeps
+daabf04020 refs/heads/main@{168}: commit (amend): test(engine): give the self-healing overlap fakes the workflow-definition epoch
+7e26ef08e8 refs/heads/main@{169}: commit: test(engine): give the self-healing overlap fakes the workflow-definition epoch
+58fe75db4c refs/heads/main@{170}: commit: feat(core,engine,dashboard): stop decoding the task log in periodic whole-project reads
+7c9788c8a4 refs/heads/main@{171}: commit: docs(dashboard): record that a heap snapshot is unexecutable on an RSS-capped host
+a4b9afdbc1 refs/heads/main@{172}: commit: docs(core): record why a PostgreSQL migration number is its only identity
+b7ef57c17c refs/heads/main@{173}: commit: fix(RUFU-615): make the review-lane ledger self-marker name its own slot
+e3dcc63a24 refs/heads/main@{174}: commit: fix(RUFU-615): restack migration identity onto upstream slots with ours at the tail
+606ff1062e refs/heads/main@{175}: merge rufu-615-migration-restack: Merge made by the 'ort' strategy.
+42aa810e06 refs/heads/main@{176}: commit: docs(RUFU-615): add the tranche-4 changeset that the sweep commit missed
+f55fa4507c refs/heads/main@{177}: commit: fix(RUFU-615): make slim board reads omit the log column they discard
+1fb2ce4dd3 refs/heads/main@{178}: commit: fix(RUFU-615): stop reading a log column the slim path discards anyway
+7d8f02374a refs/heads/main@{179}: commit: fix(RUFU-615): stop hydrating every card's log on hot board scans
+d19adca972 refs/heads/main@{180}: merge d19adca972e10692299786941400f0987b76c21f: Fast-forward
+df3ba65087 refs/heads/main@{181}: commit: fix(RUFU-643): make the stale-merging clear lane-agnostic and take log out of the lease pass
+fc7fefd13f refs/heads/main@{182}: commit (amend): fix(RUFU-643): take the unused log column out of four more recurring engine reads
+748913c9fa refs/heads/main@{183}: commit: fix(RUFU-643): take the unused log column out of four more recurring engine reads
+5119bec00e refs/heads/main@{184}: commit: docs(RUFU-643): record why the staleness sweep cannot take excludeLog
+42c3ae1b15 refs/heads/main@{185}: commit: fix(RUFU-643): stop capacity reads from loading the task-log column they never use
+4a2e8e48e7 refs/heads/main@{186}: merge 4a2e8e48e70fe7d7a56e7f65cb4a3094dbf7ed39: Fast-forward
+6ad57afde8 refs/heads/main@{187}: merge 6ad57afde8d361717de4e7186789a4480e886ce1: Fast-forward
+2e57cced14 refs/heads/main@{188}: merge 2e57cced14e09d39be5747147eb94d6d12a346b4: Fast-forward
+8f9164e55d refs/heads/main@{189}: commit: fix(RUFU-643): bound repeated task diagnostics durably, not in process memory
+58d561b1c1 refs/heads/main@{190}: commit: fix(RUFU-584): share one epoch-guarded workflow cache per pass instead of 15 per-sweep caches
+1621210dc4 refs/heads/main@{191}: commit: perf(RUFU-640): expire idle rows out of the task cache instead of waiting for pressure
+6bb0939786 refs/heads/main@{192}: merge 6bb0939786b3e925a801e8ae1e0c22ec28cbbc29: Fast-forward
+0b40d9d07b refs/heads/main@{193}: commit: fix(RUFU-640): set the task-cache budget in process units, not per store
+59a219a0c5 refs/heads/main@{194}: commit: fix(RUFU-640): bound the per-store task cache and the steering-comment writer
+ca3bc5e023 refs/heads/main@{195}: merge ca3bc5e023cc54ca42d8a63148cb4650b5015de6: Fast-forward
+53c20424c1 refs/heads/main@{196}: merge 53c20424c186b4ebb1c6698849224e3b9327b203: Fast-forward
+7ee8f513f6 refs/heads/main@{197}: merge 7ee8f513f6cf3a18d706cd471fe7d5858ae56cbc: Fast-forward
+fa22f364bc refs/heads/main@{198}: merge fa22f364bc1103722df79df131d27d94c22c8502: Fast-forward
+86343eba25 refs/heads/main@{199}: commit (amend): RUFU-615: make the board read stop transferring the task agent log
+812e06f2e1 refs/heads/main@{200}: commit: RUFU-615: make the board read stop transferring the task agent log
+31d1e66628 refs/heads/main@{201}: merge 31d1e6662873994b75d869686ab2fb68d0865ab0: Fast-forward
+77713c780d refs/heads/main@{202}: commit: docs(RUFU-627): correct the short-lived allocation claim on the task list read path
+56ef55aeb4 refs/heads/main@{203}: merge origin/main: Merge made by the 'ort' strategy.
+24da32eba1 refs/heads/main@{204}: merge 24da32eba12310e67646f07bce91dd408657512b: Fast-forward
+5f7bbe3563 refs/heads/main@{205}: merge 5f7bbe3563248462230ad7a2e030d88726a67c9f: Fast-forward
+08f84d8b64 refs/heads/main@{206}: merge 08f84d8b64fcb55874febe196f21e9476bf57170: Fast-forward
+ffc9ad6700 refs/heads/main@{207}: merge ffc9ad67009411f7cbbd18db2a789f219ebd30f1: Fast-forward
+7a16814fe2 refs/heads/main@{208}: merge 7a16814fe2c62f2a987392dcc8d6885f0ef87ae4: Fast-forward
+48ad53ea03 refs/heads/main@{209}: merge perf/task-list-read-projection: Fast-forward
+e830ff75ed refs/heads/main@{210}: merge perf/task-list-read-projection: Fast-forward
+768d962f1e refs/heads/main@{211}: merge 768d962f1ec33c8bd521d00540d6ffe293945f2c: Fast-forward
+5ae1ac532f refs/heads/main@{212}: commit: fix(RUFU-610): reclaim the abandoned post-merge continuation that pinned cards
+ab8cadf79a refs/heads/main@{213}: merge ab8cadf79ab44abd28a0565f2f13c74f79bfcdb9: Fast-forward
+873b5fab3d refs/heads/main@{214}: commit: fix(RUFU-611): let manual reconcile recheck a rejected post-merge gate
+5999ba49fa refs/heads/main@{215}: commit: fix(RUFU-613): scan legacy auto-merge stamps on demand instead of on Settings mount
+e0345399ec refs/heads/main@{216}: merge e0345399ec: Fast-forward
+155febe4a9 refs/heads/main@{217}: merge 155febe4a9: Fast-forward
+2b14f9b097 refs/heads/main@{218}: merge 2b14f9b0972a2908636c76a34b1a7dfd9cbcecf5: Fast-forward
+8f8f349fba refs/heads/main@{219}: merge 8f8f349fba8228511a555f4c0496579d670a33f3: Fast-forward
+aba845e29c refs/heads/main@{220}: merge aba845e29c073f3fe917ec67c2bb2654f377cf3a: Fast-forward
+d246ab7bfe refs/heads/main@{221}: merge d246ab7bfeeea0ebfa0619e48df0bef58233451b: Fast-forward
+89c2b53510 refs/heads/main@{222}: merge 89c2b53510f3ef283af08d815dab1ad1b9c5c35f: Fast-forward
+21f382e6b9 refs/heads/main@{223}: merge 21f382e6b94f424d7376fe2bb822a2f797617584: Fast-forward
+d97aab25c0 refs/heads/main@{224}: cherry-pick: perf(RUFU-595): memoise project-root resolution instead of spawning git per call
+57d349c7f0 refs/heads/main@{225}: merge 57d349c7f03e1d175d79d4118d40f694a31fd8d1: Fast-forward
+b9e7799780 refs/heads/main@{226}: merge rufu-585-board-ir: Fast-forward
+b053248c09 refs/heads/main@{227}: merge counters-aggregate: Fast-forward
+11a33bd170 refs/heads/main@{228}: commit: fix(RUFU-588): stop the research dispatcher from stacking database reads
+f866fe0c5a refs/heads/main@{229}: merge fix/inflight-selection-coalesce: Fast-forward
+0ae9213b38 refs/heads/main@{230}: commit: fix(STAS-205): resolve the changeset's dangling migration reference and ratchet it
+652b1c8de7 refs/heads/main@{231}: merge fix/RUFU-570-workspace-git-identity: Fast-forward
+6efc23035e refs/heads/main@{232}: commit (merge): Merge origin/main (FN-9509, FN-9510, FN-9511) into main
+61b7bd271b refs/heads/main@{233}: merge origin/main: Merge made by the 'ort' strategy.
+eed697b442 refs/heads/main@{234}: cherry-pick: fix(RUFU-487): drop checkout-emptiness proofs on card move instead of aging them out
+48178c92c3 refs/heads/main@{235}: cherry-pick: perf(RUFU-479): route the remaining direct dashboard GETs through the read queue
+5825cfb066 refs/heads/main@{236}: merge origin/main: Merge made by the 'ort' strategy.
+0a0dac353c refs/heads/main@{237}: commit: docs(FNXC:ForkedProductLine): correct the FN-9187 citation used to refuse upstream archive hunks
+212ebc3fc4 refs/heads/main@{238}: commit: test(FNXC:MigrationVersionCollision): prove the 0090 re-issue applies once from the production database shape
+7f65997879 refs/heads/main@{239}: commit (merge): Merge origin/main (FN-9505, FN-9506) — 2026-10-05 second sync
+f8f5e7d146 refs/heads/main@{240}: commit: fix(FNXC:ForkedProductLine): verify the 2026-10-05 merge against a real PostgreSQL and repair what it broke
+9ecab8cae6 refs/heads/main@{241}: merge origin-sync-20261005: Fast-forward
+dd02804f8b refs/heads/main@{242}: commit: test(dashboard): record the approval-hold clear RUFU-297 added to the approve-plan patch
+85c17e63d7 refs/heads/main@{243}: commit: test(RUFU-479): derive the diff-stats cache test jumps from the exported TTL constant
+47e0ad07d2 refs/heads/main@{244}: merge take/upstream-20261005: Fast-forward
+be36372513 refs/heads/main@{245}: merge take/upstream-20261005: Fast-forward
+ac04a37617 refs/heads/main@{246}: commit: docs(fork-extensions): record what this build adds and keep the upstream line
+c0d60328ec refs/heads/main@{247}: commit: fix(RUFU-559): close reviewer runs whose session died with the engine
+de6e8dee88 refs/heads/main@{248}: commit: fix(RUFU-343): let a stall-deadlock park find the gate its sentence never names
+2b68f10057 refs/heads/main@{249}: commit: fix(RUFU-551): repair the merged tree and re-record generated bars
+4d7efff3bb refs/heads/main@{250}: merge merge/upstream-59524b: Fast-forward
+f8d5600f05 refs/heads/main@{251}: reset: moving to f8d5600f05
+4d7efff3bb refs/heads/main@{252}: commit (merge): merge: origin/main 59524b0457 (WIP, gates red — do not deploy)
+f8d5600f05 refs/heads/main@{253}: commit: fix(RUFU-551): repair the receipt task FK that blocks project re-key
+de320c35bf refs/heads/main@{254}: merge de320c35bf957a97e879517faa914299fe1a529a: Fast-forward
+261cd1c9d9 refs/heads/main@{255}: commit: feat(RUFU-530): make the review lane's concurrency the reviewer pool
+a3a5a2f55d refs/heads/main@{256}: merge fix/rufu-502-post-merge-reseed-budget: Fast-forward
+8d1a47e28c refs/heads/main@{257}: merge fix/rufu-502-post-merge-reseed-budget: Fast-forward
+942b17d252 refs/heads/main@{258}: commit (merge): Merge origin/main (FN-9461 expired native quarantine) into main
+dea3106a90 refs/heads/main@{259}: merge dea3106a90: Fast-forward
+3c2e68ebd7 refs/heads/main@{260}: merge 3c2e68ebd7: Fast-forward
+1c06ba2988 refs/heads/main@{261}: merge fix/rufu-504-workspace-commit-free-landing: Fast-forward
+5aa0455686 refs/heads/main@{262}: merge fix/rufu-504-workspace-commit-free-landing: Fast-forward
+6b46cadd64 refs/heads/main@{263}: merge 6b46cadd64d75aea727adefeeef8c37955d9be5f: Fast-forward
+83ac77a33f refs/heads/main@{264}: commit: fix(RUFU-505): name a bypassed pre-merge gate instead of falling back to "task is paused"
+20e1ad34f9 refs/heads/main@{265}: commit: fix(RUFU-504): attribute an engine-authored review-stall park to the gate that caused it
+4efb3946d6 refs/heads/main@{266}: commit: fix(RUFU-478): attribute review-dispatch sweep lines to their project and rate-limit the steady-state gap
+7c075210b9 refs/heads/main@{267}: commit: fix(RUFU-500): resolve the worker across launcher and dist shapes, and say why an offload was refused
+4fc3efd7bc refs/heads/main@{268}: commit: perf(RUFU-500): build the knowledge graph in a forked child, not in the dashboard process
+97c7e0e7eb refs/heads/main@{269}: commit: perf(RUFU-479): make the diff-stats cache outlast the client poll period
+117afa5799 refs/heads/main@{270}: commit: perf(RUFU-495): memoise PROMPT.md step parsing across list reads
+7a592f8261 refs/heads/main@{271}: commit: fix(RUFU-492): a blocked card keeps its identity
+4f769e5da5 refs/heads/main@{272}: commit: fix(RUFU-493): stop fetching /api/usage on every dashboard load
+5cb2bd6768 refs/heads/main@{273}: commit: fix(RUFU-492): make a blocked card as tall as its notice
+3fb576666d refs/heads/main@{274}: merge main-unify: Fast-forward
+5b03398ed8 refs/heads/main@{275}: commit: test(RUFU-385): repair 11 red dashboard tests from three distinct causes
+50c4267f2d refs/heads/main@{276}: merge 50c4267f2d09e510f4bf73c15ea174fbae816400: Fast-forward
+4ee4b4e798 refs/heads/main@{277}: merge 4ee4b4e7989c92f5645e2c4a9fce5d39ed8731a2: Fast-forward
+f44d1a0828 refs/heads/main@{278}: commit: docs(FN-9402): changeset for the landed-review session-claim fence
+9e4ef6a467 refs/heads/main@{279}: merge integration/upstream-b2: Fast-forward
+6cece227ad refs/heads/main@{280}: merge fix/post-merge-resume-reason: Fast-forward
+c4c5985410 refs/heads/main@{281}: merge c4c5985410739350636a2d49990be8201f3dc25b: Fast-forward
+e51916dd17 refs/heads/main@{282}: merge integration/fn9442-reseed: Fast-forward
+b741d6ea23 refs/heads/main@{283}: merge scratch/upstream-cherrypick: Fast-forward
+c70d9dab44 refs/heads/main@{284}: commit: docs(solutions): record the 16 GB launch-environment heap ceiling and how to verify it
+e0a6680b80 refs/heads/main@{285}: merge e0a6680b80: Fast-forward
+02e7fb13ba refs/heads/main@{286}: merge 02e7fb13ba: Fast-forward
+1263545d3c refs/heads/main@{287}: merge 1263545d3c: Fast-forward

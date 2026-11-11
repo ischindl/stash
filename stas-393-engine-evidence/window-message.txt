@@ -1,0 +1,22 @@
+STAS-393: okno na manualný fast-forward je otvorené, merané v tomto ticku.
+
+Vetva: fusion/stas-393-tool-result-stack
+Tip: f91fd759ce33acc957ed1eb10df9143934ab2985
+Trunk pod ňou: refs/heads/main = c025edb9edf4a5eba16b03279ac9c5ba7805a4ef (premerané 01:38:42Z; začiatok behu = koniec behu)
+
+Merané v tom istom ticku (repa Fusion, linked worktree .engine/stas-393-engine):
+- rev-list --left-right --count main...vetva = 0 3
+- merge-base --is-ancestor main <tip> rc=0
+- log --oneline main..<tip>: f91fd759ce (STAS-391 oznámenie) / e94c723089 / 7d96302d68 (STAS-389, neutralizátor pod oznámením)
+- diff --shortstat main...<tip> = 3 files changed, 333 insertions(+), 22 deletions(-)
+- merge-tree --write-tree --name-only rc=0, 0 riadok CONFLICT, stderr prázdny
+- AC1: git grep -c neutraliseStructureTokens <tip> = 2, na trunku 0 (rc=1)
+- red-green na novej báze: GREEN na f91fd759ce = Test Files 2 passed (2), Tests 23 passed (23), 0 skipped; RED (len produktový modul vrátený na trunk) = Test Files 2 failed (2), Tests 10 failed | 13 passed (23)
+- suita balíka pi-claude-cli: before 15/376/0 failing, after 16/387/0 failing, množina zlyhaní zhodná obojsmerne
+
+Pristátie jedným príkazom, z checkoutu enginu na refs/heads/main, po čerstvom overení trunku (git rev-parse refs/heads/main):
+  git merge --ff-only fusion/stas-393-tool-result-stack
+
+Rail merguje 2-4x denne, okno sa zavrie v rádoch hodín; merge spustite teraz. Invariant je na trunku účinný až keď tento príkaz prebehol - táto karta do refs/heads/main nezapísala, netlačila, neotvorila PR. Rada: tri commity idú v poradí neutralizátor, jeho testy, oznámenie; nikdy nie samotné oznámenie.
+
+Nástroj: fn_send_message nie je na povrchu tejto executorskej relácie, dôkaz je v logu karty. Detaily a dôkazy: adresár stas-393-engine-evidence na lane fusion/stas-393 (generate.sh vie všetky merania zopakovať), artifacty e8dfed1d-5376-4ab4-923b-844db3165906 a 9d917e80-4041-4fb6-b4e6-565a2eecdb5f.

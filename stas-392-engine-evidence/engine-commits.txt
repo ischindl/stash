@@ -1,0 +1,62 @@
+# STAS-392 — Commit list for both delivered lines
+# generated: 2026-11-05T18:29:31Z
+# Names, not SHAs, are the contract.
+
+## refs/heads/fusion/stas-390-tool-channel-authority
+e6b1fe4c7f4bafa36727e33e8df7c400e87c6a91
+STAS-389: prove frame and role authority are gone, per surface, red then green
+Co-authored-by: Fusion <noreply@runfusion.ai>
+
+---
+a38c8be034c85e047fa1ad688b45ee19806735cb
+STAS-389: stop a tool result from writing its own frame or a role key
+Co-authored-by: Fusion <noreply@runfusion.ai>
+
+---
+
+## refs/heads/fusion/stas-392-empty-tool-result-announcement
+037a480cc562ef994aac0b19215613cb93e2b500
+STAS-391: announce an empty tool-result content array instead of crashing prompt assembly
+An untyped (JS-extension / MCP) tool that returns nothing reaches this module as
+`content: []`, because the runtime authors that value on purpose:
+createToolResultMessage in @earendil-works/pi-agent-core@1.1.0
+(dist/agent-loop.js:663) writes `content: finalized.result.content ?? []`, and the
+message transform in @earendil-works/pi-ai@1.1.0 (dist/api/transform-messages.js:49)
+normalises a null content to `[]` the same way. readToolResultText answered that
+value by throwing, so toolResultContentToText propagated it and buildPrompt /
+buildResumePrompt produced no prompt at all for the rest of the turn.
+
+The guard arm is deleted, so an empty array now returns "" and travels the one
+emptiness branch markToolResultAsUntrusted already owns: delivered="zero-bytes"
+and ZERO_BYTES_NOTICE, inside the same single envelope, at zero authority. No new
+branch, no default standing in for a missing value, no second codepath.
+
+The throws that name program errors are kept: a content that is neither a string
+nor an array, and a text block whose text is not a string.
+
+Tests: the pin that listed `[]` among the payloads that must throw drops it, and
+the pin that refused the equality of the two empty states is replaced by one that
+asserts it, naming the upstream normalisation as the reason. Lane suite, package
+suite (15 files) and tsc --noEmit all green on this tip.
+
+Restacked by STAS-392 onto fusion/stas-390-tool-channel-authority (e6b1fe4c7f), which
+the engine trunk does not carry yet, and extended with the third surviving pin this pair
+leaves behind: the anti-sledgehammer pin in the channel-authority suite asserted that an
+empty content array throws, which is the crash this commit removes. It now asserts the
+same delivered="zero-bytes" attribute and the same notice for both empty states, and that
+their frame bodies are identical, so the two empties cannot drift apart. The undefined,
+null, 42 and text-block-without-text throws and the buildPrompt propagation pin are
+untouched: fail-loud narrows only for a value the upstream runtime authors on purpose.
+
+---
+e6b1fe4c7f4bafa36727e33e8df7c400e87c6a91
+STAS-389: prove frame and role authority are gone, per surface, red then green
+Co-authored-by: Fusion <noreply@runfusion.ai>
+
+---
+a38c8be034c85e047fa1ad688b45ee19806735cb
+STAS-389: stop a tool result from writing its own frame or a role key
+Co-authored-by: Fusion <noreply@runfusion.ai>
+
+---
+

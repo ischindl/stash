@@ -1,0 +1,113 @@
+### STAS-399 AC6/Step 5 numeral census: SAME command at base and at tip, return codes read apart from any pipe
+base commit: c7311e7dc496aeed74ed70cad347a6a610980ef9  (live trunk at Step 1)
+tip  commit: 324da3366f7ab6551bd8280a30fa498475c1a282
+measured_utc: 2026-11-10T04:16:58Z
+
+==============================================================
+PART 1 - DEFINITIONS of the numeral (a definition is where the number is written down as a value)
+command: git grep -nE "(const|let|var)[A-Za-z_ ]*=[[:space:]]*50_?000\b" <ref> -- "*.ts" "*.tsx"
+--------------------------------------------------------------
+--- BASE ---
+c7311e7dc4:packages/core/src/task-store/async/async-agent-activity.ts:54:export const AGENT_ACTIVITY_RETENTION_ROW_CAP = 50_000;
+c7311e7dc4:packages/core/src/task-store/bounded-task-cache.ts:43:const DEFAULT_SEEN_ID_CAPACITY = 50_000;
+c7311e7dc4:packages/dashboard/app/hooks/useMemoryData.ts:25:const DEFAULT_AUTO_SUMMARIZE_THRESHOLD = 50_000;
+c7311e7dc4:packages/dashboard/src/lib/codebase-metrics.ts:31:export const MAX_SOURCE_ENTRIES = 50_000;
+c7311e7dc4:packages/dashboard/src/terminal-service.ts:32:export const MAX_SCROLLBACK_SIZE = 50000; // ~50KB per terminal
+c7311e7dc4:packages/engine/src/agent-tools.ts:800:const MAX_INSTRUCTIONS_TEXT_LENGTH = 50_000;
+c7311e7dc4:packages/engine/src/agent-tools.ts:801:const MAX_MEMORY_LENGTH = 50_000;
+c7311e7dc4:packages/engine/src/agents/agent-instructions.ts:26:export const MAX_INSTRUCTIONS_TEXT_LENGTH = 50_000;
+c7311e7dc4:packages/engine/src/agents/agent-instructions.ts:28:export const MAX_MEMORY_LENGTH = 50_000;
+rc_base=0
+--- TIP ---
+HEAD:packages/core/src/task-store/async/async-agent-activity.ts:54:export const AGENT_ACTIVITY_RETENTION_ROW_CAP = 50_000;
+HEAD:packages/core/src/task-store/bounded-task-cache.ts:43:const DEFAULT_SEEN_ID_CAPACITY = 50_000;
+HEAD:packages/dashboard/app/hooks/useMemoryData.ts:25:const DEFAULT_AUTO_SUMMARIZE_THRESHOLD = 50_000;
+HEAD:packages/dashboard/src/lib/codebase-metrics.ts:31:export const MAX_SOURCE_ENTRIES = 50_000;
+HEAD:packages/dashboard/src/terminal-service.ts:32:export const MAX_SCROLLBACK_SIZE = 50000; // ~50KB per terminal
+HEAD:packages/engine/src/agents/agent-instructions.ts:26:export const MAX_INSTRUCTIONS_TEXT_LENGTH = 50_000;
+HEAD:packages/engine/src/agents/agent-instructions.ts:51:export const MAX_MEMORY_LENGTH = 50_000;
+rc_tip=0
+counts: base=7 lines / tip=6 lines  (both counts are per-file hit counts, so sum them:)
+base hit total=9  tip hit total=7
+
+==============================================================
+PART 2 - ENFORCEMENT SITES that write the numeral as a literal comparison or a default
+command: git grep -nE "(> 50_?000|\?\? 50_?000|length > 50000|: 50_?000,)" <ref> -- "*.ts" "*.tsx", then filtered of test files and of the unrelated 50_000s named in PART 3
+note: the filter is printed so the census is reproducible; unfiltered the raw numeral appears in 141 .ts/.tsx lines at base
+--------------------------------------------------------------
+--- BASE ---
+c7311e7dc4:packages/cli/src/extension.ts:6440:      if (params.instructions_text !== undefined && params.instructions_text.length > 50000) {
+c7311e7dc4:packages/core/src/config/settings-schema.ts:1078:  memoryAutoSummarizeThresholdChars: 50_000,
+c7311e7dc4:packages/core/src/memory/memory-compaction.ts:221:  const threshold = settings.memoryAutoSummarizeThresholdChars ?? 50_000;
+c7311e7dc4:packages/dashboard/app/components/AgentDetailView.tsx:3155:    if (memory.length > 50000) {
+c7311e7dc4:packages/dashboard/app/components/MemoryView.tsx:146:    memoryAutoSummarizeThresholdChars: 50_000,
+c7311e7dc4:packages/dashboard/app/components/settings/sections/MemorySection.tsx:323:            value={form.memoryAutoSummarizeThresholdChars ?? 50000}
+c7311e7dc4:packages/dashboard/src/routes.ts:1538:      if (instructionsText.length > 50000) {
+c7311e7dc4:packages/dashboard/src/routes/register-agent-core-routes.ts:295:      if (typeof memory === "string" && memory.length > 50000) {
+c7311e7dc4:packages/dashboard/src/routes/register-agent-core-routes.ts:854:        if (typeof body.memory === "string" && body.memory.length > 50000) {
+c7311e7dc4:packages/dashboard/src/routes/register-agent-runtime-routes.ts:265:      if (memory.length > 50000) {
+c7311e7dc4:packages/engine/src/agent-tools.ts:6206:      if (params.instructions_text && params.instructions_text.length > 50000) {
+--- TIP ---
+HEAD:packages/cli/src/extension.ts:6440:      if (params.instructions_text !== undefined && params.instructions_text.length > 50000) {
+HEAD:packages/core/src/config/settings-schema.ts:1078:  memoryAutoSummarizeThresholdChars: 50_000,
+HEAD:packages/core/src/memory/memory-compaction.ts:221:  const threshold = settings.memoryAutoSummarizeThresholdChars ?? 50_000;
+HEAD:packages/dashboard/app/components/AgentDetailView.tsx:3155:    if (memory.length > 50000) {
+HEAD:packages/dashboard/app/components/MemoryView.tsx:146:    memoryAutoSummarizeThresholdChars: 50_000,
+HEAD:packages/dashboard/app/components/settings/sections/MemorySection.tsx:323:            value={form.memoryAutoSummarizeThresholdChars ?? 50000}
+HEAD:packages/dashboard/src/routes.ts:1538:      if (instructionsText.length > 50000) {
+HEAD:packages/dashboard/src/routes/register-agent-core-routes.ts:295:      if (typeof memory === "string" && memory.length > 50000) {
+HEAD:packages/dashboard/src/routes/register-agent-core-routes.ts:854:        if (typeof body.memory === "string" && body.memory.length > 50000) {
+HEAD:packages/dashboard/src/routes/register-agent-runtime-routes.ts:265:      if (memory.length > 50000) {
+HEAD:packages/engine/src/agent-tools.ts:6203:      if (params.instructions_text && params.instructions_text.length > 50000) {
+counts: base=11  tip=11
+DELTA: identical set at both refs, apart from one line-number shift in agent-tools.ts (6206 -> 6203) caused by deleting the three private constants.
+
+==============================================================
+PART 3 - CLASSIFICATION, one line per hit (THIS concept = the inline memory prompt budget)
+
+DEFINITIONS at TIP (7), each classified:
+  packages/core/src/task-store/async/async-agent-activity.ts:54  AGENT_ACTIVITY_RETENTION_ROW_CAP = 50_000    DIFFERENT CONCEPT  (agent-activity retention row cap; rows, not chars, no prompt involved)
+  packages/core/src/task-store/bounded-task-cache.ts:43          DEFAULT_SEEN_ID_CAPACITY = 50_000            DIFFERENT CONCEPT  (in-memory cache capacity; ids, not chars)
+  packages/dashboard/app/hooks/useMemoryData.ts:25               DEFAULT_AUTO_SUMMARIZE_THRESHOLD = 50_000    DIFFERENT CONCEPT  (a UI mirror of the `memoryAutoSummarizeThresholdChars` PROJECT SETTING default; different owner and different verb: it schedules compaction)
+  packages/dashboard/src/lib/codebase-metrics.ts:31              MAX_SOURCE_ENTRIES = 50_000                  DIFFERENT CONCEPT  (source-file walk cap; entries, not chars)
+  packages/dashboard/src/terminal-service.ts:32                  MAX_SCROLLBACK_SIZE = 50000                  UNRELATED          (terminal scrollback characters)
+  packages/engine/src/agents/agent-instructions.ts:26            MAX_INSTRUCTIONS_TEXT_LENGTH = 50_000        DIFFERENT CONCEPT  (ceiling for the `instructionsText` field, not memory; same numeral, same unit, different field -- deliberately NOT merged, AGENTS.md and the constant's own comment both say so)
+  packages/engine/src/agents/agent-instructions.ts:51            MAX_MEMORY_LENGTH = 50_000                   THIS CONCEPT       (exactly one)
+
+  REMOVED FROM THIS LIST BY THE CARD (definitions at BASE = 9, at TIP = 7):
+  packages/engine/src/agent-tools.ts:800  const MAX_INSTRUCTIONS_TEXT_LENGTH = 50_000   -> now imported
+  packages/engine/src/agent-tools.ts:801  const MAX_MEMORY_LENGTH = 50_000              -> now imported
+  Both were private redeclarations of another module's numbers inside the same package; they are gone by
+  import (see carrier-diff.txt), not by comment and not by renaming. The count of tracked definitions of
+  THIS concept is therefore 1 at tip, asserted in-repo by the guard test
+  ("defines the inline memory budget numeral in exactly one tracked source file", read from the two files
+  that could disagree).
+
+ENFORCEMENT SITES at TIP (11), each classified:
+  packages/cli/src/extension.ts:6440                       instructions_text.length > 50000        DIFFERENT CONCEPT (CLI write guard for the instructions field)
+  packages/dashboard/src/routes.ts:1538                    instructionsText.length > 50000         DIFFERENT CONCEPT (dashboard write guard, instructions field)
+  packages/engine/src/agent-tools.ts:6203                  instructions_text.length > 50000        DIFFERENT CONCEPT (a *literal* write guard for the instructions field on another tool path; its neighbour :6196 repeats 10000 for soul the same way. Not the memory concept, and not the path this card collapsed -- the `fn_update_identity` guards at :5944/:5955/:5966 are the ones that now read the imported constants)
+  packages/dashboard/app/components/AgentDetailView.tsx:3155      memory.length > 50000            WRITE-SIDE REJECT CAP for the same field, in a different package: sibling concept, deliberately NOT imported -- see the trap print (carrier-census.txt PART 4) and conflict-statement.txt
+  packages/dashboard/src/routes/register-agent-core-routes.ts:295 memory.length > 50000            WRITE-SIDE REJECT CAP, same note
+  packages/dashboard/src/routes/register-agent-core-routes.ts:854 body.memory.length > 50000       WRITE-SIDE REJECT CAP, same note
+  packages/dashboard/src/routes/register-agent-runtime-routes.ts:265 memory.length > 50000         WRITE-SIDE REJECT CAP, same note
+  packages/core/src/config/settings-schema.ts:1078         memoryAutoSummarizeThresholdChars: 50_000  DIFFERENT CONCEPT (user-facing project setting default; own owner, surfaced in the dashboard)
+  packages/core/src/memory/memory-compaction.ts:221        settings.memoryAutoSummarizeThresholdChars ?? 50_000  DIFFERENT CONCEPT (fallback default for that same setting)
+  packages/dashboard/app/components/MemoryView.tsx:146     memoryAutoSummarizeThresholdChars: 50_000  DIFFERENT CONCEPT (form default for that setting)
+  packages/dashboard/app/components/settings/sections/MemorySection.tsx:323  ?? 50000              DIFFERENT CONCEPT (form display default for that setting)
+
+UNIT, per site, as measured (never assumed):
+  MAX_MEMORY_LENGTH                       CHARACTERS (String.length, UTF-16 code units)   verb at read: TRUNCATE
+  the four dashboard memory guards        CHARACTERS                                       verb at write: REJECT the whole write
+  MEMORY_LONG_TERM_BYTE_BUDGET            BYTES (32 * 1024)                                verb: schedule consolidation
+  CHAT_MEMORY_CAP_CHARS                   the lane demotes to an index; branch selection compares CHARS, clampUtf8 cuts BYTES (pre-existing asymmetry, RUFU-443 pinned it, untouched here)
+  memoryAutoSummarizeThresholdChars       CHARACTERS (name says so)                        verb: schedule compaction
+
+THE ENGINE'S OWN WRITE-SIDE GUARDS ARE NOT LITERALS AT EITHER REF, AND THAT IS THE POINT OF AC7's TRAP
+  packages/engine/src/agent-tools.ts:5944  soul.length > MAX_SOUL_LENGTH                    (imported)
+  packages/engine/src/agent-tools.ts:5955  instructionsText.length > MAX_INSTRUCTIONS_TEXT_LENGTH (imported)
+  packages/engine/src/agent-tools.ts:5966  memory.length > MAX_MEMORY_LENGTH                (imported by THIS card; was a private 50_000 literal at base)
+  :5966 is the site where the inline memory budget and the write-side reject cap became the SAME number by
+  construction rather than by coincidence. It is why raising the clamp alone cannot raise what an agent can
+  get into its prompt through `fn_update_identity`, and it is why the four dashboard memory guards above are
+  named as the other enforcement points any ruling must touch.

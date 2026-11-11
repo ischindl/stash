@@ -1,0 +1,35 @@
+=== fusionBranchContext of the lineage family vs a healthy-lineage control ===
+STAS-296: sourceType='unknown' sourceParentTaskId=None
+     fusionBranchContext = {"groupId": "BG-MTMY6YSR-9U2MK3", "source": "mission", "assignmentMode": "shared"}
+STAS-352: sourceType='unknown' sourceParentTaskId=None
+     fusionBranchContext = {"groupId": "BG-MTMY6YSR-9U2MK3", "source": "mission", "assignmentMode": "shared"}
+STAS-354: sourceType='unknown' sourceParentTaskId=None
+     fusionBranchContext = {"groupId": "BG-MTMY6YSR-9U2MK3", "source": "mission", "assignmentMode": "shared"}
+STAS-355: sourceType='unknown' sourceParentTaskId=None
+     fusionBranchContext = {"groupId": "BG-MTMY6YSR-9U2MK3", "source": "mission", "assignmentMode": "shared"}
+STAS-356: sourceType='unknown' sourceParentTaskId=None
+     fusionBranchContext = {"groupId": "BG-MTMY6YSR-9U2MK3", "source": "mission", "assignmentMode": "shared"}
+STAS-357: sourceType='unknown' sourceParentTaskId=None
+     fusionBranchContext = {"groupId": "BG-MTMY6YSR-9U2MK3", "source": "mission", "assignmentMode": "shared"}
+STAS-341: sourceType='agent_heartbeat' sourceParentTaskId='STAS-285'
+     fusionBranchContext = null
+STAS-141: sourceType='api' sourceParentTaskId='STAS-122'
+     fusionBranchContext = null
+STAS-367: sourceType='task_refine' sourceParentTaskId='STAS-343'
+     fusionBranchContext = null
+
+=== where do mission records live on this host? ===
+  .fusion/**/*.sqlite: 0
+  .fusion/**/*.db: 2
+      .fusion/archive.db  (57344 bytes)
+      .fusion/fusion.db  (9572352 bytes)
+  .fusion/**/missions*: 53
+      .fusion/worktrees/stas-246/engine/artifacts/FN-486/missions-390x844-avant.png  (76254 bytes)
+      .fusion/worktrees/stas-246/engine/artifacts/FN-486/missions-longpress-menu-390x844.png  (80262 bytes)
+      .fusion/worktrees/stas-246/engine/docs/missions-completion-contract.md  (6240 bytes)
+      .fusion/worktrees/stas-246/engine/docs/missions.md  (78191 bytes)
+      .fusion/worktrees/stas-246/engine/packages/core/src/missions  (4096 bytes)
+      .fusion/worktrees/stas-246/engine/packages/dashboard/app/api/missions  (4096 bytes)
+      .fusion/worktrees/stas-246/engine/packages/dashboard/app/api/missions/missions.ts  (30168 bytes)
+      .fusion/worktrees/stas-246/engine/packages/engine/dist/missions  (4096 bytes)
+  .fusion/tasks/*/mission*: 0

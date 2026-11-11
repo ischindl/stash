@@ -1,0 +1,41 @@
+{
+  "card": "STAS-393",
+  "label": "before-suite",
+  "measuredAtUtc": "2026-11-11T01:46:15.934Z",
+  "engineRepo": "/home/schindler/git/Fusion (nested linked worktree .engine/stas-393-engine)",
+  "measuredRef": "HEAD",
+  "measuredSha": "c025edb9edf4a5eba16b03279ac9c5ba7805a4ef",
+  "workingTreePorcelainLines": 0,
+  "command": "(cd packages/pi-claude-cli && NO_COLOR=1 ./node_modules/.bin/vitest run src --reporter=verbose --reporter=json --outputFile.json=<transient raw>)",
+  "vitestVersion": "vitest/4.1.10 linux-x64 node-v26.10.0",
+  "exitCode": 0,
+  "counters": {
+    "Test Files": "15 passed (15)",
+    "Tests": "376 passed (376)",
+    "Duration": "2.34s (transform 1.74s, setup 5.59s, import 1.87s, tests 1.95s, environment 2ms)",
+    "assertionResultsFromJson": {
+      "total": 376,
+      "passed": 376,
+      "skipped": 0,
+      "failed": 0
+    }
+  },
+  "perFileTestCounts": {
+    "src/__tests__/acp-dispatch.test.ts": 4,
+    "src/__tests__/acp-driver.test.ts": 19,
+    "src/__tests__/cli-cwd-contract.test.ts": 12,
+    "src/__tests__/control-handler.test.ts": 14,
+    "src/__tests__/event-bridge.test.ts": 54,
+    "src/__tests__/execsync-guard.test.ts": 1,
+    "src/__tests__/mcp-config.test.ts": 13,
+    "src/__tests__/process-manager.test.ts": 50,
+    "src/__tests__/prompt-builder.test.ts": 55,
+    "src/__tests__/provider.test.ts": 51,
+    "src/__tests__/setup-test-isolation.test.ts": 3,
+    "src/__tests__/stream-parser.test.ts": 24,
+    "src/__tests__/thinking-config.test.ts": 25,
+    "src/__tests__/tool-mapping.test.ts": 39,
+    "src/__tests__/tool-result-authority.test.ts": 12
+  },
+  "failingTestNames": []
+}

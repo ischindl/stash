@@ -1,0 +1,34 @@
+
+ RUN  v4.1.10 /home/schindler/git/stash/.fusion/worktrees/stas-395/.engine/stas-395-engine/packages/core
+
+------
+
+⎯⎯⎯⎯⎯⎯ Failed Suites 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/__tests__/postgres/same-agent-duplicate-intake-real-store.pg.test.ts > same-agent duplicate intake on a real store (STAS-395)
+PostgresError: password authentication failed for user "schindler"
+ ❯ ErrorResponse ../../node_modules/.pnpm/postgres@3.4.9/node_modules/postgres/src/connection.js:817:22
+ ❯ handle ../../node_modules/.pnpm/postgres@3.4.9/node_modules/postgres/src/connection.js:489:6
+ ❯ Socket.data ../../node_modules/.pnpm/postgres@3.4.9/node_modules/postgres/src/connection.js:324:9
+ ❯ cachedError ../../node_modules/.pnpm/postgres@3.4.9/node_modules/postgres/src/query.js:170:23
+ ❯ new Query ../../node_modules/.pnpm/postgres@3.4.9/node_modules/postgres/src/query.js:36:24
+ ❯ sql ../../node_modules/.pnpm/postgres@3.4.9/node_modules/postgres/src/index.js:112:11
+ ❯ src/__test-utils__/pg-test-harness.ts:743:13
+    741|       unique violation (23505) — since either one proves a sibling cre…
+    742|       */
+    743|       await client`SELECT pg_advisory_lock(hashtext('fusion_golden_mar…
+       |             ^
+    744|       try {
+    745|         await client.unsafe(
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  6 skipped (6)
+   Start at  01:01:55
+   Duration  6.01s (transform 3.97s, setup 360ms, import 5.36s, tests 30ms, environment 0ms)
+
+undefined
+/home/schindler/git/stash/.fusion/worktrees/stas-395/.engine/stas-395-engine/packages/core:
+ ERR_PNPM_RECURSIVE_EXEC_FIRST_FAIL  Command failed with exit code 1: vitest run src/__tests__/postgres/same-agent-duplicate-intake-real-store.pg.test.ts --silent=passed-only --reporter=dot

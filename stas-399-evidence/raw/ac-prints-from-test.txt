@@ -1,0 +1,17 @@
+### STAS-399 AC2/AC3/AC4/AC5/AC6 prints from the real prompt-assembly run (logs NOT silenced)
+sha: 324da3366f7ab6551bd8280a30fa498475c1a282
+command: node_modules/.bin/vitest run src/__tests__/agent-memory-eviction-notice.test.ts --reporter=dot   (no --silent, so the test's own console.info prints reach the capture)
+started_utc: 2026-11-10T04:15:00Z
+------------------------------------------------
+rc=0
+[AC2] sections=56 dropped=9 named=9 elided=0
+[AC2-length] notice=467 body=48236 sum=48703 clamp=50000 reserve=1024
+[AC2-elision] dropped=95 named=17 elided=78
+[AC3-ignored] ignored=["Misplaced ninety"]
+[AC3-log] dropped=9 logNamesFirstDrop=true
+[AC4-declared] dropped=["Bulk capture A sacrifice-first","Bulk capture B sacrifice-first","Bulk capture C sacrifice-first"]
+[AC4-default] dropped=11 setdiff(forward)=0 setdiff(backward)=0
+[AC5-probe] lenBefore=50047 lenAfter=48221 ruleAbsentUnderPositional=true rulePresentUnderDeclared=true
+[AC6-census] MAX_MEMORY_LENGTH declarations=1
+ Test Files  1 passed (1)
+      Tests  14 passed (14)

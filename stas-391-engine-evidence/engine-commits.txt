@@ -1,0 +1,43 @@
+# STAS-391 — the engine commits this card authored
+# base pinned for every read in this file: 06b1768b18f38a9b4d0d5b35467204e25bfe4396
+# Regenerate: bash stas-391-engine-evidence/generate.sh   (run from the card worktree root)
+
+Branch: refs/heads/fusion/stas-391-empty-tool-result-announcement
+Tip:    eb20a6bfc583786b8c31cfe4f677237ebae54e10
+Base:   06b1768b18f38a9b4d0d5b35467204e25bfe4396  (the commit refs/heads/main pointed at when this card measured it)
+Trunk:  c20b8e4eaaed6d01b74af1586a7ca8980fd1d499  — MOVED by 1 commit(s) since the pinned base, and NOT
+        by this card: its commit exists only on refs/heads/fusion/stas-391-empty-tool-result-announcement and this card wrote no
+        trunk ref. Consequence: no fast-forward is available — the branch must be
+        rebased onto c20b8e4eaaed6d01b74af1586a7ca8980fd1d499 (or merged) before it can land. What that costs is
+        measured in raw/operator-landing-leg.txt, not assumed here.
+
+## The commits on the branch, base excluded
+  $ git -C .engine/stas-391-engine log --format=%h__%s 06b1768b18f38a9b4d0d5b35467204e25bfe4396..eb20a6bfc583786b8c31cfe4f677237ebae54e10
+      eb20a6bfc5__STAS-391: announce an empty tool-result content array instead of crashing prompt assembly
+        rc=0
+
+
+## Trunk is not this card's to move
+Measured at run time rather than asserted: what trunk points at now, what this
+card's base was, and how far the two have drifted since the base was taken.
+  $ git -C .engine/stas-391-engine rev-parse refs/heads/main
+      c20b8e4eaaed6d01b74af1586a7ca8980fd1d499
+        rc=0
+
+base this card was authored on: 06b1768b18f38a9b4d0d5b35467204e25bfe4396
+commits trunk gained since that base (0 means the branch is still trunk's successor):
+  $ git -C .engine/stas-391-engine rev-list --count eb20a6bfc583786b8c31cfe4f677237ebae54e10..c20b8e4eaaed6d01b74af1586a7ca8980fd1d499
+      1
+        rc=0
+
+What those commits did to the three files this change interacts with:
+  $ git -C .engine/stas-391-engine diff --stat 06b1768b18f38a9b4d0d5b35467204e25bfe4396 c20b8e4eaaed6d01b74af1586a7ca8980fd1d499 -- packages/pi-claude-cli/src/tool-result-authority.ts packages/pi-claude-cli/src/__tests__/tool-result-authority.test.ts packages/pi-claude-cli/src/__tests__/tool-channel-authority.test.ts
+      (no output)
+        rc=0
+
+No diff line means none of them was touched, so trunk's movement is not a conflict
+source for this card's change.
+
+## The nested worktree the branch was authored in
+Porcelain lines after the commit:
+0

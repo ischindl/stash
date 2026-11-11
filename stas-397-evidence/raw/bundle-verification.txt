@@ -1,0 +1,42 @@
+STAS-397 AC8 - the delivery bundle: created, verified, encoded, decoded, compared
+==================================================================================
+tick (UTC): 2026-11-08T09:40:10Z
+engine repository read with --git-dir $HOME/git/Fusion/.git (never a clone, never the gitlink)
+
+--- 1. the delivered ref, discovered live ---
+refs/heads/stas-397-delivery ef8ef296d28a0de11fd05cd72f368d7e662f144d fix(worktree): retire the landing-proof sentence the deleted gate left in the sweep's prose
+rc(for grep)=0
+
+--- 2. the bundle is thin against the card's base (prerequisite line decoded) ---
+# v2 git bundle
+-46b94afa0c50d942cb312b59ac69619fb348b5dd RUFU-485: park a spec the determ
+ef8ef296d28a0de11fd05cd72f368d7e662f144d refs/heads/stas-397-delivery
+list-heads rc=0
+.fusion-tmp/stas-397/stas-397-delivery.bundle is okay
+The bundle contains this ref:
+ef8ef296d28a0de11fd05cd72f368d7e662f144d refs/heads/stas-397-delivery
+The bundle requires this ref:
+46b94afa0c50d942cb312b59ac69619fb348b5dd 
+The bundle uses this hash algorithm: sha1
+verify rc=0
+
+--- 3. encode, decode a copy, compare byte for byte ---
+  bundle bytes            : 17271
+  base64 bytes            : 23028  (stas-397-delivery.bundle.base64.txt, one line)
+  decoded-copy bytes      : 17271
+  cmp original decoded-copy rc=0  (0 = byte-for-byte identical)
+  sha256 original         : fc97178185b7973b9c379c318d8150ad9380f03e927d98c77cf3392d9b93cbb0
+  sha256 decoded copy     : fc97178185b7973b9c379c318d8150ad9380f03e927d98c77cf3392d9b93cbb0
+
+--- 4. git bundle list-heads on the DECODED copy (AC8 asks for the head listing from the copy) ---
+ef8ef296d28a0de11fd05cd72f368d7e662f144d refs/heads/stas-397-delivery
+  list-heads on decoded copy rc=0
+
+--- 5. the series patch and the commit list the bundle expands to ---
+  raw/stas-397-delivery-series.txt  : 75865 bytes, 5 From-lines
+  raw/stas-397-delivery-commits.txt : 5 lines
+0e40801113 2026-11-08T07:44:07+01:00 test(STAS-397): guard that an automatic checkout release decides from occupancy only
+35f1406dc0 2026-11-08T07:59:28+01:00 fix(worktree): decide a checkout release from occupancy, so ignored artifacts stop blocking forever
+e0c1328444 2026-11-08T08:00:34+01:00 chore(changeset): record the occupancy-only checkout release for operators
+3ab0e55698 2026-11-08T08:13:30+01:00 fix(worktree): make the four conflict doors ask the same occupancy probe as the release
+ef8ef296d2 2026-11-08T10:07:29+01:00 fix(worktree): retire the landing-proof sentence the deleted gate left in the sweep's prose

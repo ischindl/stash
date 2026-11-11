@@ -1,0 +1,163 @@
+STAS-396 STEP 3 / AC3 - THE ABSORPTION IS A JOIN THAT AUTHORED NO CODE
+run in the DETACHED scratch checkout. The delivery ref was not touched by this step; the
+tested object was saved under this card's own scratch ref so it survives while the delivery
+ref stays still. All SHAs are ENGINE repo objects.
+
+==========================================================================================
+0. SCRATCH REF NAME FREEDOM, checked before creating anything
+==========================================================================================
+git for-each-ref "refs/stas-396*"  ->  0 lines, twice (before the merge and again before the
+create). The ref name refs/stas-396-candidate was free; nothing of anyone else's is displaced.
+
+==========================================================================================
+1. TRUNK RE-READ BEFORE MERGING
+==========================================================================================
+git rev-parse refs/heads/main = ee995fcc85013a990752307d0f253e9d6fe5ebf4
+unchanged since AC1's snapshot, so AC1's collision pair (merge-tree rc=0 / 0 CONFLICT lines
+and the empty collision diff) still binds the exact trunk being absorbed. Had it moved, the
+script re-prints the merge-base, the branch's path count, the collision diff and a fresh
+merge-tree pair - that branch is present in raw/absorb.sh and did not fire.
+
+==========================================================================================
+2. THE TWO VALUES THE JOIN IS NAMED FOR, re-printed immediately before the merge
+==========================================================================================
+old branch tip, read from the delivery ref, still unmoved : 1677ee018a5d3aee0e74c0669676a1db40c690c5
+trunk tip being absorbed                                  : ee995fcc85013a990752307d0f253e9d6fe5ebf4
+checkout HEAD before the merge : 1677ee018a5d3aee0e74c0669676a1db40c690c5
+symbolic HEAD                  : HEAD, i.e. detached - no branch is occupied
+porcelain before the merge     : 0 lines
+
+==========================================================================================
+3. THE MERGE - one invocation, output verbatim
+==========================================================================================
+command : git -C <scratch checkout> merge --no-edit refs/heads/main
+rc      : 0
+CONFLICT lines in its output : 0
+output, verbatim (first lines; whole file at raw/absorb-merge-output.txt):
+    Merge made by the 'ort' strategy.
+     .changeset/project-runtime-central-read.md         |   7 +
+     .changeset/project-selector-state-icon.md          |   7 +
+     .changeset/rufu-871-project-runtime-visibility.md  |   7 +
+     .changeset/rufu-871-runtime-flags-cold-read.md     |   7 +
+     .changeset/rufu-871-runtime-off-from-cards.md      |   7 +
+     .../rufu-871-runtime-state-honest-fallback.md      |   7 +
+     packages/core/src/central/central-core.ts          |  32 ++
+     .../project-runtime-enabled-flags.test.ts          | 252 ++++++++++++++
+     packages/core/src/task-store/async/async-settings.ts |  77 +++++
+     packages/dashboard/app/App.tsx                     |   3 +
+     ... 22 further dashboard / core paths ...
+     28 files changed, 2620 insertions(+), 47 deletions(-)
+Everything the merge carried is the trunk's own RUFU-871 project-runtime work arriving on the
+branch; no line of it is a resolution this card authored, which is what section 5 then proves.
+The merge ran once. It was not retried, amended, or hand-assisted. Nothing was aborted.
+
+Two hook facts recorded at Step 1 and confirmed by this run: core.hooksPath is unset and
+neither reference-transaction nor pre-merge-commit is installed, and the network-capable
+lan-backup post-merge / post-commit hooks both begin with a guard that exits unless the
+current branch is main - this checkout is detached, so that guard exits 0 and this merge
+reached no remote. The delivery ref was not what received the commit either: a detached
+HEAD received it.
+
+==========================================================================================
+4. THE RESULTING OBJECT, printed whole, and where it is stored
+==========================================================================================
+commit    cfe6daa16d9833c11031ae01dd97d5fef5b04928      <- THE CANDIDATE TIP
+parents   1677ee018a5d3aee0e74c0669676a1db40c690c5  ee995fcc85013a990752307d0f253e9d6fe5ebf4
+author    Imrich Schindler <ischindl@progis.sk>     Sun Nov 8 01:21:54 2026 +0100
+committer Imrich Schindler <ischindl@progis.sk>     Sun Nov 8 01:21:54 2026 +0100
+subject   Merge branch 'refs/heads/main' into HEAD
+body      (empty)
+
+  Two properties of that object are stated plainly rather than tidied away, because a reviewer
+  will read them:
+   (a) The subject says "into HEAD" and not into a branch name, because the merge ran on a
+       detached HEAD - the detachment this card chose deliberately, so that no checkout's
+       branch and no other card's ref received the commit.
+   (b) The author and committer identity is the host's own git identity, because this checkout
+       has no fusion-task-id file, so the engine's identity hooks are inert here (proved at
+       Step 1), and this card neither installed, edited, bypassed nor configured a hook.
+       git merge --no-edit therefore produced its default message and used the ambient identity.
+  Neither property rewrites the delivery commit: 1677ee018a is parent 1, byte for byte, and the
+  candidate carries no file edit of its own, as section 5 measures.
+
+storage : git update-ref -m "STAS-396: candidate tip (trunk absorbed) held for testing while
+          the delivery ref stays still" refs/stas-396-candidate cfe6daa16d9833c11031ae01dd97d5fef5b04928
+          rc = 0
+          refs/stas-396-candidate = cfe6daa16d9833c11031ae01dd97d5fef5b04928, the same object as
+          the checkout HEAD. This card's scratch ref is deleted in Step 7 and its deletion printed.
+  DEVIATION, recorded because it happened: the first create call passed the message as the
+  second positional argument, and git update-ref reads that slot as <oldvalue>, not as a
+  reason:
+      fatal: STAS-396: candidate tip for testing before the delivery ref moves: not a valid old SHA1
+      update-ref rc=128
+  The message belongs to the -m flag. The call was corrected (raw/absorb-fix.sh), rc=0, and the
+  only consequence was that two prints which need the ref to exist - the three-dot divergence
+  line and the ref's reflog - were re-printed a moment later. No ref was damaged and no object
+  was lost, because the candidate was reachable from the checkout HEAD throughout.
+
+==========================================================================================
+5. AC3's PROOFS, one per line, with the number each must equal
+==========================================================================================
+5a  git log -1 --format=%P at the candidate =
+      1677ee018a5d3aee0e74c0669676a1db40c690c5 ee995fcc85013a990752307d0f253e9d6fe5ebf4
+      parent 1 == the old branch tip this card printed  : YES
+      parent 2 == the trunk tip this card printed        : YES
+      -> exactly the two parents named in section 2, so the join is a join of those two.
+
+5b  absorbed, not rewritten, both directions:
+      git merge-base --is-ancestor 1677ee018a cfe6daa16 -> rc = 0   (delivery commit survives
+        as an ancestor; it was never amended, rebased or cherry-picked)
+      git merge-base --is-ancestor ee995fcc85 cfe6daa16 -> rc = 0   (the measured trunk is now
+        contained in the branch - the absorption itself)
+
+5c  exactly one new commit, and it is the join:
+      git rev-list --count 1677ee018a..cfe6daa16 ^ee995fcc85 = 1
+
+5d  the join authored no code on the branch's own paths:
+      merge-base(trunk, old branch tip) = 1d4bcc61847562837b44854bccea95b783d8b943
+      the branch's own changed-path count = 11
+      git diff --name-only 1677ee018a cfe6daa16 -- <those 11 paths>  -> 0 entries
+      (raw/absorb-pathscoped-diff.txt is an empty file; the diff printed nothing)
+      This is admissible form 1 of AC3: between the old tip and the new tip, across exactly the
+      paths the branch owns, nothing changed. Everything that DID change between those two
+      commits arrived from the trunk, which is why an unscoped diff over that range is non-empty
+      by construction and is not a claim this card makes.
+
+5e  the candidate relative to the trunk is exactly the branch's own work:
+      git diff --name-only ee995fcc85 cfe6daa16 -> 11 entries, against the branch's own 11
+      equal counts: YES, and the list is the branch's own list, name for name:
+        1  .changeset/stas-394-fix-title-idempotence.md
+        2  docs/missions.md
+        3  docs/workflow-steps.md
+        4  packages/core/src/__tests__/mission-fix-title-composition.test.ts
+        5  packages/core/src/async-stores/async-mission-store.ts
+        6  packages/core/src/index.gate.ts
+        7  packages/core/src/index.ts
+        8  packages/core/src/missions/mission-store.ts
+        9  packages/core/src/tasks/fix-title.ts
+        10 packages/core/src/tasks/remediation-steps.ts
+        11 packages/engine/src/workflows/human-merge-approval-boundary.ts
+      This is admissible form 2 of AC3: against the trunk, the candidate differs by the branch's
+      own 11 files and by nothing else.
+
+5f  divergence of the candidate against the trunk, three-dot form:
+      git rev-list --left-right --count refs/heads/main...refs/stas-396-candidate = 0    2
+      left 0  : the trunk is fully contained, so the operator's merge can no longer conflict on
+                content this trunk carries
+      right 2 : the branch's own delivery commit plus this one join commit
+      git merge-base --is-ancestor refs/heads/main refs/stas-396-candidate -> rc = 0
+
+5g  git status --porcelain after the merge = 0 lines (clean working tree, no residue)
+
+==========================================================================================
+6. THE DELIVERY REF IS STILL WHERE AC1 FOUND IT
+==========================================================================================
+refs/heads/stas-394-fix-title-idempotence = 1677ee018a5d3aee0e74c0669676a1db40c690c5
+identical to AC1's printed old value. Its reflog, printed, shows only the closed card's own
+history and nothing from this card:
+    1677ee018a refs/heads/stas-394-fix-title-idempotence@{0}: commit (amend): fix(STAS-394): compose fix titles idempotently and record fix ancestry in lineage
+    9196cbfd8d refs/heads/stas-394-fix-title-idempotence@{1}: commit: fix(STAS-394): compose fix titles idempotently and record fix ancestry in lineage
+    1d4bcc6184 refs/heads/stas-394-fix-title-idempotence@{2}: branch: Created from HEAD
+The 9196cbfd8d -> 1677ee018a amend row belongs to the closed card and predates this run; this
+card wrote no entry to it. The ref move happens in Step 5, by compare-and-swap, only if AC4
+passes at the candidate tip named here.

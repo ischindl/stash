@@ -1,0 +1,5 @@
+ .../src/__tests__/agent-instructions.test.ts       |  37 ++-
+ .../__tests__/agent-memory-eviction-notice.test.ts |  30 ++-
+ packages/engine/src/agent-tools.ts                 |  11 +-
+ packages/engine/src/agents/agent-instructions.ts   | 293 ++++++++++++++++++---
+ 4 files changed, 315 insertions(+), 56 deletions(-)

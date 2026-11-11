@@ -1,0 +1,251 @@
+STAS-397 Step 6 - the delivery window: branch, bundle, handoff, all printed in one tick
+=========================================================================================
+
+One tick carries the ref, the bundle, the live wedge state and the operator handoff, so no
+number in this file was carried from an earlier moment. The two probes that produced it are
+kept and re-runnable: raw/window_probe.py (the live wedge and the build markers) and
+raw/ac8_delivery.py (the delivery envelope). The bundle chain is raw/bundle-verification.txt.
+
+AC7 VERDICT
+-----------
+  delivered, liveness unverified
+
+AC7's two proofs are measurements of the running board, and the running board is not this
+card's to change: the fix lands on trunk, is rebuilt and the daemon is restarted by the
+operator. The proofs, unrun at this tick:
+  proof 1  `git worktree list` in the engine's primary checkout no longer prints one of the
+           seven card directories      -> NOT TAKEN, and at this tick the opposite holds:
+           all seven are still registered (section 2, `worktree_named_by_list=True`).
+  proof 2  card-log lines containing `uncommitted or ignored content present` = 0 over the
+           following 24 hours           -> NOT TAKEN, and at this tick the sweep is still
+           re-logging the warning (newest row 2026-11-08T09:30:49Z, section 2).
+Nothing in this card may therefore be reported as a drained queue, a freed card, or a live
+fix. The three legs that precede both proofs: land `refs/heads/stas-397-delivery` on trunk,
+BUILD the engine, restart the daemon. A restart alone is a nil-effect: section 2 prints the
+running `dist` still containing `REGENERABLE_IGNORED_DIR_NAMES` and lacking this card's
+discard record, and its mtime predates the newest trunk commit to that source file.
+
+This card worktree's own last commit (rc=0): 39c188cec 2026-11-08T10:41:38+01:00 docs(STAS-397): resolve the bundle path inside the AC8 printer
+This repository's porcelain filtered of untracked entries: 0 line(s)  [expected 0]  (all 2: ['?? stas-397-evidence/raw/compose_window.py', '?? stas-397-evidence/window-announcement.txt'])
+
+1. THE DELIVERY ENVELOPE - raw output of raw/ac8_delivery.py
+------------------------------------------------------------
+=== 0. repository roots, resolved by git, not by path arithmetic ===
+  card worktree        = /home/schindler/git/stash/.fusion/worktrees/stas-397
+  nested engine checkout = /home/schindler/git/stash/.fusion/worktrees/stas-397/.engine/stas-397-engine
+  engine repository    = /home/schindler/git/Fusion
+  stash repository     = /home/schindler/git/stash
+
+=== A. the delivered ref, discovered live, never assumed ===
+  for-each-ref refs/heads/ filtered to 'stas-397': 1 line(s) (rc=0)
+    refs/heads/stas-397-delivery ef8ef296d28a0de11fd05cd72f368d7e662f144d fix(worktree): retire the landing-proof sentence the deleted gate left in the sweep's prose
+  delivered tip = ef8ef296d28a0de11fd05cd72f368d7e662f144d (rc=0)
+  head:
+ef8ef296d28a0de11fd05cd72f368d7e662f144d
+  author=Imrich Schindler
+  date=2026-11-08T10:07:29+01:00
+  subject=fix(worktree): retire the landing-proof sentence the deleted gate left in the sweep's prose
+
+=== B. live trunk, re-read at this moment ===
+  engine refs/heads/main = e2d910e98a0d556a9431aeedf243b5989141ec1d (rc=0)   [Step 1/2 measured base: 46b94afa0c50d942cb312b59ac69619fb348b5dd]
+  trunk head: e2d910e98a 2026-11-08T09:13:02+01:00 perf(RUFU-871): stop SELECTing the jsonb columns the hottest board reads never read
+  merge-base trunk..branch = 46b94afa0c50d942cb312b59ac69619fb348b5dd (rc=0)
+  merge-base equals the card's base: True  [46b94afa0c50d942cb312b59ac69619fb348b5dd]
+  rev-list --left-right --count trunk...branch = 3 5  (behind ahead)
+  merge-base --is-ancestor trunk branch rc=1 (0 = branch carries live trunk)
+
+=== C. collision predicates ===
+  git merge-tree --write-tree trunk branch rc=0 tree=051acc36a9cb92bcd7434c17a0e1e388300f86e9
+  CONFLICT lines: 0
+  name-only diff merge-base..trunk over this card's DIRECTORY globs: 3 file(s) (rc=0)
+    trunk moved over: .changeset/board-read-column-projection.md
+    trunk moved over: .changeset/rufu-493-board-boot-request-set.md
+    trunk moved over: packages/engine/src/__tests__/review-sweep-read-column-projection.test.ts
+  changed files merge-base..trunk: 35 (rc=0); merge-base..branch: 15 (rc=0)
+  INTERSECTION over this card's exact delivered paths: 0 file(s)  [expected 0]
+
+=== D. the delivered diff, with a File-Scope verdict per entry ===
+  15 file(s) changed by the delivered branch (rc=0):
+    .changeset/stas-397-worktree-release-occupancy.md
+        OUTSIDE (disclosed: the engine's contributor gate requires a changeset entry)
+    packages/engine/src/__tests__/reliability-interactions/worktree-defensive-removal-preservation.real-git.test.ts
+        inside
+    packages/engine/src/__tests__/worktree-acquisition-pinned.test.ts
+        inside
+    packages/engine/src/__tests__/worktree-backend.test.ts
+        inside
+    packages/engine/src/__tests__/worktree-doc-accuracy.test.ts
+        inside
+    packages/engine/src/__tests__/worktree-release-decides-from-occupancy.real-git.test.ts
+        inside
+    packages/engine/src/auto-recovery-handlers/branch-worktree.ts
+        OUTSIDE (disclosed: import/prose follow-on of the predicate move)
+    packages/engine/src/execution/branch-conflicts.ts
+        inside
+    packages/engine/src/executor/overlap-acquisition-park.ts
+        OUTSIDE (disclosed: import/prose follow-on of the predicate move)
+    packages/engine/src/executor/worktree-branch-conflict-handle.ts
+        OUTSIDE (disclosed: import/prose follow-on of the predicate move)
+    packages/engine/src/executor/worktree-create-conflict.ts
+        OUTSIDE (disclosed: import/prose follow-on of the predicate move)
+    packages/engine/src/self-healing.ts
+        OUTSIDE (disclosed: import/prose follow-on of the predicate move)
+    packages/engine/src/util/run-audit.ts
+        OUTSIDE (disclosed: import/prose follow-on of the predicate move)
+    packages/engine/src/worktree/worktree-acquisition.ts
+        inside
+    packages/engine/src/worktree/worktree-backend.ts
+        inside
+  entries outside the literal File Scope globs: 7 (each disclosed in the close summary)
+  shortstat: 15 files changed, 456 insertions(+), 232 deletions(-)
+
+=== E. the bundle ===
+  git bundle list-heads stas-397-delivery.bundle rc=0
+    ef8ef296d28a0de11fd05cd72f368d7e662f144d refs/heads/stas-397-delivery
+    verify: The bundle contains this ref:
+    verify: ef8ef296d28a0de11fd05cd72f368d7e662f144d refs/heads/stas-397-delivery
+    verify: The bundle requires this ref:
+    verify: 46b94afa0c50d942cb312b59ac69619fb348b5dd 
+    verify: The bundle uses this hash algorithm: sha1
+    verify: /home/schindler/git/stash/.fusion/worktrees/stas-397/stas-397-evidence/raw/stas-397-delivery.bundle is okay
+  bundle head matches delivered tip: True
+
+=== F. the wedged checkouts are untouched by this card ===
+  `git worktree list` in the project repository: 40 entries (rc=0)
+  held checkout .fusion/worktrees/stas-357: still registered = True
+  held checkout .fusion/worktrees/stas-363: still registered = True
+  held checkout .fusion/worktrees/stas-374: still registered = True
+  held checkout .fusion/worktrees/stas-376: still registered = True
+  held checkout .fusion/worktrees/stas-384: still registered = True
+  held checkout .fusion/worktrees/stas-385: still registered = True
+  held checkout .fusion/worktrees/stas-393: still registered = True
+  NO `git worktree remove`, `prune`, `reset`, `clean` or directory deletion was executed
+  by this card against any held checkout. The remedy delivered here is code plus a test.
+
+=== G. this card's own worktree, and the nested engine checkout ===
+  card worktree porcelain (all, incl. untracked): 0 line(s) (rc=0)
+  card worktree porcelain filtered of untracked entries: 0 line(s)  [expected 0]
+  nested engine checkout porcelain (all): 0 line(s) (rc=0)
+  nested engine checkout porcelain filtered of untracked: 0 line(s)  [expected 0]
+  nested checkout HEAD = stas-397-delivery (rc=0)
+
+=== H. the suite totals, re-read from the raw logs and the run ledger, not transcribed ===
+  run ledger (.fusion-tmp/stas-397/suite-runs.txt), verbatim:
+    BASE RUN at 46b94afa0c50d942cb312b59ac69619fb348b5dd started 2026-11-08T07:13:36Z
+    base_rc=1 finished 2026-11-08T07:59:08Z
+    TIP RUN at 3ab0e5569817b36facad4e339fecb988a7e9aad1 started 2026-11-08T07:59:08Z
+    tip_rc=1 finished 2026-11-08T08:37:29Z
+    ALL_DONE
+    label=delivery-suite rev=ef8ef296d28a0de11fd05cd72f368d7e662f144d start=2026-11-08T09:18:02Z
+    label=delivery-suite rev=ef8ef296d28a0de11fd05cd72f368d7e662f144d rc=143 end=2026-11-08T09:38:12Z
+    delivery-suite terminated by the card at 2026-11-08T09:38:13Z: non-canonical command (extra RUN_LIVE_TESTS=1, no --project filters), not like-for-like with the base/tip pair; superseded, no totals reported
+  BASE  before-suite.raw.log: 2 summary line(s)
+      Test Files  183 failed | 1241 passed | 2 skipped (1426)
+      Tests  512 failed | 17378 passed | 278 skipped | 1 todo (18169)
+  TIP   after-suite.raw.log: 2 summary line(s)
+      Test Files  182 failed | 1243 passed | 2 skipped (1427)
+      Tests  509 failed | 17376 passed | 278 skipped | 1 todo (18164)
+  DELIVERY delivery-suite.raw.log: 0 summary line(s)
+  A DELIVERY log with 0 summary lines is a run that never reached its summary, and no total
+  is quoted from it. AC6's identical-command pair is the BASE/TIP pair above; the delivered
+  head differs from the measured TIP by one comment-only commit, whose sensitive-file and
+  typecheck/eslint re-runs are in alignment-and-suites.txt.
+
+2. THE LIVE WEDGE AND THE RUNNING BUILD - raw output of raw/window_probe.py
+-------------------------------------------------------------------------
+probe tick (UTC): 2026-11-08T09:41:09+00:00
+
+=== engine repository: trunk and this card's branch ===
+  refs/heads/main = e2d910e98a0d556a9431aeedf243b5989141ec1d (rc=0)
+  trunk head: e2d910e98a 2026-11-08T09:13:02+01:00 perf(RUFU-871): stop SELECTing the jsonb columns the hottest board reads never read
+  refs/heads/stas-397-delivery = ef8ef296d28a0de11fd05cd72f368d7e662f144d (rc=0)
+  left_right_main_dot_branch = 3	5  (behind ahead; 0 N means the branch is trunk plus N commits)
+  merge-base --is-ancestor refs/heads/main branch rc=1 (0 = cut off live trunk)
+
+=== the wedged checkouts, as they stand at this tick ===
+  `git worktree list` entries in the project repo: 40
+  STAS-357: column=todo worktree_named_by_list=True warning_rows_total=139 warning_rows_24h=27 newest=2026-11-08T09:29:57.015Z recoveryCount=0 planReviewReplanCount=0
+        HEAD=0dfd17363 untracked_expanded_lines=0 ignored_lines=2 ['!! .venv/', '!! stashai.egg-info/']
+  STAS-363: column=todo worktree_named_by_list=True warning_rows_total=841 warning_rows_24h=27 newest=2026-11-08T09:30:02.660Z recoveryCount=0 planReviewReplanCount=0
+        HEAD=b0126a2e1 untracked_expanded_lines=0 ignored_lines=2 ['!! .venv/', '!! stashai.egg-info/']
+  STAS-374: column=todo worktree_named_by_list=True warning_rows_total=38 warning_rows_24h=18 newest=2026-11-08T09:30:11.752Z recoveryCount=0 planReviewReplanCount=0
+        HEAD=dd8db36bb untracked_expanded_lines=0 ignored_lines=3 ['!! .venv/', '!! backend/__pycache__/', '!! stashai.egg-info/']
+  STAS-376: column=todo worktree_named_by_list=True warning_rows_total=141 warning_rows_24h=27 newest=2026-11-08T09:30:21.668Z recoveryCount=0 planReviewReplanCount=0
+        HEAD=0dfd17363 untracked_expanded_lines=0 ignored_lines=2 ['!! .venv/', '!! stashai.egg-info/']
+  STAS-384: column=todo worktree_named_by_list=True warning_rows_total=86 warning_rows_24h=27 newest=2026-11-08T09:30:30.540Z recoveryCount=0 planReviewReplanCount=0
+        HEAD=cff5fbc7a untracked_expanded_lines=0 ignored_lines=2 ['!! .venv/', '!! stashai.egg-info/']
+  STAS-385: column=todo worktree_named_by_list=True warning_rows_total=83 warning_rows_24h=27 newest=2026-11-08T09:30:40.959Z recoveryCount=0 planReviewReplanCount=0
+        HEAD=cff5fbc7a untracked_expanded_lines=0 ignored_lines=2 ['!! .venv/', '!! stashai.egg-info/']
+  STAS-393: column=todo worktree_named_by_list=True warning_rows_total=52 warning_rows_24h=27 newest=2026-11-08T09:30:49.652Z recoveryCount=0 planReviewReplanCount=0
+        HEAD=869d86b24 untracked_expanded_lines=0 ignored_lines=2 ['!! .venv/', '!! stashai.egg-info/']
+  STAS-394: column=done worktree_named_by_list=False warning_rows_total=2 warning_rows_24h=2 newest=2026-11-07T19:31:34.408Z recoveryCount=0 planReviewReplanCount=0
+
+=== capacity the wedge is measured against ===
+  ../../../.fusion/config.json: maxWorktrees=4 globalMaxConcurrent=4 maxConcurrent=2
+
+=== build state: does a restart alone change anything? ===
+  live engine dist mtime: 2026-11-02T12:09:45+00:00  (worktree-backend.js)
+  live engine src mtime: 2026-11-04T02:37:56+00:00  (worktree-backend.ts)
+  newest trunk commit touching that file: 16d2379014 2026-11-04T03:23:24+01:00 RUFU-373: stop charging withheld overlap waits to the acquisition strike budget
+  (a daemon restart re-loads whatever `dist` already holds; only a build changes it)
+  live dist CONTAINS  'REGENERABLE_IGNORED_DIR_NAMES'
+  live dist lacks     'worktree:removal-discarded-ignored-content'
+  live dist CONTAINS  'uncommitted or ignored content present'
+  (the first and third are the pre-STAS-397 predicate; the second is this card's record. If the running build contains the old markers and lacks the new one, the fix cannot take effect before a build, whichever way the branch lands.)
+
+3. PUSH AND TRUNK FACTS, PRINTED FROM REFLOGS RATHER THAN ASSERTED
+-------------------------------------------------------------------
+This card executed no `git push`, wrote no `refs/heads/main` in either repository, and opened,
+commented on or closed no pull request - operator-gated by AGENTS.md since 2026-08-30. What
+the engine repository's own records say, so the claim is checkable rather than declaratory:
+  lan/stas-397-delivery@{0} author=Imrich Schindler ts=2026-11-08 08:13:30 +0100 action=update by push
+  main@{0} ts=2026-11-08 09:16:07 +0100 cherry-pick: perf(RUFU-871): stop SELECTing the jsonb columns the hottest board reads never read
+  main@{1} ts=2026-11-08 09:16:07 +0100 cherry-pick: test(RUFU-871): measure jsonb columns each hot list read transfers vs consumes
+  main@{2} ts=2026-11-08 08:30:18 +0100 merge dcda8beac481fc2f5e4287c21e110647fbd9b407: Fast-forward
+  main@{3} ts=2026-11-08 07:38:59 +0100 merge 46b94afa0c50d942cb312b59ac69619fb348b5dd: Fast-forward
+  `refs/remotes/lan/stas-397-delivery` therefore exists, and the host's own mirror carries
+  every branch that gets landed the same way (`rufu-871-*`, `stas-394-fix-title-idempotence`,
+  `stas-395-measure-same-agent-duplicate-intake` each have a one-line `update by push` reflog).
+  This card cannot attribute that push to a process and does not try to; what it can state as
+  measured is that the LAN mirror is not the trunk: `refs/heads/main` moved only by three
+  commits authored outside this card (section 1, block B), and none of this card's five
+  commits is an ancestor of trunk (section 1, block B, rc_anc=1).
+
+4. THE OPERATOR HANDOFF, SENT IN THIS SAME TICK
+-----------------------------------------------
+Delivered as a structured report to agent-94d01490 (CEO, the supervisor who packages operator items) as message msg-6dd80e18.
+The three legs and the two proofs it names are the ones printed above, in the same words:
+  leg 1  land refs/heads/stas-397-delivery (tip ef8ef296d2) onto refs/heads/main.
+         Collision predicates from section 1: merge-tree rc=0, 0 CONFLICT lines, the
+         intersection of trunk's and this branch's changed-file sets = 0 files.
+  leg 2  build the engine - without it the delivered predicate is inert (section 2 markers).
+  leg 3  restart the daemon, which only re-loads whatever `dist` already holds.
+It also carried the two consequences the board will see: capacity is maxWorktrees=4 while up
+to seven checkouts free at once, and STAS-357 stays behind its own plan-review replan-cap
+park, which this fix does not touch.
+
+5. WHAT THIS TICK DID NOT DO
+-----------------------------
+No `git worktree remove` (with or without force), no `prune`, `reset` or `clean`, and no
+directory deletion against any held checkout - section 1 block F re-measures all seven as
+still registered. No board record was written by any git or shell call: no retitle, move,
+assign or delete, for the seven wedged cards or for this one. No rebuild, no restart, no
+touch of the daemon. The two operator dispositions named in the Original Description (the
+STAS-394/395/396 fast-forward and closure, the STAS-393 dispatch click) were left alone.
+One whole-package suite run at the delivered head was started and terminated by this card
+because its command differed from the AC6 pair's; the ledger line and the reason are in
+section 1 block H, and no total is quoted from it.
+
+6. ADDENDUM, LATER IN THIS SESSION - THE OPERATOR ORDERED A PR AND ONE NOW EXISTS
+-----------------------------------------------------------------------------------
+Sections 3 and 5 above are left exactly as printed at their tick; they were true then and this
+addendum is what superseded them. After this capture was written the operator issued a directive
+naming this task and ordering PR creation, which is the one condition AGENTS.md requires before
+`gh pr create` may run. A `main`-based PR was measured to be un-scopeable - local trunk is 1103
+commits ahead of `origin/main` and 171 ahead of the fork's `main`, and this card's base is an
+ancestor of neither - so the PR was opened against a ref pinned at that base, carrying exactly
+this card's five commits: https://github.com/ischindl/Fusion/pull/2 (`changedFiles=15
+additions=456 deletions=232`, `gh pr view` counts equal to section 1 block D). `refs/heads/main`
+was still not written in either repository and `origin` still received no push. The full
+measurement, the order quoted verbatim and the collateral are in `pr-creation.txt`.
+

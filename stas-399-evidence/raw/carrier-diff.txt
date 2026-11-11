@@ -1,0 +1,1004 @@
+### STAS-399 delivered carrier diff: base c7311e7dc4 -> implementation commit
+base: c7311e7dc496aeed74ed70cad347a6a610980ef9
+tip:  324da3366f7ab6551bd8280a30fa498475c1a282
+subjects:
+  324da3366f feat(STAS-399): name evicted memory sections and honour declared sacrifice order
+  2178330959 test(STAS-399): guard inline-memory eviction naming and declared order
+------------------------------------------------
+ .changeset/stas-399-memory-eviction-notice.md      |   7 +
+ .../src/__tests__/agent-instructions.test.ts       |  37 +-
+ .../__tests__/agent-memory-eviction-notice.test.ts | 469 +++++++++++++++++++++
+ packages/engine/src/agent-tools.ts                 |   5 +-
+ packages/engine/src/agents/agent-instructions.ts   | 294 +++++++++++--
+ 5 files changed, 761 insertions(+), 51 deletions(-)
+------------------------------------------------
+diff --git a/.changeset/stas-399-memory-eviction-notice.md b/.changeset/stas-399-memory-eviction-notice.md
+new file mode 100644
+index 0000000000..f20c9d32a7
+--- /dev/null
++++ b/.changeset/stas-399-memory-eviction-notice.md
+@@ -0,0 +1,7 @@
++---
++"@runfusion/fusion": patch
++---
++
++summary: Agents are told which memory sections were cut from their prompt and can choose which ones go first.
++category: fix
++dev: The inline-memory omission notice names the sacrificed `## ` headings in eviction order and says which rule picked them (a declared `sacrifice-first` heading token, else file position); a name list the budget cannot carry prints its own elision count, and a `sacrifice-first` token that is not a heading-line token is named as ignored. The notice is now subtracted from the inline budget through `MEMORY_CLAMP_NOTICE_BUDGET_CHARS` (1,024 chars) instead of riding on top of content, so notice + clamped body stay within `MAX_MEMORY_LENGTH`, which is unchanged at 50,000 chars and is now the only definition of that number — `agent-tools.ts` imports it for its write-side reject cap instead of re-declaring it. The engine `agent-instructions` warn line logs the very string the prompt carries, so the two surfaces cannot disagree.
+diff --git a/packages/engine/src/__tests__/agent-instructions.test.ts b/packages/engine/src/__tests__/agent-instructions.test.ts
+index 114f07bc97..697e72a81f 100644
+--- a/packages/engine/src/__tests__/agent-instructions.test.ts
++++ b/packages/engine/src/__tests__/agent-instructions.test.ts
+@@ -16,6 +16,7 @@ import {
+ } from "@fusion/core";
+ import {
+   MAX_MEMORY_LENGTH,
++  MEMORY_CLAMP_NOTICE_BUDGET_CHARS,
+   resolveAgentInstructions,
+   resolveAgentInstructionsWithRatings,
+   buildAgentChatPrompt,
+@@ -182,7 +183,16 @@ describe("resolveAgentInstructions", () => {
+     );
+ 
+     const result = await resolveAgentInstructions(makeAgent({ memory: "" }), testDir);
+-    expect(result).toContain("x".repeat(50000));
++    /*
++    STAS-399 D1 reconciled pin: this file used to assert a full `MAX_MEMORY_LENGTH` run survived. That
++    run could only exist because the omission notice rode ON TOP of the content, which is the defect the
++    card removes. A heading-less blob still keeps the newest suffix — now the newest
++    `MAX_MEMORY_LENGTH - MEMORY_CLAMP_NOTICE_BUDGET_CHARS` chars, because the report about the loss is
++    paid for out of the budget the loss happened to.
++    */
++    const contentBudget = MAX_MEMORY_LENGTH - MEMORY_CLAMP_NOTICE_BUDGET_CHARS;
++    expect(result).toContain("x".repeat(contentBudget));
++    expect(result).not.toContain("x".repeat(contentBudget + 1));
+   });
+ 
+   it("returns instructionsText when set", async () => {
+@@ -965,10 +975,22 @@ describe("diagnostics logging", () => {
+     expect(warnSpy.mock.calls[0]?.[0]).toContain("memory exceeded max length");
+     expect(warnSpy.mock.calls[1]?.[0]).toContain("agent-instructions");
+     expect(warnSpy.mock.calls[1]?.[0]).toContain("memory newest-kept clamp");
+-    expect(warnSpy.mock.calls[1]?.[0]).toContain("omitted 0/0 sections (10 chars)");
+     expect(result).toContain("## Agent Memory");
+-    expect(result).toContain(memory.slice(0, 50_000));
+-    expect(result).toContain("kept the newest 50000 of 50010 chars within the 50000-char inline memory budget");
++    /*
++    STAS-399 D1 reconciled pins: the log line used to carry counts (`omitted 0/0 sections (10 chars)`)
++    that appeared nowhere else. It now carries the very sentence the prompt carries, so one emitter
++    serves both surfaces and the two accounts cannot disagree. The kept run is the newest
++    `MAX_MEMORY_LENGTH - MEMORY_CLAMP_NOTICE_BUDGET_CHARS` chars for the same budget-subtraction reason.
++    */
++    const contentBudget = MAX_MEMORY_LENGTH - MEMORY_CLAMP_NOTICE_BUDGET_CHARS;
++    expect(result).toContain(memory.slice(memory.length - contentBudget));
++    expect(result).not.toContain(memory.slice(memory.length - contentBudget - 1));
++    const logLine = warnSpy.mock.calls[1]?.[0] ?? "";
++    const promptNotice = result.split("\n").find((line) => line.startsWith("_Inline agent memory: kept the newest")) ?? "";
++    expect(promptNotice.length).toBeGreaterThan(0);
++    expect(logLine).toContain(promptNotice);
++    expect(logLine).toContain("chars of heading-less text are NOT in this prompt");
++    expect(result).toContain("kept the newest 48976 of 50010 chars within the 50000-char inline memory budget");
+   });
+ 
+   it("logs exactly once when instructionsPath is too long", async () => {
+@@ -1605,8 +1627,11 @@ describe("inline long-term memory clamp keeps the newest entries (RUFU-443)", ()
+       testDir,
+     );
+     const bmpRun = bmpResult.match(/記+/)?.[0] ?? "";
+-    expect(bmpRun.length).toBeGreaterThan(MAX_MEMORY_LENGTH - 50);
+-    expect(bmpRun.length).toBeLessThanOrEqual(MAX_MEMORY_LENGTH);
++    // STAS-399 D1 reconciled pin: the run is bounded by the content budget (clamp minus notice reserve),
++    // still measured in code points — the unit this convention pins, and the notice reserve does not change it.
++    const contentBudget = MAX_MEMORY_LENGTH - MEMORY_CLAMP_NOTICE_BUDGET_CHARS;
++    expect(bmpRun.length).toBeGreaterThan(contentBudget - 50);
++    expect(bmpRun.length).toBeLessThanOrEqual(contentBudget);
+     expect(bmpResult).not.toContain("\uFFFD");
+ 
+     // Astral content: the tail cut lands mid surrogate pair, which must never render U+FFFD.
+diff --git a/packages/engine/src/__tests__/agent-memory-eviction-notice.test.ts b/packages/engine/src/__tests__/agent-memory-eviction-notice.test.ts
+new file mode 100644
+index 0000000000..5415be36fa
+--- /dev/null
++++ b/packages/engine/src/__tests__/agent-memory-eviction-notice.test.ts
+@@ -0,0 +1,469 @@
++import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
++import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
++import { readFileSync } from "node:fs";
++import { join, resolve } from "node:path";
++import { tmpdir } from "node:os";
++import type { Agent } from "@fusion/core";
++import * as agentInstructions from "../agents/agent-instructions.js";
++
++/*
++STAS-399: inline-memory eviction must be observable by name, and its order must be declarable.
++
++Two defects, one fixture family:
++1. The clamp reported counts only ("44 of 62 older sections are NOT in this prompt"), so an agent
++   could not tell WHETHER a durable rule was among the lost, and the engine log line named nothing
++   either. Observability extends the notice the agent already reads; it is not a second report.
++2. The victim set was decided by file position: the OLDEST sections always went, whatever they held.
++   A `## ` section can now declare `sacrifice-first`; declared victims go before positional ones, so
++   a named rule sitting at the top of a file survives while expendable bulk goes instead.
++
++Every assertion is on the string returned by the real composition entry point
++(`resolveAgentInstructions`), never on source text, with the single deliberate exception of the
++one-definition case, which is a code-construct guard over the two files that could disagree.
++
++The length invariant is asserted PER CLAMPED SOURCE (one notice plus the body it introduces), not
++against the whole prompt: the clamp runs once per source (the inline `agent.memory` field and the
++workspace `MEMORY.md`), so a full-mode prompt legitimately carries two clamped sources plus identity,
++soul and instruction headers. That reading is the `ac2-length-invariant-scope` finding raised against
++this card on plan review; the whole-prompt length is printed, not asserted, for that reason.
++*/
++
++const { MAX_MEMORY_LENGTH, resolveAgentInstructions } = agentInstructions;
++
++/*
++Read through the namespace object rather than a named import: this file is committed BEFORE the
++constant exists, so a named import would fail to link and the guard would never reach prompt
++assembly at all. Read this way, a missing constant shows up as a failing assertion on the notice
++length, which is the assertion that actually encodes the requirement.
++*/
++const MEMORY_CLAMP_NOTICE_BUDGET_CHARS: number = (
++  agentInstructions as unknown as Record<string, unknown>
++).MEMORY_CLAMP_NOTICE_BUDGET_CHARS as number;
++
++/** Repo root from this module's own URL: vitest sets process.cwd() to a per-worker temp dir. */
++const REPO_ROOT = resolve(import.meta.dirname, "..", "..", "..", "..");
++
++function makeAgent(overrides: Partial<Agent> = {}): Agent {
++  return {
++    id: "agent-test",
++    name: "stas-399-agent",
++    role: "executor",
++    state: "idle",
++    createdAt: new Date().toISOString(),
++    updatedAt: new Date().toISOString(),
++    metadata: {},
++    ...overrides,
++  } as Agent;
++}
++
++async function writeWorkspaceMemory(rootDir: string, content: string, agentId = "agent-test"): Promise<void> {
++  await mkdir(join(rootDir, ".fusion", "agent-memory", agentId), { recursive: true });
++  await writeFile(join(rootDir, ".fusion", "agent-memory", agentId, "MEMORY.md"), content, "utf-8");
++}
++
++type Spec = { heading: string; body: number; marker?: string };
++
++/** One `## ` section whose whole body is `y` runs, so its rendered size is predictable to the char. */
++function section(spec: Spec): string {
++  return `## ${spec.heading}${spec.marker ?? ""}\n\n${"y".repeat(spec.body)}\n`;
++}
++
++function memoryDocument(specs: Spec[], preamble = "# Agent Memory\n"): string {
++  return [preamble, ...specs.map(section)].join("\n");
++}
++
++function withMarkers(specs: Spec[], marker: (heading: string) => string | undefined): Spec[] {
++  return specs.map((spec) => {
++    const declared = marker(spec.heading);
++    return declared ? { ...spec, marker: declared } : spec;
++  });
++}
++
++/**
++ * Sections whose rendered body is NOT in the prompt, derived from the render, never from the notice.
++ *
++ * The name returned is the heading text AFTER the `## ` prefix, which is what the shared parser
++ * (`parseMemoryFile`) yields and therefore what the notice is required to print — marker text
++ * included, because a `sacrifice-first` marker lives on the heading line and is part of that text.
++ * Returning the bare `spec.heading` would compare two different renderings of one heading and make
++ * the name-equality assertions unfalsifiable in one direction.
++ */
++function absentHeadings(rendered: string, specs: Spec[]): string[] {
++  return specs
++    .filter((spec) => !rendered.includes(`## ${spec.heading}${spec.marker ?? ""}\n\n${"y".repeat(spec.body)}`))
++    .map((spec) => `${spec.heading}${spec.marker ?? ""}`);
++}
++
++/**
++ * The clamp notice as one line, with the new trailing clause captured for parsing. Matched line-wise
++ * because a real heading may itself contain an underscore, the italic delimiter of the whole notice.
++ */
++const NOTICE =
++  /^_(Inline agent memory|Workspace memory): kept the newest (\d+) of (\d+) chars within the (\d+)-char inline memory budget, so (\d+) of (\d+) older sections \((\d+) chars\) are NOT in this prompt(.*)$/;
++
++function noticeLine(rendered: string, label: string): string {
++  return rendered.split("\n").find((line) => line.startsWith(`_${label}: kept the newest`)) ?? "";
++}
++
++function noticeFor(rendered: string, label: string): RegExpMatchArray | null {
++  return noticeLine(rendered, label).match(NOTICE) ?? null;
++}
++
++/** The body one notice introduces: everything after that notice line, up to the next notice or EOF. */
++function bodyAfterNotice(rendered: string, label: string): string {
++  const line = noticeLine(rendered, label);
++  if (!line) return "";
++  const start = rendered.indexOf(line) + line.length + 2;
++  const rest = rendered.slice(start);
++  const next = rest.search(/^_(?:Inline agent memory|Workspace memory): kept the newest/m);
++  return (next < 0 ? rest : next === 0 ? "" : rest.slice(0, next)).trimEnd();
++}
++
++function namesIn(tail: string): string[] {
++  const list = /: \[([^\]]*)\]/.exec(tail);
++  return list ? list[1].split(" | ").map((name) => name.trim()).filter(Boolean) : [];
++}
++
++function elidedNames(tail: string): number {
++  return Number(/\(\+(\d+) more names not listed\)/.exec(tail)?.[1] ?? 0);
++}
++
++function ignoredMarkers(tail: string): string[] {
++  const list = /sacrifice-first marker that is not a heading-line token: \[([^\]]*)\]/.exec(tail);
++  return list ? list[1].split(" | ").map((name) => name.trim()).filter(Boolean) : [];
++}
++
++describe("STAS-399 inline-memory eviction is named and declarable", () => {
++  let testDir: string;
++
++  beforeEach(async () => {
++    testDir = await mkdtemp(join(tmpdir(), "stas-399-clamp-"));
++  });
++
++  afterEach(async () => {
++    await rm(testDir, { recursive: true, force: true });
++    vi.restoreAllMocks();
++  });
++
++  /* ---------- AC2: the dropped set is observable by name, in the composed string ---------- */
++
++  it("names every dropped section heading in the composed prompt, with no unnamed drop", async () => {
++    const specs: Spec[] = Array.from({ length: 56 }, (_, i) => ({
++      heading: `Note ${String(i + 1).padStart(3, "0")}`,
++      body: 1_011,
++    }));
++    const doc = memoryDocument(specs);
++    expect(doc.trim().length).toBeGreaterThan(MAX_MEMORY_LENGTH);
++    await writeWorkspaceMemory(testDir, doc);
++
++    const result = await resolveAgentInstructions(makeAgent({ memory: "" }), testDir);
++    const notice = noticeFor(result, "Workspace memory");
++    expect(notice, "the clamp must still announce the omission").not.toBeNull();
++
++    const dropped = absentHeadings(result, specs);
++    expect(dropped.length).toBeGreaterThan(0);
++
++    const tail = notice![8];
++    const named = namesIn(tail);
++    const elided = elidedNames(tail);
++    const unnamed = dropped.filter((heading) => !named.includes(heading));
++    console.info(`[AC2] sections=${specs.length} dropped=${dropped.length} named=${named.length} elided=${elided}`);
++    expect(unnamed).toEqual([]);
++    expect(named.length + elided).toBe(dropped.length);
++    expect(Number(notice![5])).toBe(dropped.length);
++
++    // Names are listed in eviction order, and the positional rule's order is oldest-first.
++    expect(named.slice(0, 3)).toEqual(dropped.slice(0, 3));
++
++    // Headings only, never bodies: no run of section padding may ride inside the notice line.
++    expect(notice![0]).not.toContain("yyyy");
++  });
++
++  it("keeps one clamped memory source within the clamp, with a notice and without one", async () => {
++    const oversized: Spec[] = Array.from({ length: 56 }, (_, i) => ({
++      heading: `Note ${String(i + 1).padStart(3, "0")}`,
++      body: 1_011,
++    }));
++    await writeWorkspaceMemory(testDir, memoryDocument(oversized));
++    const withNotice = await resolveAgentInstructions(makeAgent({ memory: "" }), testDir);
++    expect(noticeFor(withNotice, "Workspace memory")).not.toBeNull();
++
++    const line = noticeLine(withNotice, "Workspace memory");
++    const body = bodyAfterNotice(withNotice, "Workspace memory");
++    console.info(`[AC2-length] notice=${line.length} body=${body.length} sum=${line.length + body.length} clamp=${MAX_MEMORY_LENGTH} reserve=${MEMORY_CLAMP_NOTICE_BUDGET_CHARS}`);
++    // The report is paid for out of the budget it reports on, never added on top of it.
++    expect(line.length).toBeLessThanOrEqual(MEMORY_CLAMP_NOTICE_BUDGET_CHARS);
++    expect(body.length + line.length).toBeLessThanOrEqual(MAX_MEMORY_LENGTH);
++
++    const underBudget: Spec[] = [
++      { heading: "Short one", body: 200 },
++      { heading: "Short two", body: 200 },
++    ];
++    await writeWorkspaceMemory(testDir, memoryDocument(underBudget));
++    const withoutNotice = await resolveAgentInstructions(makeAgent({ memory: "" }), testDir);
++    expect(bodyAfterNotice(withoutNotice, "Workspace memory")).toBe("");
++    expect(withoutNotice).not.toContain("are NOT in this prompt");
++  });
++
++  it("reports an elided name list as a truncation instead of shortening it silently", async () => {
++    // Many small sections: the drop count is high while each victim is cheap, which is the shape in
++    // which the names cannot all fit inside the notice budget.
++    const specs: Spec[] = Array.from({ length: 300 }, (_, i) => ({
++      heading: `Tiny ${String(i + 1).padStart(3, "0")} durable operating note`,
++      body: 200,
++    }));
++    await writeWorkspaceMemory(testDir, memoryDocument(specs));
++
++    const result = await resolveAgentInstructions(makeAgent({ memory: "" }), testDir);
++    const notice = noticeFor(result, "Workspace memory");
++    expect(notice).not.toBeNull();
++    const dropped = absentHeadings(result, specs);
++    const named = namesIn(notice![8]);
++    const elided = elidedNames(notice![8]);
++    console.info(`[AC2-elision] dropped=${dropped.length} named=${named.length} elided=${elided}`);
++    expect(elided).toBeGreaterThan(0);
++    expect(named.length + elided).toBe(dropped.length);
++    expect(dropped.filter((heading) => !named.includes(heading))).toHaveLength(elided);
++  });
++
++  /* ---------- AC3: the notice never cries wolf and never hides one ---------- */
++
++  it("emits no notice at all when nothing was dropped", async () => {
++    const specs: Spec[] = [{ heading: "Only note", body: 300 }];
++    await writeWorkspaceMemory(testDir, memoryDocument(specs));
++
++    const result = await resolveAgentInstructions(makeAgent({ memory: "" }), testDir);
++
++    expect(result).toContain("Only note");
++    // Absence asserted on the prompt, not an empty string counted as success.
++    expect(result).not.toContain("kept the newest");
++    expect(result).not.toContain("are NOT in this prompt");
++    expect(noticeFor(result, "Workspace memory")).toBeNull();
++  });
++
++  it("composes a heading-less file and a single-giant-section file without error", async () => {
++    const blob = `HEAD ${"b".repeat(MAX_MEMORY_LENGTH + 5_000)} TAIL`;
++    await writeWorkspaceMemory(testDir, blob);
++    const blobResult = await resolveAgentInstructions(makeAgent({ memory: "" }), testDir);
++    expect(blobResult.endsWith("TAIL")).toBe(true);
++    // No headings exist, so no names can be named; the char-shaped sentence must still appear.
++    expect(blobResult).toContain("heading-less text are NOT in this prompt");
++    expect(blobResult).not.toContain("in eviction order");
++
++    // One section bigger than the whole budget: the newest section is the only candidate, so the
++    // tail fallback keeps its end and the heading itself is cut. Declared order must not change that.
++    const giant = `# Agent Memory\n\n## Colossus\n\n${"z".repeat(MAX_MEMORY_LENGTH + 4_000)}END OF COLOSSUS\n`;
++    await writeWorkspaceMemory(testDir, giant);
++    const giantResult = await resolveAgentInstructions(makeAgent({ memory: "" }), testDir);
++    expect(giantResult.endsWith("END OF COLOSSUS")).toBe(true);
++    expect(giantResult.length).toBeGreaterThan(0);
++  });
++
++  it("names an ignored malformed marker in the same notice that reports the drops", async () => {
++    const specs: Spec[] = Array.from({ length: 56 }, (_, i) => ({
++      heading: `Note ${String(i + 1).padStart(3, "0")}`,
++      body: 1_011,
++    }));
++    // The token sits in a section BODY, not as a heading-line token: honoured as absent, named as ignored.
++    const misplaced = "## Misplaced ninety\n\nsacrifice-first this marker is in the body, not in the heading\n";
++    const doc = memoryDocument(specs).replace("## Note 030\n", `${misplaced}\n## Note 030\n`);
++    expect(doc).toContain("Misplaced ninety");
++    await writeWorkspaceMemory(testDir, doc);
++
++    const result = await resolveAgentInstructions(makeAgent({ memory: "" }), testDir);
++    const notice = noticeFor(result, "Workspace memory");
++    expect(notice).not.toBeNull();
++    const ignored = ignoredMarkers(notice![8]);
++    console.info(`[AC3-ignored] ignored=${JSON.stringify(ignored)}`);
++    expect(ignored).toContain("Misplaced ninety");
++    // Honoured as absent: the misplaced marker neither protected nor sacrificed its own section.
++    expect(result).toContain("Misplaced ninety");
++    expect(result).toContain("yyyy");
++  });
++
++  it("writes the dropped heading text into the engine log line, not only counts", async () => {
++    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
++    const specs: Spec[] = Array.from({ length: 56 }, (_, i) => ({
++      heading: `Logged ${String(i + 1).padStart(3, "0")}`,
++      body: 1_011,
++    }));
++    await writeWorkspaceMemory(testDir, memoryDocument(specs));
++
++    const result = await resolveAgentInstructions(makeAgent({ memory: "" }), testDir);
++    const dropped = absentHeadings(result, specs);
++    expect(dropped.length).toBeGreaterThan(0);
++
++    const lines = warn.mock.calls.map((call) => String(call[0]));
++    const clampLine = lines.find((line) => line.includes("newest-kept clamp"));
++    expect(clampLine, "the clamp must still write its own log line").toBeDefined();
++    console.info(`[AC3-log] dropped=${dropped.length} logNamesFirstDrop=${clampLine!.includes(dropped[0])}`);
++    expect(clampLine).toContain(dropped[0]);
++  });
++
++  /* ---------- AC4: declared order decides, and the default is provably unchanged ---------- */
++
++  /**
++   * One corpus, two ways to spend it. The OLDEST section carries a named rule; three bulk sections
++   * near the end are expendable. Positionally the rule is the first victim; by declaration the bulk
++   * goes first.
++   *
++   * Sizing, measured against the render budget the clamp actually spends (48,976 = 50,000 minus the
++   * 1,024-char notice reserve): everything that is NOT a declared victim — the rule (2,034), 43 ticks
++   * (1,024 each), the newest tick (1,028), preamble and separators — is ~47,156 chars, which fits that
++   * budget with ~1,800 to spare, while the same set plus two bulk sections (~52,200) does not. So the
++   * declared run sacrifices exactly the three marked sections, and the positional prefix has to eat the
++   * rule to reach the same relief. An earlier draft used 46 ticks, which left the non-victim residual at
++   * ~50,230 — over the budget before any victim was chosen, so no declared order could have saved the
++   * rule at any size of bulk section. The assertion is unchanged; the fixture now matches its intent.
++   */
++  function bulkVsRuleSpecs(declare: boolean): Spec[] {
++    const specs: Spec[] = [
++      { heading: "Named rule AC-poison vector", body: 2_000 },
++      ...Array.from({ length: 43 }, (_, i) => ({ heading: `Tick ${String(i + 1).padStart(2, "0")}`, body: 1_011 })),
++      { heading: "Bulk capture A", body: 5_000 },
++      { heading: "Bulk capture B", body: 5_000 },
++      { heading: "Bulk capture C", body: 5_000 },
++      { heading: "Newest tick", body: 1_011 },
++    ];
++    if (!declare) return specs;
++    return withMarkers(specs, (heading) => (heading.startsWith("Bulk capture") ? " sacrifice-first" : undefined));
++  }
++
++  it("sacrifices a declared marker before an unmarked named rule the positional rule would take", async () => {
++    await writeWorkspaceMemory(testDir, memoryDocument(bulkVsRuleSpecs(true)));
++
++    const result = await resolveAgentInstructions(makeAgent({ memory: "" }), testDir);
++    const notice = noticeFor(result, "Workspace memory");
++    expect(notice).not.toBeNull();
++
++    const specs = bulkVsRuleSpecs(true);
++    const dropped = absentHeadings(result, specs);
++    const named = namesIn(notice![8]);
++    console.info(`[AC4-declared] dropped=${JSON.stringify(dropped)}`);
++    expect(dropped).toEqual(["Bulk capture A sacrifice-first", "Bulk capture B sacrifice-first", "Bulk capture C sacrifice-first"]);
++    expect(named).toEqual(dropped);
++    // The rule the positional rule would have taken is in the prompt.
++    expect(result).toContain("Named rule AC-poison vector");
++    expect(notice![8]).toContain("declared sacrifice-first order");
++  });
++
++  it("names the declared marker through an HTML comment wrapper on the heading line", async () => {
++    const specs = withMarkers(bulkVsRuleSpecs(false), (heading) =>
++      heading.startsWith("Bulk capture") ? " <!-- sacrifice-first -->" : undefined,
++    );
++    await writeWorkspaceMemory(testDir, memoryDocument(specs));
++
++    const result = await resolveAgentInstructions(makeAgent({ memory: "" }), testDir);
++    expect(result).toContain("Named rule AC-poison vector");
++    expect(absentHeadings(result, specs)).toEqual([
++      "Bulk capture A <!-- sacrifice-first -->",
++      "Bulk capture B <!-- sacrifice-first -->",
++      "Bulk capture C <!-- sacrifice-first -->",
++    ]);
++  });
++
++  it("leaves the evicted set identical to the positional rule when no marker is present anywhere", async () => {
++    const specs: Spec[] = Array.from({ length: 58 }, (_, i) => ({
++      heading: `Plain ${String(i + 1).padStart(3, "0")}`,
++      body: 1_011,
++    }));
++    await writeWorkspaceMemory(testDir, memoryDocument(specs));
++
++    const result = await resolveAgentInstructions(makeAgent({ memory: "" }), testDir);
++    const notice = noticeFor(result, "Workspace memory");
++    expect(notice).not.toBeNull();
++
++    const dropped = absentHeadings(result, specs);
++    // The positional rule drops a contiguous prefix of the oldest sections and nothing else, so the
++    // declared-order function must reproduce exactly that prefix when nothing declares itself.
++    const positionalPrefix = specs.slice(0, dropped.length).map((spec) => spec.heading);
++    const forward = dropped.filter((heading) => !positionalPrefix.includes(heading));
++    const backward = positionalPrefix.filter((heading) => !dropped.includes(heading));
++    console.info(`[AC4-default] dropped=${dropped.length} setdiff(forward)=${forward.length} setdiff(backward)=${backward.length}`);
++    expect(forward).toEqual([]);
++    expect(backward).toEqual([]);
++    expect(namesIn(notice![8])).toEqual(dropped);
++    expect(notice![8]).toContain("no sacrifice-first marker");
++  });
++
++  it("never evicts the newest section even when it declares itself sacrifice-first", async () => {
++    const specs: Spec[] = [
++      ...Array.from({ length: 50 }, (_, i) => ({ heading: `Older ${String(i + 1).padStart(3, "0")}`, body: 1_011 })),
++      { heading: "Newest declares itself expendable", body: 1_011, marker: " sacrifice-first" },
++    ];
++    await writeWorkspaceMemory(testDir, memoryDocument(specs));
++
++    const result = await resolveAgentInstructions(makeAgent({ memory: "" }), testDir);
++    expect(result).toContain("Newest declares itself expendable");
++  });
++
++  /* ---------- AC5: the retrieval probe is a prompt-assembly assertion ---------- */
++
++  it("recovers a named rule that the positional rule evicts, from the declared order alone", async () => {
++    const RULE = "staged-index FF-blocker: never fast-forward a dirty index";
++    const bodyWithRule = RULE + "\n\n" + "y".repeat(2_000 - RULE.length - 2);
++    // Same shape as AC4's corpus for the same reason: the non-victim residual must fit the render budget
++    // on its own, or no declared order could recover the rule. See `bulkVsRuleSpecs` for the arithmetic.
++    const baseSpecs: Spec[] = [
++      { heading: "Durable merge rules", body: bodyWithRule.length },
++      ...Array.from({ length: 43 }, (_, i) => ({ heading: `Tick ${String(i + 1).padStart(2, "0")}`, body: 1_011 })),
++      { heading: "Bulk capture A", body: 5_000 },
++      { heading: "Bulk capture B", body: 5_000 },
++      { heading: "Bulk capture C", body: 5_000 },
++      { heading: "Newest tick", body: 1_011 },
++    ];
++
++    const renderOf = async (specs: Spec[], firstBody: string): Promise<string> => {
++      const doc = memoryDocument(specs).replace(`## Durable merge rules\n\n${"y".repeat(firstBody.length)}`, `## Durable merge rules\n\n${firstBody}`);
++      await writeWorkspaceMemory(testDir, doc);
++      return resolveAgentInstructions(makeAgent({ memory: "" }), testDir);
++    };
++
++    // Control: the SAME corpus, nothing declared, loses the rule to file position.
++    const positional = await renderOf(baseSpecs, bodyWithRule);
++    expect(positional).not.toContain(RULE);
++
++    // One difference: three bulk sections declare themselves expendable.
++    const declaredSpecs = withMarkers(baseSpecs, (heading) =>
++      heading.startsWith("Bulk capture") ? " sacrifice-first" : undefined,
++    );
++    const declared = await renderOf(declaredSpecs, bodyWithRule);
++    expect(declared).toContain(RULE);
++
++    const notice = noticeFor(declared, "Workspace memory");
++    expect(notice).not.toBeNull();
++    console.info(`[AC5-probe] lenBefore=${positional.length} lenAfter=${declared.length} ruleAbsentUnderPositional=true rulePresentUnderDeclared=true`);
++    expect(namesIn(notice![8]).length).toBeGreaterThan(0);
++    expect(declared).toContain("## Durable merge rules");
++  });
++
++  /* ---------- AC6: one number per concept, in one unit ---------- */
++
++  it("defines the inline memory budget numeral in exactly one tracked source file", () => {
++    const sites = ["packages/engine/src/agents/agent-instructions.ts", "packages/engine/src/agent-tools.ts"];
++    const declarations = sites
++      .flatMap((rel) =>
++        readFileSync(join(REPO_ROOT, rel), "utf8")
++          .split("\n")
++          .map((line, index) => ({ rel, line, number: index + 1 }))
++          .filter(({ line }) => /^\s*(export )?const MAX_MEMORY_LENGTH\s*=/.test(line)),
++      )
++      .map(({ rel, number, line }) => `${rel}:${number}: ${line.trim()}`);
++    console.info(`[AC6-census] MAX_MEMORY_LENGTH declarations=${declarations.length}\n${declarations.join("\n")}`);
++    expect(declarations).toHaveLength(1);
++    expect(declarations[0]).toContain("packages/engine/src/agents/agent-instructions.ts");
++  });
++
++  it("measures the inline budget in characters, not bytes, so no silent unit change slips in", async () => {
++    // A two-byte LATIN character (Slovak z-caron): if the clamp ever compares bytes again, the run
++    // that reaches the prompt halves in length instead of staying at the char budget.
++    const multibyte = "\u017E".repeat(MAX_MEMORY_LENGTH + 10_000);
++
++    const result = await resolveAgentInstructions(makeAgent({ memory: multibyte }), testDir);
++
++    const run = result.match(/\u017E+/g)?.sort((a, b) => b.length - a.length)[0] ?? "";
++    expect(run.length).toBeGreaterThan(MAX_MEMORY_LENGTH - MEMORY_CLAMP_NOTICE_BUDGET_CHARS - 50);
++    expect(run.length).toBeLessThanOrEqual(MAX_MEMORY_LENGTH);
++    expect(result).not.toContain("\uFFFD");
++  });
++});
+diff --git a/packages/engine/src/agent-tools.ts b/packages/engine/src/agent-tools.ts
+index 5a6e637c3b..023bf66e65 100644
+--- a/packages/engine/src/agent-tools.ts
++++ b/packages/engine/src/agent-tools.ts
+@@ -33,6 +33,7 @@ import { fetchWebContent, WebFetchError } from "./util/web-fetch.js";
+ import type { RunAuditor } from "./util/run-audit.js";
+ import { guardBoundWriteTarget, resolveWriteTarget, writeTargetErrorResult } from "./task-write-target.js";
+ import { computeApprovalDedupeKey } from "./agents/agent-action-gate.js";
++import { MAX_INSTRUCTIONS_TEXT_LENGTH, MAX_MEMORY_LENGTH, MAX_SOUL_LENGTH } from "./agents/agent-instructions.js";
+ import { MessageDeliveryAutoRecoveryHandler } from "./auto-recovery-handlers/message-delivery.js";
+ import { emitGoalRetrievalAudit } from "./goals/goal-anchoring-audit.js";
+ import { recordRetry } from "./errors/retry-burned-logger.js";
+@@ -797,10 +798,6 @@ type MemorySearchHit = {
+ 
+ const log = createLogger("agent-tools");
+ 
+-const MAX_INSTRUCTIONS_TEXT_LENGTH = 50_000;
+-const MAX_MEMORY_LENGTH = 50_000;
+-const MAX_SOUL_LENGTH = 10_000;
+-
+ const AGENT_MEMORY_ROOT = ".fusion/agent-memory";
+ const AGENT_MEMORY_FILENAME = "MEMORY.md";
+ const AGENT_DREAMS_FILENAME = "DREAMS.md";
+diff --git a/packages/engine/src/agents/agent-instructions.ts b/packages/engine/src/agents/agent-instructions.ts
+index 559b1a551b..67cd7fe077 100644
+--- a/packages/engine/src/agents/agent-instructions.ts
++++ b/packages/engine/src/agents/agent-instructions.ts
+@@ -25,8 +25,46 @@ const log = createLogger("agent-instructions");
+ const MAX_INSTRUCTIONS_PATH_LENGTH = 500;
+ export const MAX_INSTRUCTIONS_TEXT_LENGTH = 50_000;
+ export const MAX_SOUL_LENGTH = 10_000;
++/*
++FNXC:MemoryBudgetSingleSource 2026-11-10-03:40 (STAS-399 D3): this is the ONLY definition of the inline
++memory budget numeral in the repository.
++`agent-tools.ts` used to keep its own private copy of this numeral for the write-side
++`fn_agent_update` reject cap; that literal is gone and the tool imports this one, so the prompt clamp
++and the write cap cannot drift apart. `MAX_INSTRUCTIONS_TEXT_LENGTH` and `MAX_SOUL_LENGTH` look alike
++and are NOT the same concept (they bound different fields) - do not merge them here.
++
++The unit is CHARACTERS as `String.length` yields them (UTF-16 code units), not bytes: a multi-byte
++memory file costs more prompt than a byte count suggests, and `clampUtf8` / `MEMORY_LONG_TERM_BYTE_BUDGET`
++speak bytes while this constant never does.
++
++Policy conflict, deliberately unresolved (STAS-399 AC7, documented per the operator's ruling): the
++agent-facing memory policy (CEO ruling on STAS-340, held in agent memory prose) states a 32 KB soft
++target and a 64 KB hard ceiling for a memory scope. Only the first has an implementation: 32 KiB is
++`MEMORY_LONG_TERM_BYTE_BUDGET`, the BYTES budget that decides when maintenance consolidates a file.
++The 64 KB ceiling exists nowhere in this repository, in code or in docs, and its numeric form 65,536 is
++GREATER than this char budget, so a scope fully obeying the stated policy is still truncated here -
++measured on the CEO's own scope, 55,686 bytes is 9,850 bytes UNDER 65,536 and the two oldest sections
++still did not reach the prompt. THE RULE THAT BINDS A PROMPT IS THIS ONE: 50,000 characters per memory
++source, because this is the number the render is actually compared against. See
++`docs/memory-plugin-contract.md` invariant 9, which already keeps the write budget and this clamp apart.
++*/
+ export const MAX_MEMORY_LENGTH = 50_000;
+ 
++/**
++ * Characters the omission notice may cost the memory it reports on (STAS-399 D1).
++ *
++ * The report is paid for out of the budget it reports on, never added on top of it: an over-budget
++ * source renders at most `MAX_MEMORY_LENGTH - MEMORY_CLAMP_NOTICE_BUDGET_CHARS` of content, so
++ * notice + content stays within `MAX_MEMORY_LENGTH`. Before this card the notice rode on top of the
++ * content — measured 265 chars of notice over 49,262 chars of body, i.e. 49,527 by luck of section
++ * granularity rather than by construction.
++ *
++ * The price is honest and bounded: 1,024 chars is roughly one average `## ` section, so reporting the
++ * drops can cost at most one extra sacrificed section, and it buys roughly thirty named headings
++ * before the name list has to report its own elision. A source that fits pays nothing (no notice).
++ */
++export const MEMORY_CLAMP_NOTICE_BUDGET_CHARS = 1_024;
++
+ function trimAndClamp(value: string, maxLength: number, label: string, agentId: string): string {
+   const trimmed = value.trim();
+   if (!trimmed) {
+@@ -40,6 +78,19 @@ function trimAndClamp(value: string, maxLength: number, label: string, agentId:
+   return trimmed.slice(0, maxLength);
+ }
+ 
++/** What decided the sacrifice order of one clamped memory source (STAS-399 D2). */
++type MemoryEvictionOrder = "declared" | "positional";
++
++/** The sacrificed sections, named, exactly as the clamp decided them. */
++type MemoryEvictionReport = {
++  /** `declared` when at least one `## ` section declared `sacrifice-first`, else file position. */
++  order: MemoryEvictionOrder;
++  /** Headings of the sections absent from the render, in the order they were sacrificed. */
++  droppedHeadings: string[];
++  /** Headings carrying `sacrifice-first` somewhere other than the heading line, so it was ignored. */
++  ignoredMarkerHeadings: string[];
++};
++
+ /** Result of the order-aware inline memory clamp (see {@link clampMemoryKeepingNewest}). */
+ type MemoryClampResult = {
+   /** Content safe to render: at most `maxLength` characters, newest entries always present. */
+@@ -52,9 +103,42 @@ type MemoryClampResult = {
+   omittedSections: number;
+   /** Characters of the trimmed input that did not make it into {@link text}. */
+   omittedChars: number;
++  /** Who was sacrificed and why, or null when nothing was (STAS-399 D1: an omission is never silent). */
++  eviction: MemoryEvictionReport | null;
+ };
+ 
+-const EMPTY_CLAMP: MemoryClampResult = { text: "", totalChars: 0, totalSections: 0, omittedSections: 0, omittedChars: 0 };
++const EMPTY_CLAMP: MemoryClampResult = {
++  text: "",
++  totalChars: 0,
++  totalSections: 0,
++  omittedSections: 0,
++  omittedChars: 0,
++  eviction: null,
++};
++
++/** The `## ` section heading-line token that declares a section expendable (STAS-399 D2). */
++const SACRIFICE_FIRST_MARKER = "sacrifice-first";
++
++/**
++ * Does this heading line declare its section expendable? A token match on the heading line only:
++ * HTML comment delimiters are stripped first so `## Changelog <!-- sacrifice-first -->` counts, and
++ * a token wrapped in any other punctuation does not. Position in the file is irrelevant by decision —
++ * durability is declared, not inferred from where the author happened to write.
++ */
++function declaresSacrificeFirst(headingLine: string): boolean {
++  return headingLine
++    .replace(/<!--|-->/g, " ")
++    .split(/\s+/)
++    .some((token) => token.toLowerCase() === SACRIFICE_FIRST_MARKER);
++}
++
++/**
++ * Does this section's body mention the marker? Body text is memory content, not metadata: a mention
++ * there declares nothing, and the clamp names it as ignored rather than pretending it was absent.
++ */
++function bodyMentionsSacrificeFirst(sectionLines: string[]): boolean {
++  return sectionLines.slice(1).some((line) => line.split(/\s+/).some((token) => token.toLowerCase() === SACRIFICE_FIRST_MARKER));
++}
+ 
+ /**
+  * Keep the LAST `maxChars` characters of `value`, cut on a code-point boundary.
+@@ -114,18 +198,23 @@ function clampMemoryKeepingNewest(trimmed: string, maxLength: number): MemoryCla
+   if (!trimmed) return EMPTY_CLAMP;
+   if (maxLength <= 0) return { ...EMPTY_CLAMP, totalChars: trimmed.length, omittedChars: trimmed.length };
+   if (trimmed.length <= maxLength) {
+-    return { text: trimmed, totalChars: trimmed.length, totalSections: 0, omittedSections: 0, omittedChars: 0 };
++    // Within budget nothing was sacrificed, so there is nothing to report: `eviction: null` is the
++    // assertion behind AC3's "no notice when nothing was dropped", not an empty list.
++    return { text: trimmed, totalChars: trimmed.length, totalSections: 0, omittedSections: 0, omittedChars: 0, eviction: null };
+   }
+ 
+   const parts = parseMemoryFile(trimmed);
+   if (parts.sections.length === 0) {
+-    const text = keepNewestChars(trimmed, maxLength);
++    const contentBudget = maxLength - MEMORY_CLAMP_NOTICE_BUDGET_CHARS;
++    const text = keepNewestChars(trimmed, contentBudget);
+     return {
+       text,
+       totalChars: trimmed.length,
+       totalSections: 0,
+       omittedSections: 0,
+       omittedChars: trimmed.length - text.length,
++      // Nothing is nameable: a blob with no `## ` heading has no sections to list, only characters.
++      eviction: null,
+     };
+   }
+ 
+@@ -141,52 +230,97 @@ function clampMemoryKeepingNewest(trimmed: string, maxLength: number): MemoryCla
+   const prefix = new Array<number>(lineCount + 1).fill(0);
+   for (let i = 0; i < lineCount; i += 1) prefix[i + 1] = prefix[i] + allLines[i]!.length;
+ 
++  // `renderMemoryFile(parts, kept)` renders preamble + the kept sections' lines joined by the file's
++  // newline, so ANY kept set costs `keptChars + (keptLines - 1) * newline + trailing`. Tracking what
++  // each sacrificed section gives back is therefore exact arithmetic, with no candidate string built
++  // per section (production files carry 890+ sections).
+   const sectionStart: number[] = [];
+   let cursor = preambleLines;
+   for (const section of parts.sections) {
+     sectionStart.push(cursor);
+     cursor += section.lines.length;
+   }
++  const sectionChars: number[] = sectionStart.map(
++    (start, index) => prefix[start + parts.sections[index]!.lines.length]! - prefix[start]!,
++  );
+ 
+-  // `renderMemoryFile(parts, sections.slice(i))` renders preamble + lines[i..end] joined by the
+-  // file's newline, so its length is the two line sums plus (keptLines - 1) separators.
+-  const renderedLength = (sectionIndex: number): number => {
+-    const start = sectionStart[sectionIndex]!;
+-    const keptLines = preambleLines + (lineCount - start);
+-    const separators = Math.max(0, keptLines - 1) * newlineLen;
+-    return prefix[preambleLines] + (prefix[lineCount] - prefix[start]) + separators + trailing;
++  const totalLineChars = prefix[lineCount]!;
++  const renderedAfter = (droppedChars: number, droppedLines: number): number => {
++    const keptLines = lineCount - droppedLines;
++    if (keptLines <= 0) return 0;
++    return totalLineChars - droppedChars + (keptLines - 1) * newlineLen + trailing;
+   };
+ 
+-  // Suffixes only grow as the start index moves older, so the first index that breaks the budget
+-  // ends the search; the smallest still-fitting index keeps the most history without exceeding it.
+-  let keptFrom = -1;
+-  for (let i = totalSections - 1; i >= 0; i -= 1) {
+-    if (renderedLength(i) > maxLength) break;
+-    keptFrom = i;
++  // The report is paid for here, before the content is chosen, so notice + content can never exceed
++  // the budget the caller announced.
++  const contentBudget = maxLength - MEMORY_CLAMP_NOTICE_BUDGET_CHARS;
++
++  // Candidates, in the order they are sacrificed: every section that declared itself expendable
++  // first, in file order, then the rest in file order. The newest section is never a candidate —
++  // RUFU-443's contract is that the freshest content survives, and a declaration cannot trade it
++  // away. With no marker anywhere this list is exactly the oldest-first walk the clamp always made.
++  const newestIndex = totalSections - 1;
++  const declaredCandidates: number[] = [];
++  const positionalCandidates: number[] = [];
++  const ignoredMarkerHeadings: string[] = [];
++  for (let index = 0; index < totalSections; index += 1) {
++    const section = parts.sections[index]!;
++    const declared = declaresSacrificeFirst(section.lines[0] ?? "");
++    if (!declared && bodyMentionsSacrificeFirst(section.lines)) ignoredMarkerHeadings.push(section.heading);
++    if (index === newestIndex) continue;
++    (declared ? declaredCandidates : positionalCandidates).push(index);
+   }
+ 
+-  if (keptFrom < 0) {
+-    // Even the newest section alone (plus preamble) exceeds the budget: keep that section's tail.
+-    const newest = parts.sections[totalSections - 1]!;
++  const dropped: number[] = [];
++  let droppedChars = 0;
++  let droppedLines = 0;
++  let fits = false;
++  for (const index of [...declaredCandidates, ...positionalCandidates]) {
++    dropped.push(index);
++    droppedChars += sectionChars[index]!;
++    droppedLines += parts.sections[index]!.lines.length;
++    if (renderedAfter(droppedChars, droppedLines) <= contentBudget) {
++      fits = true;
++      break;
++    }
++  }
++
++  const eviction: MemoryEvictionReport = {
++    order: declaredCandidates.length > 0 ? "declared" : "positional",
++    droppedHeadings: dropped.map((index) => parts.sections[index]!.heading),
++    ignoredMarkerHeadings,
++  };
++
++  if (!fits) {
++    /*
++    Sacrificing every candidate leaves only the newest section, and that alone is still over budget:
++    keep its tail (preamble first, when it fits). The newest content is never dropped wholesale, and
++    every other section is named — `dropped` walked the whole candidate list to get here.
++    */
++    const newest = parts.sections[newestIndex]!;
+     const preambleBlock = preambleLines > 0 ? parts.preamble.join(parts.newline) : "";
+-    const tail = keepNewestChars(newest.text, maxLength - (preambleBlock ? preambleBlock.length + newlineLen : 0));
+-    const text = preambleBlock && tail ? `${preambleBlock}${parts.newline}${tail}` : keepNewestChars(newest.text, maxLength);
++    const tailBudget = contentBudget - (preambleBlock ? preambleBlock.length + newlineLen : 0);
++    const tail = keepNewestChars(newest.text, tailBudget);
++    const text = preambleBlock && tail ? `${preambleBlock}${parts.newline}${tail}` : keepNewestChars(newest.text, contentBudget);
+     return {
+       text,
+       totalChars: trimmed.length,
+       totalSections,
+       omittedSections: totalSections - 1,
+       omittedChars: trimmed.length - text.length,
++      eviction,
+     };
+   }
+ 
+-  const text = renderMemoryFile(parts, parts.sections.slice(keptFrom));
++  const sacrificed = new Set(dropped);
++  const text = renderMemoryFile(parts, parts.sections.filter((_, index) => !sacrificed.has(index)));
+   return {
+     text,
+     totalChars: trimmed.length,
+     totalSections,
+-    omittedSections: keptFrom,
++    omittedSections: dropped.length,
+     omittedChars: trimmed.length - text.length,
++    eviction,
+   };
+ }
+ 
+@@ -203,17 +337,90 @@ function clampMemoryKeepingNewest(trimmed: string, maxLength: number): MemoryCla
+  * whenever the next-oldest section does not fit (whole sections are kept, never split), so quoting the
+  * budget as if it were the retained size overstated how much of the file the agent has — the same
+  * class of imprecision this card exists to remove. The budget is still stated, as its own number.
++ *
++ * FNXC:MemoryEvictionNotice 2026-11-10-03:40 (STAS-399 D1): counts alone left the agent unable to tell
++ * whether a durable rule was among the lost — the notice said *how much* and never *what*. It now names
++ * the sacrificed headings in eviction order and says which rule picked them, so "what am I not being
++ * told" is a read instead of archaeology. One string serves both surfaces: {@link formatMemoryClampNotice}
++ * is the only emitter, and the engine log line logs exactly this text, so the two cannot disagree.
+  */
++const NOTICE_KEPT_SENTENCE = `The newest entries are always kept; read the omitted ones with fn_memory_search, then fn_memory_get._`;
++
++/** Headings in the eviction clause are separated by this, inside one bracketed list. */
++const EVICTION_NAME_SEPARATOR = " | ";
++
++/** A name list the budget could not carry reports its own truncation instead of becoming a shorter silence. */
++function elidedNamesText(elided: number): string {
++  return `(+${elided} more names not listed)`;
++}
++
++/**
++ * `: [heading | heading](+N more names not listed)` — the elision marker sits OUTSIDE the brackets so a
++ * reader can tell the report from its content. Returns "" only for an empty list, which cannot happen
++ * for a dropped set (the clamp always sacrifices at least one section before it reports).
++ */
++function renderEvictionNames(headings: string[], budget: number): string {
++  if (headings.length === 0) {
++    return "";
++  }
++  const listed: string[] = [];
++  let used = 0;
++  for (const heading of headings) {
++    const cost = (listed.length > 0 ? EVICTION_NAME_SEPARATOR.length : 0) + heading.length;
++    const wouldElide = headings.length - listed.length - 1;
++    const elisionCost = wouldElide > 0 ? elidedNamesText(wouldElide).length + 1 : 0;
++    if (used + cost + elisionCost > budget) {
++      break;
++    }
++    used += cost;
++    listed.push(heading);
++  }
++  const elided = headings.length - listed.length;
++  return `: [${listed.join(EVICTION_NAME_SEPARATOR)}]${elided > 0 ? elidedNamesText(elided) : ""}`;
++}
++
++/**
++ * Which rule chose these victims, and who they were. `declared` is only ever reported when a heading
++ * line actually carried the marker; `positional` says so plainly, because "no marker in this file" is
++ * the information an agent needs to decide whether to declare one.
++ */
++function formatEvictionClause(eviction: MemoryEvictionReport, nameBudget: number): string {
++  const order =
++    eviction.order === "declared"
++      ? "declared sacrifice-first order"
++      : "the positional rule (no sacrifice-first marker in this file)";
++  const hasIgnored = eviction.ignoredMarkerHeadings.length > 0;
++  // Mirrors the bounded-context branch's 3:1 split: the drop list owns the clause, the malformed-marker
++  // list is a rare footnote and must never silence it.
++  const droppedBudget = hasIgnored ? Math.floor(nameBudget * 0.75) : nameBudget;
++  const ignoredBudget = nameBudget - droppedBudget;
++  const clause = `Sacrificed by ${order}, listed in eviction order${renderEvictionNames(eviction.droppedHeadings, droppedBudget)}. `;
++  if (!hasIgnored) {
++    return clause;
++  }
++  return `${clause}Ignored a sacrifice-first marker that is not a heading-line token${renderEvictionNames(eviction.ignoredMarkerHeadings, ignoredBudget)}. `;
++}
++
+ function formatMemoryClampNotice(scopeLabel: string, clamp: MemoryClampResult, maxLength: number): string {
+   const keptChars = clamp.totalChars - clamp.omittedChars;
+   const omitted =
+     clamp.totalSections > 0
+       ? `${clamp.omittedSections} of ${clamp.totalSections} older sections (${clamp.omittedChars} chars) are NOT in this prompt`
+       : `${clamp.omittedChars} chars of heading-less text are NOT in this prompt`;
+-  return (
+-    `_${scopeLabel}: kept the newest ${keptChars} of ${clamp.totalChars} chars within the ${maxLength}-char inline memory budget, so ${omitted}._ ` +
+-    `The newest entries are always kept; read the omitted ones with fn_memory_search, then fn_memory_get._`
+-  );
++  const head = `_${scopeLabel}: kept the newest ${keptChars} of ${clamp.totalChars} chars within the ${maxLength}-char inline memory budget, so ${omitted}._ `;
++  if (!clamp.eviction) {
++    return head + NOTICE_KEPT_SENTENCE;
++  }
++  /*
++  The framing is measured, never estimated: `MEMORY_CLAMP_NOTICE_BUDGET_CHARS` minus the parts that do
++  not vary is exactly what the name lists may cost, so the whole notice is within the reserve the clamp
++  already withheld from content. With the two fixed scope labels and numeric fields of any real file size
++  the framing measures ~380 chars, so the reserve is never the binding part — an absurdly long framing
++  would leave the name budget at 0 and print `: []` plus its own elision, still inside the reserve.
++  */
++  const emptyClauseChars = formatEvictionClause(clamp.eviction, 0).length;
++  const nameBudget = Math.max(0, MEMORY_CLAMP_NOTICE_BUDGET_CHARS - head.length - emptyClauseChars - NOTICE_KEPT_SENTENCE.length);
++  return head + formatEvictionClause(clamp.eviction, nameBudget) + NOTICE_KEPT_SENTENCE;
+ }
+ 
+ function isPathTraversal(path: string): boolean {
+@@ -473,17 +680,22 @@ async function formatMemorySection(
+   */
+   const inlineClamp = clampMemoryKeepingNewest(memory.trim(), MAX_MEMORY_LENGTH);
+   const workspaceClamp = clampMemoryKeepingNewest(workspaceMemory.trim(), MAX_MEMORY_LENGTH);
+-  if (inlineClamp.omittedChars > 0) {
+-    log.warn(
+-      `memory newest-kept clamp for agent ${agentId}: inline memory kept the newest ${MAX_MEMORY_LENGTH} of ${inlineClamp.totalChars} chars, ` +
+-        `omitted ${inlineClamp.omittedSections}/${inlineClamp.totalSections} sections (${inlineClamp.omittedChars} chars)`,
+-    );
++  /*
++  FNXC:MemoryEvictionNotice 2026-11-10-03:40 (STAS-399 D1): one emitter, both surfaces. The engine log
++  line used to print counts and nothing else, which is the same silence the agent saw; it now logs the
++  very string the prompt carries, so a reviewer reading the log and an agent reading its prompt cannot be
++  handed two different accounts of what was sacrificed. Heading text reaches the log where previously only
++  numbers did — headings only, capped by the notice reserve, never section bodies.
++  */
++  const inlineNotice =
++    inlineClamp.omittedChars > 0 ? formatMemoryClampNotice("Inline agent memory", inlineClamp, MAX_MEMORY_LENGTH) : "";
++  const workspaceNotice =
++    workspaceClamp.omittedChars > 0 ? formatMemoryClampNotice("Workspace memory", workspaceClamp, MAX_MEMORY_LENGTH) : "";
++  if (inlineNotice) {
++    log.warn(`memory newest-kept clamp for agent ${agentId}: ${inlineNotice}`);
+   }
+-  if (workspaceClamp.omittedChars > 0) {
+-    log.warn(
+-      `memory newest-kept clamp for agent ${agentId}: workspace memory kept the newest ${MAX_MEMORY_LENGTH} of ${workspaceClamp.totalChars} chars, ` +
+-        `omitted ${workspaceClamp.omittedSections}/${workspaceClamp.totalSections} sections (${workspaceClamp.omittedChars} chars)`,
+-    );
++  if (workspaceNotice) {
++    log.warn(`memory newest-kept clamp for agent ${agentId}: ${workspaceNotice}`);
+   }
+ 
+   const lines = [
+@@ -496,8 +708,8 @@ async function formatMemorySection(
+   ];
+ 
+   if (inlineClamp.text) {
+-    if (inlineClamp.omittedChars > 0) {
+-      lines.push(formatMemoryClampNotice("Inline agent memory", inlineClamp, MAX_MEMORY_LENGTH), "");
++    if (inlineNotice) {
++      lines.push(inlineNotice, "");
+     }
+     lines.push(inlineClamp.text);
+   }
+@@ -508,8 +720,8 @@ async function formatMemorySection(
+     } else {
+       lines.push("", "### Long-term Workspace Memory", "");
+     }
+-    if (workspaceClamp.omittedChars > 0) {
+-      lines.push(formatMemoryClampNotice("Workspace memory", workspaceClamp, MAX_MEMORY_LENGTH), "");
++    if (workspaceNotice) {
++      lines.push(workspaceNotice, "");
+     }
+     lines.push(workspaceClamp.text);
+   }

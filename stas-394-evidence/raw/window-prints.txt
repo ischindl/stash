@@ -1,0 +1,60 @@
+STAS-394 STEP 6 WINDOW, measured 2026-11-07T19:10:41Z
+cwd = /home/schindler/git/stash/.fusion/worktrees/stas-394/.engine/stas-394-engine
+
+== delivered ref, discovered by for-each-ref rather than by the spec's wording ==
+  pattern=refs/heads/fusion/: 84 refs scanned, 0 carrying this card's id
+  pattern=refs/heads/: 257 refs scanned, 1 carrying this card's id
+    refs/heads/stas-394-fix-title-idempotence 1677ee018a5d3aee0e74c0669676a1db40c690c5 fix(STAS-394): compose fix titles idempotently and record fix ancestry in lineage
+
+== AC6: the trunk measured twice inside this tick ==
+$ git rev-parse refs/heads/main
+  42f9762e1c8c8bacd1f7e7a976b7fbb536feaa85
+  rc=0   [trunk reading 1]
+
+$ git rev-parse refs/heads/stas-394-fix-title-idempotence
+  1677ee018a5d3aee0e74c0669676a1db40c690c5
+  rc=0   [delivered]
+
+$ git merge-base refs/heads/main refs/heads/stas-394-fix-title-idempotence
+  1d4bcc61847562837b44854bccea95b783d8b943
+  rc=0   [merge-base]
+
+== AC6 predicate set ==
+$ git rev-list --left-right --count refs/heads/main...refs/heads/stas-394-fix-title-idempotence
+  4	1
+  rc=0   [left=trunk-only right=delivered-only]
+
+$ git merge-base --is-ancestor refs/heads/main refs/heads/stas-394-fix-title-idempotence
+  rc=1   [fast-forward possible iff rc=0]
+
+$ git merge-tree --write-tree --name-only refs/heads/main refs/heads/stas-394-fix-title-idempotence
+  69d8f9ccce3b2aa31a6ab94f736f1d8a6a488130
+  rc=0   [collision predicate 1]
+
+  CONFLICT lines in merge-tree output: 0
+
+$ git diff --name-only 1d4bcc61847562837b44854bccea95b783d8b943 refs/heads/main -- .changeset/stas-394-fix-title-idempotence.md docs/missions.md docs/workflow-steps.md packages/core/src/__tests__/mission-fix-title-composition.test.ts packages/core/src/async-stores/async-mission-store.ts packages/core/src/index.gate.ts packages/core/src/index.ts packages/core/src/missions/mission-store.ts packages/core/src/tasks/fix-title.ts packages/core/src/tasks/remediation-steps.ts packages/engine/src/workflows/human-merge-approval-boundary.ts
+  rc=0   [collision predicate 2: empty means the trunk did not touch this card's paths since the merge-base]
+
+== this card's changed paths (base -> delivered) ==
+  .changeset/stas-394-fix-title-idempotence.md
+  docs/missions.md
+  docs/workflow-steps.md
+  packages/core/src/__tests__/mission-fix-title-composition.test.ts
+  packages/core/src/async-stores/async-mission-store.ts
+  packages/core/src/index.gate.ts
+  packages/core/src/index.ts
+  packages/core/src/missions/mission-store.ts
+  packages/core/src/tasks/fix-title.ts
+  packages/core/src/tasks/remediation-steps.ts
+  packages/engine/src/workflows/human-merge-approval-boundary.ts
+  count=11
+$ git rev-parse refs/heads/main
+  42f9762e1c8c8bacd1f7e7a976b7fbb536feaa85
+  rc=0   [trunk reading 2]
+
+TRUNK_STABLE_INSIDE_TICK=yes
+TRUNK_READING_1=42f9762e1c8c8bacd1f7e7a976b7fbb536feaa85
+TRUNK_READING_2=42f9762e1c8c8bacd1f7e7a976b7fbb536feaa85
+DELIVERED_SHA=1677ee018a5d3aee0e74c0669676a1db40c690c5
+MERGE_BASE=1d4bcc61847562837b44854bccea95b783d8b943

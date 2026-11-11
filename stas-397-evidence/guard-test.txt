@@ -1,0 +1,116 @@
+STAS-397 Step 3 - the guard test, and the order it was created in
+==================================================================
+
+One file, no others:
+packages/engine/src/__tests__/worktree-release-decides-from-occupancy.real-git.test.ts
+
+Committed BEFORE any production edit, at engine commit
+  1c0c2749c8  test(STAS-397): guard that an automatic checkout release decides from occupancy only
+on top of the live base 723b777ee. The next commit in this branch is the production edit.
+
+---------------------------------------------------------------------------------------------
+The released case is the invariant, stated in the file header
+---------------------------------------------------------------------------------------------
+A git-IGNORED path is not occupancy. Occupancy is a tracked modification, a staged change, or an
+untracked path. A checkout whose only content is ignored build output releases, and that case IS
+the invariant. The three refusal cases are the other half of the contract, each differing from
+the released case by exactly one porcelain class, and each must keep the content it refuses to
+throw away. The header says in plain words that weakening one of them trades the wedge for data
+loss.
+
+---------------------------------------------------------------------------------------------
+Mock census of the guard file: 0
+---------------------------------------------------------------------------------------------
+Pattern `vi\.(mock|fn|spyOn|stub|mocked)` over the file: 0 matches. Nothing in the file is
+mocked, stubbed or faked. The only seam is the audit SINK - an object literal collecting the
+auditor's git() events - and that is the record under observation, not a stand-in for the code
+under test. The predicate, the probe, the git process and the removal all run for real.
+Like the real-git suites beside it, mocking the status probe would reproduce the defect's own
+blind spot, because the bug lives in how the real porcelain read is classified.
+
+---------------------------------------------------------------------------------------------
+The four states, each built on a real repository, a real linked worktree and a real
+integration ref (verified shape, not asserted shape)
+---------------------------------------------------------------------------------------------
+Fixture premise, re-checked inside every case by assertWedgedPremise so a fixture that stopped
+resembling the wedge fails rather than proving nothing:
+  - `git status --porcelain --untracked-files=all` in the lane = empty
+  - `git rev-list --count refs/heads/main..HEAD` = 0
+  - `git merge-base --is-ancestor HEAD refs/heads/main` returns 0
+  - the ignored read lists at least one `!! ` line and specifically both `.venv/` and
+    `stashai.egg-info/`
+The release is driven through removeWorktree with reason RemovalReason.SelfHealingBranchConflict
+- the reason the recovery sweep passes - and no landing proof, exactly as the sweep calls it.
+Before writing the file I probed the underlying native command directly (`git worktree remove`
+with no --force) against this same fixture shape: it exits 0 and deletes the directory, so the
+released case can be reached without force. Raw probe output: raw/native-remove-probe.txt.
+
+State                      | Expected | Why
+---------------------------+----------+------------------------------------------------------------
+ignored-only               | released | the invariant: only `.venv/` + `stashai.egg-info/` present
+tracked-modified           | refused  | one tracked modification = occupancy; content preserved
+untracked                  | refused  | one untracked path = occupancy; content preserved
+quoted untracked path      | refused  | one untracked path git prints quoted (`?? "we\"ird.md"`)
+
+The refusal cases read the content back from disk after the refusal, so "preserved" is a
+measured fact and not an assumption.
+
+---------------------------------------------------------------------------------------------
+RED before the fix - the failing assertion verbatim
+---------------------------------------------------------------------------------------------
+Command (package's own binary, from packages/engine):
+  ./node_modules/.bin/vitest run --project=engine-default --reporter=dot \
+    src/__tests__/worktree-release-decides-from-occupancy.real-git.test.ts
+Exit 1. Result line: `Test Files  1 failed (1)` / `Tests  1 failed | 3 passed (4)`.
+
+  FAIL |engine-default| src/__tests__/worktree-release-decides-from-occupancy.real-git.test.ts
+       > STAS-397 automatic checkout release decides from occupancy only
+       > releases a checkout whose only content is ignored build output, recording the discard
+  AssertionError: promise rejected "WorktreeContentPreservationError: preserv… { worktreePath: '…' }"
+    instead of resolving
+   ❯ src/__tests__/worktree-release-decides-from-occupancy.real-git.test.ts:128:42
+  Caused by: WorktreeContentPreservationError: preserving /tmp/.../stas-397-release-BMy1rc/
+    .worktrees/ignored-only: uncommitted or ignored content present
+   ❯ removeWorktree src/worktree/worktree-backend.ts:1755:13
+   ❯ src/__tests__/worktree-release-decides-from-occupancy.real-git.test.ts:128:5
+
+The refusal is thrown at worktree-backend.ts:1755 - the `ignored-only` throw site named in
+Step 2's census, so the reproduction and the code fact meet at the same line. Full raw log:
+raw/guard-red-raw.txt.
+
+The three refusal cases already passed at this base, as they must: they assert the behaviour
+this card keeps. The single failure is the released case, which is the only thing this card
+changes.
+
+---------------------------------------------------------------------------------------------
+GREEN after the fix
+---------------------------------------------------------------------------------------------
+Same command, same file, exit 0:
+
+  Test Files  1 passed (1)
+       Tests  4 passed (4)
+
+All four states pass: the ignored-only checkout is released and the refusal cases still refuse and
+still hold their content on disk. The commit that makes it green is the production edit
+`fix(worktree): decide a checkout release from occupancy, so ignored artifacts stop blocking
+forever`, the direct child of the guard commit, so the order red -> edit is a fact of the branch
+history and not a claim.
+
+Re-measured at every later step of this card, because the branch moved twice after that (rebase onto
+live trunk, then the probe alignment):
+
+  1c0c2749c8  guard committed (pre-rebase SHA)          RED   1 failed | 3 passed  -> raw/guard-red-raw.txt
+  15ebe7c217  production edit + pins (pre-rebase SHA)    GREEN 4 passed
+  7e5fc9fb14  changeset (pre-rebase SHA)                 GREEN 4 passed
+  --- rebase onto refs/heads/main 46b94afa0c: the guard commit is now 0e40801113, the fix 35f1406dc0 ---
+  e0c1328444  rebased tip, guard + worktree-backend      GREEN 101 passed (2 files)
+  3ab0e55698  delivered tip, 12 files incl. the guard    GREEN 125 passed (12 files)
+              (the 12 files are the four doors' own suites plus the guard, run together because the
+               alignment commit changed the module the doors import)
+
+The delivered tip is also measured as part of the whole-package before/after run in
+before-after-suites.txt, so the guard's state at the delivered SHA is not a standalone claim.
+
+Note on the SHAs: the branch was rebased onto live trunk (46b94afa0c) before delivery, so the first
+two SHAs in that table exist only in this card's history as pre-rebase identifiers. The guard file and
+the fix commit are the same content under both identifiers.

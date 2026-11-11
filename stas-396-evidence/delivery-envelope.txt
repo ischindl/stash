@@ -1,0 +1,83 @@
+STAS-396 STEP 7 / AC8 - THE DELIVERY ENVELOPE AND THE MEASURED STASH-SIDE NO-OP
+raw transcript: raw/close-run.txt. Every SHA is stated with its repository.
+
+==========================================================================================
+1. THE BUNDLE, built against REF NAMES because a bare SHA range is refused
+==========================================================================================
+    git --git-dir=$HOME/git/Fusion/.git bundle create <f> refs/heads/main..refs/heads/stas-394-fix-title-idempotence
+    rc 0    47495 bytes    sha256 b489eb75183b368bbcad048ac41354d36eb1d717221a010620fe5aa0cd55c0c4
+
+==========================================================================================
+2. THE BASE64 ROUND-TRIP, proved with cmp rather than asserted
+==========================================================================================
+    base64 < bundle > stas-394-from-trunk.bundle.base64.txt   (64162 bytes, 834 lines)
+    base64 -d < that file > decoded copy                      (47495 bytes)
+    cmp original decoded                                      -> rc = 0, byte-for-byte identical
+
+==========================================================================================
+3. THE DECODED COPY IS WHAT GETS VERIFIED, so the attached artefact carries the proof
+==========================================================================================
+    git bundle list-heads <decoded>  rc 0
+        cfe6daa16d9833c11031ae01dd97d5fef5b04928 refs/heads/stas-394-fix-title-idempotence
+    git bundle verify <decoded>      rc 0
+        is okay
+        contains this ref   : cfe6daa16d9833c11031ae01dd97d5fef5b04928 refs/heads/stas-394-fix-title-idempotence
+        requires these 2 refs: 1d4bcc61847562837b44854bccea95b783d8b943   (the old branch base)
+                               ee995fcc85013a990752307d0f253e9d6fe5ebf4   (the measured trunk)
+        hash algorithm: sha1
+  Re-run against the ATTACHED file on disk after attaching, not against the build directory:
+        attachment .fusion/tasks/STAS-396/attachments/1794098814623-stas-394-from-trunk.bundle.base64.txt
+        decoded 47495 bytes, cmp against the locally built bundle rc = 0,
+        sha256 of the decoded attachment b489eb75183b368bbcad048ac41354d36eb1d717221a010620fe5aa0cd55c0c4
+        list-heads on the decoded ATTACHMENT prints the same single head.
+
+==========================================================================================
+4. THE PATCH SERIES AND THE COMMITS LIST, attached beside the bundle
+==========================================================================================
+    git format-patch --stdout refs/heads/main..refs/heads/stas-394-fix-title-idempotence
+      rc 0, 27272 bytes, stderr empty, exactly ONE From: line:
+        From 1677ee018a5d3aee0e74c0669676a1db40c690c5
+    git log --format='%H %ad %s' over the same range, 2 commits:
+        cfe6daa16d9833c11031ae01dd97d5fef5b04928  2026-11-08 01:21:54 +0100  Merge branch 'refs/heads/main' into HEAD
+        1677ee018a5d3aee0e74c0669676a1db40c690c5  2026-11-07 19:17:28 +0100  fix(STAS-394): compose fix titles idempotently and record fix ancestry in lineage
+  STATED PLAINLY, because the two artefacts differ and a reader should not have to guess why:
+  the patch series carries ONE commit while the commits list and the bundle carry TWO.
+  `git format-patch` omits merge commits by default - a merge has no single-parent patch text -
+  so the series reproduces the STAS-394 delivery commit and not this card's join. The BUNDLE is
+  therefore the complete envelope: it carries both commits with the trunk as its prerequisite.
+  Anyone reproducing the joined tip should fetch the bundle, not apply the series.
+
+  attachments now on this card:
+      1794098814623-stas-394-from-trunk.bundle.base64.txt   (62.7 KB, verified above)
+      1794098831387-stas-394-from-trunk.patches.txt         (26.6 KB)
+      1794098826934-stas-394-from-trunk.commits.txt         (0.3 KB)
+
+==========================================================================================
+5. THE STASH SIDE, MEASURED - the sentinel is printed from numbers, not fabricated
+==========================================================================================
+    git status --porcelain filtered of untracked entries  -> 0 lines
+    product files outside stas-396-evidence/ between refs/heads/main and HEAD -> 0
+    HEAD ec9061fa0850f84bf455f0383ae496c84c563aeb on branch fusion/stas-396
+  The measured sentinel line, verbatim (raw/noop-sentinel.txt):
+    NO-OP: stash-side product diff is empty - tracked-tree changes 0 lines, product files outside
+    stas-396-evidence/ 0, HEAD ec9061fa0850f84bf455f0383ae496c84c563aeb unchanged on branch
+    fusion/stas-396; the only stash-side commits are this card's evidence captures; the only
+    engine-side artefact is the join commit cfe6daa16d9833c11031ae01dd97d5fef5b04928 on
+    refs/heads/stas-394-fix-title-idempotence, moved by compare-and-swap from
+    1677ee018a5d3aee0e74c0669676a1db40c690c5
+  This card authored no product file in either repository. What it authored here is this evidence
+  directory, committed once per step, and its only engine-side artefact is a merge commit joining
+  two trees that already existed.
+
+==========================================================================================
+6. THE FINAL STATE OF EVERY REF THIS CARD NAMED
+==========================================================================================
+  engine refs/heads/main                                      = ee995fcc85013a990752307d0f253e9d6fe5ebf4  [never written here]
+  engine refs/heads/stas-394-fix-title-idempotence            = cfe6daa16d9833c11031ae01dd97d5fef5b04928  [the one ref moved, by compare-and-swap]
+  engine refs/stas-396* remaining                             = 0   [scratch ref deleted, rc 0, join commit still an ancestor so nothing was orphaned]
+  engine refs/heads/stas-395-measure-same-agent-duplicate-intake = e038ea90e247532e4cdc84af33657fb5337adb7f  [untouched]
+  stash  refs/heads/main                                      = de5515fd113e485c05e4d745e992c641aa69511c  [never written here]
+  engine worktree entries                                     = 133 (AC1 baseline 132 + this card's one; none pruned)
+  scratch checkout .engine/stas-396-engine                    = HEAD cfe6daa16d9833c11031ae01dd97d5fef5b04928, detached, porcelain 0
+      excluded by .git/info/exclude:33 (/.engine/), left in place, reported, NOT a deliverable
+      and not attached.

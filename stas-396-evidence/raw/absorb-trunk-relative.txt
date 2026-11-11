@@ -1,0 +1,11 @@
+.changeset/stas-394-fix-title-idempotence.md
+docs/missions.md
+docs/workflow-steps.md
+packages/core/src/__tests__/mission-fix-title-composition.test.ts
+packages/core/src/async-stores/async-mission-store.ts
+packages/core/src/index.gate.ts
+packages/core/src/index.ts
+packages/core/src/missions/mission-store.ts
+packages/core/src/tasks/fix-title.ts
+packages/core/src/tasks/remediation-steps.ts
+packages/engine/src/workflows/human-merge-approval-boundary.ts

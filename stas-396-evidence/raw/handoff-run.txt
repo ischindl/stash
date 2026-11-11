@@ -1,0 +1,43 @@
+=== the primary checkout path, taken from THIS RUN's worktree listing ===
+  PRIMARY = /home/schindler/git/Fusion
+
+=== the five proof inputs, measured now ===
+  trunk  refs/heads/main                  = ee995fcc85013a990752307d0f253e9d6fe5ebf4
+  branch refs/heads/refs/heads/stas-394-fix-title-idempotence = cfe6daa16d9833c11031ae01dd97d5fef5b04928
+  git rev-list --left-right --count main...branch = 0	2
+  git merge-tree --write-tree --name-only main branch -> rc = 0 ; CONFLICT lines = 0
+    first line of its output (the written tree) = 9bc1e0c46caf67f4ad62e2d6495e6dcbfb65486e
+  merge-base(main, branch) = ee995fcc85013a990752307d0f253e9d6fe5ebf4
+  the branch's own changed paths = 11
+  collision diff over those paths, trunk side = 0 entries
+  rc(trunk is an ancestor of the branch)                 = 0
+  rc(the STAS-394 delivery commit is an ancestor too)    = 0
+
+=== AC7's NOT-true item 4: the wrong-repository mergedAt, probed in BOTH repositories ===
+  engine: git --git-dir=/home/schindler/git/Fusion/.git cat-file -t de5515fd1 -> fatal: Not a valid object name de5515fd1
+  stash : git --git-dir=/home/schindler/git/stash/.git cat-file -t de5515fd1 -> commit
+
+=== both trunks, printed one last time ===
+  engine refs/heads/main = ee995fcc85013a990752307d0f253e9d6fe5ebf4
+  stash  refs/heads/main = de5515fd113e485c05e4d745e992c641aa69511c
+
+=== delete this card's scratch ref, and print the deletion ===
+  before: cfe6daa16d9833c11031ae01dd97d5fef5b04928 commit	refs/stas-396-candidate
+  git update-ref -d refs/stas-396-candidate -> rc = 0
+  refs matching refs/stas-396* after deletion = 0
+  rc(the join commit is still an ancestor of the delivery branch, so nothing was lost) = 0
+
+=== the scratch checkout: left in place, reported, NOT a deliverable ===
+  path      = /home/schindler/git/stash/.fusion/worktrees/stas-396/.engine/stas-396-engine
+  HEAD      = cfe6daa16d9833c11031ae01dd97d5fef5b04928
+  symbolic  = HEAD (detached; it holds no branch)
+  porcelain = 0 lines
+  ignored by the stash repo: /home/schindler/git/stash/.git/info/exclude:33:/.engine/	.engine/stas-396-engine
+  engine worktree entries now = 133
+
+=== the stash side, closed: tracked tree empty, untracked = this card's own evidence ===
+  tracked-change lines = 0
+  untracked lines      = 18
+  HEAD   = 71acd849922be2a1c1afc1fa1c737eaa8ec0c0ed
+  branch = fusion/stas-396
+  commits this card authored on the stash side = 6

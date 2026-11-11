@@ -1,0 +1,45 @@
+=== 1. create the bundle: refs/heads/main..refs/heads/stas-394-fix-title-idempotence (ref names, not SHAs) ===
+  rc = 0
+  bytes = 47495   sha256 = b489eb75183b368bbcad048ac41354d36eb1d717221a010620fe5aa0cd55c0c4
+
+=== 2. base64 round-trip, proved by cmp ===
+  encoded bytes = 64162   lines = 834
+  decoded bytes = 47495
+  cmp original vs decoded rc = 0  (0 = byte-for-byte identical)
+
+=== 3. verify the DECODED copy, so the attached artefact is the proof ===
+  git bundle list-heads rc = 0
+    cfe6daa16d9833c11031ae01dd97d5fef5b04928 refs/heads/stas-394-fix-title-idempotence
+  git bundle verify rc = 0
+    stas-396-evidence/raw/decoded.bundle is okay
+    The bundle contains this ref:
+    cfe6daa16d9833c11031ae01dd97d5fef5b04928 refs/heads/stas-394-fix-title-idempotence
+    The bundle requires these 2 refs:
+    1d4bcc61847562837b44854bccea95b783d8b943 
+    ee995fcc85013a990752307d0f253e9d6fe5ebf4 
+    The bundle uses this hash algorithm: sha1
+
+=== 4. the patch series (--stdout, one file) ===
+  rc = 0
+  bytes = 27272   From: lines = 1
+    From 1677ee018a5d3aee0e74c0669676a1db40c690c5 Mon Sep 17 00:00:00 2001
+  stderr (if any): 0 bytes
+
+=== 5. the commits list ===
+  rc = 0   commits = 2
+    cfe6daa16d9833c11031ae01dd97d5fef5b04928 2026-11-08 01:21:54 +0100 Merge branch 'refs/heads/main' into HEAD
+    1677ee018a5d3aee0e74c0669676a1db40c690c5 2026-11-07 19:17:28 +0100 fix(STAS-394): compose fix titles idempotently and record fix ancestry in lineage
+
+=== 6. what the bundle's single head IS, re-read from the live ref ===
+  refs/heads/stas-394-fix-title-idempotence = cfe6daa16d9833c11031ae01dd97d5fef5b04928
+  its parents  = 1677ee018a5d3aee0e74c0669676a1db40c690c5 ee995fcc85013a990752307d0f253e9d6fe5ebf4
+  trunk        = ee995fcc85013a990752307d0f253e9d6fe5ebf4  (the bundle's prerequisite)
+
+=== 7. the stash side is provably empty: tracked-tree changes only ===
+  git status --porcelain, untracked entries filtered out:
+    lines = 0
+  untracked entries (this card's own evidence dir, staged and committed each step):
+    11
+  HEAD = 71acd849922be2a1c1afc1fa1c737eaa8ec0c0ed   branch = fusion/stas-396
+  commits this card made on the stash side = 6
+  STASH_HEAD_BEFORE=71acd849922be2a1c1afc1fa1c737eaa8ec0c0ed STASH_HEAD_AFTER=71acd849922be2a1c1afc1fa1c737eaa8ec0c0ed ENGINE_BRANCH_BEFORE=1677ee018a5d3aee0e74c0669676a1db40c690c5 ENGINE_BRANCH_AFTER=cfe6daa16d9833c11031ae01dd97d5fef5b04928

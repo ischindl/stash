@@ -1,0 +1,19 @@
+STAS-394 dodane. Predikaty namerane v tomto ticku (19:10:41Z), kazde rc je rc vlastneho volania.
+
+dodany ref, discovery cez for-each-ref: refs/heads/stas-394-fix-title-idempotence = 1677ee018a5d3aee0e74c0669676a1db40c690c5
+trunk (druhe citanie v ticku): refs/heads/main = 42f9762e1c8c8bacd1f7e7a976b7fbb536feaa85, prve citanie identicke
+merge-base: 1d4bcc61847562837b44854bccea95b783d8b943
+rev-list --left-right --count main...delivered: 4 1
+merge-base --is-ancestor main delivered: rc=1. Fast-forward NIE JE mozny, trunk poskočil o 4 commity nad moj base uz pocas tohto runu. Rebase nerobim, lebo by osamel SHA, ktore menuju red.txt a green.txt.
+
+kolizny predikat 1: git merge-tree --write-tree --name-only refs/heads/main refs/heads/stas-394-fix-title-idempotence -> rc=0, riadkov CONFLICT: 0
+kolizny predikat 2: git diff --name-only 1d4bcc618 refs/heads/main nad 11 zmenenymi cestami -> prazdny, rc=0
+
+testy @fusion/core: pred 263 failing suborov a 6998 passing testov, po 263 failing a 7012 passing. Mnozina failing suborov je byte-identicka, sha256 22e75974..., diff rc=0. Delta je +1 subor a +14 passing, to je presne nove regresne suite, a 0 novych zlyhani.
+
+jeden prikaz pre operatora v primary checkoute enginu:
+git -C <Fusion primary checkout> merge --no-ff stas-394-fix-title-idempotence
+
+Oprava nie je na trunku a nie je ziva v beziacej doske, kym sa tato leg neuskutocni a kym sa build neprebuilduje a nespusti znova. refs/heads/main tato karta nikdy nepisla. Titulky STAS-357 a piatich surodencov som nedotkol.
+
+Nahlasujem aj to, co neviem prehliadnut: na zrkadle `lan` existuje refs/remotes/lan/stas-394-fix-title-idempotence na dodanom SHA, reflog zaznamena update by push o 2026-11-07 19:52:09 +0100. Tento run ziaden push ani PR nevykonal a na github remote `origin` nie je ziaden ref s stas-394 (ls-remote). Dve miesta v kode enginu vedia push: packages/engine/src/merge/pr-response-run-ops.ts:202 a packages/engine/src/merge/merger-ai.ts:4791, ich autora z vnutra neurcim.

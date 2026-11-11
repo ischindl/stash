@@ -1,0 +1,28 @@
+### re-measured in the Step 5 tick (AC5 headline numbers, at the delivered tip)
+
+command forms carrying --ignored=matching under src/worktree (tip):
+stas-397-delivery:packages/engine/src/worktree/worktree-backend.ts:1351:    ({ stdout } = await execFileAsync("git", ["status", "--porcelain=v1", "--ignored=matching", "--untracked-files=normal"], {
+
+bare 'git status --porcelain' count in execution/branch-conflicts.ts:
+TIP:  stas-397-delivery:packages/engine/src/execution/branch-conflicts.ts:1
+BASE: 46b94afa0c:packages/engine/src/execution/branch-conflicts.ts:2
+
+every non-test mention of an ignored-only classification (tip):
+stas-397-delivery:packages/engine/src/merge/post-landing-worktree-cleanup.ts:212: * only ignored-only content; deliverable, unverifiable, and active-session worktrees stay intact and
+stas-397-delivery:packages/engine/src/self-healing.ts:7852:            not the ordering gate. Only durable landing proof permits ignored-only content removal;
+stas-397-delivery:packages/engine/src/worktree/acquisition-conflict-revalidation.ts:102: * ignored-only shape is faithful to the guard that actually refused, even while RUFU-298 argues
+stas-397-delivery:packages/engine/src/worktree/worktree-acquisition.ts:1274:           * FN-9233 rows as before this change; `ignored-only`/`deliverable` take the preserve-rename aside (RUFU-278's
+stas-397-delivery:packages/engine/src/worktree/worktree-acquisition.ts:1278:           * `status: "probe-failed"` with an `ignored-only` classification, so `unverifiable` is recognised here by
+stas-397-delivery:packages/engine/src/worktree/worktree-acquisition.ts:1283:           * `ignored-only`: preserving aside would move a checkout whose contents nobody can enumerate.
+stas-397-delivery:packages/engine/src/worktree/worktree-acquisition.ts:1306:            && (removalContent?.classification === "ignored-only" || removalContent?.classification === "deliverable")
+stas-397-delivery:packages/engine/src/worktree/worktree-acquisition.ts:1363:                  // the checkout (`ignored-only`/`deliverable`); the "content-preservation" fallback is
+stas-397-delivery:packages/engine/src/worktree/worktree-backend.ts:1269:export type WorktreeRemovalContentClassification = "clean" | "ignored-only" | "deliverable";
+stas-397-delivery:packages/engine/src/worktree/worktree-backend.ts:1273: * `deliverable`, and no ignored name can change the verdict: `ignored-only` means only that there is
+stas-397-delivery:packages/engine/src/worktree/worktree-backend.ts:1280:  return "ignored-only";
+stas-397-delivery:packages/engine/src/worktree/worktree-backend.ts:1308:  STAS-397: the ignored paths behind an `ignored-only` classification, so the release that discards
+stas-397-delivery:packages/engine/src/worktree/worktree-backend.ts:1359:      classification: "ignored-only",
+stas-397-delivery:packages/engine/src/worktree/worktree-backend.ts:1387:    (`!!`) entries are counted by `entryCount` instead, because FN-9234's rule is that an ignored-only
+stas-397-delivery:packages/engine/src/worktree/worktree-backend.ts:1403:the same sweep. Every answer is unchanged: a clean or ignored-only tree is still free of occupancy,
+stas-397-delivery:packages/engine/src/worktree/worktree-backend.ts:1460:    case "ignored-only":
+stas-397-delivery:packages/engine/src/worktree/worktree-backend.ts:1461:      return { state: "ignored-only", entryCount: probe.entryCount };
+stas-397-delivery:packages/engine/src/worktree/worktree-backend.ts:1746:    if (contentClassification !== "ignored-only" || discardedIgnoredPaths.length === 0) return;

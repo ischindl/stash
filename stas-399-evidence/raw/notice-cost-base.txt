@@ -1,0 +1,13 @@
+### STAS-399 D1: what the notice cost BEFORE the card (re-derived, base algorithm, AC2 fixture)
+fixture: 56 sections x 1011 body chars + '# Agent Memory' preamble  (= the AC2 shape in the guard file)
+command: python3 simulation of the base algorithm (largest section suffix that fits maxLength, notice appended AFTER)
+total chars           = 57470
+base content kept     = 49262  (dropped 8 of 56 sections)
+base notice length    = 265
+NOTICE + CONTENT      = 49527  -- the notice rode ON TOP of the content budget
+budget the render was compared against = 50000
+
+Consequence asserted by MEMORY_CLAMP_NOTICE_BUDGET_CHARS: the content budget is now
+  50000 - 1024 = 48976 and the notice is emitted inside the remaining reserve, so notice + content
+  is within 50000 by construction instead of by luck of section granularity.
+Re-derived 2026-11-10T04:14Z in this run; matches the numbers quoted at the constant's definition.

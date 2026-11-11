@@ -1,0 +1,137 @@
+STAS-396 STEP 2 / AC2 - PRE-ABSORPTION GREEN SET AT THE BRANCH TIP AS FOUND
+measured here, on this host, in the scratch checkout this card provisioned. Every number is
+the reporter's own, printed verbatim; the exit status of each instrument is read outside any
+pipe by run-instrument.sh, which runs the command in a redirect and takes $? directly.
+
+==========================================================================================
+0. PRECONDITIONS, confirmed immediately before the runs (and the refs re-read, AC0)
+==========================================================================================
+scratch checkout HEAD            : 1677ee018a5d3aee0e74c0669676a1db40c690c5
+refs/heads/stas-394-fix-title-idempotence re-read : 1677ee018a5d3aee0e74c0669676a1db40c690c5
+   -> HEAD equals the printed branch tip: YES
+git status --porcelain           : 0 lines (clean)
+refs/heads/main re-read          : ee995fcc85013a990752307d0f253e9d6fe5ebf4  (unchanged since
+                                   Step 1, so AC1's gates still bind the trunk being absorbed)
+Both SHAs are ENGINE repo objects. Dependency install landed before these runs
+(node_modules/.modules.yaml, 103018 bytes); no re-install was needed for these runs.
+
+==========================================================================================
+1. I1 - THE AFFECTED PACKAGE'S WHOLE SUITE
+==========================================================================================
+command        : pnpm --filter @fusion/core test
+derived from   : packages/core/package.json scripts["test"]
+                 = "vitest run --silent=passed-only --reporter=dot"
+SHA measured on: 1677ee018a5d3aee0e74c0669676a1db40c690c5      [ENGINE repo]
+raw capture    : raw/before-suite-raw.txt   (204480 bytes, 2453 lines, full stdout+stderr)
+exit status    : 1     (read outside any pipe; pnpm reports ERR_PNPM_RECURSIVE_RUN_FIRST_FAIL)
+
+reporter's counters, verbatim:
+    Test Files  264 failed | 534 passed | 1 skipped (799)
+          Tests  324 failed | 7011 passed | 1642 skipped (8977)
+         Errors  2 errors
+       Duration  336.62s (transform 72.86s, setup 259.24s, import 1234.20s, tests 285.30s, environment 131ms)
+
+  field-by-field:  test files failed 264, passed 534, skipped 1, total 799
+                   tests       failed 324, passed 7011, skipped 1642, total 8977
+                   unhandled errors 2   (the reporter's own "Errors" line; the raw prints
+                   "Vitest caught 2 unhandled errors during the test run", both
+                   PostgresError: password authentication failed for user "schindler")
+                   duration 336.62 s
+                   individual FAIL blocks in the raw: 552
+
+the trunk is NOT green on this host and this card did not change that fact; the reason is
+in section 4 below and was recorded before this card changed anything.
+
+==========================================================================================
+2. I2 / I3 / I4 - THE OTHER THREE INSTRUMENTS AT THE SAME SHA
+==========================================================================================
+I2  command : pnpm --filter @fusion/core typecheck
+    derived : packages/core/package.json scripts["typecheck"] = "tsc --noEmit"
+    raw     : raw/before-typecheck-core-raw.txt (147 bytes)
+    exit    : 0                                    -> PASSES at the branch tip as found
+
+I3  command : pnpm --filter @fusion/engine typecheck
+    derived : packages/engine/package.json scripts["typecheck"] = "tsc --noEmit"
+    raw     : raw/before-typecheck-engine-raw.txt (151 bytes)
+    exit    : 0                                    -> PASSES at the branch tip as found
+
+I4  command : pnpm test:gate:static
+    derived : root package.json scripts["test:gate:static"], the ' && ' chain of 23
+              node scripts/check-*.mjs validators enumerated in raw/ac1-validators.txt
+    raw     : raw/before-static-gate-raw.txt (2589 bytes, 17 lines)
+    exit    : 0                                    -> PASSES at the branch tip as found
+    validator self-reports quoted from the raw, so the pass is falsifiable and not just an rc:
+      check-capacity-pool-id: ok (1879 files inspected)
+      check-cli-runtime-routing: ok
+      docker workspace manifests: all 37 staged before pnpm install
+      [check-lockfile-importers] 38 lockfile importers, 38 manifests, 442 dependency records in sync
+      check-mock-completeness: @fusion/dashboard + @fusion/engine both covered
+      inert-sync-lane: 0 guard(s) consuming a sync-resolved lane across 0 file(s)
+      check-runtime-skill-loader-drift: Claude and Grok loaders match as a clean rename-diff (342 lines)
+      retention coverage OK: 111 module-scope Map/Set declarations classified
+      changeset migration references: 9 reference(s) resolve
+
+==========================================================================================
+3. THE FAILING-FILE SET, as a name set with its hash (this is AC4's baseline, not the totals)
+==========================================================================================
+extraction (binary-safe, colour-free, as prescribed):
+    grep -aoE 'FAIL +src/[^ ]+\.test\.ts' <raw> | sed 's/FAIL *//' | sort -u
+    (NO_COLOR=1 was set for the run itself, so the raw is not ANSI-polluted)
+list   : raw/failfiles-before-suite.txt
+count  : 264 sorted unique failing files
+sha256 : 188d9514386cb41831ca13ad8ef655733f853b8cfb7a9ba609b29ecf5046438a
+split measured on the list: 190 files match *.pg.test.ts, 74 do not.
+
+==========================================================================================
+4. WHY 190 OF THEM CANNOT PASS HERE, quoted from the raw and not absorbed into a total
+==========================================================================================
+The run prints, verbatim and repeatedly:
+    PostgresError: password authentication failed for user "schindler"
+    Serialized Error: { severity_local: 'FATAL', severity: 'FATAL', code: '28P01',
+                       file: 'auth.c', routine: 'auth_failed', ... }
+16 auth_failed lines appear in the raw and both unhandled errors are that same 28P01. This is
+the host's PostgreSQL authentication baseline, not code. The repository does ship a throwaway
+cluster command (root scripts pg:test:up / pg:test:status / pg:test:down ->
+scripts/pg-test-server.mjs), but AC4 needs a database only for files that newly fail at the
+candidate, and the expected new-failure count is zero, so no cluster is started by this card;
+if Step 4 names any new failure that needs a database, the cluster is started then and said so.
+
+==========================================================================================
+5. MATCH-OR-DELTA against the inherited 263-failing-file / 7012-passing pair (C15)
+==========================================================================================
+The inherited pair is re-verified as a LIST, not taken on trust: the closed card's tip list is
+committed in the STASH repo at stas-394-evidence/raw/failfiles-after-suite-raw.txt.lst and is
+re-read here with git show. Its measured length is 263 and its measured sha256 is
+22e759745a9e536ee93494b05d5159d7431c44ff648f8356d95dee9977d26043 - the same hash the closed
+card printed, so C15's numbers stand as printed. (raw/failfiles-inherited-394-tip.lst)
+
+    inherited (their tip) : 263 failing files, 7012 passing tests, sha256 22e759745a9e...
+    measured  (this run)  : 264 failing files, 7011 passing tests, sha256 188d9514386c...
+
+LINE: DELTA.  Named, not absorbed:
+    + src/__tests__/workflow-prompt-overrides-memo.test.ts   (failing here, absent there)
+    - (nothing)                                              (no file stopped failing)
+    one extra failing file, and passing tests differ by exactly one, 7011 against 7012.
+
+That one file is re-run by itself at the SAME SHA to attribute the DELTA:
+    pnpm --filter @fusion/core exec vitest run
+      src/__tests__/workflow-prompt-overrides-memo.test.ts --silent=passed-only --reporter=dot
+    exit 0, "Test Files 1 passed (1)", "Tests 12 passed (12)"   (raw/before-flakerecheck-memo-raw.txt)
+So the DELTA against the inherited list is one file that fails inside the full-suite run and
+passes in isolation, which is a load/timing property of this host, not a property of the tree
+it was measured on: the tree at 1677ee018a is the same tree the closed card measured, and the
+failing assertion is a memo-TTL timing bound,
+    "re-reads after the TTL elapses, which is the bound on a write made by another process"
+    AssertionError: expected 1 to be 2   at ...:155:25
+Attribution is stated, not smoothed: 262 of 263 inherited names reproduce, 0 disappeared, and
+1 extra name appears that passes when run alone. Because AC4 gates on a name-set difference
+measured in THIS session against THIS list, the DELTA above does not weaken AC4; it is exactly
+why AC4 was written as a set difference against a run on this host rather than against a number
+quoted from another day.
+
+==========================================================================================
+6. BASELINE TOOL PROBE
+==========================================================================================
+git ls-files scripts/suite-baseline.mjs -> 0 lines at this tree: NOT TRACKED, so there is no
+capture / capture-files / check subcommand to run and nothing was captured with it. The name
+list above, built from the run's own raw output, is the artifact AC4 differences.

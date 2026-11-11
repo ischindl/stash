@@ -1,0 +1,12 @@
+FINAL AC5 CHECK at 2026-11-07T19:22:17Z
+task.json files in store: 299
+  mtime at/after 2026-11-07 18:00 local: 28 files
+  mtime at/after 2026-11-07 19:00 local: 28 files
+  mtime at/after 2026-11-07 20:00 local: 28 files
+
+STAS-296: file sha256 74e51050 (Step-0 74e51050, SAME) mtime 19:50:17 | layers 3 | title sha 9806b37eb1bd | remainder sha 2b55badcc380 == Step-0 remainder
+STAS-352: file sha256 dd068a8d (Step-0 dd068a8d, SAME) mtime 04:59:09 | layers 4 | title sha f942e87c618d | remainder sha 2b55badcc380 == Step-0 remainder
+STAS-354: file sha256 a6bf2669 (Step-0 a6bf2669, SAME) mtime 10:03:37 | layers 5 | title sha ed760c07d5d4 | remainder sha 2b55badcc380 == Step-0 remainder
+STAS-355: file sha256 affba880 (Step-0 affba880, SAME) mtime 12:38:35 | layers 6 | title sha c7ec99eb5b6c | remainder sha 2b55badcc380 == Step-0 remainder
+STAS-356: file sha256 6497213f (Step-0 6497213f, SAME) mtime 15:54:57 | layers 7 | title sha ad2045852010 | remainder sha 2b55badcc380 == Step-0 remainder
+STAS-357: file sha256 ecef5376 (Step-0 1e0050f9, MOVED) mtime 20:19:37 | layers 8 | title sha 25c5e43caf98 | remainder sha 2b55badcc380 == Step-0 remainder

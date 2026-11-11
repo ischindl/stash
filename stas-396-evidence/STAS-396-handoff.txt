@@ -1,0 +1,64 @@
+STAS-396 HANDOFF - THE OPERATOR'S LEG, WITH THE INPUTS MEASURED SECONDS BEFORE THIS LINE
+Measured in the engine repository at 2026-11-08, every value below re-read from a ref name in
+the same script run that printed it (raw/handoff-run.txt). THIS CARD MERGED NOTHING, PUSHED
+NOTHING, BUILT NOTHING AND RESTARTED NOTHING. The command below is for the operator to run.
+
+    git -C /home/schindler/git/Fusion merge --no-ff stas-394-fix-title-idempotence
+
+THE FIVE PROOF LINES, measured seconds before the command above, all in the engine repo:
+  1. trunk SHA            refs/heads/main                                    = ee995fcc85013a990752307d0f253e9d6fe5ebf4
+  2. branch SHA           refs/heads/stas-394-fix-title-idempotence          = cfe6daa16d9833c11031ae01dd97d5fef5b04928
+  3. three-dot pair       git rev-list --left-right --count main...branch    = 0    2
+  4. merge-tree           git merge-tree --write-tree --name-only main branch -> rc = 0, CONFLICT lines = 0
+                            (its written tree: 9bc1e0c46caf67f4ad62e2d6495e6dcbfb65486e)
+  5. collision diff       git diff --name-only <merge-base> refs/heads/main -- <the branch's own 11 paths>
+                            -> 0 entries, an empty result. merge-base(main, branch) = ee995fcc85013a
+                            (the 11-path list is raw/handoff-branch-paths.txt, printed in full below)
+
+EXPIRY RULE, read this before running the command:
+  These proofs bind the trunk SHA they name, ee995fcc85013a990752307d0f253e9d6fe5ebf4. This
+  trunk moves roughly hourly - the operator is actively cherry-picking RUFU-871 onto it - so if
+  refs/heads/main reads anything other than ee995fcc85013a at merge time, re-run the
+  `merge-tree --write-tree --name-only` pair and the collision diff against the NEW trunk before
+  merging. The absorption below is only proven conflict-free against the trunk it names.
+
+WHY THE COMMAND IS STILL `merge --no-ff`, stated without preferring either style:
+  The absorption already happened on the branch, not on the trunk. `git merge-base --is-ancestor
+  refs/heads/main refs/heads/stas-394-fix-title-idempotence` now returns 0, and the three-dot
+  pair reads `0 2`, so the trunk is fully contained in the branch and the branch carries exactly
+  two commits the trunk does not: the STAS-394 delivery commit 1677ee018a5d3a and this card's
+  join commit cfe6daa16d9833. The command the operator specified is unchanged, `merge --no-ff`,
+  so the delivery lands as a join and the branch's identity survives in history. No claim is
+  made here about which merge style is better; the operator chose this one and the measurement
+  was taken to fit it.
+
+THE 11 PATHS THE COLLISION DIFF WAS TAKEN OVER (the branch's own, against merge-base ee995fcc85013a):
+      .changeset/stas-394-fix-title-idempotence.md
+      docs/missions.md
+      docs/workflow-steps.md
+      packages/core/src/__tests__/mission-fix-title-composition.test.ts
+      packages/core/src/async-stores/async-mission-store.ts
+      packages/core/src/index.gate.ts
+      packages/core/src/index.ts
+      packages/core/src/missions/mission-store.ts
+      packages/core/src/tasks/fix-title.ts
+      packages/core/src/tasks/remediation-steps.ts
+      packages/engine/src/workflows/human-merge-approval-boundary.ts
+
+WHAT STILL HAS TO HAPPEN, and none of it is agent-performable:
+  a) the operator runs the command above,
+  b) the operator rebuilds the engine,
+  c) the operator restarts the running Fusion daemon.
+  Until all three, the running board still composes follow-up titles the old way and STAS-357
+  still carries its eight stacked `Fix: ` prefixes. That is the honest state of the board at
+  this card's close.
+
+WHAT THIS CARD LEFT BEHIND ON DISK, reported because it is not a deliverable:
+  scratch checkout  /home/schindler/git/stash/.fusion/worktrees/stas-396/.engine/stas-396-engine
+                    HEAD cfe6daa16d9833c11031ae01dd97d5fef5b04928, detached (holds no branch),
+                    porcelain 0 lines, excluded by the stash repo's common exclude file
+                    (.git/info/exclude:33  /.engine/), left in place, never attached.
+  scratch ref       refs/stas-396-candidate  DELETED at this step, git update-ref -d rc = 0,
+                    and refs matching refs/stas-396* now number 0; the join commit remains an
+                    ancestor of the delivery branch, so its deletion lost no object.
+  engine worktrees  133 entries, this card added exactly one and pruned none.

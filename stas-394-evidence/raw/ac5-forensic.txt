@@ -1,0 +1,23 @@
+AC5 FORENSIC on STAS-357 at 2026-11-07T18:30:36Z
+--- title as stored now ---
+title_repr: 'Fix: Fix: Fix: Fix: Fix: Fix: Fix: Fix: Folder-share→agent MCP access + skill "Publish & share" working E2E'
+prefix_layers_now: 8
+remainder_sha256_now: 2b55badcc3805b3d27087320604cc1f609e09afc853fcab27c21e39ef8630ef8
+step0_step_statuses_now: ['Preflight', 'Founder-stack identity and build-parity ', 'Real-HTTP + real-MCP-client mutating wal']
+field status = 'awaiting-approval'
+field column = 'todo'
+field updatedAt = '2026-11-07T18:22:00.508Z'
+field postReviewFixCount = 8
+--- which mtimes moved project-wide (newest 12) ---
+2026-11-07T19:30:23 ../../../.fusion/tasks/STAS-201/task.json
+2026-11-07T19:29:16 ../../../.fusion/tasks/STAS-394/task.json
+2026-11-07T19:26:57 ../../../.fusion/tasks/STAS-393/task.json
+2026-11-07T19:26:52 ../../../.fusion/tasks/STAS-374/task.json
+2026-11-07T19:26:45 ../../../.fusion/tasks/STAS-385/task.json
+2026-11-07T19:26:31 ../../../.fusion/tasks/STAS-384/task.json
+2026-11-07T19:26:22 ../../../.fusion/tasks/STAS-376/task.json
+2026-11-07T19:26:05 ../../../.fusion/tasks/STAS-363/task.json
+2026-11-07T19:25:41 ../../../.fusion/tasks/STAS-357/task.json
+2026-11-07T19:23:50 ../../../.fusion/tasks/STAS-373/task.json
+2026-11-07T19:23:44 ../../../.fusion/tasks/STAS-372/task.json
+2026-11-07T19:23:39 ../../../.fusion/tasks/STAS-369/task.json

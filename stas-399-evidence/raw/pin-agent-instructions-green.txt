@@ -1,0 +1,20 @@
+### STAS-399 single-file run
+package: engine
+sha: 217833095935ff88da3f5c4996c9eb85f1908dba
+file: src/__tests__/agent-instructions.test.ts
+command: node_modules/.bin/vitest run src/__tests__/agent-instructions.test.ts --silent=passed-only --reporter=dot
+started_utc: 2026-11-10T04:09:52Z
+------------------------------------------------
+
+ RUN  v4.1.10 /home/schindler/git/stash/.fusion/worktrees/stas-399/.engine/stas-399-engine/packages/engine
+
+····························································································
+
+ Test Files  1 passed (1)
+      Tests  92 passed (92)
+   Start at  05:09:53
+   Duration  9.86s (transform 5.79s, setup 337ms, import 9.07s, tests 202ms, environment 0ms)
+
+------------------------------------------------
+exit_status: 0
+finished_utc: 2026-11-10T04:10:03Z
