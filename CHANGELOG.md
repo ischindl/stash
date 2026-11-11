@@ -92,11 +92,17 @@ everything before it is captured in git history (`git log`), not here.
   model can spend a turn's whole output budget on its reasoning channel and come back with a
   null message body (`finish_reason=length`) — and the harness still exits 0, so the run
   reported a turn with no text and no error. Now the turn is named: "pi produced no answer
-  content: reasoning budget exhausted at the output limit (finish_reason=length,
+  content: reasoning consumed every output token (finish_reason=length,
   output=8, reasoning=8)", carried through the same redacted error channel a real endpoint
   failure uses. The mid-reasoning transport death is named the same way instead of repeating
   the transport word pi itself offers (`terminated`), which is what a model-agnostic word for
-  "the stream died" gets mistaken for. A genuine endpoint error still shows the endpoint's
+  "the stream died" gets mistaken for. The sentence names the token counts it observed and
+  never a limit: the ceiling a turn stopped at belongs to the endpoint (2887 and 1 tokens in
+  the founder's log), while 8192 is only the budget we asked for. An empty turn that ended
+  without reaching its ceiling is named for what was seen rather than blamed on a spent
+  budget — measured on the founder's endpoint, that shape also comes with reasoning at zero
+  bytes, so "exhausted" there would send an operator hunting the wrong thing. A genuine
+  endpoint error still shows the endpoint's
   own words, a turn that ends in a tool call stays green, and a turn that got no evidence at
   all reports what was observed rather than guessing a budget.
 

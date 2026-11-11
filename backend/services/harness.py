@@ -371,22 +371,39 @@ def _pi_no_answer_cause(message: dict) -> str:
     """Why a terminal assistant turn carries neither answer text nor a tool call.
 
     pi exits 0 on all of these, so this string is the only cause the operator
-    will ever read. Reasoning content with no answer is itself the evidence:
-    the endpoint spent the turn's output budget on the reasoning channel and
-    reports it as finish_reason=length with a null message content. Where the
-    event shows no budget at all, report what was observed instead of inventing
-    one — pi's own endpoint error still names a plain transport failure.
+    will ever read. Two shapes were measured on the founder's endpoint
+    (STAS-409). A length stop whose reasoning tokens equal the whole output is
+    thinking taking the turn's output, and the counts are the ceiling that was
+    reached — 2887 and 1 in the island log, never the 8192 we send as
+    max_completion_tokens, which is why the sentence names counts and no limit.
+    An empty turn at finish=stop is the other shape and is not a budget: it
+    measured 1/10 calls with no flags, 1/10 with reasoning_effort=low and 2/10
+    with reasoning at zero bytes, so claiming exhaustion there misdiagnoses.
+    Where the event shows no budget evidence at all, report what was observed;
+    pi's own endpoint error still names a plain transport failure.
     """
     thinking = _pi_text(message, "thinking").strip()
     stop = str(message.get("stopReason") or "none")
     finish = str(message.get("rawStopReason") or "none")
     usage = message.get("usage") or {}
-    counts = f"output={usage.get('output') or 0}, reasoning={usage.get('reasoning') or 0}"
-    budget_spent_on_reasoning = bool(thinking) or stop == "length" or finish == "length"
-    if budget_spent_on_reasoning:
+    output = usage.get("output") or 0
+    reasoning = usage.get("reasoning") or 0
+    counts = f"output={output}, reasoning={reasoning}"
+    truncated = stop == "length" or finish == "length"
+    if truncated and reasoning and reasoning >= output:
         return (
-            f"{_PI_NO_ANSWER}: reasoning budget exhausted at the output limit "
+            f"{_PI_NO_ANSWER}: reasoning consumed every output token "
             f"(finish_reason={finish}, {counts})"
+        )
+    if truncated:
+        return (
+            f"{_PI_NO_ANSWER}: output stopped at its ceiling with no answer "
+            f"(finish_reason={finish}, {counts})"
+        )
+    if thinking:
+        return (
+            f"{_PI_NO_ANSWER}: reasoning but no answer at turn end "
+            f"(stopReason={stop}, finish_reason={finish}, {counts})"
         )
     if message.get("errorMessage"):
         return _pi_endpoint_error(message)

@@ -12,6 +12,7 @@ error — never the exit code — is the only thing the operator ever reads, and
 bare transport word there is undebuggable.
 """
 
+import json
 from pathlib import Path
 
 import pytest
@@ -165,6 +166,92 @@ def test_empty_user_message_end_stays_green():
     # through message_end, and those are not the assistant's output.
     state = _map_lines('{"type":"message_end","message":{"role":"user","content":[]}}')
     assert state.error is None
+
+
+def _assistant_end(
+    content: list[dict], *, output: int, reasoning: int, stop: str, finish: str
+) -> str:
+    return json.dumps(
+        {
+            "type": "message_end",
+            "message": {
+                "role": "assistant",
+                "content": content,
+                "api": "openai-completions",
+                "provider": "local",
+                "model": "qwen",
+                "usage": {
+                    "input": 795,
+                    "output": output,
+                    "reasoning": reasoning,
+                    "cacheRead": 0,
+                    "cacheWrite": 0,
+                    "totalTokens": output + 795,
+                    "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0, "total": 0},
+                },
+                "stopReason": stop,
+                "timestamp": 1794400000000,
+                "rawStopReason": finish,
+            },
+        }
+    )
+
+
+def test_island_budget_shape_names_reasoning_and_the_observed_count():
+    # STAS-409 island shape, measured on the founder's endpoint: the reasoning
+    # tokens equal the whole output (2887/2887 and 1/1 in production, 8/8 in
+    # the captured fixture). The counts name the ceiling that was actually
+    # hit — never a claim about which limit (ours or the endpoint's) applied.
+    state = _map_lines(
+        _assistant_end(
+            [{"type": "thinking", "thinking": "pages and pages of reasoning..."}],
+            output=2887,
+            reasoning=2887,
+            stop="length",
+            finish="length",
+        )
+    )
+    assert "no answer content" in state.error
+    assert "reasoning consumed every output token" in state.error
+    assert "output=2887, reasoning=2887" in state.error
+    assert "at the output limit" not in state.error
+
+
+def test_empty_answer_at_stop_is_not_reported_as_a_budget():
+    # STAS-409 stop-class shape, measured at 1/10 (baseline), 1/10
+    # (reasoning_effort low) and 2/10 (thinking measured OFF): the turn ends
+    # at stop with thinking present (or absent) and no answer. No output
+    # ceiling was reached, so claiming a budget here is a misdiagnosis — the
+    # old wording fired on any thinking block and lied about exhaustion.
+    state = _map_lines(
+        _assistant_end(
+            [{"type": "thinking", "thinking": "planned to answer, then stopped"}],
+            output=413,
+            reasoning=254,
+            stop="stop",
+            finish="stop",
+        )
+    )
+    assert "no answer content" in state.error
+    assert "stopReason=stop" in state.error
+    assert "reasoning consumed" not in state.error
+    assert "finish_reason=length" not in state.error
+
+
+def test_length_stop_without_a_reasoning_breakdown_names_the_ceiling_only():
+    # A provider that truncates but reports no reasoning breakdown gets the
+    # ceiling sentence: naming reasoning as the consumer would invent evidence.
+    state = _map_lines(
+        _assistant_end(
+            [{"type": "thinking", "thinking": "uncounted thinking"}],
+            output=300,
+            reasoning=0,
+            stop="length",
+            finish="length",
+        )
+    )
+    assert "output stopped at its ceiling" in state.error
+    assert "reasoning consumed" not in state.error
 
 
 @pytest.mark.asyncio
