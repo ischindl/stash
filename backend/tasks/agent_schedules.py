@@ -25,9 +25,33 @@ logger = logging.getLogger(__name__)
 
 # Each pass keeps the existing event and time limits. Queue the next pass
 # separately so a busy developer account does not wait another day for its
-# next 500 inputs, or monopolize one worker indefinitely. In addition to this
-# per-chain bound, executions share seven automatic continuations per 24h.
+# next 500 inputs, or monopolize one worker indefinitely. This constant is the
+# FLOOR of the bound actually applied; read `curator_catchup_pass_ceiling()`,
+# never this, from any code that has to decide whether a pass may run.
 CURATOR_CATCHUP_PASSES = 8
+
+
+def curator_catchup_pass_ceiling() -> int:
+    """Catch-up passes one chain may plan, and one lane may claim per 24h.
+
+    The month's curator allowance spread across the month that funds it, never
+    below the floor above. Two consequences worth saying out loud:
+
+    At the code default (`FREE_CURATOR_RUNS_PER_MONTH` = 10, which floors at 10
+    // 31 = 0) the result is exactly `CURATOR_CATCHUP_PASSES`, so a default
+    install is unchanged run for run. Only a deployment that raised its own
+    allowance gets a wider cadence, and it gets it inside the allowance it
+    already declared — this never raises the entitlement.
+
+    This bound, not `month_run_count`, is what limits what the chain spends: the
+    chain dispatches with `metered=False`, so its runs never touch the month
+    counter the beat gates on. Raising the ceiling therefore costs real model
+    calls that the allowance figure will not show.
+    """
+    from ..config import settings
+
+    return max(CURATOR_CATCHUP_PASSES, settings.FREE_CURATOR_RUNS_PER_MONTH // 31)
+
 
 # A lane whose `started` is older than the longest run a task may legally take has
 # no live worker behind it. Neither rescuer can catch a child killed by the hard
@@ -145,7 +169,7 @@ def run_curator_now(
     agent_id: str,
     full_history: bool = False,
     metered: bool = True,
-    catchup_remaining: int = CURATOR_CATCHUP_PASSES - 1,
+    catchup_remaining: int | None = None,
     catchup: bool = False,
 ) -> None:
     agent_uuid = UUID(agent_id)
@@ -160,12 +184,17 @@ async def _run_curator_now(
     agent_id: UUID,
     full_history: bool = False,
     metered: bool = True,
-    catchup_remaining: int = CURATOR_CATCHUP_PASSES - 1,
+    catchup_remaining: int | None = None,
     catchup: bool = False,
 ) -> None:
     """A user-requested curator run: same execution as the daily tick, minus
     the due-check — the user is the trigger. The router already enforced the
     free-tier allowance and resolved credentials.
+
+    `catchup_remaining` defaults to the live entitlement rather than to a
+    constant, because a default argument is frozen at import: a manual run would
+    otherwise chain under the import-time bound while the beat chained under the
+    setting, which is two behaviours from one knob.
 
     `full_history` is the backfill: the run reads with no watermark, but the
     stored watermark is only advanced after success — a failed backfill must
@@ -181,6 +210,8 @@ async def _run_curator_now(
 
     agent = await agent_service.get_agent_by_id(agent_id)
     workspace = await scoped_curation_service.workspace_for_agent(agent)
+    if catchup_remaining is None:
+        catchup_remaining = curator_catchup_pass_ceiling() - 1
     try:
         async with _run_lock(agent, workspace):
             agent = await agent_service.get_agent_by_id(agent_id)
@@ -252,7 +283,7 @@ async def _run_curator_locked(agent, workspace, full_history, metered, catchup_r
         owner = UUID(str(agent["user_id"]))
         if not await billing_service.is_pro(owner) or not await _pending_input(agent, workspace):
             return
-        if not await agent_service.claim_catchup(agent_id, CURATOR_CATCHUP_PASSES - 1):
+        if not await agent_service.claim_catchup(agent_id, curator_catchup_pass_ceiling() - 1):
             return
     # The compare-and-set anchor for mark_curated is the stored position this run
     # actually loaded — captured BEFORE the full_history override below, which zeroes
@@ -472,7 +503,20 @@ async def _dispatch_due_agent(agent, stamp, workspace):
         and month_runs > settings.FREE_CURATOR_RUNS_PER_MONTH
         and not await billing_service.is_pro(user_id)
     ):
-        logger.info("agent schedule: curator credits exhausted for user %s — skipping", user_id)
+        # WARNING, for the same reason as the no-credential skip below: this fires
+        # once per tick in a beat that ticks every minute, and INFO there is
+        # unreadable on the self-hosted box where `docker compose logs` is the only
+        # console. The difference from that skip is that this one is a spend limit
+        # the operator can lift, and the lane behind it is a backlog that will never
+        # drain while it stands — so both numbers are named, not just the fact.
+        logger.warning(
+            "agent schedule: curator monthly allowance spent for user %s (%s of %s runs used "
+            "this month) — every tick will skip until the allowance is raised or the account "
+            "goes Pro",
+            user_id,
+            month_runs,
+            settings.FREE_CURATOR_RUNS_PER_MONTH,
+        )
         await agent_service.mark_run_skipped(agent["id"], "credits")
         return 0
     # No runnable credential (unconnected free user) → nothing can run.
@@ -587,7 +631,9 @@ async def _run_scheduled_locked(agent, stamp, workspace):
                 f"Scheduled agent run failed: {agent['name']!r} for {email}: {str(e)[:300]}"
             )
     else:
-        await _dispatch_curator_catchup(agent, now, CURATOR_CATCHUP_PASSES - 1, workspace=workspace)
+        await _dispatch_curator_catchup(
+            agent, now, curator_catchup_pass_ceiling() - 1, workspace=workspace
+        )
 
 
 @celery.task(name="backend.tasks.agent_schedules.reap_stranded_runs")
@@ -671,7 +717,11 @@ async def _alert_stale_curators() -> int:
     changes. Alerting on the stale *outcome* catches every cause — dead
     provider keys, harness bugs, a wedged beat — where per-run failure alerts
     only catch runs that started. Successful runs with an undrained backlog
-    also qualify. Designed skips resolve explicitly and stay quiet.
+    also qualify. A designed skip stays quiet *as a skip*: the row resolves
+    explicitly and names its reason, and no page is raised for it. The one
+    exception is the monthly-allowance stop, which is a skip the row resolves
+    correctly and the drain cannot survive: a lane frozen there looks healthy
+    forever, so the stale watermark now reports it as allowance exhaustion.
     """
     from ..database import get_pool
     from ..services import alert_service
@@ -684,7 +734,7 @@ async def _alert_stale_curators() -> int:
         FROM agents a JOIN users u ON u.id = a.user_id
         WHERE a.is_curator AND a.run_mode = 'scheduled'
           AND a.curated_through IS NOT NULL AND a.curated_through < $1
-          AND a.last_run_outcome IN ('started', 'failed', 'ran')
+          AND a.last_run_outcome IN ('started', 'failed', 'ran', 'skipped_credits')
         """,
         cutoff,
     )
@@ -708,15 +758,38 @@ async def _alert_stale_curators() -> int:
         return 0
     lines = []
     for row in stale:
-        outcome = {
-            "ran": "backlog remains after a successful batch",
-            "failed": "last run failed without an error message",
-            "started": "run started but never resolved",
-        }[row["last_run_outcome"]]
-        detail = row["last_run_error"] or outcome
+        if row["last_run_outcome"] == "skipped_credits":
+            # Named by its allowance, not by `last_run_error`: `mark_run_skipped`
+            # writes the outcome and nothing else, so the error column still holds
+            # whatever an unrelated earlier run left in it. The CEO decision this
+            # line exists to trigger needs the size of what is frozen beside the
+            # number of runs spent, read for this lane's own wiki and folder.
+            from ..config import settings
+            from ..services import agent_service, curation_service
+
+            backlog = await curation_service.curator_event_backlog(
+                UUID(str(row["user_id"])),
+                row["curator_wiki"],
+                curation_service.position_of(dict(row)),
+                row["curator_folder_id"],
+            )
+            detail = (
+                f"curator credits spent: monthly allowance exhausted, "
+                f"{agent_service.month_runs_used(dict(row))} of "
+                f"{settings.FREE_CURATOR_RUNS_PER_MONTH} runs used; "
+                f"{backlog['distinct_events']} distinct events pending "
+                f"({backlog['raw_rows']} raw rows) — dispatch cannot resume until the "
+                f"allowance is raised or the account goes Pro"
+            )
+        else:
+            outcome = {
+                "ran": "backlog remains after a successful batch",
+                "failed": "last run failed without an error message",
+                "started": "run started but never resolved",
+            }[row["last_run_outcome"]]
+            detail = (row["last_run_error"] or outcome)[:200]
         lines.append(
-            f"- {row['email']}: last curated {row['curated_through']:%Y-%m-%d %H:%M} UTC "
-            f"({detail[:200]})"
+            f"- {row['email']}: last curated {row['curated_through']:%Y-%m-%d %H:%M} UTC ({detail})"
         )
     # Asked before the call, never caught after it: a mode that sends no
     # operational alerts makes send_alert raise, and a raise here would

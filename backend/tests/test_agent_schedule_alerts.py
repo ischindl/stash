@@ -837,3 +837,174 @@ async def test_refunds_do_not_change_an_old_month_counter(client, pool, reason):
     else:
         await agent_service.mark_run_failed(agent["id"], "Failed")
     assert await pool.fetchval("SELECT month_run_count FROM agents WHERE id=$1", agent["id"]) == 3
+
+
+# ---------------------------------------------------------------------------
+# STAS-376: the catch-up cadence ceiling is derived from the curator allowance,
+# and an allowance-blocked lane is reported instead of reading as healthy.
+# ---------------------------------------------------------------------------
+
+
+def test_the_catchup_ceiling_is_the_floor_at_default_settings():
+    """The bug being closed lives only in deployments that raise their own
+    allowance, so the regression that must be impossible is a default install
+    drifting by even one run."""
+    assert agent_schedules.curator_catchup_pass_ceiling() == agent_schedules.CURATOR_CATCHUP_PASSES
+
+
+@pytest.mark.asyncio
+async def test_catchup_bound_a_lane_claims_tracks_the_allowance_not_the_constant(
+    client, pool, monkeypatch
+):
+    """Raising the month's curator allowance widens the catch-up bound, and the
+    bound a pass actually *claims* is the widened one.
+
+    The claim is the assertion that matters: a pass that planned 10 but claimed 7
+    would still stop at 7, which is the bug. The constant would allow only 7
+    attempts, so a limit of 9 is only reachable through the entitlement.
+    """
+    from backend.services import billing_service, scoped_curation_service
+
+    user_id = await _register(client)
+    agent = await _make_curator(user_id, curated_hours_ago=72, last_run_error=None)
+    await pool.execute("UPDATE agents SET run_mode='scheduled' WHERE id=$1", agent["id"])
+    agent = await agent_service.get_agent_by_id(agent["id"])
+
+    async def yes(*args, **kwargs):
+        return True
+
+    monkeypatch.setattr(scoped_curation_service, "workspace_for_agent", lambda _a: {"id": None})
+    monkeypatch.setattr(scoped_curation_service, "require_run_auth", yes)
+    monkeypatch.setattr(billing_service, "is_pro", yes)
+    monkeypatch.setattr(agent_schedules, "_pending_input", yes)
+    # Stop the pass at the claim so nothing runs: returning False is the real
+    # "allowance spent" outcome and takes the function straight to its return.
+    claim = AsyncMock(return_value=False)
+    monkeypatch.setattr(agent_service, "claim_catchup", claim)
+
+    await agent_schedules._run_curator_locked(agent, {"id": uuid.uuid4()}, False, False, None, True)
+    assert claim.await_args.args[1] == agent_schedules.CURATOR_CATCHUP_PASSES - 1
+
+    monkeypatch.setattr(settings, "FREE_CURATOR_RUNS_PER_MONTH", 310)
+    assert agent_schedules.curator_catchup_pass_ceiling() == 10
+    await agent_schedules._run_curator_locked(agent, {"id": uuid.uuid4()}, False, False, None, True)
+    assert claim.await_args.args[1] == 10 - 1
+
+
+@pytest.mark.asyncio
+async def test_a_chain_started_under_a_raised_allowance_queues_the_wider_budget(
+    client, pool, monkeypatch
+):
+    """The queued dispatch carries the entitlement's budget, so the chain is
+    planned against the allowance the operator declared rather than the floor."""
+    from backend.services import billing_service, scoped_curation_service
+
+    user_id = await _register(client)
+    agent = await _make_curator(user_id, curated_hours_ago=72, last_run_error=None)
+    started = datetime.now(UTC)
+    # A catch-up chain only continues from a successful, advancing batch, so the
+    # lane is seeded that way before the dispatch is attempted. `agent` keeps its
+    # pre-update watermark: the advance is what the chain reads as progress.
+    await pool.execute(
+        "UPDATE agents SET curated_through=$2, run_mode='scheduled', last_run_outcome='ran' "
+        "WHERE id=$1",
+        agent["id"],
+        started,
+    )
+
+    async def yes(*args, **kwargs):
+        return True
+
+    async def workspace(_agent):
+        return {"id": None}
+
+    monkeypatch.setattr(scoped_curation_service, "workspace_for_agent", workspace)
+    monkeypatch.setattr(billing_service, "is_pro", yes)
+    monkeypatch.setattr(agent_schedules, "_pending_input", yes)
+    queued = []
+    monkeypatch.setattr(
+        agent_schedules.run_curator_now, "apply_async", lambda **kw: queued.append(kw)
+    )
+
+    monkeypatch.setattr(settings, "FREE_CURATOR_RUNS_PER_MONTH", 310)
+    await agent_schedules._queue_curator_catchup(
+        agent, started, agent_schedules.curator_catchup_pass_ceiling() - 1
+    )
+    # The chain start hands over ceiling - 1 and each dispatch reserves one for
+    # itself, so a raised allowance plans 8 further passes where the constant
+    # plans 6. The floor value is asserted in the same test so a drift in either
+    # direction fails.
+    assert queued == [
+        {
+            "args": [str(agent["id"])],
+            "kwargs": {"metered": False, "catchup_remaining": 8, "catchup": True},
+            "countdown": 15,
+        }
+    ]
+
+    queued.clear()
+    monkeypatch.setattr(settings, "FREE_CURATOR_RUNS_PER_MONTH", 10)
+    await agent_schedules._queue_curator_catchup(
+        agent, started, agent_schedules.curator_catchup_pass_ceiling() - 1
+    )
+    assert queued == [
+        {
+            "args": [str(agent["id"])],
+            "kwargs": {"metered": False, "catchup_remaining": 6, "catchup": True},
+            "countdown": 15,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_an_allowance_blocked_curator_is_reported_with_its_backlog(client, pool, monkeypatch):
+    """A lane frozen by the monthly allowance used to be indistinguishable from
+    a healthy one, and the drain could not survive it.
+
+    `last_run_error` is deliberately populated with an unrelated older failure:
+    `mark_run_skipped` writes the outcome and nothing else, so a line built from
+    the error column would print a cause that has nothing to do with the stop.
+    The report must name the allowance and carry the backlog number, because the
+    decision it triggers is about an account, not a lane.
+    """
+    from datetime import date
+
+    user_id = await _register(client)
+    agent = await _make_curator(user_id, curated_hours_ago=72, last_run_error="opencode error")
+    await pool.execute(
+        "UPDATE agents SET last_run_outcome='skipped_credits', month_run_count=10, "
+        "month_run_anchor=$2 WHERE id=$1",
+        agent["id"],
+        date.today(),
+    )
+    for _ in range(2):
+        await memory_service.push_event(
+            user_id, "test", "user_message", "curate me", user_id, f"sess-{uuid.uuid4()}"
+        )
+    sent = _capture_alerts(monkeypatch)
+
+    assert await agent_schedules._alert_stale_curators() == 1
+    assert len(sent) == 1
+    assert "credits" in sent[0] and "allowance" in sent[0]
+    assert "10 of 10 runs used" in sent[0]
+    assert "2 distinct events pending" in sent[0]
+    assert "opencode error" not in sent[0]
+
+
+@pytest.mark.asyncio
+async def test_a_curator_that_found_nothing_to_do_still_stays_quiet(client, pool, monkeypatch):
+    """The widened predicate must not turn every designed skip into a page. A
+    lane that resolved as `skipped_no_changes` had a run and found nothing; it is
+    not the bug and must stay silent."""
+    user_id = await _register(client)
+    agent = await _make_curator(user_id, curated_hours_ago=72, last_run_error=None)
+    await pool.execute(
+        "UPDATE agents SET last_run_outcome='skipped_no_changes' WHERE id=$1", agent["id"]
+    )
+    await memory_service.push_event(
+        user_id, "test", "user_message", "hello", user_id, f"sess-{uuid.uuid4()}"
+    )
+    sent = _capture_alerts(monkeypatch)
+
+    assert await agent_schedules._alert_stale_curators() == 0
+    assert sent == []
