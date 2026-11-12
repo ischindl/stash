@@ -1,5 +1,54 @@
 # Testing
 
+## Which environment a verdict belongs to
+
+A test run judges the tree its interpreter installed, not the directory you happened to `cd` into. The
+`stash` on `PATH` is a released PyPI build (`uv tool install stashai`, self-updated by the plugin hooks),
+so it reports on the release it came from, not on a working tree. Another checkout's environment -
+usually the primary one, sometimes a card worktree that has since been removed - judges that checkout.
+`cli/tests/conftest.py` refuses to collect when `typer` is off its pin or when `cli` and `stashai`
+resolve outside the collecting tree, because a stale editable install made the suite report a tree it
+was never running (STAS-178 spent a card cycle "fixing" code that was not wrong).
+
+Verify in the tree that carries the change, in that tree's own environment:
+
+```bash
+cd "$(git rev-parse --show-toplevel)"
+uv venv -p 3.12 && uv pip install -e .            # once per tree
+uv pip install -r backend/requirements-dev.txt    # pytest, pytest-cov, ruff
+.venv/bin/python -m pytest cli/tests --no-cov -q
+.venv/bin/ruff check backend/ cli/ && .venv/bin/ruff format --check backend/ cli/
+```
+
+Before trusting a verdict, print whose code that interpreter judges:
+
+```bash
+head -1 .venv/bin/stash
+.venv/bin/python -c "import cli, stashai; print(cli.__file__, stashai.__file__)"
+which stash
+```
+
+Two failures those lines exist to catch, both seen on a real box:
+
+- A console script whose shebang names a **different tree's** interpreter, so `.venv/bin/stash` runs a
+  removed worktree's code while the shell stands elsewhere. Re-run the shebang check after every
+  install, and prefer `.venv/bin/python -m pytest` over a bare `pytest`.
+- An exact pin moved by a top-up install. `backend/requirements-dev.txt` starts with
+  `-r requirements.txt`, which carries `celery[redis]>=5.4` against `pyproject.toml`'s exact
+  `click==8.3.2`. Print both sides and require them to agree:
+
+```bash
+grep -E '"(typer|click)==' pyproject.toml
+.venv/bin/python -c "import importlib.metadata as m; print(m.version('typer'), m.version('click'))"
+```
+
+Repair a drift by re-installing this tree with `uv pip install --python .venv/bin/python -e .`, never by
+editing the pin. Never install into a checkout you are not changing, and never borrow another
+checkout's `.venv` to judge a worktree: a `.venv` may legitimately hold runtime deps only, with no
+`pytest` in it - that is a missing tool, not a licence to test the wrong tree.
+
+---
+
 ## Backend
 
 - **Framework:** pytest + pytest-asyncio

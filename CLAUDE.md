@@ -194,6 +194,14 @@ By default `stash` is the released PyPI build (`uv tool` install, self-updating)
 1. Once per checkout: `uv venv -p 3.12 && uv pip install -e .`
 2. Per terminal: `source .venv/bin/activate` — your prompt shows `(.venv)` and `stash` now runs this checkout's working tree. New terminals default back to the released CLI.
 
+A verdict belongs to the tree that owns the interpreter, so verify in the tree you changed, in that
+tree's own environment. Prove it before trusting it: `head -1 .venv/bin/stash` must name this tree's
+interpreter, and `.venv/bin/python -c "import cli, stashai; print(cli.__file__, stashai.__file__)"`
+must print paths under it. `stash` on `PATH` is a PyPI release that judges no working tree, and a
+`.venv` borrowed from another checkout - including this repo's primary one - judges that checkout.
+The full rule, including the pin re-check after a top-up install:
+[docs/testing.md](docs/testing.md#which-environment-a-verdict-belongs-to).
+
 ### Backend
 - Install deps: `uv pip install -r backend/requirements.txt -r backend/requirements-dev.txt`
 - Migrate DB: `alembic upgrade head`
