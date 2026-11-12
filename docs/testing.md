@@ -190,43 +190,44 @@ then refused) and `test_a_failure_after_the_fence_publishes_neither_the_watermar
 (the crash boundary: a raise after the matched fence rolls the stamp back and leaves the window
 still offered).
 
-**A scoped run walks its backlog in slices, and every slice commits as if it were the last.** A
-run that bounds every event still owed into one window and stamps its watermark once, at the end,
-cannot advance at all when the backlog is larger than its budget: it dies at the ceiling having
-committed nothing, and the next run reads the same backlog from the same position (measured on the
-founder stack 2026-09-23 — `curated_through` unmoved since 2026-08-22 across 42 runs, each one
-failing at the 600 s chat-turn wall). `scoped_curation_service.run` therefore loops:
-`complete_through` picks the slice's boundary from the position the previous slice committed,
-every scope loads that window, and the commit is the same `agent_service.advance_watermark` whose
-returned pair becomes the next slice's fence — one CAS per slice rather than one per run. The
-window's lower bound is `curation_service.position_bound` and not the cursor's instant, because a
-slice that stops inside a tie has to resume *at* that event; resuming at the instant would leave
-the rest of it to be curated by nobody while the marker walked past. The budget is
-`settings.CURATOR_RUN_TIMEOUT_SECONDS` — its own setting, because a curation run and a chat turn
-are different facts — checked between slices, and that check is the live exit: what a slice
-committed stays, a slice that returns *after* the budget was spent is kept, and the run still
-raises. The `wait_for` wall in `run_scheduled` is the ceiling above that exit rather than the plan,
-and it sits one completion window past the budget — `run_wall_timeout()` is one number for both it
-and the session lock's TTL, because the between-slice check can only fire once the slice in flight
-returns, and a wall set at the budget itself always wins that race and cancels the very slice
-slicing exists to keep; a lock on a shorter number than the wall would expire mid-run and belong to
-the next dispatch. Pinned by `test_scoped_curation.py`'s
-`test_a_run_slices_a_backlog_larger_than_one_feed_window`,
-`test_a_run_that_runs_out_of_time_keeps_the_slices_it_committed`,
-`test_the_run_stops_itself_at_the_next_boundary_and_keeps_the_slice_that_arrived_late` — which
-together tell the two exits apart by `__cause__`, each test asserting the cause of the exit it
-pins: the run's own stop carrying none, the wall's carrying the `TimeoutError` it cancelled —
-`test_the_next_run_resumes_at_the_watermark_the_last_run_committed` and
-`test_a_slice_cut_in_the_middle_of_a_tie_resumes_at_that_event`, with the wall's place under the
-worker's own ceiling pinned by
-`test_celery_time_limits.py::test_curator_run_budget_stays_under_the_worker_ceiling`. A test that
-patches the budget alone therefore never reaches the wall in reasonable time, so the tests that
-mean the wall patch `llm.LOCAL_COMPLETION_TIMEOUT_S` beside it, and never with 0 — a grace of 0
-collapses the wall onto the budget, the shape this slack exists to rule out, and the test passes
-having proved nothing — while the tests that mean the run's own stop leave the window at its real
-300 s, so the wall is nowhere near the run they close. The two tests that name an exit then assert
-that exit's own `__cause__` rather than the message both exits share, so neither can pass for the
-other's reason.
+**A scoped run reads one bounded batch and stamps its watermark once, fenced on the pair it read.**
+A run that had to carry every event still owed through one window could not finish at all once the
+founder backlog outgrew what a single run can read (measured on the founder stack 2026-09-23 —
+`curated_through` unmoved since 2026-08-22 across 42 runs, each one dying at the 600 s wall). The
+walk is therefore spread across runs rather than inside one: `scoped_curation_inputs.load_batch`
+fills a batch to `_MAX_INPUT_CHARS` and records what is still owed as `curation_cursor` — which
+documents it finished and how far inside an unfinished one it got — and the run's single commit
+writes that cursor beside `batch.through`, in the same UPDATE that fences on the pair this run read.
+An ingest rewind or an overlapping run therefore matches no row instead of being stamped over.
+Pinned by `test_scoped_curation.py`'s `test_cursor_is_committed_only_after_all_scopes_succeed`,
+`test_large_files_and_sources_resume_without_skipping_or_unbounded_input`,
+`test_same_timestamp_group_larger_than_event_limit_drains` and
+`test_revised_large_document_restarts_its_partial_cursor`.
+
+**The run ceiling is one curator's own number, and it is the same number on both sides of the
+wall.** `agent_service.turn_ceiling_seconds` is the only code in the tree that names a scoped run's
+ceiling: the curator's `agents.turn_timeout_seconds`, or `AGENT_TURN_TIMEOUT_SECONDS` while that
+column is null. `sprite_agent_service` resolves it once per run and hands that one value to
+`asyncio.wait_for` and to the TTL of the `scoped-curator-{id}` lock fencing the lane, so the two
+cannot drift: a lock keyed shorter than the wall expires mid-run and hands the next dispatch a
+half-finished run, which is the single-flight guarantee migration 0258 exists to hold. The write
+path closes the other gap — `worker_turn_ceiling_seconds()` reads the celery conf, and a ceiling at
+or above it is refused at PATCH, because a run the worker kills never reaches the chore that marks
+it failed and refunds its curator credit. Pinned by `test_scoped_curation.py`'s
+`test_scoped_run_timeout_preserves_progress_and_releases_lock` (the wall, the progress that
+outlives it, the lock released), `test_each_curator_ceiling_sets_its_own_wall_and_its_own_fence`
+(two curators and two ceilings, the shorter wall giving out first and each lane's fence TTL equal to
+its own ceiling), `test_a_run_that_takes_its_own_fence_uses_the_same_ceiling` (the second lock
+construction site), `test_an_unset_ceiling_fences_the_run_with_the_setting_it_read` (a null column
+is the deployment default read through the resolver, not a second codepath), and
+`test_a_scoped_run_never_writes_a_stop_flag_only_a_chat_lane_reads` — the measurement that lets
+`request_stop`, `_pump_turn` and `run_chat` keep the global constant, since those fence chat
+sessions and a scoped run returns before any of them. The bound, the round-trip and the control that
+writes it are pinned by `test_folder_curators.py`'s
+`test_a_ceiling_the_worker_would_beat_is_refused_and_changes_nothing` and
+`test_run_ceiling_round_trips_through_the_curators_api`, and by the run-ceiling cases in
+`CuratorsSection.test.tsx`, which assert that a row with no ceiling shows an empty field beside the
+server's effective number rather than a number the UI invented.
 
 **The stored pair has to survive the trip through the run's own feed command.** A sprite curator
 reads its changes through a command the server renders into its prompt —

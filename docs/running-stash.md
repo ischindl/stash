@@ -115,11 +115,29 @@ Before starting:
   account may start in a calendar month, and it also sets how far a backlog may
   be chased: the catch-up ceiling is that allowance spread over the month that
   funds it, floored at 8 passes, so raising it is what lets a large backlog drain
-  faster. Past the allowance, non-Pro curators stop dead mid-backlog: every later
+  faster. Those chase passes are not billed: the catch-up chain dispatches with
+  `metered=False`, so its passes never raise the month's run count the beat and
+  the credit gate look at. At the default allowance of 10 the ceiling is exactly 8
+  passes (10 // 31 is 0, so the floor rules), while an allowance of 1000 gives about
+  32 unmetered passes per lane per 24 h — the monthly tally never sees them.
+  Metering that chain waits for the first paid tier. Past the allowance, non-Pro
+  curators stop dead mid-backlog: every later
   tick logs `curator monthly allowance spent` at WARNING, the row reads
   `skipped_credits`, and the stale-watermark watchdog names it — runs spent, the
   allowance, and the events still pending. A lane frozen there never drains on its
   own; raise the allowance or make the account Pro.
+- `AGENT_TURN_TIMEOUT_SECONDS` (default 600) is the *default* run ceiling: how
+  many seconds one curator run may take before it is cut off and its lane freed.
+  A ceiling is a property of a curator, not of the process — Settings → Curators
+  gives each one its own "Run ceiling" in seconds, which is what a lane running
+  on a slow local model endpoint needs, and clearing it returns that curator to
+  this setting. A curator's own number bounds both its run and the lock that
+  keeps a second run of that curator from starting while the first is still
+  going, so the two can never disagree: a lock keyed shorter than the wall would
+  expire mid-run and hand the next dispatch a half-finished run. Saving a ceiling
+  at or above the worker's own task ceiling is refused where it is written — the
+  worker would kill such a run before it could record the failure or refund the
+  curator credit it had already spent.
 - Operational alerts stay off unless you finish them: set both `ALERT_SLACK_*`
   variables in `.env` and install the Stash Slack bot into that workspace, so
   the team has a `slack_bot_installs` row and its bot is in the alert channel.

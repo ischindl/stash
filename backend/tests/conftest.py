@@ -135,15 +135,22 @@ from backend.services import agent_auth, sprite_agent_service, sprite_service  #
 
 
 class FakeRedis:
-    """Just enough of redis.asyncio for the per-session turn lock."""
+    """Just enough of redis.asyncio for the per-session turn lock.
+
+    `ttls` records the `ex` each key was set with and outlives the key's delete,
+    so a test can read the TTL a lock was taken with after that lock is gone —
+    which is the only way to check that a fence was the length of the run it
+    bounds. `data` still says exactly what is live right now."""
 
     def __init__(self) -> None:
         self.data: dict[str, bytes] = {}
+        self.ttls: dict[str, object] = {}
 
     async def set(self, key, value, nx=False, ex=None):
         if nx and key in self.data:
             return None
         self.data[key] = value.encode() if isinstance(value, str) else value
+        self.ttls[key] = ex
         return True
 
     async def get(self, key):

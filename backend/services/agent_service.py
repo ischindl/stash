@@ -14,6 +14,7 @@ from uuid import UUID
 
 from fastapi import HTTPException
 
+from ..config import settings
 from ..database import get_pool
 from . import agent_auth
 from .curation_service import Position, position_ahead, position_of
@@ -26,6 +27,7 @@ _COLUMNS = (
     "telegram_bound, last_run_at, last_run_error, last_run_outcome, curated_through, "
     "curated_through_event_id, "
     "curator_wiki, curator_folder_id, model_id, credential_id, digest_provider, digest_model_id, "
+    "turn_timeout_seconds, "
     "month_run_count, month_run_anchor, curation_cursor, created_at"
 )
 
@@ -68,6 +70,30 @@ def _row(row) -> dict:
     d = dict(row)
     d["id"] = str(d["id"])
     return d
+
+
+def turn_ceiling_seconds(agent: dict) -> int:
+    """Wall seconds one run of this agent may take: its own ceiling when it has
+    one, the deployment's when it has not.
+
+    This is the only place a row becomes a wall. The setting is read at call time
+    rather than aliased at import, so one retuned number — by env or by a test's
+    monkeypatch — reaches every reader of the ceiling."""
+    ceiling = agent["turn_timeout_seconds"]
+    if ceiling is None:
+        return settings.AGENT_TURN_TIMEOUT_SECONDS
+    return ceiling
+
+
+def _curator_row(row) -> dict:
+    """A curator payload: the row plus the ceiling its next run will honour.
+
+    Derived in one place so an operator sees the number the next run uses rather
+    than a second guess at it, and so only curator payloads carry it — a generic
+    agent has no scheduled run for a ceiling to bound."""
+    curator = _row(row)
+    curator["effective_turn_timeout_seconds"] = turn_ceiling_seconds(curator)
+    return curator
 
 
 async def list_agents(user_id: UUID) -> list[dict]:
@@ -145,7 +171,7 @@ async def get_or_create_curator(user_id: UUID, wiki: str = "internal") -> dict:
         wiki,
     )
     if row is not None:
-        return _row(row)
+        return _curator_row(row)
     name = "Memory curator" if wiki == "internal" else "External wiki curator"
     row = await pool.fetchrow(
         f"""
@@ -173,7 +199,7 @@ async def get_or_create_curator(user_id: UUID, wiki: str = "internal") -> dict:
             user_id,
             wiki,
         )
-    return _row(row)
+    return _curator_row(row)
 
 
 async def list_curators(user_id: UUID) -> list[dict]:
@@ -183,7 +209,7 @@ async def list_curators(user_id: UUID) -> list[dict]:
         f"SELECT {_COLUMNS} FROM agents WHERE user_id = $1 AND is_curator ORDER BY created_at",
         user_id,
     )
-    return [_row(r) for r in rows]
+    return [_curator_row(r) for r in rows]
 
 
 async def create_folder_curator(
@@ -287,7 +313,7 @@ async def create_folder_curator(
             user_id,
             folder_id,
         )
-    curator = _row(row)
+    curator = _curator_row(row)
     curator["wiki_folder_id"] = str(wiki_folder_id)
     return curator
 
@@ -316,7 +342,7 @@ async def get_curator_by_id(agent_id: UUID) -> dict | None:
     row = await pool.fetchrow(
         f"SELECT {_COLUMNS} FROM agents WHERE id = $1 AND is_curator", agent_id
     )
-    return _row(row) if row else None
+    return _curator_row(row) if row else None
 
 
 async def update_curator(
@@ -328,6 +354,7 @@ async def update_curator(
     curated_through: datetime | None = ...,
     digest_provider: str | None = ...,
     digest_model_id: str | None = ...,
+    turn_timeout_seconds: int | None = ...,
 ) -> dict:
     """PATCH semantics: `...` means leave the field alone, None clears it."""
     fields: dict = {}
@@ -347,6 +374,10 @@ async def update_curator(
         fields["digest_provider"] = digest_provider
     if digest_model_id is not ...:
         fields["digest_model_id"] = digest_model_id
+    if turn_timeout_seconds is not ...:
+        if turn_timeout_seconds is not None:
+            _refuse_unreachable_ceiling(turn_timeout_seconds)
+        fields["turn_timeout_seconds"] = turn_timeout_seconds
     touches_pin = any(k in fields for k in ("model_provider", "model_id", "credential_id"))
     wants_digest_check = (
         fields.get("digest_provider") is not None or fields.get("digest_model_id") is not None
@@ -446,7 +477,30 @@ async def update_curator(
     )
     if row is None:
         _raise_missing(agent_id)
-    return _row(row)
+    return _curator_row(row)
+
+
+def _refuse_unreachable_ceiling(seconds: int) -> None:
+    """Refuse a ceiling this worker would beat, naming both numbers.
+
+    The bound is read from the celery conf, so raising either worker ceiling moves
+    it. A run the worker kills never reaches `mark_run_failed` or `refund_run`, so a
+    curator given a ceiling that high would spend its credit, keep no result, and
+    leave its lane reading 'started' forever."""
+    from ..celery_app import worker_turn_ceiling_seconds
+
+    ceiling = worker_turn_ceiling_seconds()
+    if 1 <= seconds < ceiling:
+        return
+    raise HTTPException(
+        status_code=400,
+        detail=(
+            f"turn_timeout_seconds must be between 1 and {ceiling - 1} seconds; "
+            f"{seconds} is refused because the worker bounds a task at {ceiling} "
+            "seconds. A ceiling that high is never reached: the worker kills the "
+            "run, its curator credit stays spent, and the lane stays 'started'."
+        ),
+    )
 
 
 def _raise_missing(agent_id: UUID):

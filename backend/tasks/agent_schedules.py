@@ -224,14 +224,16 @@ async def _run_curator_now(
 
 
 def _run_lock(agent: dict, workspace):
-    from ..config import settings
-    from ..services import sprite_agent_service
+    from ..services import agent_service, sprite_agent_service
 
     if workspace is not None:
         # The developer-platform lane: this key is the fence its commit re-enters
         # under `scoped_lock_held`, so the name is upstream's and stays upstream's.
+        # The TTL is that lane's own ceiling — the same number its `wait_for` wall
+        # uses, resolved by the same resolver — because a lock that expired first
+        # would let a second dispatch into a run still writing the wiki.
         return sprite_agent_service._TurnLock(
-            f"scoped-curator-{agent['id']}", settings.AGENT_TURN_TIMEOUT_SECONDS
+            f"scoped-curator-{agent['id']}", agent_service.turn_ceiling_seconds(agent)
         )
     # The personal-wiki lane has no other single-flight guard: its turn lock is
     # keyed by a per-run session id, so two runs of one agent never contend on it,

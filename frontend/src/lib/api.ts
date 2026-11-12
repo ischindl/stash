@@ -2692,6 +2692,11 @@ export type Curator = {
   last_run_outcome: string | null;
   last_run_error: string | null;
   next_run_at: string | null;
+  /** This curator's own run ceiling in seconds, or null when the deployment
+   *  default applies. `effective_turn_timeout_seconds` is the number its next run
+   *  will actually honour — the server resolves it, the browser never guesses. */
+  turn_timeout_seconds: number | null;
+  effective_turn_timeout_seconds: number;
   folder_name?: string | null;
   wiki_folder_id?: string | null;
   event_backlog?: { distinct_events: number; raw_rows: number; distinct_sessions: number } | null;
@@ -2737,6 +2742,9 @@ export type CuratorPatch = {
   digest_provider?: string | null;
   digest_model_id?: string | null;
   schedule_cron?: string | null;
+  /** A number sets this curator's ceiling; null returns it to the deployment
+   *  default, which is only expressible by sending the key, not by omitting it. */
+  turn_timeout_seconds?: number | null;
 };
 
 export async function patchCurator(agentId: string, patch: CuratorPatch): Promise<Curator> {

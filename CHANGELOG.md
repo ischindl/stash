@@ -7,6 +7,21 @@ everything before it is captured in git history (`git log`), not here.
 
 ### Added
 
+- A curator's run ceiling is now the curator's own setting. One number —
+  `AGENT_TURN_TIMEOUT_SECONDS`, default 600 — used to be the wall for every curator, so a lane
+  pointed at a slow local model box died at 600 s exactly like a lane that finishes in a minute,
+  and the only lever was the environment plus a restart. Every curator row in Settings → Curators
+  now has a "Run ceiling" in seconds, with a "Deployment default" button that hands that curator
+  back to `AGENT_TURN_TIMEOUT_SECONDS`. The row shows both the number it stored and the number the
+  next run will use, so an unset ceiling never reads as configured, and a refused save says so on
+  the row instead of looking like a number that stuck. That one number bounds the run *and* the
+  lock that keeps a second run of the same curator from starting while the first is still going —
+  they are resolved together, because a lock shorter than the wall expires mid-run and hands the
+  next dispatch a half-finished run. A ceiling at or above what the worker itself enforces (1500 s
+  soft, 1800 s hard) is refused where it is typed, naming both numbers: the worker kills such a
+  run before it can record its failure or refund the curator credit it spent, which would leave the
+  lane reading "started" until the sweep noticed. The global default stays 600.
+
 - A saved model box can be re-checked without dialling all of them. Every local model
   endpoint row in Settings now has its own "Test connection" button, and it answers with
   the same verdict the add-form's test gives: "Reachable and authenticated — serving 2

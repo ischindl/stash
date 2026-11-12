@@ -235,3 +235,13 @@ celery.conf.update(
         },
     },
 )
+
+
+def worker_turn_ceiling_seconds() -> int:
+    """Highest per-agent turn ceiling worth offering: the earliest ceiling the
+    worker would enforce on that run. A ceiling at or above it can never be
+    reached, and a run the worker kills never runs the chore that marks it failed
+    and refunds it, so the curator credit it spent stays spent and its lane stays
+    'started'. Read from the conf rather than restated, so moving either ceiling
+    moves what a curator may be given."""
+    return min(celery.conf.task_soft_time_limit, celery.conf.task_time_limit)

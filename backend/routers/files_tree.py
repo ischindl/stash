@@ -439,7 +439,8 @@ async def update_scope_curator(
     scope_user_id: UUID = Depends(get_scope),
 ):
     """Retune one of this scope's curators: its model pick, provider, digest
-    model, or schedule cadence. Only fields present in the body change."""
+    model, schedule cadence, or run ceiling. Only fields present in the body
+    change."""
     from ..services import agent_service
 
     curator = await agent_service.get_curator_by_id(agent_id)
@@ -454,6 +455,7 @@ async def update_scope_curator(
             "schedule_cron",
             "digest_provider",
             "digest_model_id",
+            "turn_timeout_seconds",
         )
         if name in req.model_fields_set
     }

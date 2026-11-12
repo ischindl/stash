@@ -812,6 +812,158 @@ async def test_scoped_run_timeout_preserves_progress_and_releases_lock(
     assert sprite_exec.redis.data == {}
 
 
+# --- The run ceiling belongs to the curator, and it is one number per run ---
+
+
+def _fence_ttl(seam, agent_id) -> object:
+    """The TTL the `scoped-curator-{id}` single-flight fence was taken with."""
+    return seam.redis.ttls[f"scoped-curator-{agent_id}"]
+
+
+@pytest.mark.asyncio
+async def test_each_curator_ceiling_sets_its_own_wall_and_its_own_fence(
+    dataset, pool, monkeypatch, sprite_exec
+):
+    """Two scoped curators, two different walls, in one observable number each.
+
+    The number a curator is given is both its `wait_for` wall and the TTL of the
+    `scoped-curator-{id}` lock that fences that lane, so setting one ceiling cannot
+    leave the fence on another value: a lock keyed shorter than the wall expires
+    while its run is still going and hands the next dispatch a half-finished run.
+    The shorter wall is the one that gives out first, which is what makes 'its own
+    ceiling' a behaviour and not just a stored number."""
+    from backend.config import settings
+    from backend.services import agent_service
+    from backend.tasks.agent_schedules import _run_curator_now
+
+    async def stuck(*args):
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(curation, "run_scope", stuck)
+    # 1 s and 2 s rather than a realistic 900 s and 1200 s: this test waits both
+    # walls out, and which one gives out first is the assertion.
+    pair = {}
+    for wiki, ceiling in (("internal", 2), ("external", 1)):
+        curator = await agent_service.get_or_create_curator(dataset.owner, wiki=wiki)
+        await pool.execute(
+            "UPDATE agents SET turn_timeout_seconds=$2 WHERE id=$1",
+            UUID(curator["id"]),
+            ceiling,
+        )
+        pair[wiki] = curator
+
+    gave_out: list[str] = []
+
+    async def run_until_cut_off(wiki: str) -> None:
+        with pytest.raises(RuntimeError, match="run time limit"):
+            await _run_curator_now(UUID(pair[wiki]["id"]), metered=False)
+        gave_out.append(wiki)
+
+    await asyncio.gather(run_until_cut_off("internal"), run_until_cut_off("external"))
+
+    assert gave_out == ["external", "internal"]
+    assert _fence_ttl(sprite_exec, pair["external"]["id"]) == 1
+    assert _fence_ttl(sprite_exec, pair["internal"]["id"]) == 2
+    assert settings.AGENT_TURN_TIMEOUT_SECONDS not in (1, 2)
+    assert sprite_exec.redis.data == {}
+
+
+@pytest.mark.asyncio
+async def test_a_run_that_takes_its_own_fence_uses_the_same_ceiling(
+    dataset, pool, monkeypatch, sprite_exec
+):
+    """The second construction site of that fence, not the beat's.
+
+    The beat holds `scoped-curator-{id}` itself and re-enters with
+    `scoped_lock_held=True`; a lane arriving without that flag builds the lock here
+    instead. Both sites have to read one source, or the two drift apart precisely
+    the way a shared constant lets them."""
+    from backend.services import agent_service, sprite_agent_service
+
+    async def stuck(*args):
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(curation, "run_scope", stuck)
+    curator = await agent_service.get_or_create_curator(dataset.owner, wiki="external")
+    await pool.execute(
+        "UPDATE agents SET turn_timeout_seconds=$2 WHERE id=$1",
+        UUID(curator["id"]),
+        1,
+    )
+    agent = await agent_service.get_agent_by_id(UUID(curator["id"]))
+    with pytest.raises(RuntimeError, match="run time limit"):
+        await sprite_agent_service.run_scheduled(
+            agent, "own-fence-test", curation_service.position_of(agent)
+        )
+    assert _fence_ttl(sprite_exec, curator["id"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_an_unset_ceiling_fences_the_run_with_the_setting_it_read(
+    dataset, pool, monkeypatch, sprite_exec
+):
+    """A NULL ceiling is 'the deployment default applies', read through the resolver.
+
+    This test and `test_scoped_run_timeout_preserves_progress_and_releases_lock`,
+    which this card leaves untouched, are the pair that says there is no second
+    codepath: the row with no ceiling still drives its wall through the patched
+    setting, and the fence it took carries that same patched number."""
+    from backend.services import agent_service, sprite_agent_service
+    from backend.tasks.agent_schedules import _run_curator_now
+
+    async def stuck(*args):
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(curation, "run_scope", stuck)
+    monkeypatch.setattr(sprite_agent_service.settings, "AGENT_TURN_TIMEOUT_SECONDS", 0.05)
+    agent = await agent_service.get_or_create_curator(dataset.owner, wiki="external")
+    with pytest.raises(RuntimeError, match="run time limit"):
+        await _run_curator_now(UUID(agent["id"]), metered=False)
+    assert _fence_ttl(sprite_exec, agent["id"]) == 0.05
+    assert sprite_exec.redis.data == {}
+
+
+@pytest.mark.asyncio
+async def test_a_scoped_run_never_writes_a_stop_flag_only_a_chat_lane_reads(
+    dataset, pool, monkeypatch, sprite_exec
+):
+    """The ceiling stays out of the chat lanes, measured rather than asserted.
+
+    `request_stop` and the two session turn locks still read the process-wide
+    constant, and that is only right because a scoped run returns before it reaches
+    `run_chat`, `_pump_turn` or `_stoppable` — the only readers of
+    `agent-turn-stop:{session}`. Both endings of a scoped run are checked: one that
+    finishes and one its own ceiling cuts off."""
+    from backend.services import agent_service, sprite_agent_service
+    from backend.tasks.agent_schedules import _run_curator_now
+
+    def stop_keys() -> list[str]:
+        return [k for k in sprite_exec.redis.data if k.startswith("agent-turn-stop:")]
+
+    async def completes(scope, instructions):
+        return "Wiki updated."
+
+    monkeypatch.setattr(curation, "run_scope", completes)
+    agent = await _from_never(
+        pool, await agent_service.get_or_create_curator(dataset.owner, wiki="external")
+    )
+    await sprite_agent_service.run_scheduled(
+        agent, "stop-flag-test", curation_service.position_of(agent)
+    )
+    assert stop_keys() == []
+
+    async def stuck(*args):
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(curation, "run_scope", stuck)
+    await pool.execute(
+        "UPDATE agents SET turn_timeout_seconds=$2 WHERE id=$1", UUID(str(agent["id"])), 1
+    )
+    with pytest.raises(RuntimeError, match="run time limit"):
+        await _run_curator_now(UUID(str(agent["id"])), metered=False)
+    assert stop_keys() == []
+
+
 @pytest.mark.asyncio
 async def test_duplicate_create_returns_existing_page_without_overwriting_it(dataset, pool):
     shared = await scope(dataset, "shared")

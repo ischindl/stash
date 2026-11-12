@@ -1138,3 +1138,120 @@ async def test_the_two_scoped_lanes_stay_scoped_and_gated_on_a_provider(
     )
     assert result == "CURATED"
     assert runs == [(str(internal["id"]), workspace["id"], "20260102030405")]
+
+
+@pytest.mark.asyncio
+async def test_run_ceiling_round_trips_through_the_curators_api(
+    client: AsyncClient, _db_pool, pool
+):
+    """The ceiling is a curator property the API writes, not one only an operator
+    holding the environment can set.
+
+    PATCH answers with both numbers because they mean different things — the one
+    stored and the one the next run will use — and a list showing only the stored
+    one would have an operator tuning a curator that was never reading it. An
+    absent field must not silently clear what a previous save wrote, so clearing
+    takes an explicit null, and the answer then names the deployment default the
+    ceiling fell back to rather than leaving it blank."""
+    key, uid = await _register(client)
+    rozvrh = await _folder(client, key, "Rozvrh")
+    curator = (
+        await client.post("/api/v1/me/curators", json={"folder_id": rozvrh}, headers=_auth(key))
+    ).json()["curator"]
+    url = f"/api/v1/me/curators/{curator['id']}"
+    assert curator["turn_timeout_seconds"] is None
+    assert curator["effective_turn_timeout_seconds"] == settings.AGENT_TURN_TIMEOUT_SECONDS
+
+    saved = await client.patch(url, json={"turn_timeout_seconds": 900}, headers=_auth(key))
+    assert saved.status_code == 200
+    assert (
+        saved.json()["curator"]["turn_timeout_seconds"],
+        saved.json()["curator"]["effective_turn_timeout_seconds"],
+    ) == (900, 900)
+    listed = {
+        c["id"]: c
+        for c in (await client.get("/api/v1/me/curators", headers=_auth(key))).json()["curators"]
+    }[curator["id"]]
+    assert (listed["turn_timeout_seconds"], listed["effective_turn_timeout_seconds"]) == (
+        900,
+        900,
+    )
+
+    # A save that names only the cadence leaves the stored ceiling where it is.
+    other = await client.patch(url, json={"schedule_cron": "*/2 * * * *"}, headers=_auth(key))
+    assert other.json()["curator"]["turn_timeout_seconds"] == 900
+
+    # An explicit null falls back to the deployment default, and says which.
+    cleared = await client.patch(url, json={"turn_timeout_seconds": None}, headers=_auth(key))
+    assert cleared.json()["curator"]["turn_timeout_seconds"] is None
+    assert (
+        cleared.json()["curator"]["effective_turn_timeout_seconds"]
+        == settings.AGENT_TURN_TIMEOUT_SECONDS
+    )
+
+    # A curator pinned to a local endpoint with no override gets the same default
+    # every other lane gets: no provider earns a quiet second number.
+    pinned = await client.patch(
+        url, json={"model_provider": "local", "model_id": "qwen"}, headers=_auth(key)
+    )
+    assert pinned.status_code == 200, pinned.text
+    assert pinned.json()["curator"]["turn_timeout_seconds"] is None
+    assert pinned.json()["curator"]["effective_turn_timeout_seconds"] == (
+        settings.AGENT_TURN_TIMEOUT_SECONDS
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_ceiling_the_worker_would_beat_is_refused_and_changes_nothing(
+    client: AsyncClient, _db_pool, pool, monkeypatch
+):
+    """The write path refuses a ceiling the beat would cut off, naming both numbers.
+
+    A curator given 1800 would accept an operator's tuning, dispatch, and then be
+    killed by the worker at 1500 with a result no one asked for; the refusal is the
+    only place the mismatch is visible. The bound comes from
+    `worker_turn_ceiling_seconds()`, which reads the celery conf rather than
+    repeating a number here — which is the only way the two stay in step when a
+    deployment raises its worker ceilings."""
+    from backend.celery_app import celery, worker_turn_ceiling_seconds
+
+    key, uid = await _register(client)
+    rozvrh = await _folder(client, key, "Rozvrh")
+    curator_id = (
+        await client.post("/api/v1/me/curators", json={"folder_id": rozvrh}, headers=_auth(key))
+    ).json()["curator"]["id"]
+    url = f"/api/v1/me/curators/{curator_id}"
+    await client.patch(url, json={"turn_timeout_seconds": 900}, headers=_auth(key))
+    before = await agent_service.get_curator_by_id(UUID(curator_id))
+    assert before["turn_timeout_seconds"] == 900
+
+    ceiling = worker_turn_ceiling_seconds()
+    refused = await client.patch(
+        url,
+        json={"schedule_cron": "*/2 * * * *", "turn_timeout_seconds": ceiling},
+        headers=_auth(key),
+    )
+    assert refused.status_code == 400
+    # The message quotes the number sent and the ceiling it ran into, since an
+    # operator who typed 1500 needs to learn the live worker bound, not a rule of
+    # thumb. And nothing at all was written: not the ceiling, not the cadence.
+    assert str(ceiling) in refused.text and str(ceiling - 1) in refused.text
+    untouched = await agent_service.get_curator_by_id(UUID(curator_id))
+    assert untouched["turn_timeout_seconds"] == before["turn_timeout_seconds"]
+    assert untouched["schedule_cron"] == before["schedule_cron"]
+
+    for not_a_duration in (0, -5):
+        assert (
+            await client.patch(
+                url, json={"turn_timeout_seconds": not_a_duration}, headers=_auth(key)
+            )
+        ).status_code == 400
+
+    # Raising the worker's own ceilings moves the bound, because it was never a
+    # second copy of the number.
+    monkeypatch.setattr(celery.conf, "task_soft_time_limit", 3300)
+    monkeypatch.setattr(celery.conf, "task_time_limit", 3600)
+    assert worker_turn_ceiling_seconds() == 3300
+    accepted = await client.patch(url, json={"turn_timeout_seconds": 3000}, headers=_auth(key))
+    assert accepted.status_code == 200
+    assert accepted.json()["curator"]["turn_timeout_seconds"] == 3000

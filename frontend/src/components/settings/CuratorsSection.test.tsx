@@ -48,6 +48,10 @@ function curator(over: Partial<Curator>): Curator {
     last_run_outcome: null,
     last_run_error: null,
     next_run_at: "2026-09-09T02:00:00Z",
+    // The server resolves the effective ceiling; these are fixtures, so each row
+    // carries its own number rather than one shared stand-in for a default.
+    turn_timeout_seconds: null,
+    effective_turn_timeout_seconds: 720,
     ...over,
   };
 }
@@ -81,6 +85,8 @@ const BEANIE = curator({
   digest_model_id: "gemma3:4b",
   schedule_cron: null,
   next_run_at: null,
+  turn_timeout_seconds: 1200,
+  effective_turn_timeout_seconds: 1200,
 });
 
 function renderSection() {
@@ -434,5 +440,84 @@ describe("CuratorsSection blocked state", () => {
     // The user turned it off; the block is not why it is not running.
     expect(within(row).getByText("Idle", { selector: "span.rounded-full" })).toBeDefined();
     expect(within(row).queryByText("No model connected")).toBeNull();
+  });
+});
+
+// A run ceiling is one curator's own number, and this row is the only place an
+// operator can set it. The control therefore never shows a number it invented: an
+// unset ceiling renders an empty field beside the server's own effective value, so
+// "this curator was tuned" and "it is on the deployment default" cannot look alike.
+describe("CuratorsSection run ceiling", () => {
+  it("sends a typed ceiling as that curator's own number", async () => {
+    renderSection();
+    const atlas = await rowNamed("Project Atlas");
+    const field = within(atlas).getByLabelText("Run ceiling") as HTMLInputElement;
+
+    expect(field.value).toBe("");
+    expect(field.placeholder).toBe("720");
+
+    fireEvent.change(field, { target: { value: "900" } });
+    fireEvent.click(within(atlas).getByRole("button", { name: "Save ceiling" }));
+
+    await waitFor(() =>
+      expect(patchCurator).toHaveBeenCalledWith("cur-a", { turn_timeout_seconds: 900 }),
+    );
+  });
+
+  it("clears back to the deployment default with an explicit null", async () => {
+    renderSection();
+    const beanie = await rowNamed("Beanie");
+
+    expect((within(beanie).getByLabelText("Run ceiling") as HTMLInputElement).value).toBe("1200");
+
+    fireEvent.click(within(beanie).getByRole("button", { name: "Deployment default" }));
+
+    await waitFor(() =>
+      expect(patchCurator).toHaveBeenCalledWith("cur-b", { turn_timeout_seconds: null }),
+    );
+  });
+
+  it("leaves saving disabled for a ceiling too broken for the server to accept", async () => {
+    renderSection();
+    const atlas = await rowNamed("Project Atlas");
+    const field = within(atlas).getByLabelText("Run ceiling") as HTMLInputElement;
+    const save = within(atlas).getByRole("button", { name: "Save ceiling" }) as HTMLButtonElement;
+
+    for (const unusable of ["", "  ", "0", "-4", "12.5"]) {
+      fireEvent.change(field, { target: { value: unusable } });
+      expect(save.disabled).toBe(true);
+    }
+
+    fireEvent.change(field, { target: { value: "60" } });
+    expect(save.disabled).toBe(false);
+  });
+
+  it("renders the server's refusal instead of a ceiling that was never stored", async () => {
+    patchCurator.mockRejectedValue(
+      new ApiError(
+        400,
+        "turn_timeout_seconds must be between 1 and 1499 seconds; 1500 is refused because the worker bounds a task at 1500 seconds",
+      ),
+    );
+
+    renderSection();
+    const atlas = await rowNamed("Project Atlas");
+    fireEvent.change(within(atlas).getByLabelText("Run ceiling"), { target: { value: "1500" } });
+    fireEvent.click(within(atlas).getByRole("button", { name: "Save ceiling" }));
+
+    expect(await screen.findByText(/worker bounds a task at 1500 seconds/)).toBeDefined();
+    // The row never reloads as though the save had landed, so no phantom ceiling.
+    expect(listCurators).toHaveBeenCalledTimes(1);
+  });
+
+  it("states which number the next run will actually use", async () => {
+    renderSection();
+
+    // Beanie carries its own ceiling; the workspace row falls back to the number
+    // the server resolved for it, which is not one the UI chose.
+    const beanie = await rowNamed("Beanie");
+    const workspace = await rowNamed("Workspace curator");
+    expect(within(beanie).getByText(/uses 1200/)).toBeDefined();
+    expect(within(workspace).getByText(/uses 720/)).toBeDefined();
   });
 });

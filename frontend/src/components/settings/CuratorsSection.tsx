@@ -114,6 +114,10 @@ function CuratorRow({
 }) {
   const confirm = useConfirm();
   const [draftCron, setDraftCron] = useState(curator.schedule_cron ?? "");
+  // Prefilled from the *stored* ceiling, so an unset one renders empty rather than
+  // a number the browser invented: empty is what "the deployment default applies"
+  // looks like, and the server's own effective value says which number that is.
+  const [draftCeiling, setDraftCeiling] = useState(curator.turn_timeout_seconds?.toString() ?? "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -125,6 +129,10 @@ function CuratorRow({
   // stays empty: this row is the only place the block can surface.
   const noModel = !isIdle && curator.last_run_outcome === "skipped_no_credential";
   const backlog = curator.event_backlog;
+  // A blank or unparsable draft would send 0 or NaN, which the server rightly
+  // refuses, so the row says so by leaving its Save disabled instead.
+  const ceilingDraft = Number(draftCeiling);
+  const ceilingIsUsable = draftCeiling.trim() !== "" && Number.isInteger(ceilingDraft) && ceilingDraft >= 1;
 
   async function save(patch: Parameters<typeof patchCurator>[1]) {
     setBusy(true);
@@ -160,6 +168,10 @@ function CuratorRow({
 
   async function saveSchedule() {
     await save({ schedule_cron: draftCron.trim() });
+  }
+
+  async function saveCeiling() {
+    await save({ turn_timeout_seconds: Number(draftCeiling) });
   }
 
   async function toggleIdle() {
@@ -279,6 +291,44 @@ function CuratorRow({
         {isFolderCurator && (
           <IdleSwitch checked={isIdle} busy={busy} onToggle={toggleIdle} />
         )}
+      </div>
+
+      {/* One curator's own wall, in seconds. It bounds both its run and the lock
+          that fences that run, so a lane on a slow box can be given room without
+          handing that room to every other curator. The number beside the control is
+          the server's, so the row can never drift from what the next run does. */}
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <label className="flex items-center gap-2 text-[12.5px] text-muted-foreground">
+          Run ceiling
+          <input
+            type="number"
+            min={1}
+            value={draftCeiling}
+            onChange={(e) => setDraftCeiling(e.target.value)}
+            placeholder={String(curator.effective_turn_timeout_seconds)}
+            className="w-24 rounded-md border border-border bg-surface px-2.5 py-1.5 text-[12.5px] text-foreground"
+          />
+        </label>
+        <button
+          type="button"
+          onClick={saveCeiling}
+          disabled={busy || !ceilingIsUsable}
+          className="rounded-md border border-border px-3 py-1.5 text-[12.5px] text-foreground hover:bg-raised disabled:opacity-60"
+        >
+          Save ceiling
+        </button>
+        <button
+          type="button"
+          onClick={() => save({ turn_timeout_seconds: null })}
+          disabled={busy || curator.turn_timeout_seconds === null}
+          className="rounded-md border border-border px-3 py-1.5 text-[12.5px] text-dim hover:text-foreground disabled:opacity-60"
+        >
+          Deployment default
+        </button>
+        <span className="text-[12px] text-muted-foreground">
+          seconds one run of this curator may take; its next run uses{" "}
+          {curator.effective_turn_timeout_seconds}
+        </span>
       </div>
 
       {error && <p className="mt-2 text-[12px] text-error">{error}</p>}
