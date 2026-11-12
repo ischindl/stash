@@ -27,6 +27,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
     ln -sf /opt/node-v22.23.2-linux-x64/bin/npm /usr/local/bin/npm && \
     ln -sf /opt/node-v22.23.2-linux-x64/bin/npx /usr/local/bin/npx && \
     rm /tmp/node.tar.xz && \
-    npm install -g --ignore-scripts @earendil-works/pi-coding-agent@0.84.2 && \
+    npm install -g --ignore-scripts @earendil-works/pi-coding-agent@1.5.2 && \
     ln -sf /opt/node-v22.23.2-linux-x64/bin/pi /usr/local/bin/pi
 USER stash

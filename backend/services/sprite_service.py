@@ -47,14 +47,14 @@ SPRITE_PATH = (
 # Bump whenever _seed_script changes: boxes provisioned under an older
 # version re-run the (idempotent) seed on their next acquire, so additions
 # like a new harness CLI reach existing sprites, not just new ones.
-SEED_VERSION = 3
+SEED_VERSION = 4
 
 # Pinned because the installer's "latest" lookup hits the unauthenticated
 # GitHub API, whose per-IP rate limit the sprites' shared egress IP exhausts —
 # a pinned version downloads straight from the release CDN instead.
 OPENCODE_VERSION = "1.17.18"
 # npm package version (the pi binary's own `--version` prints 0.1.0 internally).
-PI_VERSION = "0.84.2"
+PI_VERSION = "1.5.2"
 
 # A first-ever provision creates the VM and seeds it (~10-30s).
 PROVISION_TIMEOUT_S = 180
