@@ -30,6 +30,24 @@ The four destinations the plan enumerated, each answered by a measurement rather
 | Does a durable cursor exist? | **No.** The only dedupe is `capturedMemoryTaskIds`, a `Set<string>` held as an instance field at `packages/engine/src/executor/task-executor-state.ts:94`. It suppresses a second capture inside one process and is empty in every new process. The chat path's `sentCounts` (`memory-capture.ts:488`) is likewise an in-memory `Map`. | read at the same tip |
 | Why repeats are unbounded across restarts | The builder is deterministic - each event's `created_at` is the agent-log entry's own ISO timestamp and its content is that entry's text truncated to 4,000 chars - so an unchanged log re-uploads as the **same identity tuple**, and the number of copies equals the number of times the task terminalized in a distinct process. `max_copies_of_one_identity` = 270 is therefore a restart count, not a data problem. | builder read + `measurement.txt` section 4 |
 
+## Step 3 disposition: NO-OP, by the plan's own routing
+
+Verdict B routes to Step 3B, which reads: Stash needs no code for this AC; record the NO-OP verdict
+with its measurement and add nothing "for completeness". **No Stash code and no engine code was
+authored for AC2 by this card.** Two tempting additions were considered and deliberately rejected:
+
+- **A write-time identity dedupe (unique index on the identity tuple).** It would be a second dedupe
+  mechanism living beside the read-side collapse rather than replacing it, against the single-codepath
+  rule, and it would require a one-time migration over the founder's 4.8M-row `history_events`. The
+  honest version of that change deletes `_canonical_rows()` in the same commit; that is its own card.
+- **An engine-side durable per-task cursor.** It is the actual cure for the loop, and it is a separate
+  repository's design decision. Making that edit under a B verdict would also change what the Stash
+  feed sees, which no AC here asks about. Named as a follow-up instead.
+
+What this card **did** change beside the measurement is the rewind's own freshness question (Step 1),
+which the measurement explains: the loop is harmless only while nothing it re-pushes sits below the
+position, and the guard the founder's stack runs reaches that line by coin flip.
+
 ## What the loop costs, and what it no longer costs
 
 **No watermark cost today, for a reason that is not the reason anyone wants.** The founder's
