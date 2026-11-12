@@ -1147,30 +1147,33 @@ async def test_run_ceiling_round_trips_through_the_curators_api(
     """The ceiling is a curator property the API writes, not one only an operator
     holding the environment can set.
 
-    PATCH answers with both numbers because they mean different things — the one
-    stored and the one the next run will use — and a list showing only the stored
-    one would have an operator tuning a curator that was never reading it. An
-    absent field must not silently clear what a previous save wrote, so clearing
-    takes an explicit null, and the answer then names the deployment default the
-    ceiling fell back to rather than leaving it blank."""
-    key, uid = await _register(client)
-    rozvrh = await _folder(client, key, "Rozvrh")
-    curator = (
-        await client.post("/api/v1/me/curators", json={"folder_id": rozvrh}, headers=_auth(key))
-    ).json()["curator"]
+    It is only a property of a lane that resolves one, so this row is the workspace
+    curator of an activated developer account: the kind of curator whose run reads
+    the number back. (A folder curator on a plain account used to stand in here, and
+    the numbers it echoed were ones nothing on its lane ever read.) PATCH answers
+    with both numbers because they mean different things - the one stored and the one
+    the next run will use - and a list showing only the stored one would have an
+    operator tuning a curator that was never reading it. An absent field must not
+    silently clear what a previous save wrote, so clearing takes an explicit null, and
+    the answer then names the deployment default the ceiling fell back to rather than
+    leaving it blank."""
+    key, _, workspace = await _developer(client)
+    scope = UUID(workspace["scope_user_id"])
+    console = _console(key, workspace)
+    curator = await agent_service.get_or_create_curator(scope, wiki="external")
     url = f"/api/v1/me/curators/{curator['id']}"
     assert curator["turn_timeout_seconds"] is None
     assert curator["effective_turn_timeout_seconds"] == settings.AGENT_TURN_TIMEOUT_SECONDS
 
-    saved = await client.patch(url, json={"turn_timeout_seconds": 900}, headers=_auth(key))
-    assert saved.status_code == 200
+    saved = await client.patch(url, json={"turn_timeout_seconds": 900}, headers=console)
+    assert saved.status_code == 200, saved.text
     assert (
         saved.json()["curator"]["turn_timeout_seconds"],
         saved.json()["curator"]["effective_turn_timeout_seconds"],
     ) == (900, 900)
     listed = {
         c["id"]: c
-        for c in (await client.get("/api/v1/me/curators", headers=_auth(key))).json()["curators"]
+        for c in (await client.get("/api/v1/me/curators", headers=console)).json()["curators"]
     }[curator["id"]]
     assert (listed["turn_timeout_seconds"], listed["effective_turn_timeout_seconds"]) == (
         900,
@@ -1178,11 +1181,11 @@ async def test_run_ceiling_round_trips_through_the_curators_api(
     )
 
     # A save that names only the cadence leaves the stored ceiling where it is.
-    other = await client.patch(url, json={"schedule_cron": "*/2 * * * *"}, headers=_auth(key))
+    other = await client.patch(url, json={"schedule_cron": "*/2 * * * *"}, headers=console)
     assert other.json()["curator"]["turn_timeout_seconds"] == 900
 
     # An explicit null falls back to the deployment default, and says which.
-    cleared = await client.patch(url, json={"turn_timeout_seconds": None}, headers=_auth(key))
+    cleared = await client.patch(url, json={"turn_timeout_seconds": None}, headers=console)
     assert cleared.json()["curator"]["turn_timeout_seconds"] is None
     assert (
         cleared.json()["curator"]["effective_turn_timeout_seconds"]
@@ -1192,7 +1195,7 @@ async def test_run_ceiling_round_trips_through_the_curators_api(
     # A curator pinned to a local endpoint with no override gets the same default
     # every other lane gets: no provider earns a quiet second number.
     pinned = await client.patch(
-        url, json={"model_provider": "local", "model_id": "qwen"}, headers=_auth(key)
+        url, json={"model_provider": "local", "model_id": "qwen"}, headers=console
     )
     assert pinned.status_code == 200, pinned.text
     assert pinned.json()["curator"]["turn_timeout_seconds"] is None
@@ -1211,17 +1214,19 @@ async def test_a_ceiling_the_worker_would_beat_is_refused_and_changes_nothing(
     killed by the worker at 1500 with a result no one asked for; the refusal is the
     only place the mismatch is visible. The bound comes from
     `worker_turn_ceiling_seconds()`, which reads the celery conf rather than
-    repeating a number here — which is the only way the two stay in step when a
-    deployment raises its worker ceilings."""
+    repeating a number here - which is the only way the two stay in step when a
+    deployment raises its worker ceilings. The setup ceiling is written on a scoped
+    lane because that is the lane the worker bound governs: a lane that resolves no
+    ceiling is refused for a different reason, and the test below pins that one."""
     from backend.celery_app import celery, worker_turn_ceiling_seconds
 
-    key, uid = await _register(client)
-    rozvrh = await _folder(client, key, "Rozvrh")
-    curator_id = (
-        await client.post("/api/v1/me/curators", json={"folder_id": rozvrh}, headers=_auth(key))
-    ).json()["curator"]["id"]
+    key, _, workspace = await _developer(client)
+    scope = UUID(workspace["scope_user_id"])
+    console = _console(key, workspace)
+    curator_id = (await agent_service.get_or_create_curator(scope, wiki="external"))["id"]
     url = f"/api/v1/me/curators/{curator_id}"
-    await client.patch(url, json={"turn_timeout_seconds": 900}, headers=_auth(key))
+    setup = await client.patch(url, json={"turn_timeout_seconds": 900}, headers=console)
+    assert setup.status_code == 200, setup.text
     before = await agent_service.get_curator_by_id(UUID(curator_id))
     assert before["turn_timeout_seconds"] == 900
 
@@ -1229,7 +1234,7 @@ async def test_a_ceiling_the_worker_would_beat_is_refused_and_changes_nothing(
     refused = await client.patch(
         url,
         json={"schedule_cron": "*/2 * * * *", "turn_timeout_seconds": ceiling},
-        headers=_auth(key),
+        headers=console,
     )
     assert refused.status_code == 400
     # The message quotes the number sent and the ceiling it ran into, since an
@@ -1242,9 +1247,7 @@ async def test_a_ceiling_the_worker_would_beat_is_refused_and_changes_nothing(
 
     for not_a_duration in (0, -5):
         assert (
-            await client.patch(
-                url, json={"turn_timeout_seconds": not_a_duration}, headers=_auth(key)
-            )
+            await client.patch(url, json={"turn_timeout_seconds": not_a_duration}, headers=console)
         ).status_code == 400
 
     # Raising the worker's own ceilings moves the bound, because it was never a
@@ -1252,6 +1255,126 @@ async def test_a_ceiling_the_worker_would_beat_is_refused_and_changes_nothing(
     monkeypatch.setattr(celery.conf, "task_soft_time_limit", 3300)
     monkeypatch.setattr(celery.conf, "task_time_limit", 3600)
     assert worker_turn_ceiling_seconds() == 3300
-    accepted = await client.patch(url, json={"turn_timeout_seconds": 3000}, headers=_auth(key))
+    accepted = await client.patch(url, json={"turn_timeout_seconds": 3000}, headers=console)
     assert accepted.status_code == 200
     assert accepted.json()["curator"]["turn_timeout_seconds"] == 3000
+
+
+@pytest.mark.asyncio
+async def test_the_ceiling_readout_names_a_number_only_the_scoped_lane_reads(
+    client: AsyncClient, _db_pool, pool
+):
+    """One account, two curator lanes, and the readout answers differently for each.
+
+    The ceiling is resolved per lane and not per account: asked about the workspace
+    curators and a folder curator of the SAME developer account, `workspace_for_agent`
+    gives two different answers, so the account cannot be what explains the number.
+    A folder row that quoted one would be quoting a number nothing on its lane ever
+    reads - the exact lie this test is written to fail on."""
+    key, _, workspace = await _developer(client)
+    scope = UUID(workspace["scope_user_id"])
+    console = _console(key, workspace)
+    internal = await agent_service.get_or_create_curator(scope)
+    scoped = await agent_service.get_or_create_curator(scope, wiki="external")
+    rozvrh = await _folder(client, key, "Rozvrh", headers=console)
+    folder = (
+        await client.post("/api/v1/me/curators", json={"folder_id": rozvrh}, headers=console)
+    ).json()["curator"]
+
+    def rows(payload):
+        return {c["id"]: c for c in payload["curators"]}
+
+    listed = rows((await client.get("/api/v1/me/curators", headers=console)).json())
+    # Activation had already provisioned the account's Memory curator, so this scope
+    # has exactly the provisioned pair plus the project row this test created.
+    assert set(listed) == {internal["id"], scoped["id"], folder["id"]}
+    # The rows differ IN KIND: both workspace lanes answer with a number, the folder
+    # lane declines to answer with one at all.
+    assert (listed[internal["id"]]["effective_turn_timeout_seconds"]) == (
+        settings.AGENT_TURN_TIMEOUT_SECONDS
+    )
+    assert listed[scoped["id"]]["effective_turn_timeout_seconds"] == (
+        settings.AGENT_TURN_TIMEOUT_SECONDS
+    )
+    assert listed[folder["id"]]["effective_turn_timeout_seconds"] is None
+
+    tuned = await client.patch(
+        f"/api/v1/me/curators/{scoped['id']}",
+        json={"turn_timeout_seconds": 900},
+        headers=console,
+    )
+    assert tuned.status_code == 200, tuned.text
+    listed = rows((await client.get("/api/v1/me/curators", headers=console)).json())
+    assert listed[scoped["id"]]["effective_turn_timeout_seconds"] == 900
+    assert listed[internal["id"]]["effective_turn_timeout_seconds"] == (
+        settings.AGENT_TURN_TIMEOUT_SECONDS
+    )
+    assert listed[folder["id"]]["effective_turn_timeout_seconds"] is None
+
+    # The negative half, read off the folder row's own payload: neither the number
+    # its account just stored nor the deployment default reaches the ceiling field,
+    # and nothing was stored on that row either.
+    folder_ceiling = listed[folder["id"]]["effective_turn_timeout_seconds"]
+    assert folder_ceiling is None
+    assert str(folder_ceiling) not in ("900", str(settings.AGENT_TURN_TIMEOUT_SECONDS))
+    assert listed[folder["id"]]["turn_timeout_seconds"] is None
+
+
+@pytest.mark.asyncio
+async def test_a_lane_that_ignores_the_ceiling_refuses_the_write(
+    client: AsyncClient, _db_pool, pool
+):
+    """Storing a ceiling a lane will never read is refused, and that is all the rule touches.
+
+    The second half is the point of the test: the refusal is confined to the ceiling
+    key, so the row that cannot take a ceiling still takes every knob it always had.
+    Without it, a broad validation rule would quietly idle a project's curator."""
+    key, _, workspace = await _developer(client)
+    console = _console(key, workspace)
+    rozvrh = await _folder(client, key, "Rozvrh", headers=console)
+    folder = (
+        await client.post("/api/v1/me/curators", json={"folder_id": rozvrh}, headers=console)
+    ).json()["curator"]
+    url = f"/api/v1/me/curators/{folder['id']}"
+
+    refused = await client.patch(url, json={"turn_timeout_seconds": 900}, headers=console)
+    assert refused.status_code == 400
+    assert "no run ceiling" in refused.text
+    assert (await agent_service.get_curator_by_id(UUID(folder["id"])))[
+        "turn_timeout_seconds"
+    ] is None
+
+    cadence = await client.patch(url, json={"schedule_cron": "*/2 * * * *"}, headers=console)
+    assert cadence.status_code == 200, cadence.text
+    assert (await agent_service.get_curator_by_id(UUID(folder["id"])))["schedule_cron"] == (
+        "*/2 * * * *"
+    )
+
+
+@pytest.mark.asyncio
+async def test_an_account_without_an_external_wiki_resolves_no_ceiling(
+    client: AsyncClient, _db_pool, pool
+):
+    """The other lane that resolves no ceiling: a workspace curator whose account has
+    never activated a developer workspace.
+
+    No folder guard explains this row's answer - it is a provisioned workspace curator.
+    The account has no External wiki for a scoped run to fold into, so it has no
+    scoped run at all, and its curators run on the chat path, where the only wall is
+    the worker's task limit. This is the row that would otherwise quote the deployment
+    default and send an operator tuning a number their runs never approach."""
+    key, uid = await _register(client)
+    curator = await agent_service.get_or_create_curator(uid)
+    assert curator["curator_folder_id"] is None
+    assert curator["effective_turn_timeout_seconds"] is None
+
+    refused = await client.patch(
+        f"/api/v1/me/curators/{curator['id']}",
+        json={"turn_timeout_seconds": 900},
+        headers=_auth(key),
+    )
+    assert refused.status_code == 400
+    assert "no run ceiling" in refused.text
+    after = await agent_service.get_curator_by_id(UUID(curator["id"]))
+    assert after["turn_timeout_seconds"] is None
+    assert after["effective_turn_timeout_seconds"] is None
