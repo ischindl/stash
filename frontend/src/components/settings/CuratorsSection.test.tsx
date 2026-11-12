@@ -62,7 +62,22 @@ function curator(over: Partial<Curator>): Curator {
 // idle.
 const WORKSPACE = curator({ id: "cur-ws", next_run_at: "2026-09-09T02:00:00Z" });
 const EXTERNAL = curator({ id: "cur-ex", name: "External curator", curator_wiki: "external", schedule_cron: "0 5 * * *" });
-const ATLAS = curator({
+// The two rows the ceiling tests drive are both workspace lanes, because only a lane
+// the server resolves a workspace for has a ceiling to show: WORKSPACE sits on the
+// deployment default, SCOPED_PINNED carries its own number.
+const SCOPED_PINNED = curator({
+  id: "cur-scoped-pinned",
+  curator_wiki: "external",
+  schedule_cron: "0 5 * * *",
+  turn_timeout_seconds: 1200,
+  effective_turn_timeout_seconds: 1200,
+});
+// A project lane resolves no ceiling at all, so every folder fixture reports null
+// rather than a number nothing on that lane would ever read.
+function folderCurator(over: Partial<Curator>): Curator {
+  return curator({ effective_turn_timeout_seconds: null, ...over });
+}
+const ATLAS = folderCurator({
   id: "cur-a",
   name: "Curator: Project Atlas",
   curator_folder_id: "f-atlas",
@@ -73,7 +88,9 @@ const ATLAS = curator({
   schedule_cron: "0 4 * * *",
   event_backlog: { distinct_events: 7, raw_rows: 9, distinct_sessions: 2 },
 });
-const BEANIE = curator({
+// Beanie keeps a stored ceiling from before its lane stopped resolving one: the row
+// must not render it, because that number is not what bounds this curator's run.
+const BEANIE = folderCurator({
   id: "cur-b",
   name: "Curator: Beanie",
   curator_folder_id: "f-beanie",
@@ -86,7 +103,6 @@ const BEANIE = curator({
   schedule_cron: null,
   next_run_at: null,
   turn_timeout_seconds: 1200,
-  effective_turn_timeout_seconds: 1200,
 });
 
 function renderSection() {
@@ -144,7 +160,7 @@ describe("CuratorsSection rows", () => {
 
   it("says so when the project behind a curator is gone", async () => {
     listCurators.mockResolvedValue([
-      curator({ id: "cur-gone", curator_folder_id: "f-gone", folder_name: null }),
+      folderCurator({ id: "cur-gone", curator_folder_id: "f-gone", folder_name: null }),
     ]);
 
     renderSection();
@@ -202,7 +218,7 @@ describe("CuratorsSection model picker", () => {
 
   it("offers the model list grouped by box and keeps an orphaned model visible", async () => {
     listCurators.mockResolvedValue([
-      curator({
+      folderCurator({
         id: "cur-orphan",
         curator_folder_id: "f-atlas",
         folder_name: "Project Atlas",
@@ -444,44 +460,54 @@ describe("CuratorsSection blocked state", () => {
 });
 
 // A run ceiling is one curator's own number, and this row is the only place an
-// operator can set it. The control therefore never shows a number it invented: an
-// unset ceiling renders an empty field beside the server's own effective value, so
-// "this curator was tuned" and "it is on the deployment default" cannot look alike.
+// operator can set it - on the lane whose run resolves one. The control therefore
+// never shows a number it invented: an unset ceiling renders an empty field beside
+// the server's own effective value, so "this curator was tuned" and "it is on the
+// deployment default" cannot look alike. A row whose lane resolves no ceiling shows
+// one sentence, no control, and no digit, which the last case pins.
 describe("CuratorsSection run ceiling", () => {
   it("sends a typed ceiling as that curator's own number", async () => {
+    listCurators.mockResolvedValue([WORKSPACE]);
+
     renderSection();
-    const atlas = await rowNamed("Project Atlas");
-    const field = within(atlas).getByLabelText("Run ceiling") as HTMLInputElement;
+    const row = await rowNamed("Workspace curator");
+    const field = within(row).getByLabelText("Run ceiling") as HTMLInputElement;
 
     expect(field.value).toBe("");
     expect(field.placeholder).toBe("720");
 
     fireEvent.change(field, { target: { value: "900" } });
-    fireEvent.click(within(atlas).getByRole("button", { name: "Save ceiling" }));
+    fireEvent.click(within(row).getByRole("button", { name: "Save ceiling" }));
 
     await waitFor(() =>
-      expect(patchCurator).toHaveBeenCalledWith("cur-a", { turn_timeout_seconds: 900 }),
+      expect(patchCurator).toHaveBeenCalledWith("cur-ws", { turn_timeout_seconds: 900 }),
     );
   });
 
   it("clears back to the deployment default with an explicit null", async () => {
+    listCurators.mockResolvedValue([SCOPED_PINNED]);
+
     renderSection();
-    const beanie = await rowNamed("Beanie");
+    const row = await rowNamed("Shared-wiki curator");
 
-    expect((within(beanie).getByLabelText("Run ceiling") as HTMLInputElement).value).toBe("1200");
+    expect((within(row).getByLabelText("Run ceiling") as HTMLInputElement).value).toBe("1200");
 
-    fireEvent.click(within(beanie).getByRole("button", { name: "Deployment default" }));
+    fireEvent.click(within(row).getByRole("button", { name: "Deployment default" }));
 
     await waitFor(() =>
-      expect(patchCurator).toHaveBeenCalledWith("cur-b", { turn_timeout_seconds: null }),
+      expect(patchCurator).toHaveBeenCalledWith("cur-scoped-pinned", {
+        turn_timeout_seconds: null,
+      }),
     );
   });
 
   it("leaves saving disabled for a ceiling too broken for the server to accept", async () => {
+    listCurators.mockResolvedValue([WORKSPACE]);
+
     renderSection();
-    const atlas = await rowNamed("Project Atlas");
-    const field = within(atlas).getByLabelText("Run ceiling") as HTMLInputElement;
-    const save = within(atlas).getByRole("button", { name: "Save ceiling" }) as HTMLButtonElement;
+    const row = await rowNamed("Workspace curator");
+    const field = within(row).getByLabelText("Run ceiling") as HTMLInputElement;
+    const save = within(row).getByRole("button", { name: "Save ceiling" }) as HTMLButtonElement;
 
     for (const unusable of ["", "  ", "0", "-4", "12.5"]) {
       fireEvent.change(field, { target: { value: unusable } });
@@ -493,6 +519,7 @@ describe("CuratorsSection run ceiling", () => {
   });
 
   it("renders the server's refusal instead of a ceiling that was never stored", async () => {
+    listCurators.mockResolvedValue([WORKSPACE]);
     patchCurator.mockRejectedValue(
       new ApiError(
         400,
@@ -501,23 +528,49 @@ describe("CuratorsSection run ceiling", () => {
     );
 
     renderSection();
-    const atlas = await rowNamed("Project Atlas");
-    fireEvent.change(within(atlas).getByLabelText("Run ceiling"), { target: { value: "1500" } });
-    fireEvent.click(within(atlas).getByRole("button", { name: "Save ceiling" }));
+    const row = await rowNamed("Workspace curator");
+    fireEvent.change(within(row).getByLabelText("Run ceiling"), { target: { value: "1500" } });
+    fireEvent.click(within(row).getByRole("button", { name: "Save ceiling" }));
 
     expect(await screen.findByText(/worker bounds a task at 1500 seconds/)).toBeDefined();
     // The row never reloads as though the save had landed, so no phantom ceiling.
     expect(listCurators).toHaveBeenCalledTimes(1);
   });
 
+  // The honest half of the rule, guarded the other way too: a lane that does resolve
+  // a ceiling must keep stating the server's exact number, so no future change can
+  // fix the case below by silencing this one.
   it("states which number the next run will actually use", async () => {
-    renderSection();
+    listCurators.mockResolvedValue([WORKSPACE, SCOPED_PINNED]);
 
-    // Beanie carries its own ceiling; the workspace row falls back to the number
-    // the server resolved for it, which is not one the UI chose.
+    renderSection();
+    const scoped = await rowNamed("Workspace curator");
+    const pinned = await rowNamed("Shared-wiki curator");
+
+    expect(within(scoped).getByText(/uses 720/)).toBeDefined();
+    expect(within(pinned).getByText(/uses 1200/)).toBeDefined();
+    expect((within(pinned).getByLabelText("Run ceiling") as HTMLInputElement).placeholder).toBe(
+      "1200",
+    );
+  });
+
+  it("shows one sentence and no ceiling control on a lane that resolves none", async () => {
+    listCurators.mockResolvedValue([ATLAS, BEANIE]);
+
+    renderSection();
+    const atlas = await rowNamed("Project Atlas");
     const beanie = await rowNamed("Beanie");
-    const workspace = await rowNamed("Workspace curator");
-    expect(within(beanie).getByText(/uses 1200/)).toBeDefined();
-    expect(within(workspace).getByText(/uses 720/)).toBeDefined();
+
+    for (const row of [atlas, beanie]) {
+      expect(within(row).getByText(/no per-curator ceiling/)).toBeDefined();
+      expect(within(row).queryByLabelText("Run ceiling")).toBeNull();
+      expect(within(row).queryByRole("spinbutton")).toBeNull();
+      expect(within(row).queryByRole("button", { name: "Save ceiling" })).toBeNull();
+      expect(within(row).queryByRole("button", { name: "Deployment default" })).toBeNull();
+    }
+    // No digit survives, not even one the row's own column still holds: Beanie's
+    // stored 1200 predates its lane resolving no ceiling and must not be rendered.
+    expect(atlas.textContent).not.toContain("720");
+    expect(beanie.textContent).not.toContain("1200");
   });
 });

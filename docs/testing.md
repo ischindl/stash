@@ -204,16 +204,22 @@ Pinned by `test_scoped_curation.py`'s `test_cursor_is_committed_only_after_all_s
 `test_same_timestamp_group_larger_than_event_limit_drains` and
 `test_revised_large_document_restarts_its_partial_cursor`.
 
-**The run ceiling is one curator's own number, and it is the same number on both sides of the
-wall.** `agent_service.turn_ceiling_seconds` is the only code in the tree that names a scoped run's
-ceiling: the curator's `agents.turn_timeout_seconds`, or `AGENT_TURN_TIMEOUT_SECONDS` while that
-column is null. `sprite_agent_service` resolves it once per run and hands that one value to
+**The run ceiling is one curator's own number on the lane that resolves one, and it is
+the same number on both sides of that wall.** `agent_service.turn_ceiling_seconds` is the only code
+in the tree that names a scoped run's ceiling: the curator's `agents.turn_timeout_seconds`, or
+`AGENT_TURN_TIMEOUT_SECONDS` while that column is null. `sprite_agent_service` resolves it once per run and hands that one value to
 `asyncio.wait_for` and to the TTL of the `scoped-curator-{id}` lock fencing the lane, so the two
 cannot drift: a lock keyed shorter than the wall expires mid-run and hands the next dispatch a
 half-finished run, which is the single-flight guarantee migration 0258 exists to hold. The write
 path closes the other gap — `worker_turn_ceiling_seconds()` reads the celery conf, and a ceiling at
 or above it is refused at PATCH, because a run the worker kills never reaches the chore that marks
-it failed and refunds its curator credit. Pinned by `test_scoped_curation.py`'s
+it failed and refunds its curator credit. Only the scoped lane reads any of that: the lane answer
+is `scoped_curation_service.workspace_for_agent`, the same call the dispatcher makes, and it
+returns `None` twice — for a folder curator, and for every curator of an account with no External
+wiki. Those runs fall through to `run_chat`, where no `wait_for` carries a per-curator number and
+the only wall is Celery's own task limit, so a curator payload for such a lane carries
+`effective_turn_timeout_seconds: null` and a PATCH naming `turn_timeout_seconds` on it is refused
+rather than stored. Pinned by `test_scoped_curation.py`'s
 `test_scoped_run_timeout_preserves_progress_and_releases_lock` (the wall, the progress that
 outlives it, the lock released), `test_each_curator_ceiling_sets_its_own_wall_and_its_own_fence`
 (two curators and two ceilings, the shorter wall giving out first and each lane's fence TTL equal to
@@ -225,9 +231,18 @@ is the deployment default read through the resolver, not a second codepath), and
 sessions and a scoped run returns before any of them. The bound, the round-trip and the control that
 writes it are pinned by `test_folder_curators.py`'s
 `test_a_ceiling_the_worker_would_beat_is_refused_and_changes_nothing` and
-`test_run_ceiling_round_trips_through_the_curators_api`, and by the run-ceiling cases in
-`CuratorsSection.test.tsx`, which assert that a row with no ceiling shows an empty field beside the
-server's effective number rather than a number the UI invented.
+`test_run_ceiling_round_trips_through_the_curators_api` — both driven on a scoped-lane curator,
+the only lane that reads what they write — and each half of the readout is pinned by that file's
+`test_the_ceiling_readout_names_a_number_only_the_scoped_lane_reads` (the workspace rows and the
+folder row of ONE account answer in different kinds, and the folder row carries neither the number
+the account just stored nor the deployment default),
+`test_a_lane_that_ignores_the_ceiling_refuses_the_write` (the ceiling write is refused, the column
+stays NULL, and a cadence PATCH on that very same row still succeeds) and
+`test_an_account_without_an_external_wiki_resolves_no_ceiling` (the row that would otherwise quote
+the deployment default). The run-ceiling cases in `CuratorsSection.test.tsx` hold the browser to the
+same rule: a scoped row shows an empty field beside the server's effective number rather than a
+number the UI invented, and a row whose lane resolves none shows one sentence naming the worker's
+task limit, with no ceiling input, no save button, and no digit rendered at all.
 
 **The stored pair has to survive the trip through the run's own feed command.** A sprite curator
 reads its changes through a command the server renders into its prompt —

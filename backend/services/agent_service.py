@@ -85,14 +85,24 @@ def turn_ceiling_seconds(agent: dict) -> int:
     return ceiling
 
 
-def _curator_row(row) -> dict:
+async def _curator_row(row) -> dict:
     """A curator payload: the row plus the ceiling its next run will honour.
 
-    Derived in one place so an operator sees the number the next run uses rather
-    than a second guess at it, and so only curator payloads carry it — a generic
-    agent has no scheduled run for a ceiling to bound."""
+    The ceiling is a scoped-lane property — only a run that dispatches through the
+    scoped lane resolves one — so a payload for a lane that resolves none carries
+    `None` rather than a number that lane will never read. The row's lane is
+    decided by exactly the call the dispatcher makes, so the readout and the run
+    cannot disagree. Derived in one place so an operator sees the number the next
+    run uses rather than a second guess at it, and so only curator payloads carry
+    it — a generic agent has no scheduled run for a ceiling to bound."""
+    from . import scoped_curation_service
+
     curator = _row(row)
-    curator["effective_turn_timeout_seconds"] = turn_ceiling_seconds(curator)
+    workspace = await scoped_curation_service.workspace_for_agent(curator)
+    if workspace is not None:
+        curator["effective_turn_timeout_seconds"] = turn_ceiling_seconds(curator)
+    else:
+        curator["effective_turn_timeout_seconds"] = None
     return curator
 
 
@@ -171,7 +181,7 @@ async def get_or_create_curator(user_id: UUID, wiki: str = "internal") -> dict:
         wiki,
     )
     if row is not None:
-        return _curator_row(row)
+        return await _curator_row(row)
     name = "Memory curator" if wiki == "internal" else "External wiki curator"
     row = await pool.fetchrow(
         f"""
@@ -199,7 +209,7 @@ async def get_or_create_curator(user_id: UUID, wiki: str = "internal") -> dict:
             user_id,
             wiki,
         )
-    return _curator_row(row)
+    return await _curator_row(row)
 
 
 async def list_curators(user_id: UUID) -> list[dict]:
@@ -209,7 +219,7 @@ async def list_curators(user_id: UUID) -> list[dict]:
         f"SELECT {_COLUMNS} FROM agents WHERE user_id = $1 AND is_curator ORDER BY created_at",
         user_id,
     )
-    return [_curator_row(r) for r in rows]
+    return [await _curator_row(r) for r in rows]
 
 
 async def create_folder_curator(
@@ -313,7 +323,7 @@ async def create_folder_curator(
             user_id,
             folder_id,
         )
-    curator = _curator_row(row)
+    curator = await _curator_row(row)
     curator["wiki_folder_id"] = str(wiki_folder_id)
     return curator
 
@@ -342,7 +352,7 @@ async def get_curator_by_id(agent_id: UUID) -> dict | None:
     row = await pool.fetchrow(
         f"SELECT {_COLUMNS} FROM agents WHERE id = $1 AND is_curator", agent_id
     )
-    return _curator_row(row) if row else None
+    return await _curator_row(row) if row else None
 
 
 async def update_curator(
@@ -377,6 +387,22 @@ async def update_curator(
     if turn_timeout_seconds is not ...:
         if turn_timeout_seconds is not None:
             _refuse_unreachable_ceiling(turn_timeout_seconds)
+        # A stored ceiling is only honest on the lane that reads one. The answer is
+        # the dispatcher's own predicate, not a re-derivation from the row's columns:
+        # a value no run will ever read would make both the column and the readout
+        # in Settings lie about what bounds this curator.
+        from . import scoped_curation_service
+
+        ceiling_row = await get_curator_by_id(agent_id) or _raise_missing(agent_id)
+        if await scoped_curation_service.workspace_for_agent(ceiling_row) is None:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "this curator's lane resolves no run ceiling - a per-curator "
+                    "ceiling would never be read, and its run is bounded by the "
+                    "worker's own task limit"
+                ),
+            )
         fields["turn_timeout_seconds"] = turn_timeout_seconds
     touches_pin = any(k in fields for k in ("model_provider", "model_id", "credential_id"))
     wants_digest_check = (
@@ -477,7 +503,7 @@ async def update_curator(
     )
     if row is None:
         _raise_missing(agent_id)
-    return _curator_row(row)
+    return await _curator_row(row)
 
 
 def _refuse_unreachable_ceiling(seconds: int) -> None:

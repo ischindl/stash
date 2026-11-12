@@ -194,9 +194,11 @@ class _AnthropicRoute:
 # One completion request against the operator's box, start to finish. The probe's
 # 5-second budget is a reachability knock, not a completion budget: a local box reads
 # a backlog in one request and needs minutes rather than seconds.
-# `scoped_curation_service.run_wall_timeout` is this number's second consumer — a
-# scoped run's outer wall sits one window past the run's own budget, which is what
-# lets the run close a slice that finished late instead of the wall cancelling it.
+# Nothing else reads this number: it is the only wall a local completion request
+# gets, and no run-layer ceiling is derived from it. What bounds a whole curator run
+# is the ceiling its lane resolves (`agent_service.turn_ceiling_seconds`), and the
+# worker's own task limit on a lane that resolves none — see the run-ceiling
+# paragraph of docs/testing.md.
 LOCAL_COMPLETION_TIMEOUT_S = 300
 # The two words a chat-completions server uses for what a tool loop cares about.
 _LOCAL_STOP_REASONS = {"stop": "end_turn", "tool_calls": "tool_use"}

@@ -2694,9 +2694,12 @@ export type Curator = {
   next_run_at: string | null;
   /** This curator's own run ceiling in seconds, or null when the deployment
    *  default applies. `effective_turn_timeout_seconds` is the number its next run
-   *  will actually honour — the server resolves it, the browser never guesses. */
+   *  will actually honour, and only on a lane that resolves a ceiling at all — the
+   *  server resolves it, the browser never guesses. A null there means this row's
+   *  lane resolves none, so its run is bounded by the worker's own task limit and
+   *  no ceiling can be stored for it. */
   turn_timeout_seconds: number | null;
-  effective_turn_timeout_seconds: number;
+  effective_turn_timeout_seconds: number | null;
   folder_name?: string | null;
   wiki_folder_id?: string | null;
   event_backlog?: { distinct_events: number; raw_rows: number; distinct_sessions: number } | null;
