@@ -405,6 +405,72 @@ async def test_repushed_history_does_not_reopen_the_workspace_watermark(
 
 
 @pytest.mark.asyncio
+async def test_mixed_batch_rewinds_only_to_the_genuinely_new_event(client: AsyncClient, _db_pool):
+    """The shape a real engine capture actually arrives in: one batch carrying
+    yesterday's transcript lines again *and* the new line that ends the task.
+    The rewind must land on the fresh line alone. A guard that read the oldest
+    instant in the batch instead of the oldest FRESH one would still drag the
+    position back over every twin, which is the founder's stall in miniature.
+    """
+    key, uid = await _register(client)
+    curator = await agent_service.get_or_create_curator(uid)
+    cid = UUID(curator["id"])
+    twins = [
+        {
+            "agent_name": "fusion",
+            "event_type": "assistant_message",
+            "content": "replayed transcript line A",
+            "session_id": "fusion-task-mixed",
+            "created_at": (BASE - timedelta(days=2)).isoformat(),
+        },
+        {
+            "agent_name": "fusion",
+            "event_type": "assistant_message",
+            "content": "replayed transcript line B",
+            "session_id": "fusion-task-mixed",
+            "created_at": (BASE - timedelta(days=1)).isoformat(),
+        },
+    ]
+    # Land the two identities in the feed below BASE, the way a prior capture did.
+    await _db_pool.execute("UPDATE agents SET curated_through = $2 WHERE id = $1", cid, BASE)
+    await _push_events(client, key, twins)
+
+    # Re-park the lane as if the curator had since drained through BASE. Clearing
+    # the event half is what makes the park a whole position — the same write the
+    # landed rewind itself performs — and without it the watermark would still sit
+    # under the fresh event below and no rewind could be observed at all.
+    await _db_pool.execute(
+        "UPDATE agents SET curated_through = $2, curated_through_event_id = NULL WHERE id = $1",
+        cid,
+        BASE,
+    )
+
+    fresh_at = BASE - timedelta(hours=6)
+    await _push_events(
+        client,
+        key,
+        twins
+        + [
+            {
+                "agent_name": "fusion",
+                "event_type": "task_completion",
+                "content": "the task's terminal anchor, new in this capture",
+                "session_id": "fusion-task-mixed",
+                "created_at": fresh_at.isoformat(),
+            }
+        ],
+    )
+
+    moved = await _db_pool.fetchrow(
+        "SELECT curated_through, curated_through_event_id FROM agents WHERE id = $1", cid
+    )
+    # Exactly one rewind, driven by the fresh line: the twins' older instants are
+    # already in the feed and must not pull the position earlier than the new event.
+    assert moved["curated_through"] == fresh_at - timedelta(microseconds=1)
+    assert moved["curated_through_event_id"] is None
+
+
+@pytest.mark.asyncio
 async def test_folder_curator_is_not_at_the_ingest_s_leash(client: AsyncClient, _db_pool, pool):
     """An old event ingested into an unfiled session belongs to no project yet.
     It reopens the workspace curator as always — but must not touch a folder

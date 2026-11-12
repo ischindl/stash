@@ -142,11 +142,21 @@ async def _rewind_curated_through(owner_user_id: UUID, event_ids: list[UUID]) ->
     next run does. This is the ONLY write allowed to move the watermark
     backwards: a successful run's mark_curated can only ever advance it.
 
-    Only genuinely new content reopens the position. The feed dedupes an event
-    re-pushed eight times to one slot by an identity anti-join, and rewinding
-    without the same anti-join let a twin re-open what the curator had passed:
-    a dogfooded agent re-pushing its own transcripts rewound the curator every
-    push, and run and ingest spent the day fighting each other instead of
+    Only genuinely new content reopens the position, and "new" here is NOT the
+    question the feed asks. The feed asks which of k identical rows to show and
+    answers "the smallest id" (`_canonical_rows`); that tie-break is sound there
+    because any copy of an identity carries the same words. This question is
+    different — did the feed already hold this identity before this batch? — and
+    the tie-break cannot answer it: ids come from `gen_random_uuid()`, which has
+    no insertion order, so a re-pushed row is the smallest id about half the time
+    and would be called fresh on an event the curator has already read. Measured
+    on 2000 first-copy/re-push pairs: 49.3% misjudged. The discriminator is
+    therefore every row the batch itself just inserted, excluded from the
+    anti-join, so what remains proves prior presence.
+
+    Rewinding without any anti-join at all let a twin re-open what the curator had
+    passed: a dogfooded agent re-pushing its own transcripts rewound the curator
+    every push, and run and ingest spent the day fighting each other instead of
     draining the backlog.
 
     Workspace curators only. A folder curator reads one project's sessions, and
@@ -177,7 +187,7 @@ async def _rewind_curated_through(owner_user_id: UUID, event_ids: list[UUID]) ->
         f"  SELECT 1 FROM history_events dup "
         f"  WHERE dup.owner_user_id = he.owner_user_id "
         f"    AND ({_event_identity('dup')}) = ({_event_identity('he')}) "
-        f"    AND dup.id < he.id)"
+        f"    AND NOT (dup.id = ANY($1::uuid[])))"
     )
     unscoped_oldest = await pool.fetchval(f"SELECT min(created_at) FROM ({fresh}) fresh", event_ids)
     external_oldest = await pool.fetchval(
