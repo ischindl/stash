@@ -132,6 +132,7 @@ def test_migration_ids_disjoint_from_stamped_builds():
     manifest = _shipped_manifest()
     shipped = manifest["revisions"]
     stamp_only = manifest["stamp_only"]
+    upstream = manifest["upstream"]
     absorbed = set(manifest["absorbed"])
 
     rebooked, unregistered, misnamed, stranded, stranded_nodes = [], [], [], [], []
@@ -184,9 +185,16 @@ def test_migration_ids_disjoint_from_stamped_builds():
     )
 
     run_errors = check_heads.new_revision_run_errors(
-        check_heads.revision_files(), shipped, stamp_only, _script().get_heads()
+        check_heads.revision_files(), shipped, stamp_only, upstream, _script().get_heads()
     )
     assert not run_errors, "revision numbering is not one contiguous run:\n" + "\n".join(run_errors)
+
+    rebooked_upstream = check_heads.upstream_rebook_errors(upstream, check_heads.revision_files())
+    assert not rebooked_upstream, (
+        "migration file(s) book a revision id the upstream trunk already holds, which "
+        "merges without a git conflict and strands every database stamped at it:\n"
+        + "\n".join(rebooked_upstream)
+    )
 
 
 def test_the_real_manifest_passes_every_guard_ci_applies():
@@ -205,8 +213,11 @@ def test_the_real_manifest_passes_every_guard_ci_applies():
 
 
 def _booked_ceiling(manifest: dict) -> int:
-    """The highest revision id a deployed build already holds a claim on."""
-    booked = {int(revision) for revision in (*manifest["revisions"], *manifest["stamp_only"])}
+    """The highest revision id a deployed build or the upstream trunk already holds a claim on."""
+    booked = {
+        int(revision)
+        for revision in (*manifest["revisions"], *manifest["stamp_only"], *manifest["upstream"])
+    }
     return max(booked)
 
 
@@ -225,10 +236,14 @@ def test_each_manifest_rule_fires_on_the_mistake_it_exists_for(tmp_path, monkeyp
     branch is allowed to add more than one. The stamped-but-unshipped id is invented
     rather than read from `stamp_only`, which is legitimately empty now that no
     database holds such a stamp: a rule that can only be shown red while an
-    outstanding incident happens to be open is not a tested rule.
+    outstanding incident happens to be open is not a tested rule. The upstream rules
+    are shown red from an id drawn out of the real `upstream` map, and a manifest with
+    no such map is itself a mistake this test has to see, because the guard cannot
+    invent upstream's ids.
     """
     manifest = _shipped_manifest()
     shipped, stamp_only = manifest["revisions"], manifest["stamp_only"]
+    upstream = manifest["upstream"]
     ceiling = _booked_ceiling(manifest)
     first, second, forked = (f"{ceiling + offset:04d}" for offset in (1, 2, 3))
     stamped_id, stamped_slug = f"{ceiling + 4:04d}", "a_migration_no_build_shipped"
@@ -242,7 +257,7 @@ def test_each_manifest_rule_fires_on_the_mistake_it_exists_for(tmp_path, monkeyp
         return check_heads.manifest_collisions(tree, list(heads))
 
     def run(tree, heads):
-        return check_heads.new_revision_run_errors(tree, shipped, stamp_only, heads)
+        return check_heads.new_revision_run_errors(tree, shipped, stamp_only, upstream, heads)
 
     use_manifest()
     a_shipped_id, shipped_slug = sorted(shipped.items())[0]
@@ -310,6 +325,76 @@ def test_each_manifest_rule_fires_on_the_mistake_it_exists_for(tmp_path, monkeyp
         )
     )
     assert len(duplicates) == 1 and first in duplicates[0], duplicates
+
+    # Upstream's booked ids: the STAS-371 class, which `revisions` alone cannot see
+    # because no build of ours ever stamped the id -- only upstream's builds did.
+    an_upstream_id, upstream_slug = sorted(upstream.items())[0]
+
+    def rebooked(errors):
+        return [error for error in errors if "the upstream trunk holds as" in error]
+
+    use_manifest()
+    stole = rebooked(collide({an_upstream_id: [Path(f"{an_upstream_id}_our_own_thing.py")]}))
+    assert len(stole) == 1 and upstream_slug in stole[0], stole
+    assert "our_own_thing" in stole[0], stole
+
+    # The same id carrying upstream's own slug is what an absorption looks like, so it
+    # must not be red: a guard that reddens absorption itself gets disabled in a week.
+    absorbed = collide({an_upstream_id: [Path(f"{an_upstream_id}_{upstream_slug}.py")]})
+    assert not rebooked(absorbed), rebooked(absorbed)
+
+    # An upstream id this tree does not ship yet is upstream's node on its way in via the
+    # daily absorb, not a migration this tree deleted. Today every upstream id is present
+    # here -- this tree runs ahead of upstream -- so the case is modelled where it is
+    # decided: at the rule input, with a tree that lacks the id.
+    upstream_ahead = {**upstream, first: "an_upstream_migration_we_do_not_ship"}
+    use_manifest(upstream=upstream_ahead)
+    our_tree = {second: [Path(f"{second}_ours.py")]}
+    assert not check_heads.upstream_rebook_errors(upstream_ahead, our_tree), (
+        "an upstream id this tree does not ship must not look like a mistake of ours"
+    )
+    assert not [
+        error for error in collide(our_tree) if "no file for it" in error and first in error
+    ], "the stranded-migration loop must not reach into the upstream map"
+
+    # A manifest that cannot name upstream's ids is a broken guard, whether the key is
+    # absent or present but empty -- an empty map is the same hole wearing a passing shape.
+    use_manifest(upstream={})
+    assert any("upstream" in error for error in collide({})), collide({})
+
+    no_map = {key: value for key, value in manifest.items() if key != "upstream"}
+    (tmp_path / "shipped_revisions.json").write_text(json.dumps(no_map))
+    monkeypatch.setattr(check_heads, "MANIFEST", tmp_path / "shipped_revisions.json")
+    missing = collide({})
+    assert any("upstream" in error and "bookings --live" in error for error in missing), missing
+
+    # Above the booked ceiling a new id must still be legal, or the first absorb of the
+    # day would leave every branch unable to add a migration at all.
+    use_manifest()
+    assert not run({first: [Path(f"{first}_one.py")]}, [first]), (
+        "the id above the booked ceiling must stay free"
+    )
+
+    # The ceiling tracks upstream's numbering as the daily absorb lands it: an upstream id
+    # this chain runs through is booked history, so it neither joins our run nor asks us to
+    # renumber around it. Without the same slug it is a collision, not an absorption.
+    highest_local = max(check_heads.revision_files())
+    landed = f"{int(highest_local) + 1:04d}"
+    landed_map = {**upstream, landed: "an_upstream_node"}
+    use_manifest(upstream=landed_map)
+    absorbed_node = {landed: [Path(f"{landed}_an_upstream_node.py")]}
+    assert not check_heads.new_revision_run_errors(
+        absorbed_node, shipped, stamp_only, landed_map, [landed]
+    ), "an absorbed upstream id is booked history, not this tree's new run"
+
+    # An upstream id this tree does not ship yet must not move the ceiling either: it is
+    # the absorb's business, and counting it here would demand renumbering a tail that
+    # collides with nothing.
+    unshipped_map = {**upstream, landed: "an_upstream_node_we_do_not_ship"}
+    use_manifest(upstream=unshipped_map)
+    assert not check_heads.new_revision_run_errors(
+        check_heads.revision_files(), shipped, stamp_only, unshipped_map, [highest_local]
+    ), "an unshipped upstream id must not raise this tree's ceiling"
 
 
 def test_a_stamp_only_id_with_no_node_is_red(tmp_path):

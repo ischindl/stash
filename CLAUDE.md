@@ -25,6 +25,29 @@ If you are about to ask the user to do something for you, think about whether yo
 - **Never ask permission to kill/restart local processes.** If you need to restart uvicorn, ngrok, or any dev server to make progress, just do it. But scope kills to this worktree: several worktrees run the same stack on this machine, so kill by specific PID or port (`kill <pid>`, `pkill -f "next dev -p 3457"`) — never by bare command pattern (`pkill -f "next dev"`, `pkill -f uvicorn`), which takes down other worktrees' servers.
 
 
+### The trunk is only a base while it carries upstream (`origin/main`)
+
+`origin` in this repository is **upstream's** project, not ours (ours is `fork`), so local
+`main` is a safe base exactly as long as it already contains `origin/main`. One command answers
+that, and its FALSE answer blocks work rather than advising about it:
+
+```
+python -m backend.scripts.upstream_gate check        # TRUE/FALSE + both shas + merge base + ahead/behind
+python -m backend.scripts.upstream_gate absorb       # merge upstream into main, or refuse loudly
+```
+
+The truth is `git merge-base --is-ancestor origin/main <ref>`, always re-fetched — never
+`.git/FETCH_HEAD`, which can be days old. `absorb` merges in a scratch worktree and publishes by
+compare-and-swap; on conflicts it prints the paths and changes nothing, because picking a side in
+someone else's conflict is not this job's to do. Cut lanes from local `main` only. Once the
+operator installs it (`python backend/scripts/install_hooks.py`) a `reference-transaction` hook
+refuses any advance of `refs/heads/main` that fails the predicate, and refuses a new `fusion/*`
+lane only when `main` already carries `origin/main` while that lane's base does not. While `main`
+itself is unabsorbed the lane verdict is reported rather than refused: that hook has no
+`--no-verify`, and the lane whose job is to clear the debt is cut from exactly that base, so the
+hard gate is the trunk ref alone. The daily cadence and the job's forbidden actions are in
+`docs/upstream-absorb-procedure.md`.
+
 ### PR creation is operator-gated (operator directive 2026-08-30)
 No agent may open a GitHub PR without the operator's explicit knowledge. Work that
 is done merges to local main and stops there: write a PR proposal into the task log,

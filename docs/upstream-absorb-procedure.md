@@ -1,0 +1,78 @@
+# Daily upstream absorb
+
+The procedure the **Upstream Absorber** scheduler agent runs on each heartbeat. It is the
+visible half of the anti-fork gate: the rule that our trunk must always carry upstream's
+trunk is enforced by `.githooks/reference-transaction.sh`, and this job is what keeps that
+rule true instead of merely enforced.
+
+Why a daily cadence and not a weekly one: upstream moves about two commits a day, and the
+last time this was left alone the gap ran six weeks and is still 28 conflicted files deep
+(measured 2026-11-12, by the job's own refusal list). Our migration tail had to be renumbered
+as damage control while it grew (STAS-371, STAS-374).
+
+## The run
+
+From the repository root:
+
+```
+python -m backend.scripts.upstream_gate absorb
+```
+
+That one command fetches `origin main`, merges it into `refs/heads/main` inside a scratch
+detached worktree, re-runs the predicate and the alembic booking guard there, refreshes the
+upstream revision-id bookings, and publishes with a compare-and-swap. It never touches a
+checkout it does not own.
+
+## Report what it printed
+
+The verdict line is machine-shaped; quote it rather than paraphrasing it:
+
+```
+TRUE  refs/heads/main origin_main=<sha> refs/heads/main=<sha> merge_base=<sha> ahead/behind=<n>/<n>
+```
+
+Record, in the board run log and in one `task_log` line on the task named at the bottom of
+this file:
+
+- the exit code,
+- `origin_main` and the resulting `refs/heads/main` sha,
+- for a no-op ("already anchored") say so in those words,
+- for a refusal, every conflicted path it printed.
+
+If the job says the trunk is checked out somewhere with uncommitted changes, report that and
+stop. It is not your index to clean.
+
+## What this job never does
+
+- It does not resolve a conflict or pick a side in one. A conflict is a lane of its own with a
+  reviewer; the refusal message says so. Side-picking is the revert class recorded in project
+  memory.
+- It does not `reset`, `switch -C`, `checkout -f`, `clean`, or `stash` anything, in any tree.
+- It does not push, open a pull request, or install git hooks. Hook activation is one
+  deliberate operator command (`python backend/scripts/install_hooks.py`) taken after the
+  trunk passes the predicate, because installing it while the trunk fails stops every merge on
+  this machine.
+- It does not edit `core.hooksPath` or any file under `.git/`.
+
+## While upstream is unabsorbed
+
+Until the debt is cleared, this job exits 1 every day and prints that same conflict list (28
+paths as measured on 2026-11-12). That is the job working, not a broken job: the trunk is refused rather than quietly
+forked. Clearing the debt is a lane of its own (`STAS-373` named the predicate; the conflict
+lane is whatever card the operator opens for it). Pause this agent only on the operator's
+order.
+
+That lane has to be creatable, which is why the installed hook does not refuse lane creation in
+this state. `reference-transaction` refuses every write that would move `refs/heads/main`, and for
+a new `refs/heads/fusion/*` branch it refuses only when the trunk already carries `origin/main`
+while the new base does not; while the trunk itself is behind, it prints the verdict on stderr and
+lets the lane exist. A hook refusal has no `--no-verify`, so refusing the unabsorbed case would
+have locked the repair out of the machine that needed it, and it would have prevented no fork —
+the trunk cannot advance to an unanchored commit either way.
+
+One consequence of there being no bypass: while the trunk is unanchored the hook stops writes to
+`refs/heads/main` in both directions, so an operator's undo of a bad landing — pointing the trunk
+back at the commit it held — is refused too, because that commit is unanchored as well. The way
+through an undo is `python backend/scripts/install_hooks.py --uninstall`, the ref move, then
+install again. Installing is itself refused while the trunk is behind (`--force` overrides), so on
+a machine carrying the debt the order is absorb, then install.
