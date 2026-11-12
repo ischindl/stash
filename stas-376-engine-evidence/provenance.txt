@@ -1,0 +1,34 @@
+provenance generated: 2026-11-12T01:47:13Z
+
+== repositories and tips ==
+stash repo worktree : /home/schindler/git/stash/.fusion/worktrees/stas-376
+stash branch        : fusion/stas-376
+stash worktree HEAD : 4bd09f5eaa409bc3a1b085bff697fedbc74b701f
+stash local main    : b8b6a99cb721c6c83a4e3bb3fe711e30b6155fc4
+engine repo         : /home/schindler/git/Fusion/.git
+engine tip HEAD     : 1a19b6100d60f9533d1222d2b4ff2e321338f35a
+
+== engine reads (read-only, no worktree, no branch, no write) ==
+git --git-dir=<engine .git> ls-tree --name-only HEAD packages/engine/src/executor/
+git --git-dir=<engine .git> grep -n -iE 'cursor|alreadyUpload|uploadedCount|sentCount|lastLine|offset' HEAD -- packages/engine/src/executor/memory-capture.ts
+git --git-dir=<engine .git> grep -n 'capturedMemoryTaskIds' HEAD -- packages/engine/src packages/dashboard/src
+git --git-dir=<engine .git> show HEAD:packages/engine/src/executor/memory-capture.ts
+
+== founder stack reads (read-only) ==
+docker compose -p stash ps --format '{{.Name}} {{.Image}}'
+docker compose -p stash exec -T <svc> printenv FREE_CURATOR_RUNS_PER_MONTH | INTERNAL_DOMAINS_FREE_PRO | INTERNAL_EMAIL_DOMAINS
+docker compose -p stash exec -T <svc> sh -c "grep -rc --include=<file> '<pattern>' ."
+docker compose -p stash exec -T postgres psql -U stash -d stash -Atc '<SELECT only>'
+docker compose -p stash logs --timestamps <svc>            (window bounds)
+docker compose -p stash logs --since 24h <svc> | grep -c <marker>
+
+== deployed image identity ==
+backend/worker/heavy-worker/beat image: stash-backend:main-11e0644a-pi
+that commit: 11e0644ad 2026-10-10 21:09:23 +0200 STAS-268: gate operational alert deliveries on the configured alert mode
+deployed db alembic_version: 0225   (that image's own migrations head: 0225; local main head: 0270)
+anti-join commit ea889100e is an ancestor of the deployed commit: yes
+catch-up chain commit 091a86370 is an ancestor of the deployed commit: no
+
+== scratch database used for the coin-flip measurement (never the founder db) ==
+container stas376-pg, host port 55476, database stash_test (proved via current_database())
+the founder stack's own postgres is a different container (stash-postgres-1) and was reached only by SELECT

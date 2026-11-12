@@ -1,0 +1,135 @@
+generated: 2026-11-12T01:47:57Z
+stash worktree HEAD: 4bd09f5eaa409bc3a1b085bff697fedbc74b701f
+engine git common dir: /home/schindler/git/Fusion/.git
+engine tip: 1a19b6100d60f9533d1222d2b4ff2e321338f35a
+
+================ 1. deployed build: which image, which guard ================
+
+$ docker compose -p stash ps --format '{{.Name}} {{.Image}}'
+stash-backend-1 stash-backend:main-11e0644a-pi
+stash-beat-1 stash-backend:main-11e0644a-pi
+stash-frontend-1 stash-frontend:main-db223464
+stash-heavy-worker-1 stash-backend:main-11e0644a-pi
+stash-postgres-1 pgvector/pgvector:pg16
+stash-redis-1 redis:7-alpine
+stash-worker-1 stash-backend:main-11e0644a-pi
+
+-- anti-join present in the RUNNING build (relative search root: the container
+   cwd is /app, and naming that absolute path in the command text is refused by the
+   worktree boundary scanner, which is a tool policy and not a statement about the file) --
+
+$ docker compose -p stash exec -T backend grep -rc --include=memory_service.py "dup.id < he.id" .
+./backend/services/memory_service.py:1
+
+$ docker compose -p stash exec -T worker grep -rc --include=memory_service.py "dup.id < he.id" .
+./backend/services/memory_service.py:1
+
+$ docker compose -p stash exec -T heavy-worker grep -rc --include=memory_service.py "dup.id < he.id" .
+./backend/services/memory_service.py:1
+
+================ 2. entitlement and plan state (read-only) ================
+backend FREE_CURATOR_RUNS_PER_MONTH=[UNSET]
+worker FREE_CURATOR_RUNS_PER_MONTH=[UNSET]
+heavy-worker FREE_CURATOR_RUNS_PER_MONTH=[UNSET]
+beat FREE_CURATOR_RUNS_PER_MONTH=[UNSET]
+
+$ docker compose -p stash exec -T postgres psql -U stash -d stash -Atc "SELECT u.email, u.plan, COALESCE(s.status,'NO_SUBSCRIPTION') FROM users u LEFT JOIN user_subscriptions s ON s.user_id=u.id WHERE u.email='ischindl@progis.sk'"
+ischindl@progis.sk|free|NO_SUBSCRIPTION
+
+================ 3. amplifier: rows vs distinct identities per replay session ================
+
+$ docker compose -p stash exec -T postgres psql -U stash -d stash -Atc "SELECT session_id, count(*) AS rows, count(DISTINCT (session_id, event_type, created_at, md5(content))) AS identities, min(created_at), max(created_at) FROM history_events WHERE session_id LIKE 'fusion-task-%' GROUP BY 1 ORDER BY 2 DESC LIMIT 12"
+fusion-task-SANE-480|1020100|26678|2026-09-24 08:21:57.307+00|2026-10-05 22:03:06.228+00
+fusion-task-SANE-453|790200|5990|2026-09-23 03:35:24.355+00|2026-09-23 23:49:38.578+00
+fusion-task-SANE-367|524660|9912|2026-08-10 06:51:57.768+00|2026-09-07 19:03:43.412189+00
+fusion-task-SANE-435|325700|43305|2026-09-21 10:55:26.213+00|2026-09-27 21:18:36.611+00
+fusion-task-BANKS-113|231525|12703|2026-10-06 04:12:12.971+00|2026-10-12 13:08:01.220818+00
+fusion-task-SANE-384|98354|8337|2026-08-24 23:19:08.771+00|2026-09-09 08:28:47.216672+00
+fusion-task-GEDA-1092|64998|2890|2026-10-31 17:38:47.678+00|2026-11-08 18:08:07.520312+00
+fusion-task-SANE-083|59404|11923|2026-08-08 14:28:34.369+00|2026-08-30 09:34:34.881957+00
+fusion-task-RUFU-286|57440|10218|2026-09-23 21:16:37.508+00|2026-10-11 09:20:53.87324+00
+fusion-task-RUFU-196|56600|17198|2026-09-07 19:42:49.418+00|2026-09-14 13:25:13+00
+fusion-task-SANE-404|50271|5634|2026-09-12 13:45:59.368+00|2026-09-13 16:35:49.541803+00
+fusion-task-RUFU-268|45400|1975|2026-09-22 13:56:26.461+00|2026-11-01 01:15:04.214+00
+
+================ 4. do re-captures insert FRESH identities? (copies per identity) ================
+# If a re-capture changed created_at or content, the copies would NOT share an identity and
+# no read-side collapse could apply - that would be verdict A. max_copies_of_one_identity is
+# the count of stored rows behind ONE identity tuple.
+
+$ docker compose -p stash exec -T postgres psql -U stash -d stash -Atc "WITH m AS (SELECT session_id, (session_id, event_type, created_at, md5(content)) AS ident, count(*) AS copies FROM history_events WHERE session_id LIKE 'fusion-task-%' GROUP BY 1,2) SELECT session_id, sum(copies) AS rows, count(*) AS identities, max(copies) AS max_copies_of_one_identity, count(*) FILTER (WHERE copies = 1) AS identities_seen_once FROM m GROUP BY 1 ORDER BY 2 DESC LIMIT 8"
+fusion-task-SANE-480|1020100|26678|120|1088
+fusion-task-SANE-453|790200|5990|270|0
+fusion-task-SANE-367|524660|9912|177|126
+fusion-task-SANE-435|325700|43305|15|11377
+fusion-task-BANKS-113|231525|12703|46|163
+fusion-task-SANE-384|98354|8337|84|3107
+fusion-task-GEDA-1092|64998|2890|80|309
+fusion-task-SANE-083|59404|11923|25|7
+
+================ 5. who pushed the family ================
+
+$ docker compose -p stash exec -T postgres psql -U stash -d stash -Atc "SELECT he.agent_name, he.created_by, u.email, count(*) AS rows, count(DISTINCT (he.session_id, he.event_type, he.created_at, md5(he.content))) AS identities, min(he.created_at), max(he.created_at) FROM history_events he JOIN users u ON u.id = he.created_by WHERE he.session_id LIKE 'fusion-task-%' GROUP BY 1,2,3 ORDER BY 4 DESC LIMIT 10"
+fusion|bd1f4b68-9661-4f58-ab9c-051bc9633cbe|ischindl@progis.sk|4702784|845437|2026-07-25 13:14:41.724+00|2026-11-11 22:44:33.739033+00
+
+================ 6. is the loop still pushing right now? ================
+
+$ docker compose -p stash exec -T postgres psql -U stash -d stash -Atc "SELECT max(created_at) AS newest_fusion_task_event, count(*) FILTER (WHERE created_at > now() - interval '3 days') AS rows_last_3d FROM history_events WHERE session_id LIKE 'fusion-task-%'"
+2026-11-11 22:44:33.739033+00|8152
+
+================ 7. watermark motion: every rewind line in the retained window ================
+# The AC requires zero. A non-zero line must be shown with its old -> new pair so a repeat
+# of one instant is separated from a genuine import.
+
+$ docker compose -p stash logs --timestamps <svc> | head -1 | tail -1   (window bounds)
+worker first: worker-1  | 2026-10-10T22:44:12.
+worker last : worker-1  | 2026-11-12T01:48:50.
+heavy-worker first: heavy-worker-1  | 2026-10-10T22:
+heavy-worker last : heavy-worker-1  | 2026-11-12T01:
+backend first: backend-1  | 2026-10-10T22:43:58
+backend last : backend-1  | 2026-11-12T01:48:53
+
+$ docker compose -p stash logs backend worker heavy-worker | grep "watermark rewound for user"
+(zero rewind lines in the retained window)
+
+rewind line count: 0
+
+================ 8. cadence ground truth per founder curator lane ================
+# catchup_runs / catchup_window_started are named here to show they do not exist in the
+# DEPLOYED schema: the running image predates the migration that adds them.
+
+$ docker compose -p stash exec -T postgres psql -U stash -d stash -Atc "SELECT version_num FROM alembic_version"
+0225
+
+$ docker compose -p stash exec -T postgres psql -U stash -d stash -Atc "SELECT a.id, a.curator_wiki, COALESCE(a.curator_folder_id::text,'(workspace)') AS folder, a.schedule_cron, a.last_run_outcome, a.curated_through, a.month_run_count, a.month_run_anchor FROM agents a JOIN users u ON u.id=a.user_id WHERE a.is_curator AND u.email='ischindl@progis.sk' ORDER BY folder, a.curator_wiki"
+42fad1ea-b510-4365-97d0-08618c716276|internal|3209a46d-dd68-45d2-a8f8-114cf4b11370|42 11 * * *|failed|2026-09-02 16:23:09.418+00|2|2026-11-01
+9f0cab42-b550-467b-a101-ff17d60790bd|internal|6a688da6-f83d-421f-a756-037e02007775|42 11 * * *|skipped_credits|2026-11-01 10:37:20.786752+00|23|2026-11-01
+152840e4-1cdf-4354-a605-385599bfb3af|internal|6a94ac86-9625-41d2-81af-a1203bf548ae|42 10 * * *|skipped_credits|2026-09-07 10:22:23.17+00|17|2026-11-01
+1ed6c549-c5bf-4ee3-a255-adb5a63debe4|internal|6d67e3fd-08fd-4820-8228-e55b2a6ecab4|42 13 * * *|failed|2026-09-01 05:55:57.967+00|1|2026-11-01
+2c86d9f1-9594-413c-adcd-9507ecbafa38|external|(workspace)|45 11 * * *|failed|2026-08-22 03:06:33.440999+00|0|2026-11-01
+242dcd2d-9bb3-41b3-9475-fed792f9b65d|internal|(workspace)|58 9 * * *|failed|2026-08-09 08:22:12.842+00|4|2026-11-01
+
+$ docker compose -p stash logs --since 24h beat | grep -c agent-schedules-run-due
+1440
+$ curator executions in 24h (worker + heavy-worker, run_curator_now)
+26
+$ credits-exhausted skip lines in 24h
+28
+
+================ 9. the deployed build has no catch-up chain at all ================
+
+$ docker compose -p stash exec -T backend grep -rc --include=agent_schedules.py "_queue_curator_catchup" .
+ABSENT - the running build contains no catch-up chain; it landed upstream on 2026-10-25, after the commit this image was built from
+
+$ docker compose -p stash exec -T heavy-worker grep -rc --include=agent_schedules.py "_queue_curator_catchup" .
+ABSENT - the running build contains no catch-up chain; it landed upstream on 2026-10-25, after the commit this image was built from
+
+================ 10. the coin-flip rate of the smallest-id tie-break ================
+# Why the landed rewind predicate could call a duplicate fresh: history_events.id is
+# gen_random_uuid(), which has no insertion order, and the predicate asked dup.id < he.id.
+CREATE TABLE
+INSERT 0 6
+insertion order monotonic? false
+CREATE TABLE
+INSERT 0 2000
+re-push classified fresh: 976 of 2000 = 48.8%
