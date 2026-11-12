@@ -111,6 +111,15 @@ Before starting:
   your first login. With neither, every scheduled curator skips every tick — the
   backend logs `no runnable model` at WARNING and each curator row reads
   `No model connected` until a model exists.
+- `FREE_CURATOR_RUNS_PER_MONTH` (default 10) bounds how many curator runs an
+  account may start in a calendar month, and it also sets how far a backlog may
+  be chased: the catch-up ceiling is that allowance spread over the month that
+  funds it, floored at 8 passes, so raising it is what lets a large backlog drain
+  faster. Past the allowance, non-Pro curators stop dead mid-backlog: every later
+  tick logs `curator monthly allowance spent` at WARNING, the row reads
+  `skipped_credits`, and the stale-watermark watchdog names it — runs spent, the
+  allowance, and the events still pending. A lane frozen there never drains on its
+  own; raise the allowance or make the account Pro.
 - Operational alerts stay off unless you finish them: set both `ALERT_SLACK_*`
   variables in `.env` and install the Stash Slack bot into that workspace, so
   the team has a `slack_bot_installs` row and its bot is in the alert channel.

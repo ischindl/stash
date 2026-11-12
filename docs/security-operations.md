@@ -186,6 +186,13 @@ failing run writes its own cause to the agent row and logs its own traceback
 before any alert is attempted, so a delivery that then fails — in either mode —
 leaves the run's error as the thing in the log and on the row.
 
+A stale curator alert covers a lane whose position has not moved for 48 hours and
+which still has input to read. It includes a lane stopped by the monthly curator
+allowance: that skip resolves correctly on the row, but the backlog behind it will
+never drain by itself, so the alert names the runs spent against the allowance and
+the events still pending rather than leaving a permanently frozen lane reading as
+healthy. A lane that skipped because a run found nothing to do stays quiet.
+
 ## Subprocessors
 
 Maintain a customer-facing list of infrastructure and subprocessors before
