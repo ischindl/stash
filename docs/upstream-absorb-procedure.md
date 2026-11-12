@@ -6,9 +6,10 @@ trunk is enforced by `.githooks/reference-transaction.sh`, and this job is what 
 rule true instead of merely enforced.
 
 Why a daily cadence and not a weekly one: upstream moves about two commits a day, and the
-last time this was left alone the gap ran six weeks and is still 28 conflicted files deep
-(measured 2026-11-12, by the job's own refusal list). Our migration tail had to be renumbered
-as damage control while it grew (STAS-371, STAS-374).
+last time this was left alone the gap ran six weeks and reached 28 conflicted paths — measured
+2026-11-12 by the job's own refusal list, and cleared the same day by STAS-427, whose merge
+commit now sits in `refs/heads/main`. Our migration tail had to be renumbered as damage control
+while it grew (STAS-371, STAS-374).
 
 ## The run
 
@@ -56,14 +57,16 @@ stop. It is not your index to clean.
 
 ## While upstream is unabsorbed
 
-Until the debt is cleared, this job exits 1 every day and prints that same conflict list (28
-paths as measured on 2026-11-12). That is the job working, not a broken job: the trunk is refused rather than quietly
-forked. Clearing the debt is a lane of its own (`STAS-373` named the predicate; the conflict
-lane is whatever card the operator opens for it). Pause this agent only on the operator's
-order.
+The trunk carried this state until STAS-427 anchored it on 2026-11-12, and the state returns the
+moment upstream moves ahead and a day is skipped. In it, this job exits 1 every day and prints
+its conflict list — 28 paths at that measurement, all 28 now inside the merged line, every side
+recorded per path in the STAS-427 task document `merge-conflict-ledger`. That refusal is the job
+working, not a broken job: the trunk is refused rather than quietly forked. Clearing the debt is
+always a lane of its own with a reviewer, never a side-pick here (`STAS-373` named the predicate;
+`STAS-427` is the lane that cleared it). Pause this agent only on the operator's order.
 
-That lane has to be creatable, which is why the installed hook does not refuse lane creation in
-this state. `reference-transaction` refuses every write that would move `refs/heads/main`, and for
+That lane has to be creatable, which is why the installed hook does not refuse lane creation
+while the trunk itself is unanchored. `reference-transaction` refuses every write that would move `refs/heads/main`, and for
 a new `refs/heads/fusion/*` branch it refuses only when the trunk already carries `origin/main`
 while the new base does not; while the trunk itself is behind, it prints the verdict on stderr and
 lets the lane exist. A hook refusal has no `--no-verify`, so refusing the unabsorbed case would
