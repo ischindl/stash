@@ -1232,49 +1232,38 @@ def _install_openclaw(force: bool, use_json: bool = False) -> tuple[str, str]:
     )
 
 
-def _copy_pi_runtime(scripts_src: Path, dest: Path, force: bool) -> bool:
-    """Copy the pi hook runtime from the shipped assets into ~/.pi/.
+def _install_pi(force: bool, use_json: bool = False) -> tuple[str, str]:
+    """Copy the Stash pi 1.x extension into pi's agent dir.
 
-    Each hook wrapper execs "$SCRIPT_DIR/../_run.sh" and _run.sh resolves its
-    handler via "TARGET=$SCRIPT_DIR/$SCRIPT.py", so the whole scripts/ tree maps
-    1:1 onto ~/.pi/: scripts/_run.sh -> ~/.pi/_run.sh, scripts/hooks/* ->
-    ~/.pi/hooks/*, and scripts/on_*.py|config.py|adapt.py -> ~/.pi/. We copy
-    bytes (never symlink) so the install stays self-contained even if the
-    checkout or pipx env moves. Returns True if anything was written.
+    pi loads every `<agentDir>/extensions/*.ts` at startup with no registration
+    step, so this single TypeScript file is the whole pi-side install. It is a
+    transport: the events it forwards reach the Python shipped inside the stashai
+    package through `stash hook run pi <event>`, so no Python is copied here.
+
+    Bytes are copied, never symlinked, so the install stays self-contained even if
+    the checkout or pipx env moves. Returns ("skipped") when the installed file is
+    already the shipped one, which is what makes `stash setup` idempotent.
     """
     import shutil
 
-    changed = False
-    for src in sorted(scripts_src.rglob("*")):
-        if not src.is_file():
-            continue
-        rel = src.relative_to(scripts_src)
-        dst = dest / rel
-        # A pre-existing symlink (e.g. from an older symlink installer) still
-        # points at the repo — replace it with a real copy so the install stays
-        # self-contained and carries no absolute shipped-assets path.
-        if dst.is_symlink():
-            dst.unlink()
-        if dst.exists() and dst.read_bytes() == src.read_bytes() and not force:
-            continue
-        dst.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(src, dst)
-        shutil.copymode(src, dst)  # keep hooks / _run.sh executable
-        changed = True
-    return changed
-
-
-def _install_pi(force: bool, use_json: bool = False) -> tuple[str, str]:
-    root = _assets_dir("pi")
-    dest = Path.home() / ".pi"
+    src = _assets_dir("pi") / "extensions" / "stash.ts"
+    dest = _pi_agent_dir() / "extensions" / "stash.ts"
     agents_dest = _guidance_dest("pi")
 
-    changed = _copy_pi_runtime(root / "scripts", dest, force)
+    # A pre-existing symlink (e.g. from an older symlink installer) still points at
+    # the repo, so replace it with a real copy.
+    if dest.is_symlink():
+        dest.unlink()
+    changed = force or not dest.exists() or dest.read_bytes() != src.read_bytes()
+    if changed:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(src, dest)
+
     _install_guidance("pi")
 
-    if not changed and not force:
+    if not changed:
         return ("skipped", f"{dest} already up to date + {agents_dest}")
-    return ("installed", f"copied pi runtime \u2192 {dest} + {agents_dest}")
+    return ("installed", f"copied pi extension {src} -> {dest} + {agents_dest}")
 
 
 _INSTALLERS = {
@@ -1310,6 +1299,7 @@ _HOOK_EVENTS = {
     "hermes": ("on_session_start", "on_prompt", "on_tool_use", "on_stop", "on_session_end"),
     "openclaw": ("on_session_start", "on_prompt", "on_stop", "on_session_end"),
     "opencode": ("on_session_start", "on_prompt", "on_tool_use", "on_session_end"),
+    "pi": ("on_session_start", "on_prompt", "on_tool_use", "on_stop", "on_session_end"),
 }
 
 
@@ -1327,10 +1317,8 @@ def hook_run(agent: str = typer.Argument(...), event: str = typer.Argument(...))
     # The byte-stable command string is what makes this the one place a product
     # change can reliably reach an installed machine: this process is the freshly
     # resolved package, and it is running here before any configuration or plugin
-    # state is read, so no dropped setting gates it. Pi is absent from
-    # `_HOOK_EVENTS` (its runtime is byte-copied under ~/.pi) and converges
-    # through `connect`/`upgrade` — but the refresh is global, so the first
-    # session of any agent here repairs pi's guidance file too.
+    # state is read, so no dropped setting gates it. Pi reaches here from its 1.x
+    # extension, so the refresh is global and repairs pi's guidance file too.
     if event == "on_session_start":
         spawn_guidance_refresh_if_stale([dest for _, dest in _guidance_targets()], __version__)
 
@@ -1419,11 +1407,9 @@ def _plugin_installed(agent: str) -> bool:
         except OSError:
             return False
     if agent == "pi":
-        # The self-contained marker _install_pi leaves behind: the native hook
-        # dir plus the _run.sh interpreter-resolution runtime both exist.
-        return (Path.home() / ".pi" / "hooks").is_dir() and (
-            Path.home() / ".pi" / "_run.sh"
-        ).exists()
+        # pi 1.x loads every <agentDir>/extensions/*.ts with no registration, so
+        # the installed extension file is the whole install.
+        return (_pi_agent_dir() / "extensions" / "stash.ts").is_file()
     return False
 
 
@@ -7118,16 +7104,10 @@ def _mcp_json_entry(server: dict) -> dict:
     return entry
 
 
-# pi has no MCP client of its own (STAS-218: its README says "No MCP.");
-# ~/.pi/agent/mcp.json is only read when this extension is registered in
-# the agent dir's settings.json. Installing into pi without it would write a
-# config the runtime silently ignores, so we fail loudly with the fix.
-_PI_MCP_EXTENSION = "pi-mcp-adapter"
-
-
 def _pi_agent_dir() -> Path:
-    """pi's agent dir, mirroring pi-mcp-adapter's own resolution: the
-    PI_CODING_AGENT_DIR override ("~" and "~/…" relative to home), else ~/.pi/agent."""
+    """pi's agent dir: the PI_CODING_AGENT_DIR override ("~" and "~/…" relative to
+    home), else ~/.pi/agent. pi 1.x reads its settings.json, mcp.json and
+    extensions/ from this one directory."""
     import os
 
     configured = os.environ.get("PI_CODING_AGENT_DIR", "").strip()
@@ -7138,26 +7118,6 @@ def _pi_agent_dir() -> Path:
     if configured.startswith("~/"):
         return Path.home() / configured[2:]
     return Path(configured).expanduser().resolve()
-
-
-def _require_pi_mcp_extension() -> None:
-    """Abort unless pi on this machine can actually read MCP config."""
-    settings_path = _pi_agent_dir() / "settings.json"
-    packages: list = []
-    if settings_path.exists():
-        try:
-            settings = json.loads(settings_path.read_text())
-        except json.JSONDecodeError:
-            _exit_user_error(
-                f"{settings_path} is not valid JSON; repair it before installing MCP servers."
-            )
-        packages = settings.get("packages", [])
-    sources = [p.get("source") if isinstance(p, dict) else p for p in packages]
-    if not any(isinstance(s, str) and _PI_MCP_EXTENSION in s for s in sources):
-        _exit_user_error(
-            f"pi only reads MCP config when the {_PI_MCP_EXTENSION} extension is registered "
-            f"in {settings_path} — install it with: pi install npm:{_PI_MCP_EXTENSION}"
-        )
 
 
 def _claude_mcp_dest() -> Path:
@@ -7175,15 +7135,6 @@ def _pi_mcp_dest() -> Path:
 _MCP_INSTALLERS = {
     "claude": _claude_mcp_dest,
     "pi": _pi_mcp_dest,
-}
-
-# Agents whose config file the runtime ignores until something else is set up on
-# the machine. Resolving a destination must never consult these — an entry has to
-# be retractable even if the gate stopped being satisfied after it was written —
-# so the gate lives here instead of inside the resolver, and only tools_install
-# runs it.
-_MCP_INSTALL_GATES = {
-    "pi": _require_pi_mcp_extension,
 }
 
 
@@ -7428,8 +7379,6 @@ def tools_install(
         _exit_user_error(
             f"No MCP install path for agent {agent!r} yet — supported: {', '.join(sorted(_MCP_INSTALLERS))}."
         )
-    if agent in _MCP_INSTALL_GATES:
-        _MCP_INSTALL_GATES[agent]()
     dest = _MCP_INSTALLERS[agent]()
     with _client() as c:
         try:

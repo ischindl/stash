@@ -1,1 +1,1 @@
-{"session_id": "pi-1", "cwd": "/Users/alice/repo", "hook_event_name": "assistant_message", "turn_id": "t1", "last_assistant_message": "done"}
+{"session_id": "pi-1", "cwd": "/Users/alice/repo", "transcript_path": "/Users/alice/.pi/agent/sessions/--Users-alice-repo--/2026-11-12T00-57-49-821Z_01a1cd42.jsonl", "aborted": false}

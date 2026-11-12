@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Pi session_start: save session_id and create the session record."""
+"""Pi `session_start` event: save session_id and create the session record."""
 
 import json
 import os
@@ -10,6 +10,7 @@ from config import (
     get_client,
     get_config,
     get_stdin_data,
+    is_configured,
     is_fusion_managed,
 )
 
@@ -30,6 +31,8 @@ from stashai.plugin.state import load_state, reset_stats, save_state
 
 
 def main():
+    if not is_configured():
+        return
     event = adapt_session_start(get_stdin_data())
     if is_fusion_managed(event.cwd):
         return
@@ -70,4 +73,4 @@ def main():
 
 
 if __name__ == "__main__":
-    guard_hook_main(DATA_DIR, main, host_exits_zero=True)
+    guard_hook_main(DATA_DIR, main, host_exits_zero=False)

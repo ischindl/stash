@@ -303,8 +303,8 @@ stash tools remove fetch --json
 - `--command` (stdio launch command) and `--url` (http endpoint) are mutually exclusive;
   `--header`/`--env` take repeatable `KEY=VAL` pairs.
 - `stash tools install <name>` writes the server into an agent's MCP config — by default this
-  project's `.mcp.json` for Claude Code; `--agent pi` targets pi's `mcp.json` and requires the
-  `pi-mcp-adapter` extension to be installed.
+  project's `.mcp.json` for Claude Code; `--agent pi` targets pi's own `mcp.json` in its agent
+  dir, which pi 1.x reads directly (no extra pi extension has to be installed first).
 - The merge is **ownership-tracked**: entries Stash wrote are listed under a
   `stashManagedServers` key in the config file. Re-runs are idempotent, user-defined entries
   are never touched, and a name collision with a user entry fails loudly instead of clobbering.

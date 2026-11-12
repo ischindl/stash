@@ -44,7 +44,7 @@ def test_session_start(plugin):
     event = adapt.adapt_session_start(_load_fixture(plugin, "session_start"))
     assert event.kind == "session_start"
     assert event.session_id  # non-empty
-    if plugin in ("codex", "cursor", "gemini"):
+    if plugin in ("codex", "cursor", "gemini", "pi"):
         assert event.transcript_path
 
 
@@ -78,9 +78,15 @@ def test_tool_use(plugin):
     assert isinstance(event.tool_input, dict)
 
 
-@pytest.mark.parametrize(
-    "plugin", ["claude", "gemini", "codex", "opencode", "openclaw", "hermes", "pi"]
-)
+# pi's `agent_settled` carries no assistant text — pi's own per-turn
+# `assistant_message` event is not forwarded, and a settled run can answer several
+# turns at once. The turn's content reaches Stash in the transcript upload instead,
+# so pi's stop event is the one stop event with an empty `last_assistant_message`
+# and `stream_assistant_message` skips itself on it.
+_PLUGINS_WITH_STOP_TEXT = ["claude", "gemini", "codex", "opencode", "openclaw", "hermes"]
+
+
+@pytest.mark.parametrize("plugin", _PLUGINS_WITH_STOP_TEXT + ["pi"])
 def test_stop(plugin):
     # Cursor intentionally has no stop hook — afterAgentResponse + sessionEnd
     # cover what used to be Cursor's `stop`. See cursor-plugin/hooks.json.
@@ -88,7 +94,11 @@ def test_stop(plugin):
     event = adapt.adapt_stop(_load_fixture(plugin, "stop"))
     assert event.kind == "stop"
     assert event.session_id
-    assert event.last_assistant_message
+    if plugin in _PLUGINS_WITH_STOP_TEXT:
+        assert event.last_assistant_message
+    else:
+        assert event.transcript_path
+        assert event.last_assistant_message == ""
 
 
 def test_cursor_agent_response():
@@ -254,6 +264,90 @@ def test_tool_name_normalization():
         assert event.tool_name == expected, (
             f"{plugin}: {raw!r} -> {event.tool_name!r}, expected {expected!r}"
         )
+
+
+def _pi_tool(**overrides):
+    payload = {
+        "session_id": "pi-1",
+        "cwd": "/repo",
+        "transcript_path": "/t/pi.jsonl",
+        "toolName": "bash",
+        "input": {"command": "ls"},
+        "content": [{"type": "text", "text": "notes.md"}],
+        "isError": False,
+    }
+    payload.update(overrides)
+    return _load_adapt("pi").adapt_tool_use(payload)
+
+
+def test_pi_normalizes_its_own_tool_vocabulary():
+    """pi names its tools `bash powershell read write edit grep find ls`; our
+    canonical vocabulary has no `find` and calls the shell tool `bash`."""
+    for raw, expected in (
+        ("bash", "bash"),
+        ("powershell", "bash"),
+        ("read", "read"),
+        ("write", "write"),
+        ("edit", "edit"),
+        ("grep", "grep"),
+        ("find", "glob"),
+        ("ls", "ls"),
+        ("some_mcp_tool", "some_mcp_tool"),
+    ):
+        assert _pi_tool(toolName=raw).tool_name == expected
+
+
+def test_pi_tool_input_and_response_use_the_canonical_field_names():
+    """pi's schemas say `path`, `edits[{oldText,newText}]` and a `content` block
+    array. `state.py` and `summarize.py` read `file_path`, `old_string`/
+    `new_string` and `stdout`, so the adapter owns those renames — pi's own keys
+    stay put so nothing is lost."""
+    read = _pi_tool(toolName="read", input={"path": "/repo/notes.md", "offset": 2})
+    assert read.tool_input["file_path"] == "/repo/notes.md"
+    assert read.tool_input["offset"] == 2
+
+    edit = _pi_tool(
+        toolName="edit",
+        input={"path": "/repo/notes.md", "edits": [{"oldText": "a\n", "newText": "b\n"}]},
+    )
+    assert edit.tool_input["old_string"] == "a\n"
+    assert edit.tool_input["new_string"] == "b\n"
+
+    shell = _pi_tool(
+        toolName="bash",
+        input={"command": "ls"},
+        content=[{"type": "text", "text": "notes.md"}],
+        structuredContent={"output": "notes.md", "exit_code": 0},
+    )
+    assert shell.tool_response["stdout"] == "notes.md"
+    assert shell.tool_response["exit_code"] == 0
+    assert shell.tool_response["is_error"] is False
+
+    failed = _pi_tool(content=[], isError=True)
+    assert failed.tool_response == {"stdout": "", "is_error": True}
+
+
+@pytest.mark.parametrize(
+    ("adapter", "payload"),
+    [
+        ("adapt_session_start", {"session_id": "pi-1", "cwd": "/repo"}),
+        ("adapt_session_end", {"session_id": "pi-1", "cwd": "/repo"}),
+        ("adapt_stop", {"session_id": "pi-1", "cwd": "/repo"}),
+    ],
+)
+def test_pi_stop_and_session_events_fail_loud_without_a_transcript(adapter, payload):
+    """The transcript is how pi's content reaches Stash, so an absent one is a
+    broken transport, not a value to invent."""
+    adapt = _load_adapt("pi")
+    with pytest.raises(ValueError, match="transcript_path"):
+        getattr(adapt, adapter)(payload)
+
+
+def test_pi_prompt_fails_loud_without_the_prompt_text():
+    adapt = _load_adapt("pi")
+    payload = {"session_id": "pi-1", "cwd": "/repo", "transcript_path": "/t.jsonl"}
+    with pytest.raises(ValueError, match="prompt"):
+        adapt.adapt_prompt(payload)
 
 
 def test_client_facet_flows_through_stream_paths():

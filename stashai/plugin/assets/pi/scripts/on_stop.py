@@ -60,4 +60,4 @@ def main():
 
 
 if __name__ == "__main__":
-    guard_hook_main(DATA_DIR, main, host_exits_zero=True)
+    guard_hook_main(DATA_DIR, main, host_exits_zero=False)

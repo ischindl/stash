@@ -43,9 +43,8 @@ _AGENT_EVENTS = {
     "hermes": ("on_session_start", "on_prompt", "on_tool_use", "on_stop", "on_session_end"),
     "openclaw": ("on_session_start", "on_prompt", "on_stop", "on_session_end"),
     "opencode": ("on_session_start", "on_prompt", "on_tool_use", "on_session_end"),
-    # Pi is not dispatched by `stash hook run` (no _HOOK_EVENTS row — pi reads
-    # executable files from ~/.pi/hooks/ natively), but its handlers are the
-    # same shipped scripts, so they must stay API-conformant: execute them here.
+    # Pi is dispatched like every other agent here: its pi 1.x extension shells out
+    # to `stash hook run pi <event>` for each of these five events.
     "pi": ("on_session_start", "on_prompt", "on_tool_use", "on_stop", "on_session_end"),
 }
 
@@ -84,38 +83,34 @@ def test_hook_script_executes(agent, event, monkeypatch, capsys, tmp_path: Path)
         for mod in ("adapt", "config"):
             sys.modules.pop(mod, None)
 
-    # A dispatchable agent's crash propagates out of runpy and fails this test.
-    # pi's crash does not: its entry point answers the host with exit 0, so the
-    # traceback on stderr is the only in-process signal that it died. Asserting
-    # it here keeps "green means the script actually ran" true for pi too.
+    # Every agent in this table is dispatched by `stash hook run`, so a crash
+    # propagates out of runpy and fails this test. The two assertions below keep
+    # "green means the script actually ran" honest: nothing printed a traceback,
+    # and nothing was uploaded in this fixture (no configured endpoint), so a green
+    # run must not leave an upload record behind either.
     captured = capsys.readouterr()
     assert "Traceback (most recent call last)" not in captured.err
-    # Nothing was uploaded in this fixture (no configured endpoint), so a green
-    # run must not leave an upload record behind either.
     assert not (tmp_path / "hook-data" / "upload_status.json").exists()
 
 
 @pytest.mark.parametrize("event", _AGENT_EVENTS["pi"])
-def test_pi_fatal_hook_records_and_announces_without_failing_the_host(
-    event, tmp_path: Path
-) -> None:
-    """A shipped pi handler that dies must stay invisible to pi but loud everywhere else.
+def test_pi_fatal_hook_records_and_exits_non_zero(event, tmp_path: Path) -> None:
+    """A shipped pi handler that dies must leave a record and a non-zero exit.
 
-    pi reads an exit code of zero and one JSON object on stdout; a hook that
-    exits non-zero is discarded by the host, which is exactly how a whole
-    generation of pi sessions went unrecorded with nobody the wiser. So the
-    entry point records the crash in the file `stash status` reads, prints the
-    traceback, answers with a `systemMessage`, and still exits 0.
+    pi 1.x reaches these scripts through `stash hook run pi <event>`, so pi's
+    retired hook contract — exit 0 plus one JSON object on stdout — is gone: an
+    extension reads neither. What survives is the promise that a crash is never
+    lost: the entry point records it in the file `stash status` reads, and the
+    exit status stays non-zero so the extension can say so out loud.
 
-    Run as a subprocess because an in-process harness cannot observe the exit
-    code pi depends on. Only the crash is synthetic — the entry point, the
-    recording, the stdout contract and the exit code are the shipped ones.
+    Run as a subprocess because the exit status is the thing under test. Only the
+    crash is synthetic — the entry point and the recording are the shipped ones.
     """
     scripts = tmp_path / "pi-runtime"
     shutil.copytree(PI_SCRIPTS, scripts, ignore=shutil.ignore_patterns("__pycache__"))
     handler = scripts / f"{event}.py"
     text = handler.read_text()
-    crash = '    raise RuntimeError("synthetic STAS-267 handler crash")\n'
+    crash = '    raise RuntimeError("synthetic STAS-368 handler crash")\n'
     handler.write_text(text.replace("def main():\n", "def main():\n" + crash, 1))
 
     data_dir = tmp_path / "pi-data"
@@ -139,17 +134,17 @@ def test_pi_fatal_hook_records_and_announces_without_failing_the_host(
         check=False,
     )
 
-    assert result.returncode == 0, f"pi host must not see a failing hook:\n{result.stderr}"
-    message = json.loads(result.stdout)["systemMessage"]
-    assert message.strip(), "the pi host must be told the hook failed"
-    assert "stash status" in message
-    assert "synthetic STAS-267 handler crash" in result.stderr
+    assert result.returncode != 0, (
+        "a fatal hook must not report success to its dispatcher:\n" + result.stdout
+    )
+    assert result.stdout == "", "the retired pi stdout contract must not come back"
+    assert "synthetic STAS-368 handler crash" in result.stderr
 
     status = read_upload_status(data_dir)
     assert status["health"] == "failing"
     assert status["consecutive_failures"] == 1
     assert status["last_failure_operation"] == "hook_run"
-    assert "synthetic STAS-267 handler crash" in status["last_error"]
+    assert "synthetic STAS-368 handler crash" in status["last_error"]
 
 
 def test_codex_hooks_json_template_shape() -> None:

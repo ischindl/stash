@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Pi user_message: stream prompt to Stash."""
+"""Pi `before_agent_start` event (user-authored only): stream prompt to Stash."""
 
 from adapt import adapt_prompt
 from config import (
@@ -30,4 +30,4 @@ def main():
 
 
 if __name__ == "__main__":
-    guard_hook_main(DATA_DIR, main, host_exits_zero=True)
+    guard_hook_main(DATA_DIR, main, host_exits_zero=False)

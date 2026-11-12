@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Pi tool_use: stream tool use to Stash."""
+"""Pi `tool_result` event: stream a finished tool call to Stash.
+
+pi's `tool_call` fires before the tool runs and carries no result, so the
+extension forwards from the result side only."""
 
 from adapt import adapt_tool_use
 from config import (
@@ -31,4 +34,4 @@ def main():
 
 
 if __name__ == "__main__":
-    guard_hook_main(DATA_DIR, main, host_exits_zero=True)
+    guard_hook_main(DATA_DIR, main, host_exits_zero=False)

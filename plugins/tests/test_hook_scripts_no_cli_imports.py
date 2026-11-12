@@ -578,17 +578,6 @@ def _contract_offenders_in_tree(root: Path) -> list[str]:
     return offenders
 
 
-# A pi wrapper must be exactly this and nothing else: locate the tree, exec
-# `_run.sh` with the handler name, forward the arguments. Anything else there is
-# logic that runs on every pi event, before the handler's own guard is reached.
-PI_WRAPPER_TEMPLATE = re.compile(
-    r"\A#!/usr/bin/env bash\n"
-    r"set -euo pipefail\n"
-    r'SCRIPT_DIR="\$\(cd "\$\(dirname "\$0"\)" && pwd\)"\n'
-    r'exec "\$SCRIPT_DIR/\.\./_run\.sh" (on_[a-z_]+) "\$@"\n\Z'
-)
-
-
 def _main_tail(path: Path) -> list[ast.stmt]:
     """The body of a script's `if __name__ == "__main__":` block."""
     for node in ast.parse(path.read_text()).body:
@@ -620,8 +609,9 @@ def test_shipped_trees_actually_have_scripts_to_scan() -> None:
     }
 
     assert all(files for files in scanned.values()), f"empty scripts tree in {scanned}"
-    assert any(path.suffix != ".py" for files in scanned.values() for path in files), (
-        "the bash hook wrappers must stay inside the scan"
+    assert all(path.suffix == ".py" for files in scanned.values() for path in files), (
+        f"shipped non-.py files under scripts/: "
+        f"{sorted(str(p) for files in scanned.values() for p in files if p.suffix != '.py')}"
     )
 
 
@@ -770,41 +760,11 @@ def test_shipped_hook_scripts_resolve_against_the_installed_package(agent: str, 
 
 
 @pytest.mark.parametrize("tree", [SOURCE_TREE, ASSET_TREE])
-def test_pi_wrappers_exec_run_sh_and_nothing_else(tree: str) -> None:
-    """A pi wrapper is four lines: find the tree, exec `_run.sh`, forward `$@`.
-
-    Wrapper code runs on every pi event before any handler-level guard exists and
-    nothing reports its failure, so a wrapper that grows logic is a silent
-    behaviour change on the user's machine.
-    """
-    scripts = _tree_root("pi", tree) / "scripts"
-    handlers = {path.stem for path in scripts.glob("on_*.py")}
-    offenders: list[str] = []
-    reached: set[str] = set()
-
-    for wrapper in sorted(path for path in (scripts / "hooks").iterdir() if path.is_file()):
-        body = wrapper.read_text()
-        shape = PI_WRAPPER_TEMPLATE.match(body)
-        if shape is None:
-            offenders.append(f"{_display(wrapper)} is not the exec-`_run.sh` template:\n{body}")
-            continue
-        handler = shape.group(1)
-        reached.add(handler)
-        if handler not in handlers:
-            offenders.append(
-                f"{_display(wrapper)} execs `{handler}`, which this tree does not ship"
-            )
-
-    assert offenders == []
-    assert reached == handlers, f"shipped handlers no wrapper reaches: {handlers - reached}"
-
-
-@pytest.mark.parametrize("tree", [SOURCE_TREE, ASSET_TREE])
 def test_pi_handlers_exit_through_the_fail_loud_guard(tree: str) -> None:
-    """pi starts the handler itself, so the handler owns its own failure report.
+    """pi's handlers guard their own entry point, so a direct run records too.
 
-    The dispatched agents get this from `stash hook run`; pi has no dispatcher
-    row, so without this call a fatal crash is invisible to `stash status`.
+    `stash hook run pi <event>` guards the dispatch as well; this call is what
+    keeps a crash recorded when someone runs `python on_stop.py` by hand.
     """
     scripts = _tree_root("pi", tree) / "scripts"
     unrouted = [

@@ -1,12 +1,16 @@
-"""Tests for `stash tools install --agent pi` (STAS-218).
+"""Tests for `stash tools install --agent pi` (STAS-218, re-measured by STAS-368).
 
-pi core has no MCP client — its agent-dir mcp.json is only read when the
-pi-mcp-adapter extension is registered in the agent dir's settings.json
-(runtime-verified against the real pi binaries in Step 1). So the install
-path must (a) fail loudly instead of writing a config pi would silently
-ignore, (b) land in the agent dir (never the project .mcp.json), and (c)
-preserve pi-owned fields (settings, foreign servers with adapter options)
-through the shared stash marker/merge discipline.
+pi 1.x reads `<agentDir>/mcp.json` itself: verified against the installed
+1.5.2 bundle, where `pi mcp list` connects to a stdio server named in that file
+with no other extension registered. STAS-218's premise — that pi core has no MCP
+client and needs the pi-mcp-adapter extension registered first — held for the pi
+build of its day and is gone now, so the install path must (a) write the agent dir
+directly (never the project .mcp.json) and (b) preserve pi-owned fields
+(`settings`, a foreign server's own options) through the shared marker/merge
+discipline.
+
+`mcp list` also proves an unknown top-level key (`stashManagedServers`, which our
+merge writes) does not stop pi from parsing the file.
 """
 
 from __future__ import annotations
@@ -62,10 +66,6 @@ def home(tmp_path, monkeypatch):
     return home_dir
 
 
-def _write_settings(home_dir: Path, packages) -> None:
-    (home_dir / ".pi" / "agent" / "settings.json").write_text(json.dumps({"packages": packages}))
-
-
 def _agent_mcp(home_dir: Path) -> Path:
     return home_dir / ".pi" / "agent" / "mcp.json"
 
@@ -94,43 +94,23 @@ def test_pi_agent_dir_expands_tilde_home(home, monkeypatch):
     assert main._pi_agent_dir() == home / "boxes" / "pi"
 
 
-# --- fail-loud gate: no adapter registration, no write ------------------------
+# --- no registration step: pi reads the file we write -------------------------
 
 
-def test_install_pi_without_settings_json_fails_and_writes_nothing(home):
+def test_install_pi_needs_no_settings_json_and_writes_only_the_agent_dir(home):
+    """The gate this replaces refused the install until pi-mcp-adapter was
+    registered, telling the user to `pi install npm:pi-mcp-adapter` for a config
+    pi 1.x would have read anyway. An empty agent dir must now just work — and must
+    still not touch the project's .mcp.json."""
     result = _invoke("linear", "--agent", "pi")
 
-    assert result.exit_code == 1
-    assert "pi install npm:pi-mcp-adapter" in result.stderr
-    assert not _agent_mcp(home).exists()
+    assert result.exit_code == 0, result.stderr
+    assert json.loads(_agent_mcp(home).read_text())["mcpServers"]["linear"]["command"] == "npx"
+    assert not (home / ".pi" / "agent" / "settings.json").exists()
     assert not (home.parent / ".mcp.json").exists()  # cwd must stay untouched
 
 
-def test_install_pi_without_registered_adapter_fails(home):
-    _write_settings(home, ["npm:pi-context", {"source": "npm:pi-web-access"}])
-
-    result = _invoke("linear", "--agent", "pi")
-
-    assert result.exit_code == 1
-    assert "pi-mcp-adapter" in result.stderr
-    assert not _agent_mcp(home).exists()
-
-
-def test_install_pi_fails_loud_on_malformed_settings_json(home):
-    (home / ".pi" / "agent" / "settings.json").write_text("{broken")
-
-    result = _invoke("linear", "--agent", "pi")
-
-    assert result.exit_code == 1
-    assert "not valid JSON" in result.stderr
-    assert not _agent_mcp(home).exists()
-
-
-# --- gate satisfied: writes into the agent dir, preserving pi's fields --------
-
-
 def test_install_pi_writes_agent_dir_and_preserves_foreign_pi_config(home):
-    _write_settings(home, [{"source": "npm:pi-mcp-adapter", "extensions": ["+index.ts"]}])
     chrome = {"command": "npx", "args": ["-y", "chrome-devtools-mcp"], "directTools": True}
     _agent_mcp(home).write_text(
         json.dumps({"settings": {"toolPrefix": "mcp"}, "mcpServers": {"chrome-devtools": chrome}})
@@ -152,18 +132,7 @@ def test_install_pi_writes_agent_dir_and_preserves_foreign_pi_config(home):
     assert not (home.parent / ".mcp.json").exists()  # pi leg never writes Claude's file
 
 
-def test_install_pi_accepts_string_package_registration(home):
-    _write_settings(home, ["npm:pi-mcp-adapter"])
-
-    result = _invoke("linear", "--agent", "pi")
-
-    assert result.exit_code == 0, result.stderr
-    assert _agent_mcp(home).exists()
-
-
 def test_install_pi_is_idempotent(home):
-    _write_settings(home, ["npm:pi-mcp-adapter"])
-
     assert _invoke("linear", "--agent", "pi").exit_code == 0
     before = _agent_mcp(home).read_text()
     assert _invoke("linear", "--agent", "pi").exit_code == 0
@@ -171,7 +140,6 @@ def test_install_pi_is_idempotent(home):
 
 
 def test_install_pi_refuses_to_clobber_foreign_server_with_same_name(home):
-    _write_settings(home, ["npm:pi-mcp-adapter"])
     user_entry = {"command": "user-owned-linear"}
     _agent_mcp(home).write_text(json.dumps({"mcpServers": {"linear": user_entry}}))
 
@@ -188,9 +156,6 @@ def test_install_pi_respects_agent_dir_env_override(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("PI_CODING_AGENT_DIR", str(tmp_path / "agentdir"))
     (tmp_path / "agentdir").mkdir()
-    (tmp_path / "agentdir" / "settings.json").write_text(
-        json.dumps({"packages": ["npm:pi-mcp-adapter"]})
-    )
     monkeypatch.chdir(tmp_path)
 
     result = _invoke("linear", "--agent", "pi")
@@ -211,8 +176,6 @@ def test_install_unknown_agent_fails_with_supported_list(home):
 
 
 def test_install_pi_json_reports_status(home):
-    _write_settings(home, ["npm:pi-mcp-adapter"])
-
     result = runner.invoke(main.app, ["tools", "install", "linear", "--agent", "pi", "--json"])
 
     assert result.exit_code == 0

@@ -1,11 +1,13 @@
 # Stash Plugin for Pi
 
-Streams Pi coding sessions to Stash using Pi's native `~/.pi/hooks/` system.
+Streams Pi coding sessions to Stash through a Pi 1.x **extension**.
 
 ## Prerequisites
 
 - `stash` CLI installed and logged in
-- Pi installed with hook directory support (`~/.pi/hooks/`)
+- Pi 1.x, which loads TypeScript extensions from its agent dir. Pi's older
+  `~/.pi/hooks/` directory is dead: pi warns that hooks were renamed to
+  extensions and never runs what is in there.
 
 Streaming is gated globally: it is on whenever you are signed in and have not
 stopped recording (`stash stop`). There is no per-repo manifest — the handlers
@@ -14,63 +16,55 @@ with the CLI rather than being something you install beside it.
 
 ## Install
 
-The recommended way to install the Pi hooks is through the `stash` CLI, which
-supersedes the manual instructions below: `stash settings` (or the interactive
-`stash connect` flow) detects Pi on your machine and copies the self-contained
-hook runtime from the shipped assets under `stashai/plugin/assets/pi/` into
-`~/.pi/` — `_run.sh` and the `on_*.py` handlers at the top level, the five event
-wrappers under `~/.pi/hooks/`, and the Stash block in `~/.pi/AGENTS.md`. No
-symlinks are created, so the install keeps working even if the stash checkout
+`stash setup --record --agents pi` (or the interactive `stash connect` /
+`stash settings` flow) copies `extensions/stash.ts` from the shipped assets under
+`stashai/plugin/assets/pi/` into pi's agent dir — `$PI_CODING_AGENT_DIR` or
+`~/.pi/agent`, call it `<agentDir>` — as `<agentDir>/extensions/stash.ts`, and
+writes the Stash block into `~/.pi/AGENTS.md`. That single file is the whole
+install: pi picks up every `*.ts` in `<agentDir>/extensions/` at startup, with no
+registration in `settings.json` and no restart ritual beyond starting pi again. The
+installer copies bytes and never symlinks, so it keeps working if the stash checkout
 or pipx env moves, and it never depends on this repo's location.
 
-Manual install (fallback, when you cannot run the CLI installer) — copy the
-runtime, do not symlink the wrappers alone: each wrapper execs
-`"$SCRIPT_DIR/../_run.sh"`, so `_run.sh` and the `on_*.py` handlers have to sit
-in `~/.pi/` beside `hooks/`. A hooks-only install makes every event exit
-non-zero, and Pi drops a failing hook without saying so.
+Manual install, when you cannot run the CLI installer:
 
 ```bash
 cd path/to/stash/plugins/pi-plugin
-mkdir -p ~/.pi/hooks
-
-# Runtime beside the hooks directory — the layout _run.sh resolves against
-cp scripts/_run.sh scripts/*.py ~/.pi/
-cp scripts/hooks/* ~/.pi/hooks/
-chmod +x ~/.pi/_run.sh ~/.pi/hooks/*
+mkdir -p ~/.pi/agent/extensions
+cp extensions/stash.ts ~/.pi/agent/extensions/stash.ts
 
 # Agent context — tells Pi it has the stash CLI available
 cat AGENTS.md >> ~/.pi/AGENTS.md
 ```
 
-## How Pi hooks work
+## How it works
 
-Pi reads executable files from `~/.pi/hooks/` — one file per event name.
-Each hook receives JSON on stdin with the event payload and must exit
-with status 0. The hook files in `scripts/hooks/` are thin bash wrappers
-that delegate to `_run.sh`, which resolves the correct Python interpreter
-and dispatches to the corresponding `on_*.py` handler.
+`extensions/stash.ts` is a transport and nothing else. On each pi event it writes
+one JSON object to the stdin of `stash hook run pi <event>`, which runs the
+matching `on_*.py` handler shipped inside the installed `stashai` package. Every
+Stash decision — what to record, how to name pi's fields, when to upload — lives in
+that Python, so a package upgrade reaches a machine on its next event and the
+extension itself changes almost never.
 
-## When a hook fails
+The three values pi puts on its context object and never on an event — session id,
+working directory, transcript path — are read in the extension and sent with the
+payload. A payload missing one of its required keys raises in `scripts/adapt.py`;
+the adapter never invents a value.
 
-A hook that crashes is never silent. Every shipped handler runs its work inside
-`stashai.plugin.hooks.guard_hook_main`, which on a fatal error:
+## When it fails
 
-- records the failure in `~/.stash/plugins/pi/upload_status.json` under the
-  `hook_run` operation — error text, timestamp, and a growing
-  `consecutive_failures` count. That file is what `stash status` reads, so Pi's
-  row turns `failing`, and the traceback is printed rather than swallowed; and
-- tells you in the conversation: a yellow `systemMessage` reading "Stash hook
-  failed; this conversation may not be visible to your team. Run `stash status`
-  for details."
+A failure is never silent. The extension has no try/catch: a child process that
+cannot start, or that exits non-zero, is announced on stderr: a line beginning
+'stash pi hook failed', then the event and the reason. The handler it was talking to records the
+same crash in `~/.stash/plugins/pi/upload_status.json` under the `hook_run`
+operation — error text, timestamp, and a growing `consecutive_failures` count. That
+file is what `stash status` reads, so Pi's row turns `failing` and the traceback is
+printed rather than swallowed.
 
-Pi requires exit status 0 and one JSON object on stdout, so a failed hook still
-exits 0 once it has announced itself — the record and the message are the point.
-
-The handlers copied into `~/.pi/` call into the installed `stashai` package, so
-the copied generation needs a package at least as new as itself: the floor is the
-first release whose `stashai.plugin.hooks` offers `guard_hook_main`. Convergence
-is the product's job, not a manual copy — `stash connect` (or `stash settings`)
-re-copies the handlers from the assets of the package you actually have installed.
+stdout is deliberately dropped: an extension's child process writes to a terminal pi
+is also drawing on, and pi reads nothing from it. The upload-health notices the
+handlers print on stdout therefore reach a manual `python on_stop.py` run, not a live
+pi session — `stash status` is the channel for a live one.
 
 ## Commands
 
@@ -84,19 +78,20 @@ Everything is a plain `stash` CLI subcommand — no slash commands or skills:
 
 ## What streams
 
-| Pi event | Stash event | Notes |
+| Pi 1.x event | Stash event | Notes |
 |---|---|---|
 | `session_start` | — (warms cache) | Session record created, skills synced |
-| `user_message` | `user_message` | User prompt streamed |
-| `tool_use` | `tool_use` | Tool invocations streamed (bash, read, write, edit, grep, …) |
-| `assistant_message` | `assistant_message` + transcript upload | Per-turn assistant response; transcript uploaded in background with 60s cooldown |
-| `session_end` | `session_end` | Session finalized, state cleared |
+| `before_agent_start` (user-authored only) | `prompt` | An extension-injected `custom` message is not a prompt |
+| `tool_result` | `tool_use` | Finished tool call streamed (bash, read, write, edit, grep, find, …) |
+| `agent_settled` | `stop` + transcript upload | The settled turn's content travels in the transcript, uploaded in the background with a 60s cooldown |
+| `session_shutdown` | `session_end` | Session finalized, state cleared |
 
 ## Known gaps
 
-1. **Pi hook coverage depends on Pi's runtime.** Pi's hook system is still
-   maturing. Check Pi's documentation for which events fire reliably and
-   whether all tool types are covered.
+1. **Pi extension coverage depends on Pi's runtime.** The five events above are
+   the ones the extension forwards; pi fires more than it needs to and its
+   vocabulary can move between releases. Check pi's own documentation for which
+   events fire reliably and whether all tool types are covered.
 2. **macOS / Linux only.** Pi runs on macOS and Linux. No Windows support.
    (Consistent with all existing Stash streaming plugins.)
 
