@@ -461,11 +461,16 @@ def guard_hook_main(
     """Run a hook's entry point so a fatal failure can never be invisible.
 
     Exactly two production entry points call this, and both are load-bearing:
-    ``cli.main.hook_run`` (every dispatchable agent) and the ``__main__`` of each
-    shipped pi handler (pi's hooks never enter ``hook_run``). A crash is recorded
-    in the same ``upload_status.json`` that ``stash status`` reads, and the
-    traceback is always shown — never swallowed, and never replaced by a success
-    record for work the hook did not do.
+    ``cli.main.hook_run`` wraps the dispatch of every dispatchable agent, pi among
+    them, and the ``__main__`` tail of each shipped pi handler guards its own run.
+    The tail is not redundant with the wrapper — because ``hook_run`` runpy's the
+    handler with ``run_name="__main__"``, a dispatched pi hook runs the tail *inside*
+    the wrapper, so one dispatch records once per entry point (twice when both point
+    at the same existing directory), and the tail is the only recorder when someone
+    runs ``python on_stop.py`` directly. A crash is recorded in the same
+    ``upload_status.json`` that ``stash status`` reads, and the traceback is always
+    shown — never swallowed, and never replaced by a success record for work the
+    hook did not do.
 
     ``host_exits_zero`` is a per-host tail, not a second mechanism. pi requires
     exit 0 and reads one JSON object on stdout, so its failure is additionally

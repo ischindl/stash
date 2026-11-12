@@ -7,11 +7,16 @@ swallow a Stash API failure (upload, session-create, tool-use, session-end).
 A swallow lets telemetry vanish without a trace; these must fail loud to the
 agent's hook runner instead.
 
-Two legitimate parse/IO guards are allowed to keep a default, but only under a
-narrow, specific exception type — never a bare catch-all:
+One legitimate parse guard is allowed to keep a default, but only under a narrow,
+specific exception type - never a bare catch-all:
   - cursor adapt.py `_parse_tool_output` -> `except json.JSONDecodeError`
-  - claude config.py `get_stdin_data` / `_read_json` -> `except (json.JSONDecodeError, OSError)`
-hermes and pi have NO such parse guards — every Stash call in their on_* hooks
+This allowance used to name claude's `config.py get_stdin_data` / `_read_json` as
+well. Those functions no longer exist in claude's tree: the stdin reader moved into
+the shared `stashai/plugin/agent_config.py`, which this file's directory scan never
+covered, so the permission outlived its subject and the real catch-all sat
+unscanned. `test_shared_stdin_reader_has_no_catch_all` below now locks that module,
+and `get_stdin_data` raises instead of defaulting (STAS-417).
+hermes and pi have NO parse guards - every Stash call in their on_* hooks
 is fail-loud, so no narrow guard is allowed or needed there.
 
 This test also asserts the STAS-019 silent-default (`if not cwd: return False`)
@@ -38,6 +43,7 @@ Deltas from the original STAS-071/083 shape, forced by today's layout:
 
 from __future__ import annotations
 
+import ast
 import re
 from pathlib import Path
 
@@ -47,6 +53,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 SRC_DIR = REPO_ROOT / "plugins"
 DST_DIR = REPO_ROOT / "stashai" / "plugin" / "assets"
 CLI_MAIN = REPO_ROOT / "cli" / "main.py"
+SHARED_READER = REPO_ROOT / "stashai" / "plugin" / "agent_config.py"
 
 BARE_CATCHALL = re.compile(r"^\s*except (Exception|BaseException):")
 UNNAMED_CATCHALL = re.compile(r"^\s*except:")
@@ -121,6 +128,89 @@ def test_no_swallow_in_source_and_shipped_assets(agent: str, tree: str) -> None:
     assert not offenders, (
         f"{agent} {tree} hooks swallow errors; Stash API failures must fail loud:\n"
         + "\n".join(offenders)
+    )
+
+
+def _reads_sys_stdin(node: ast.AST) -> bool:
+    for child in ast.walk(node):
+        if (
+            isinstance(child, ast.Attribute)
+            and child.attr == "stdin"
+            and isinstance(child.value, ast.Name)
+            and child.value.id == "sys"
+        ):
+            return True
+    return False
+
+
+def _catch_all_lines(func: ast.AST) -> list[int]:
+    """Line numbers of handlers inside `func` that catch everything."""
+    lines: list[int] = []
+    for handler in ast.walk(func):
+        if not isinstance(handler, ast.ExceptHandler):
+            continue
+        if handler.type is None:
+            lines.append(handler.lineno)
+            continue
+        caught = (
+            handler.type.id if isinstance(handler.type, ast.Name) else ast.unparse(handler.type)
+        )
+        if caught in {"Exception", "BaseException"}:
+            lines.append(handler.lineno)
+    return lines
+
+
+def test_shared_stdin_reader_has_no_catch_all() -> None:
+    """The shared stdin reader every agent re-exports must never swallow a parse.
+
+    `stashai/plugin/agent_config.py` is the single `get_stdin_data` behind all eight
+    agents' `config.py`, so a catch-all there out-ranks every per-agent hook script -
+    and it sat outside the directory scan above, which only walks
+    `plugins/<agent>-plugin/scripts/` and `stashai/plugin/assets/<agent>/scripts/`.
+    That is how `except Exception: return {}` survived there while this file policed
+    the trees around it: every malformed, truncated, or absent payload became `{}` and
+    was then reported as a payload problem ("keys present: []"), which is how a test
+    payload came to be counted as a failure of the operator's own install (STAS-417).
+
+    Locking the rule by shape (a function that reads `sys.stdin` may not catch all)
+    rather than by name, so a renamed or added reader is covered too.
+    """
+    # The lock has to be able to fail, so first prove the detector sees the exact
+    # shape this card removed. Without this, a scan that silently matched nothing
+    # would look identical to a clean module.
+    poisoned = ast.parse(
+        "import json, sys\n"
+        "def get_stdin_data():\n"
+        "    try:\n"
+        "        return json.loads(sys.stdin.read())\n"
+        "    except Exception:\n"
+        "        return {}\n"
+    )
+    removed_shape = poisoned.body[1]
+    assert _reads_sys_stdin(removed_shape), "the detector misses a stdin reader"
+    assert _catch_all_lines(removed_shape) == [5], "the detector misses the old swallow"
+
+    source = SHARED_READER.read_text(encoding="utf-8")
+    tree = ast.parse(source, filename=str(SHARED_READER))
+    readers = [
+        node
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and _reads_sys_stdin(node)
+    ]
+    relative = SHARED_READER.relative_to(REPO_ROOT)
+    assert readers, (
+        f"no function in {relative} reads sys.stdin any more; this lock is now "
+        "vacuous - move it with the reader instead of deleting it"
+    )
+
+    offenders = [
+        f"{relative}:{line}: bare catch-all inside {reader.name}()"
+        for reader in readers
+        for line in _catch_all_lines(reader)
+    ]
+    assert not offenders, (
+        "a stdin reader swallows the payload error; a required input must fail loud "
+        "with what actually arrived:\n" + "\n".join(offenders)
     )
 
 

@@ -27,10 +27,36 @@ def data_dir_from_env(env_var: str, default_subpath: str) -> Path:
 
 
 def get_stdin_data() -> dict:
+    """Parse the agent's one-JSON-object payload from stdin, or say what arrived.
+
+    The payload is a required input, so an absent one is a broken transport and the
+    only useful fact about it is what actually landed on stdin. This used to return
+    `{}` for anything unparseable, which made an absent payload report itself as
+    "keys present: []" - the message a payload that genuinely WAS an empty object
+    produces - so no reader could tell a broken transport from an empty event, and a
+    fabricated failure count could not be traced to whoever sent it (STAS-417).
+
+    An empty object is still returned: `{}` is valid JSON, and refusing a payload
+    without a `session_id` belongs to the adapter, not here. One validator.
+    """
+    raw = sys.stdin.read()
+    if not raw:
+        raise ValueError(
+            "stash hook run: stdin carried 0 bytes; the agent transport must pipe one "
+            "JSON payload object"
+        )
     try:
-        return json.loads(sys.stdin.read())
-    except Exception:
-        return {}
+        payload = json.loads(raw)
+    except json.JSONDecodeError as error:
+        raise ValueError(
+            f"stash hook run: stdin is not valid JSON ({len(raw)} bytes, starts "
+            f"{raw[:40]!r}): {error}"
+        ) from error
+    if not isinstance(payload, dict):
+        raise ValueError(
+            f"stash hook run: stdin payload must be a JSON object, got {type(payload).__name__}"
+        )
+    return payload
 
 
 def _read_json(path: Path) -> dict:
