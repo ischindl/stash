@@ -83,10 +83,57 @@ The engine-side durable per-task cursor stays a **named follow-up**, not a chang
 verdict. It is a separate repository's design decision: a capture that uploads only what it has not
 uploaded, with the terminal anchor always sent.
 
+## Step 5 / AC4 disposition: EVIDENCE-BLOCKED, with the reads that failed
+
+AC4 asked for at least three strictly-advancing automated dispatches on the founder's stack. The
+measured count is **zero**, and the observation is blocked for two independent reasons, each of which
+alone would block it:
+
+| Input | Measured value | Source |
+| --- | --- | --- |
+| Scheduled curator lanes that ticked in 24h | 32 | founder `agents` table, 2026-11-12T02:03Z |
+| …of which resolved `ran` | **0** | same |
+| …of which advanced `curated_through` in 24h | **0** | same |
+| Newest `curated_through` on any lane | 2026-11-01T10:37:20Z (11 days stale) | same |
+| Newest `last_run_at` on any lane | 2026-11-11T15:14:17Z (the beat is alive) | same |
+| Fleet state behind those zeroes | 28 lanes `skipped_credits` at 11-23 runs against an allowance of 10; 4 `failed` | same |
+
+**Reason 1, the deployed build predates every fix this card makes.** The running image is
+`stash-backend:main-11e0644a-pi`, built from a commit dated 2026-10-10, and it carries the
+smallest-id tie-break guard that Step 1 replaces, no catch-up chain at all, and none of AC3. Its
+schema is at alembic 0225 against local main's 0270, and it has no `catchup_runs` or
+`catchup_window_started` columns - the chain's storage does not exist. A live pass on this build
+therefore cannot demonstrate this card's fixes even if it ran.
+
+**Reason 2, the fleet is frozen by policy, not by slowness.** Zero dispatches are being released at
+all, because every internal lane has spent a 10-run monthly allowance (11 to 23 runs each). Lifting
+that means raising the allowance or moving the account to Pro: a billing decision on the founder's
+account, not a technical step this card may take.
+
+**The ETA is therefore not computable, and is not estimated here.** An ETA needs an observed drain
+rate; the observed rate over 24h is zero, so any figure would be invented. The inputs that will make
+it computable the moment dispatch is released are named so nobody has to rediscover them: the
+per-lane identity-collapsed backlog from `curator_event_backlog` (`distinct_events`, spot-measured at
+492 and 135 on two frozen internal lanes, against `raw_rows` of 174,605 and 77,198 - the ratio is
+what makes a volume estimate misleading), the passes-per-day the ceiling now allows, and the
+strictly-increasing `curated_through` readings that Step 5's check reads. Note that at 492 distinct
+events the larger spot-measured lane is on the order of one pass of work, so the binding constraint
+on the founder's drain is the freeze, not the backlog volume.
+
+**What the operator leg is.** Exactly one thing: a rebuilt backend image carrying this card's
+commits, re-pinned as the override tag through the STAS-198 mechanism across `backend`, `worker`,
+`heavy-worker` and `beat`, rollback tags untouched, one beat - and then the allowance decision, which
+is separate and prior. Until the first, no fix in this card is live; until the second, no lane
+advances and AC4 stays where it is. The clock on AC4's cadence half starts at ship, as planned.
+
 ## File map
 
 `generate.sh` reproduces `measurement.txt` end to end, read-only. `provenance.txt` names the repos,
 tips, commands and timestamps. `MANIFEST.sha256` covers every file here.
+
+The Step 5 / AC4 record sits in this directory rather than a separate one because the card's declared
+File Scope admits evidence artifacts only under `stas-376-engine-evidence/`; that section is about the
+deployed founder stack, not the engine repository, and is titled to say so.
 
 The sibling `stas-*-engine-evidence/` directories carry `findings.md`, `engine-commits.txt`,
 `engine-diff.txt` and `raw/` because those cards authored an engine branch. This verdict authored
