@@ -209,6 +209,14 @@ By default `stash` is the released PyPI build (`uv tool` install, self-updating)
 - `docker-compose.prod.yml` and the **GHCR images are for self-hosters only** — they are NOT how joinstash.ai deploys. Editing them does not affect prod.
 - `publish.yml` (on push to `main`) publishes the **`stashai` CLI to PyPI** on a version bump and builds GHCR release images — this is CLI/self-host distribution, separate from the Render app deploy.
 
+### Publishing and the founder stack (our own deployment)
+**Nothing auto-deploys our stack; after any merge to `main`, run `scripts/publish-trunk.sh`.**
+
+- The sentence above describes hosted prod on Render only. Our founder stack moves when a human runs the runbook in `docs/trunk-publish-and-deploy.md`, and `pushAfterMerge` is off, so an unpushed `main` stays on this machine.
+- The fork (`ischindl/stash`) is a mirror and a pull-request source, never a line of its own. The script fast-forwards `refs/heads/main` and `refs/heads/deploy/main` by literal refspec, never upstream, never tags, never a force.
+- `refs/heads/deploy/main` names the commit whose **image pair** is live on that stack. It moves only to a `main` commit built from a detached worktree, proven against a copy of the founder database, and verified live (`X-Stash-Cli-Latest` equals the version at that ref). Both tags in `docker-compose.founder.yml` name that one commit; `backend/tests/test_founder_deploy_pin.py` reddens the suite when they do not.
+- Pull requests stay operator-gated (see the clause above). Never push to `origin`.
+
 # 12-rule template
 
 These rules apply to every task in this project unless explicitly overridden.

@@ -1,0 +1,62 @@
+# Founder-stack pin: the one tracked file that names the commit our own stack runs.
+#
+# Self-hosters never use this file. It is the fourth `-f` overlay, after
+# docker-compose.prod.yml, docker-compose.local.yml and docker-compose.dogfood.yml,
+# and it does exactly one thing: it retags every lane to a locally built image whose
+# tag carries the commit it was built from. Before this file existed that knowledge
+# lived in untracked root files in one checkout, so no other worktree could see what
+# the founder stack was running and no test could read it.
+#
+# BOTH TAGS BELOW MUST NAME THE SAME COMMIT. A pair that names two commits is how a
+# frontend-only deploy once shipped a Test button calling a route the running backend
+# did not have: the founder clicked it and it 404'd. The guard is
+# backend/tests/test_founder_deploy_pin.py, which derives the lane set from
+# docker-compose.prod.yml and compares the two hexes, so adding a queue without
+# pinning it here, or moving one lane alone, fails the suite.
+#
+# The images are built from a tree detached at that exact commit by the runbook in
+# docs/trunk-publish-and-deploy.md, which also owns the proof-before-cutover recipe,
+# the `up -d --no-deps` command with its `-p stash` project name and full `-f` list,
+# and the rollback truth. Nothing is built here: no build section, no registry, no
+# interpolation and no default, because a defaulted tag lets a lane boot an image
+# nobody chose.
+#
+# BASE_IMAGE still has to be exported when running compose with this file even though
+# nothing builds: docker-compose.dogfood.yml declares it as a required interpolation
+# with no default, and compose resolves it for every command, `config` and `up`
+# included. Set it to the same commit's pi overlay, e.g.
+#   BASE_IMAGE=stash-backend:main-11e0644a-pi docker compose -p stash ... config --quiet
+#
+# NOT CUT OVER AS OF 2026-11-12. The backend hex below is what the stack runs: `docker
+# inspect stash-backend-1` reads stash-backend:main-11e0644a-pi. The frontend hex is the
+# pair it should run and does not: `docker inspect stash-frontend-1` reads
+# stash-frontend:main-db223464, a September build. No stash-frontend:main-11e0644a image
+# can exist, because `docker build frontend/` at 11e0644ad exits 1 on four test fixtures
+# that name types whose required fields they lack, and the commit that fixes those
+# fixtures is the commit that moves the migration chain off the founder database's stamp.
+# Both gates, the four errors and the measured readings are in
+# docs/trunk-publish-and-deploy.md. Until they clear, `up -d` with this file fails loudly
+# on a missing frontend image rather than booting a lane from a build nobody chose.
+# Delete this paragraph when the cutover lands and the container readings agree.
+
+services:
+  backend:
+    image: stash-backend:main-11e0644a-pi
+
+  worker:
+    image: stash-backend:main-11e0644a-pi
+
+  heavy-worker:
+    image: stash-backend:main-11e0644a-pi
+
+  sync-worker:
+    image: stash-backend:main-11e0644a-pi
+
+  reward-worker:
+    image: stash-backend:main-11e0644a-pi
+
+  beat:
+    image: stash-backend:main-11e0644a-pi
+
+  frontend:
+    image: stash-frontend:main-11e0644a
