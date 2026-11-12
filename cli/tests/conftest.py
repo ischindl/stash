@@ -13,9 +13,13 @@ the setup command that repairs them. A correct environment never notices
 this file exists.
 """
 
+import contextlib
 import importlib.metadata
 import importlib.util
+import json
+import sys
 import tomllib
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -101,6 +105,13 @@ def _plugin_data_dirs_stay_inside_the_test(monkeypatch, tmp_path):
     row into whoever's home directory ran the suite: the machine this feature was
     built on ended up with 44 failures attributed to a hook that never ran
     (STAS-267). A test that asserts on a data dir sets it to its own path.
+
+    Scope limit, stated so the name does not overpromise: this covers the
+    dispatcher's ``PLUGIN_DATA_DIRS`` map only. It cannot redirect the second
+    recorder a dispatch has — the shipped handler's own ``__main__`` tail records
+    into the directory its ``config.py`` bound from ``STASH_<AGENT>_DATA`` — so a
+    test that dispatches a real shipped handler needs ``isolated_hook_dispatch``
+    below, not this fixture alone (STAS-417).
     """
     import cli.main as cli_main
 
@@ -109,3 +120,120 @@ def _plugin_data_dirs_stay_inside_the_test(monkeypatch, tmp_path):
         "PLUGIN_DATA_DIRS",
         {agent: tmp_path / agent for agent in cli_main.PLUGIN_DATA_DIRS},
     )
+
+
+# Each plugin's config.py reads its own data dir from this env var at import time.
+_AGENT_DATA_DIR_ENV = {
+    "claude": "STASH_CLAUDE_DATA",
+    "codex": "STASH_CODEX_DATA",
+    "cursor": "STASH_CURSOR_DATA",
+    "gemini": "STASH_GEMINI_DATA",
+    "hermes": "STASH_HERMES_DATA",
+    "openclaw": "STASH_OPENCLAW_DATA",
+    "opencode": "STASH_OPENCODE_DATA",
+    "pi": "STASH_PI_DATA",
+}
+
+
+def _remap_plugin_data_dirs(
+    monkeypatch, tmp_path: Path, existing: tuple[str, ...]
+) -> dict[str, Path]:
+    """Point every registered plugin data dir under `tmp_path`, creating only the
+    named agents' directories. `PLUGIN_DATA_DIRS` is built from the real home at
+    import time, and a hook must never write outside the test tree."""
+    import cli.main
+
+    remapped: dict[str, Path] = {}
+    for agent in cli.main.PLUGIN_DATA_DIRS:
+        data_dir = tmp_path / ".stash" / "plugins" / agent
+        if agent in existing:
+            data_dir.mkdir(parents=True)
+        remapped[agent] = data_dir
+    monkeypatch.setattr(cli.main, "PLUGIN_DATA_DIRS", remapped)
+    return remapped
+
+
+def _fresh_hook_modules() -> None:
+    """Drop the cached flat hook modules.
+
+    The shipped hook scripts import flat siblings (``adapt``, ``config``), and
+    ``config.py`` fixes its data dir from the environment at import time. Leaving
+    a cached copy behind makes the next dispatch bind whichever agent imported
+    first, on whichever machine ran it.
+    """
+    for mod in ("adapt", "config"):
+        sys.modules.pop(mod, None)
+
+
+@contextlib.contextmanager
+def isolated_hook_dispatch(
+    monkeypatch, tmp_path: Path, agent: str, *, configured: bool
+) -> Iterator[dict[str, Path]]:
+    """Install every binding one in-process ``stash hook run <agent> <event>`` reads.
+
+    A dispatch has two recorders, both load-bearing: ``cli.main.hook_run`` guards
+    the dispatch into ``PLUGIN_DATA_DIRS[agent]``, and because that dispatch runpy's
+    the shipped handler with ``run_name="__main__``, the handler's own tail guards
+    again into the directory its ``config.py`` bound from ``STASH_<AGENT>_DATA``.
+    Redirecting only the first is what let a test write a fabricated failure into a
+    real home, where ``stash status`` then blamed it on the operator's agent install
+    (STAS-417). So this redirects both sinks, fakes ``HOME``/``Path.home``, writes a
+    config when the test needs ``is_configured()`` to answer instead of inheriting
+    the developer's, repoints both import-time ``_CONFIG_FILE`` bindings, and drops
+    the flat hook modules on entry and exit so this environment is the one that
+    binds.
+
+    The two sinks are deliberately separate, both existing. ``guard_hook_main``
+    records only into a directory that is already there, so one record per entry
+    point is what a caller can assert; collapsing them into one directory would
+    double a count another test pins to one.
+
+    Yields ``{"dispatcher": ..., "handler": ..., "home": ...}``.
+    """
+    import cli.main
+    import stashai.plugin.hooks as plugin_hooks
+    import stashai.plugin.scope as plugin_scope
+
+    dispatcher_dir = tmp_path / "dispatcher-sink" / agent
+    handler_dir = tmp_path / "handler-sink" / agent
+    dispatcher_dir.mkdir(parents=True)
+    handler_dir.mkdir(parents=True)
+
+    data_dirs = _remap_plugin_data_dirs(monkeypatch, tmp_path, existing=())
+    data_dirs[agent] = dispatcher_dir
+    monkeypatch.setattr(cli.main, "PLUGIN_DATA_DIRS", data_dirs)
+
+    home = tmp_path / "fake-home"
+    home.mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+
+    config_file = home / ".stash" / "config.json"
+    config_file.parent.mkdir(parents=True, exist_ok=True)
+    if configured:
+        # ``.invalid`` is the RFC 2606 TLD that never resolves, so a hook that got
+        # further than the test intends can never reach the real service. (A
+        # dotted-quad literal here would also read as a hardcoded version to
+        # test_env_guard's own text lock on this file.)
+        config_file.write_text(
+            json.dumps(
+                {
+                    "api_key": "test-key",
+                    "username": "alice-laptop",
+                    "base_url": "http://stash-tests.invalid",
+                }
+            )
+        )
+    for binding in (plugin_hooks, plugin_scope):
+        # Both bind the config path to the real home at import time, so patching
+        # ``Path.home`` does not reach them.
+        monkeypatch.setattr(binding, "_CONFIG_FILE", config_file)
+
+    env_var = _AGENT_DATA_DIR_ENV[agent]
+    monkeypatch.setenv(env_var, str(handler_dir))
+
+    _fresh_hook_modules()
+    try:
+        yield {"dispatcher": dispatcher_dir, "handler": handler_dir, "home": home}
+    finally:
+        _fresh_hook_modules()

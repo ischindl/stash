@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -12,6 +13,7 @@ from typer.testing import CliRunner
 
 import cli.main
 from cli.main import _HOOK_EVENTS, app
+from cli.tests.conftest import _fresh_hook_modules, _remap_plugin_data_dirs, isolated_hook_dispatch
 from stashai.plugin.upload_status import read_upload_status
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -20,20 +22,24 @@ FIXTURES = REPO_ROOT / "plugins" / "tests" / "fixtures"
 runner = CliRunner()
 
 
-def _remap_plugin_data_dirs(
-    monkeypatch, tmp_path: Path, existing: tuple[str, ...]
-) -> dict[str, Path]:
-    """Point every registered plugin data dir under `tmp_path`, creating only the
-    named agents' directories. `PLUGIN_DATA_DIRS` is built from the real home at
-    import time, and a hook must never write outside the test tree."""
-    remapped: dict[str, Path] = {}
-    for agent in cli.main.PLUGIN_DATA_DIRS:
-        data_dir = tmp_path / ".stash" / "plugins" / agent
-        if agent in existing:
-            data_dir.mkdir(parents=True)
-        remapped[agent] = data_dir
-    monkeypatch.setattr(cli.main, "PLUGIN_DATA_DIRS", remapped)
-    return remapped
+def _real_home_pi_status() -> Path:
+    """The operator's own pi health file, resolved from the real home.
+
+    Must be called BEFORE a test fakes ``HOME``: ``expanduser`` reads the
+    environment, so resolving it later silently points the snapshot at a fake home
+    and the comparison passes vacuously. Read as a snapshot, never as a fixture:
+    the assertion is that a test run leaves it exactly as it found it.
+    """
+    return Path(os.path.expanduser("~")) / ".stash" / "plugins" / "pi" / "upload_status.json"
+
+
+def _fingerprint(path: Path) -> tuple[object, ...]:
+    """Bytes plus mtime, or the fact of absence — so "nothing changed" cannot pass
+    vacuously on a machine where the file was never there."""
+    if not path.exists():
+        return ("absent",)
+    stat = path.stat()
+    return (path.read_bytes(), stat.st_mtime_ns, stat.st_size)
 
 
 def _crashing_agent_assets(monkeypatch, tmp_path: Path, agent: str) -> None:
@@ -157,25 +163,139 @@ def test_a_fatal_hook_for_an_unregistered_agent_records_nothing(
 def test_dispatching_pi_records_the_mistake_without_dispatching_pi(
     monkeypatch, tmp_path: Path
 ) -> None:
-    """pi has no dispatcher row by design, so `stash hook run pi <event>` is a
-    mistake. It is still a hook invocation that produced nothing, and pi's own
-    data dir is the sink — the invisibility this task fixes is exactly a
-    rejected pi hook that leaves no trace.
+    """An empty pi payload is a caller defect, and it must be recorded, twice: once
+    per entry point.
+
+    STAS-368 gave pi a dispatcher row, so `stash hook run pi <event>` is no longer
+    a mistake — it is the supported path, and it runpy's the shipped handler as
+    `__main__`. That handler's own tail is a second recorder, kept because it is
+    the only one for `python on_stop.py`. One dispatch through two existing
+    directories therefore leaves one record in each, and `consecutive_failures`
+    staying at 1 per directory is the proof the two sinks were not collapsed.
+
+    Recording stays on purpose (STAS-267): a hook invocation that produced nothing
+    is drift worth seeing. What STAS-417 removed is this test writing one of those
+    records into a real home, where `stash status` blamed it on the operator's own
+    pi install.
 
     `last_error` reads `Exit` because the CLI's user-error path signals with
     `typer.Exit`, whose message went to stderr; the record's job is that the
     failure is visible at all, not to repeat that line.
     """
-    data_dirs = _remap_plugin_data_dirs(monkeypatch, tmp_path, existing=("pi",))
+    real_status = _real_home_pi_status()
+    real_status_before = _fingerprint(real_status)
 
-    result = runner.invoke(app, ["hook", "run", "pi", "on_stop"], input="{}")
+    with isolated_hook_dispatch(monkeypatch, tmp_path, "pi", configured=True) as sinks:
+        result = runner.invoke(app, ["hook", "run", "pi", "on_stop"], input="{}")
 
-    assert result.exit_code == 1
-    status = read_upload_status(data_dirs["pi"])
-    assert status["health"] == "failing"
-    assert status["consecutive_failures"] == 1
-    assert status["last_failure_operation"] == "hook_run"
-    assert status["last_error"]
+        assert result.exit_code == 1
+        dispatcher = read_upload_status(sinks["dispatcher"])
+        assert dispatcher["health"] == "failing"
+        assert dispatcher["consecutive_failures"] == 1
+        assert dispatcher["last_failure_operation"] == "hook_run"
+        assert dispatcher["last_error"]
+        # The handler's own guard is a separate recorder, not a second write into
+        # the dispatcher's file.
+        handler = read_upload_status(sinks["handler"])
+        assert handler["consecutive_failures"] == 1
+        assert handler["last_failure_operation"] == "hook_run"
+
+    assert _fingerprint(real_status) == real_status_before, (
+        "a test moved the operator's real pi health counter"
+    )
+    assert "config" not in sys.modules, "the flat hook modules outlived the dispatch"
+
+    assert "config" not in sys.modules, "the flat hook modules outlived the dispatch"
+
+
+def test_empty_stdin_names_the_byte_count_and_stays_out_of_the_real_home(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """`stash hook run pi <event>` with nothing on stdin must fail loud at the parse,
+    naming how many bytes arrived — and must never touch the operator's health file.
+
+    `~/.stash/plugins/pi/upload_status.json` is a health signal the operator reads
+    to decide whether THEIR agent install is losing conversations. It is not a
+    queue for faults no transport of theirs produced. A `{}` default in the stdin
+    parser made those two cases indistinguishable: an absent payload and a payload
+    that was an empty object both surfaced as "keys present: []", so the file
+    carried a rising failure count for invocations that pi never sent (STAS-417
+    measured 6 -> 15 -> 21 in a day, all of them one pytest node).
+
+    Both entry points still record, in their own directories inside the test tree,
+    because a hook that produced nothing is worth seeing. The byte-count message is
+    what makes the caller nameable instead of invented.
+    """
+    real_status = _real_home_pi_status()
+    real_status_before = _fingerprint(real_status)
+
+    with isolated_hook_dispatch(monkeypatch, tmp_path, "pi", configured=True) as sinks:
+        result = runner.invoke(app, ["hook", "run", "pi", "on_stop"], input="")
+
+        assert result.exit_code == 1
+        dispatcher = read_upload_status(sinks["dispatcher"])
+        assert dispatcher["consecutive_failures"] == 1
+        assert "stdin carried 0 bytes" in dispatcher["last_error"], dispatcher["last_error"]
+        assert "keys present: []" not in dispatcher["last_error"], (
+            "an absent payload must not be reported as an empty object"
+        )
+        assert read_upload_status(sinks["handler"])["consecutive_failures"] == 1
+
+    assert _fingerprint(real_status) == real_status_before, (
+        "a test moved the operator's real pi health counter"
+    )
+
+
+def test_payload_that_is_an_empty_object_still_blames_the_payload(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """A `{}` payload must keep failing in the payload layer, not the parse layer.
+
+    `{}` is a valid JSON object, so the parser returns it and `adapt._require`
+    stays the single place that rejects a missing `session_id` — one codepath, no
+    second validator. This is the companion that keeps the two causes tellable
+    apart: "keys present: []" now means a caller really sent an empty object, which
+    is the reading the operator's file was already being given for a payload that
+    never existed.
+    """
+    with isolated_hook_dispatch(monkeypatch, tmp_path, "pi", configured=True) as sinks:
+        result = runner.invoke(app, ["hook", "run", "pi", "on_stop"], input="{}")
+
+        assert result.exit_code == 1
+        last_error = read_upload_status(sinks["dispatcher"])["last_error"]
+        assert "keys present: []" in last_error, last_error
+        assert "stdin carried" not in last_error
+
+
+def test_malformed_stdin_names_the_bytes_that_arrived(monkeypatch, tmp_path: Path) -> None:
+    """Truncated or non-JSON stdin is a transport bug, so it must say what arrived
+    rather than become an empty dict and be blamed on the payload."""
+    with isolated_hook_dispatch(monkeypatch, tmp_path, "pi", configured=True) as sinks:
+        result = runner.invoke(app, ["hook", "run", "pi", "on_stop"], input='{"session_id": "a"')
+
+        assert result.exit_code == 1
+        last_error = read_upload_status(sinks["dispatcher"])["last_error"]
+        assert "not valid JSON" in last_error, last_error
+        assert "keys present: []" not in last_error
+        assert read_upload_status(sinks["handler"])["consecutive_failures"] == 1
+
+
+def test_unconfigured_machine_short_circuits_empty_stdin_green_without_recording(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """The unconfigured short-circuit is a contract, not a swallow: an unsetup
+    machine exits 0 and leaves no record anywhere, even on stdin nothing about.
+
+    Both sinks are created existing so this stays a real assertion — a guard only
+    records into a directory already present, and had the test left them absent it
+    would pass for the wrong reason.
+    """
+    with isolated_hook_dispatch(monkeypatch, tmp_path, "pi", configured=False) as sinks:
+        result = runner.invoke(app, ["hook", "run", "pi", "on_stop"], input="")
+
+        assert result.exit_code == 0
+        assert not (sinks["dispatcher"] / "upload_status.json").exists()
+        assert not (sinks["handler"] / "upload_status.json").exists()
 
 
 def test_a_fatal_hook_for_a_known_agent_and_unknown_event_is_recorded(
@@ -231,13 +351,6 @@ def test_hook_run_codex_on_stop_executes(monkeypatch, tmp_path: Path) -> None:
             sys.modules.pop(mod, None)
 
     assert result.exit_code == 0
-
-
-def _fresh_hook_modules():
-    # The hook scripts import flat sibling modules (`adapt`, `config`); drop
-    # cached copies so each run binds the claude ones under this test's env.
-    for mod in ("adapt", "config"):
-        sys.modules.pop(mod, None)
 
 
 def test_hook_run_claude_on_session_end_without_plugin_env_is_green(
