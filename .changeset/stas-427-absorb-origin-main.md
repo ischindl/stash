@@ -15,7 +15,7 @@ still open on the trunk. The trunk write is an operator leg, named under *Landin
 K1 makes the anti-fork gate activatable; nothing here makes it active or installed.
 
 **Shape: four two-parent merges, not one, because both sides moved while the lane was under
-review.** No rebase, no squash, no cherry-pick series — 252 upstream commits and our 529 are
+review.** No rebase, no squash, no cherry-pick series — 252 upstream commits and our 530 are
 all reachable as themselves.
 
 | merge | parents | committed tree vs a naive auto-merge of the same two parents | hand-resolved |
@@ -31,7 +31,7 @@ normal commits sit on top of the merges: `4936d76f3` and `48c036e4d`, each a `uv
 re-resolve to upstream's freshly bumped release number.
 
 **What users get:** the product-side difference is small and it is real, and it is not what
-the card was for. Over the trunk the lane moves 27 files (+1702 / −1842), and the upstream
+the card was for. Over the trunk the lane moves 27 files (+1729 / −1843), and the upstream
 bytes in it are `fa7453845` "Remove sharp and libvips from Stash web builds (#1292)" and
 `57a0156da` "Patch the dependencies behind Stash's 93 Dependabot alerts (#1294)" plus two
 release bumps. The rest of the 252 commits arrived as ancestry already carried: against the
@@ -80,12 +80,31 @@ about it either way. `python backend/migrations/check_heads.py` closes
 `migration graph ok: single head 0271`, and the whole chain re-applies base-to-head on a
 database created empty.
 
-**Known red this card does not own, reported not repaired:** `cd frontend && npm ci` fails
-with `Missing: sharp@ from lock file`. `frontend/package.json` (`f5eec74da`) and
-`frontend/package-lock.json` (`5cd68d8eb`) in the merged tree are byte-identical to
-`refs/remotes/origin/main`, where the override `"sharp": "<0.0.0-0"` and the sharp-free lock
-come from upstream's own `57a0156da` and `fa7453845`. The pair is upstream's, so syncing it
-here would mean rewriting an upstream release artifact this card's own rules forbid touching.
+**Known reds this card does not own, reported not repaired.** (a) `npm ci` fails in *both*
+web projects — `frontend/` and `www/` — with `Missing: sharp@ from lock file`, exit 1 each.
+The pair is upstream's, not this merge's: `frontend/package.json` (`f5eec74da`),
+`frontend/package-lock.json` (`5cd68d8eb`) and `www/package-lock.json` are byte-identical to
+`refs/remotes/origin/main`, `www/package.json` differs from it by one added `test:watch`
+script line, and the override `"sharp": "<0.0.0-0"` plus the sharp-free lock come from
+upstream's own `57a0156da` and `fa7453845`. Measured on upstream's bytes alone —
+`git show 41b217aa0:…` extracted to scratch, no lane content — `npm ci --dry-run` still exits
+1, `Missing: sharp@ from lock file` for `www/` and an earlier `ERESOLVE` on a `@tiptap` peer
+for `frontend/`. Whether upstream's own CI reads the same verdict is not measurable here: CI
+pins node 20 and this box has node 26 / npm 12.2, no node 20 is installed, and the container
+substitute is refused by the worktree boundary. That gap is named, not closed. Syncing the
+pair here would mean rewriting an upstream release artifact this card's rules forbid touching.
+(b) `www`'s vitest suite is red — 3 files fail, 28 tests pass — and it pre-dates this merge:
+the whole `www/test` and `www/app/docs` surface is byte-identical to `refs/heads/main`, and
+the page all three failing files read, `www/app/docs/cli/page.tsx`, is absent *at trunk too*,
+deleted by `783e4ad23` "Docs: replace /docs with Stash Reward Models (#1129)", an ancestor of
+both trunk and upstream. Their recorded disposition — leave with the code they policed —
+stays unexecuted, because no conflict in any of the three absorbs gave this merge authority
+over them.
+
+Both suites were still run for a verdict, under `npm install --no-save --package-lock=false`
+instead of `npm ci`, which leaves manifest and lock untouched (`git status --porcelain` empty
+afterwards) and therefore resolves a graph CI does not: `frontend/` is **green**, 169 files /
+930 tests, exit 0.
 
 **Landing — the open leg.** `refs/heads/main` was not advanced by this card.
 `git worktree list --porcelain` shows `/home/schindler/git/stash` on
@@ -95,7 +114,8 @@ because `update-ref` cannot tell that checkout's `HEAD` anything and the strande
 as a huge staged revert — the STAS-244 incident verbatim. The handover is therefore the
 deliverable, not a shortcut around it, and it is a pure formality because forwardness holds:
 `git merge-base --is-ancestor refs/heads/main refs/heads/fusion/stas-427` exits **0**. The
-exact command and its expiry are in the STAS-427 task log.
+exact command and its expiry are in the STAS-427 task document `trunk-write-operator-leg`,
+re-dated in the card's log every time `refs/remotes/origin/main` moves.
 
 **Enforcement, stated precisely.** This card makes the gate *activatable*; it does not make it
 *active*. `.githooks/reference-transaction.sh` is still not installed on this machine —
