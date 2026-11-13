@@ -304,6 +304,7 @@ async def _turn_events(
         system_prompt=system_prompt,
         disallowed_tools=disallowed_tools,
         model=auth.model,
+        thinking=auth.thinking,
     )
     async for event in _run_harness(harness, sprite, argv, state, provider_env):
         yield event
@@ -324,6 +325,7 @@ async def _turn_events(
             system_prompt=system_prompt,
             disallowed_tools=disallowed_tools,
             model=auth.model,
+            thinking=auth.thinking,
         )
         async for event in _run_harness(harness, sprite, argv, state, provider_env):
             yield event

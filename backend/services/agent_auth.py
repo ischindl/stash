@@ -87,6 +87,10 @@ class RunAuth:
     # the model id within it (both set only for the LOCAL provider's PI run).
     endpoint: str | None = None
     model: str | None = None
+    # The reasoning level stored for that endpoint, carried through so the turn
+    # can ask for it. Only the local lane has one; the other harnesses take
+    # their thinking from their own provider, never from this field.
+    thinking: str | None = None
 
 
 # What a user typed into the base URL field, refused. The test-connection route
@@ -96,6 +100,10 @@ LOCAL_BASE_URL_HINT = (
     "base_url must be an absolute http(s) URL your cloud computer can reach "
     "(e.g. http://your-host:11434/v1)"
 )
+
+# Same reason as the base-URL hint above: the route that sets the level and the
+# form that calls it must not learn two different messages for one mistake.
+LOCAL_THINKING_HINT = "thinking must be one of: " + ", ".join(model_provider.THINKING_LEVELS)
 
 # The local endpoint probe: one GET of the endpoint's own model listing proves
 # the server answers and, with a key attached, that the key is accepted. Both
@@ -110,13 +118,25 @@ def local_probe_url(base_url: str) -> str:
     return base_url.rstrip("/") + LOCAL_PROBE_SUFFIX
 
 
-def local_endpoint_doc(base_url: str, model: str, api_key: str | None = None) -> dict:
+def local_endpoint_doc(
+    base_url: str,
+    model: str,
+    api_key: str | None = None,
+    thinking: str = model_provider.THINKING_OFF,
+) -> dict:
     """The validated local endpoint form as a doc: the base URL the box dials,
-    the model id on it, and an optional key.
+    the model id on it, an optional key, and the reasoning level to ask it for.
 
     One validation surface for every place that takes these values — the
     personal connect, the workspace connect, and the pre-save test — so all of
-    them refuse bad input with the same words.
+    them refuse bad input with the same words, and every doc that can exist
+    carries all four keys. There is no doc shape without `thinking`: the reader
+    refuses one, so a writer that could produce it is a bug, not a legacy path.
+
+    `thinking` defaults to `off` only for the places that create an endpoint
+    without being asked for a level (connect, and the pre-save test, which dials
+    the box and changes nothing). It is never a repair applied while reading a
+    stored doc — see `_local_credential_doc`.
 
     Raises ValueError with a user-facing detail on bad input; the endpoints map
     it to a 400.
@@ -128,19 +148,27 @@ def local_endpoint_doc(base_url: str, model: str, api_key: str | None = None) ->
         raise ValueError(LOCAL_BASE_URL_HINT)
     if not model:
         raise ValueError("model is required for the local endpoint")
+    if thinking not in model_provider.THINKING_LEVELS:
+        raise ValueError(LOCAL_THINKING_HINT)
     return {
         "base_url": base_url,
         "model": model,
         "api_key": (api_key or "").strip() or None,  # keyless endpoints are common
+        "thinking": thinking,
     }
 
 
-def local_endpoint_secret(base_url: str, model: str, api_key: str | None = None) -> str:
+def local_endpoint_secret(
+    base_url: str,
+    model: str,
+    api_key: str | None = None,
+    thinking: str = model_provider.THINKING_OFF,
+) -> str:
     """The stored doc for a local endpoint credential — an endpoint, not a bare
     key. Shared by the personal and the workspace connect endpoints so both
     validate and store one shape.
     """
-    return json.dumps(local_endpoint_doc(base_url, model, api_key))
+    return json.dumps(local_endpoint_doc(base_url, model, api_key, thinking))
 
 
 def endpoint_name(base_url: str) -> str:
@@ -410,13 +438,23 @@ async def list_local_endpoints(user_id: UUID) -> list[dict]:
         "WHERE user_id = $1 AND provider = 'local' ORDER BY created_at, id",
         user_id,
     )
-    docs = [json.loads(_decrypt(row["secret_enc"])) for row in rows]
+    docs = [_local_credential_doc({"secret": _decrypt(row["secret_enc"])}) for row in rows]
     probes = await asyncio.gather(
         *(probe_local_endpoint(doc["base_url"], doc["api_key"]) for doc in docs)
     )
     entries = []
     for row, doc, probe in zip(rows, docs, probes):
-        entry = {"id": row["id"], "name": row["name"], "base_url": doc["base_url"], "models": []}
+        entry = {
+            "id": row["id"],
+            "name": row["name"],
+            "base_url": doc["base_url"],
+            # The stored level, so the Settings row can show and change the box it
+            # is describing. What the endpoint thinks is a property of the box, so
+            # it belongs on the row that names the box — not on the agent that runs
+            # on it, and not on the model id, which is an opaque string here.
+            "thinking": doc["thinking"],
+            "models": [],
+        }
         if probe["ok"]:
             entry["models"] = probe["models"]
         else:
@@ -440,11 +478,12 @@ async def get_local_endpoint(user_id: UUID, credential_id: UUID) -> dict | None:
 
 
 def _endpoint_summary(credential_id: UUID, name: str, secret_enc) -> dict:
-    doc = json.loads(_decrypt(secret_enc))
+    doc = _local_credential_doc({"secret": _decrypt(secret_enc)})
     return {
         "id": credential_id,
         "name": name,
         "base_url": doc["base_url"],
+        "thinking": doc["thinking"],
         "models": doc.get("models") or [doc["model"]],
     }
 
@@ -614,18 +653,52 @@ _SPRITE_HOME = "/home/sprite"
 
 
 def _local_credential_doc(cred: dict) -> dict:
+    """The stored local endpoint doc, refused unless it is the one current shape.
+
+    Every key is required and none of them is ever invented here: a doc that
+    predates `thinking` is carried forward by migration 0272, so a doc arriving
+    without it means the migration did not run, and running a turn whose reasoning
+    level nobody named is the exact failure this setting exists to end.
+    """
     doc = json.loads(cred["secret"])
     base_url = doc.get("base_url")
     model = doc.get("model")
     if not base_url or not model:
         raise ValueError("local credential is missing base_url or model")
+    if "thinking" not in doc:
+        raise ValueError("local credential is missing thinking (migration 0272 not applied?)")
+    if doc["thinking"] not in model_provider.THINKING_LEVELS:
+        raise ValueError(f"local credential thinking is not a level: {doc['thinking']!r}")
     return doc
 
 
-def _synthesized_models_json(base_url: str, model: str, key_ref: str) -> str:
+def _synthesized_models_json(base_url: str, model: str, key_ref: str, thinking: str) -> str:
     """The default pi provider config for a connected local endpoint — the
     single synthesis path, used by every turn and by the Settings reader when
-    the user has not stored their own models.json."""
+    the user has not stored their own models.json.
+
+    `thinking` is the endpoint's stored level, and `off` adds nothing at all: the
+    file is then byte-identical to the one Stash shipped before the level existed
+    (no `reasoning` on the model, no thinking flag in `compat`), which is what
+    lets an endpoint that never chose a level keep running exactly as it runs now.
+
+    Above `off`, two keys are what makes the level reach the wire at all, both
+    measured off the wire rather than read off pi's schema: `pi` only computes a
+    thinking budget for a model that declares `reasoning`, and it only names the
+    request field when `compat` says this server takes one. `reasoning_effort`
+    stays switched off by omission — no combination tried put it on the wire, and
+    a vLLM box rejects it.
+    """
+    model_entry: dict = {"id": model, "contextWindow": 131072, "maxTokens": 8192}
+    compat: dict = {
+        # Ollama-style servers reject OpenAI's developer role and
+        # reasoning_effort; these flags keep pi off both.
+        "supportsDeveloperRole": False,
+        "supportsReasoningEffort": False,
+    }
+    if thinking != model_provider.THINKING_OFF:
+        model_entry["reasoning"] = True
+        compat["supportsThinkingTokenBudget"] = True
     return json.dumps(
         {
             "providers": {
@@ -633,13 +706,8 @@ def _synthesized_models_json(base_url: str, model: str, key_ref: str) -> str:
                     "baseUrl": base_url,
                     "api": "openai-completions",
                     "apiKey": key_ref,
-                    # Ollama-style servers reject OpenAI's developer role and
-                    # reasoning_effort; these flags keep pi off both.
-                    "compat": {
-                        "supportsDeveloperRole": False,
-                        "supportsReasoningEffort": False,
-                    },
-                    "models": [{"id": model, "contextWindow": 131072, "maxTokens": 8192}],
+                    "compat": compat,
+                    "models": [model_entry],
                 }
             }
         },
@@ -666,11 +734,16 @@ def _local_auth(cred: dict, home: str = _SPRITE_HOME, model_override: str | None
     single source of truth. Endpoint, model, and the key env always come from
     the connect doc. A per-agent `model_override` cannot be honored against a
     verbatim stored file, so pairing the two fails loud rather than running a
-    model neither source named.
+    model neither source named. A thinking level above `off` cannot be honored
+    against one either, for the same reason and refused the same way: the level
+    rides in two of those bytes (`model.reasoning` and the compat flag that names
+    the budget field), and a hand-written file that does not carry them would let
+    the Settings screen say `low` while the request carries no budget at all.
     """
     doc = _local_credential_doc(cred)
     base_url = doc["base_url"]
     model = model_override or doc["model"]
+    thinking = doc["thinking"]
     env = {"PI_OFFLINE": "1", "HOME": home}  # no pi startup network calls
     api_key = doc.get("api_key")
     if api_key:
@@ -683,8 +756,16 @@ def _local_auth(cred: dict, home: str = _SPRITE_HOME, model_override: str | None
         raise ValueError(
             "agent model_id cannot be applied while a stored models.json override is set"
         )
+    if override is not None and thinking != model_provider.THINKING_OFF:
+        raise ValueError(
+            "the thinking level cannot be applied while a stored models.json override is "
+            "set — put reasoning and the thinking-budget compat flag in that file, or reset "
+            "the override to use the Settings level"
+        )
     models_json = (
-        override if override is not None else _synthesized_models_json(base_url, model, key_ref)
+        override
+        if override is not None
+        else _synthesized_models_json(base_url, model, key_ref, thinking)
     )
     return RunAuth(
         harness=harness_mod.PI,
@@ -692,6 +773,7 @@ def _local_auth(cred: dict, home: str = _SPRITE_HOME, model_override: str | None
         files={f"{home}/.pi/agent/models.json": models_json},
         endpoint=base_url,
         model=model,
+        thinking=thinking,
     )
 
 
@@ -709,7 +791,7 @@ async def get_local_models_json(user_id: UUID) -> dict:
         "models_json": (
             stored
             if stored is not None
-            else _synthesized_models_json(doc["base_url"], doc["model"], key_ref)
+            else _synthesized_models_json(doc["base_url"], doc["model"], key_ref, doc["thinking"])
         ),
         "stored": stored is not None,
     }
@@ -751,6 +833,43 @@ async def reset_local_models_json(user_id: UUID) -> None:
         "UPDATE user_agent_credentials SET models_json_enc = NULL WHERE id = $1",
         cred["id"],
     )
+
+
+async def set_endpoint_thinking(user_id: UUID, credential_id: UUID, thinking: str) -> dict:
+    """Change one connected endpoint's reasoning level, and nothing else about it.
+
+    The doc is rewritten through `local_endpoint_doc` so the level is validated by
+    the same function that validates an endpoint on connect — one set of words for
+    one mistake — and the address, model, and key are copied out of the stored doc
+    rather than accepted from the caller: this route sets one field and must not be
+    able to move the box it is describing.
+
+    A level above `off` is refused while a verbatim models.json override is stored,
+    because those bytes are what the turn actually writes and the level rides in two
+    of their keys. Refusing here rather than at the next turn is the difference
+    between telling the user his control did not take effect and letting a curator
+    run for 45 s on a level the Settings screen claims is set.
+
+    Raises LookupError for an id that is not this user's local endpoint (a key
+    provider's row included) and ValueError for a level that is not one.
+    """
+    cred = await _get_credential_by_id(user_id, credential_id)
+    if cred is None or cred["provider"] != model_provider.LOCAL.id:
+        raise LookupError("no such local endpoint")
+    doc = _local_credential_doc(cred)
+    if thinking != model_provider.THINKING_OFF and cred.get("models_json") is not None:
+        raise ValueError(
+            "the thinking level cannot be set while a stored models.json override is set "
+            "— put reasoning and the thinking-budget compat flag in that file, or reset "
+            "the override first"
+        )
+    new_doc = local_endpoint_doc(doc["base_url"], doc["model"], doc.get("api_key"), thinking)
+    await get_pool().execute(
+        "UPDATE user_agent_credentials SET secret_enc = $1 WHERE id = $2",
+        _encrypt(json.dumps(new_doc)),
+        cred["id"],
+    )
+    return new_doc
 
 
 def _codex_auth_json(secret: str) -> str:

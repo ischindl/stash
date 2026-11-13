@@ -737,7 +737,7 @@ async def test_recompute_metered_like_the_scheduler(client: AsyncClient, _db_poo
             return {
                 "provider": "local",
                 "kind": "endpoint",
-                "secret": '{"base_url": "http://127.0.0.1:11434/v1", "model": "m"}',
+                "secret": '{"base_url": "http://127.0.0.1:11434/v1", "model": "m", "thinking": "off"}',
             }
         return None
 

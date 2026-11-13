@@ -335,10 +335,13 @@ async def test_models_json_override_targets_the_default_box(client: AsyncClient,
 
 @pytest.mark.asyncio
 async def test_endpoint_listing_never_carries_the_key(client: AsyncClient, monkeypatch):
-    """GET-shape entries: id, name, base_url, and models probed LIVE from the
-    box — the api key stays inside the encrypted doc, reachable only by a turn
-    dialing the box. A box that is down reports models: [] plus a probe_error
-    on its own entry instead of blanking the listing."""
+    """GET-shape entries: id, name, base_url, the stored thinking level, and models
+    probed LIVE from the box — the api key stays inside the encrypted doc, reachable
+    only by a turn dialing the box. A box that is down reports models: [] plus a
+    probe_error on its own entry instead of blanking the listing.
+
+    The level is in the entry because the Settings row has to show what is stored;
+    the key is not, because this payload travels to the browser."""
     _key, uid = await _register(client)
     await agent_auth.store_credential(
         uid,
@@ -358,6 +361,7 @@ async def test_endpoint_listing_never_carries_the_key(client: AsyncClient, monke
             "id": entries[0]["id"],
             "name": "box-one",
             "base_url": BOX_ONE,
+            "thinking": "off",
             "models": ["llama", "llama:8b"],
         }
     ]
@@ -462,6 +466,7 @@ async def test_endpoint_listing_probes_a_live_and_a_dead_box_with_per_entry_erro
         "id": entries[0]["id"],
         "name": "box-one",
         "base_url": BOX_ONE,
+        "thinking": "off",
         "models": ["llama", "llama:8b"],
     }
     assert "probe_error" not in entries[0]
@@ -1108,3 +1113,230 @@ async def test_a_pinned_two_phase_curator_dials_one_box_for_both_turns(
     assert [auth.endpoint for auth in auths] == [BOX_TWO, BOX_TWO]
     assert [auth.model for auth in auths] == ["qwen-fast", "qwen"]
     assert BOX_ONE not in {auth.endpoint for auth in auths}
+
+
+# --- The per-box reasoning level, over HTTP ---
+
+
+async def _stored_secret(uid: UUID, credential_id: str) -> str:
+    """One stored endpoint's decrypted doc. Assertions about what a write persisted
+    read the row itself — an entry built from the same code path as the write would
+    agree with a bug."""
+    row = await agent_auth.get_pool().fetchrow(
+        "SELECT secret_enc FROM user_agent_credentials WHERE id = $1 AND user_id = $2",
+        UUID(credential_id),
+        uid,
+    )
+    return agent_auth._decrypt(row["secret_enc"])
+
+
+#
+# The founder's failure is one box spending its entire output on reasoning while the
+# screen offers no way to bound it. That is fixed only if the level is stored per row
+# and reaches that row's next turn, so these pin the write path: which ids change a
+# box, which refusals change nothing, and that the box keeps its other settings.
+
+
+@pytest.mark.asyncio
+async def test_http_thinking_level_changes_one_box_and_reports_it(client: AsyncClient, monkeypatch):
+    """A saved level is answered with the server's own stored value, and a second box
+    is untouched by it — the level is a property of one box, not a global switch."""
+    monkeypatch.setattr(agent_auth, "probe_local_endpoint", _probe_ok("llama"))
+    key, _uid = await _register(client)
+    one = await client.post(
+        "/api/v1/me/agent-credentials",
+        json={"provider": "local", "base_url": BOX_ONE, "model": "llama"},
+        headers=_auth(key),
+    )
+    two = await client.post(
+        "/api/v1/me/agent-credentials",
+        json={"provider": "local", "base_url": BOX_TWO, "model": "qwen"},
+        headers=_auth(key),
+    )
+    # Both boxes have to exist for "the other one is untouched" to mean anything.
+    assert one.status_code == 200 and two.status_code == 200, (one.text, two.text)
+
+    r = await client.put(
+        f"/api/v1/me/agent-credentials/endpoints/{one.json()['id']}/thinking",
+        json={"thinking": "low"},
+        headers=_auth(key),
+    )
+    assert r.status_code == 200, r.text
+    assert r.json() == {"ok": True, "thinking": "low"}
+
+    body = (await client.get("/api/v1/me/agent-credentials", headers=_auth(key))).json()
+    assert [(e["name"], e["thinking"]) for e in body["endpoints"]] == [
+        ("box-one", "low"),
+        ("ollama.lan", "off"),
+    ]
+    # The listing reports the levels this harness accepts, so the selector offers
+    # choices the turn can honour instead of a list the browser maintains.
+    assert body["thinking_levels"] == ["off", "minimal", "low", "medium", "high", "xhigh", "max"]
+
+
+@pytest.mark.asyncio
+async def test_http_thinking_level_keeps_the_endpoint_untouched_apart_from_the_level(
+    client: AsyncClient, monkeypatch
+):
+    """The write copies address, model and key out of the stored doc. That is the
+    security property, not a convenience: the control that sets how much a box thinks
+    must not be able to point the user's key and traffic at a different server, and it
+    accepts no address to make that mistake with."""
+    monkeypatch.setattr(agent_auth, "probe_local_endpoint", _probe_ok("llama"))
+    key, uid = await _register(client)
+    made = await client.post(
+        "/api/v1/me/agent-credentials",
+        json={"provider": "local", "base_url": BOX_ONE, "model": "llama", "api_key": SECRET},
+        headers=_auth(key),
+    )
+    before = json.loads(await _stored_secret(uid, made.json()["id"]))
+
+    r = await client.put(
+        f"/api/v1/me/agent-credentials/endpoints/{made.json()['id']}/thinking",
+        json={"thinking": "medium", "base_url": "http://attacker.example/v1", "api_key": "stolen"},
+        headers=_auth(key),
+    )
+    assert r.status_code == 200, r.text
+    after = json.loads(await _stored_secret(uid, made.json()["id"]))
+    assert after == {**before, "thinking": "medium"}
+    assert after["base_url"] == BOX_ONE and after["api_key"] == SECRET
+
+
+@pytest.mark.asyncio
+async def test_http_thinking_level_refuses_a_level_the_harness_does_not_know(
+    client: AsyncClient, monkeypatch
+):
+    """`ultra` is not a pi level. Refusing it here is the whole point: accepting it
+    would store a value that fails only when a turn builds argv, one session after the
+    click, with the Settings screen still showing the level as chosen."""
+    monkeypatch.setattr(agent_auth, "probe_local_endpoint", _probe_ok("llama"))
+    key, uid = await _register(client)
+    made = await client.post(
+        "/api/v1/me/agent-credentials",
+        json={"provider": "local", "base_url": BOX_ONE, "model": "llama"},
+        headers=_auth(key),
+    )
+
+    for bad in ("ultra", "", "LOW", "off "):
+        r = await client.put(
+            f"/api/v1/me/agent-credentials/endpoints/{made.json()['id']}/thinking",
+            json={"thinking": bad},
+            headers=_auth(key),
+        )
+        assert r.status_code == 400, f"{bad!r} must be refused: {r.text}"
+
+    stored = json.loads(await _stored_secret(uid, made.json()["id"]))
+    assert stored["thinking"] == "off", "a refused write stores nothing"
+
+
+@pytest.mark.asyncio
+async def test_http_thinking_level_refused_while_a_verbatim_override_is_stored(
+    client: AsyncClient, monkeypatch
+):
+    """The verbatim models.json is what a turn writes, so a level stored beside it
+    would be shown and never sent. The refusal arrives at the write and names the way
+    out, and the stored level stays `off` — the value that describes the file."""
+    monkeypatch.setattr(agent_auth, "probe_local_endpoint", _probe_ok("llama"))
+    key, uid = await _register(client)
+    made = await client.post(
+        "/api/v1/me/agent-credentials",
+        json={"provider": "local", "base_url": BOX_ONE, "model": "llama"},
+        headers=_auth(key),
+    )
+    endpoint_id = made.json()["id"]
+    saved = await client.put(
+        "/api/v1/me/agent-credentials/local/models-json",
+        json={"models_json": json.dumps({"providers": {"local": {"baseUrl": BOX_ONE}}})},
+        headers=_auth(key),
+    )
+    assert saved.status_code == 200, saved.text
+
+    r = await client.put(
+        f"/api/v1/me/agent-credentials/endpoints/{endpoint_id}/thinking",
+        json={"thinking": "low"},
+        headers=_auth(key),
+    )
+    assert r.status_code == 400, r.text
+    assert "models.json" in r.json()["detail"]
+    assert json.loads(await _stored_secret(uid, endpoint_id))["thinking"] == "off"
+
+    # `off` stays writable: turning a box back to no-bound behaviour is always
+    # possible, and it is the shape the override already describes.
+    off = await client.put(
+        f"/api/v1/me/agent-credentials/endpoints/{endpoint_id}/thinking",
+        json={"thinking": "off"},
+        headers=_auth(key),
+    )
+    assert off.status_code == 200, off.text
+
+
+@pytest.mark.asyncio
+async def test_http_thinking_level_addresses_only_this_users_local_boxes(
+    client: AsyncClient, monkeypatch
+):
+    """A foreign id, a random uuid, and a key provider's name all read as 404. The
+    route could have answered 400 and leaked that the row exists somewhere; it
+    answers not-found, which is what a box the user cannot see is."""
+    monkeypatch.setattr(agent_auth, "probe_local_endpoint", _probe_ok("llama"))
+    key, _uid = await _register(client)
+    other_key, _other_uid = await _register(client)
+    mine = await client.post(
+        "/api/v1/me/agent-credentials",
+        json={"provider": "local", "base_url": BOX_ONE, "model": "llama"},
+        headers=_auth(key),
+    )
+
+    r = await client.put(
+        f"/api/v1/me/agent-credentials/endpoints/{mine.json()['id']}/thinking",
+        json={"thinking": "low"},
+        headers=_auth(other_key),
+    )
+    assert r.status_code == 404, r.text
+    assert (
+        json.loads((await client.get("/api/v1/me/agent-credentials", headers=_auth(key))).text)[
+            "endpoints"
+        ][0]["thinking"]
+        == "off"
+    )
+
+    stray = await client.put(
+        "/api/v1/me/agent-credentials/endpoints/00000000-0000-0000-0000-000000000000/thinking",
+        json={"thinking": "low"},
+        headers=_auth(key),
+    )
+    assert stray.status_code == 404, stray.text
+
+
+@pytest.mark.asyncio
+async def test_a_pinned_agent_turns_with_its_box_level_and_no_others(
+    client: AsyncClient, monkeypatch
+):
+    """The level is read per turn from the box that agent resolves to. Two boxes with
+    different levels, one agent pinned to the second: the turn carries the second
+    box's level, which is the only claim the Settings row makes."""
+    monkeypatch.setattr(agent_auth, "probe_local_endpoint", _probe_ok("llama"))
+    key, uid = await _register(client)
+    one = await client.post(
+        "/api/v1/me/agent-credentials",
+        json={"provider": "local", "base_url": BOX_ONE, "model": "llama"},
+        headers=_auth(key),
+    )
+    two = await client.post(
+        "/api/v1/me/agent-credentials",
+        json={"provider": "local", "base_url": BOX_TWO, "model": "qwen"},
+        headers=_auth(key),
+    )
+    for credential_id, level in ((one.json()["id"], "high"), (two.json()["id"], "low")):
+        saved = await client.put(
+            f"/api/v1/me/agent-credentials/endpoints/{credential_id}/thinking",
+            json={"thinking": level},
+            headers=_auth(key),
+        )
+        assert saved.status_code == 200, saved.text
+
+    for credential_id, expected in ((one.json()["id"], "high"), (two.json()["id"], "low")):
+        auth = await agent_auth.resolve(
+            uid, "local", credential_id=UUID(credential_id), model_id=None
+        )
+        assert auth.thinking == expected
+        assert auth.endpoint == (BOX_ONE if credential_id == one.json()["id"] else BOX_TWO)

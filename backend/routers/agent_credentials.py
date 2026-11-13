@@ -14,7 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from ..auth import get_current_user
-from ..services import agent_auth, agent_oauth, agent_service
+from ..services import agent_auth, agent_oauth, agent_service, model_provider
 
 router = APIRouter(prefix="/api/v1/me/agent-credentials", tags=["agent-credentials"])
 
@@ -44,6 +44,10 @@ class ModelsJsonRequest(BaseModel):
     models_json: str  # the user's pi models.json, stored verbatim
 
 
+class ThinkingRequest(BaseModel):
+    thinking: str  # one of the levels the reader reports; the server re-validates it
+
+
 class LocalTestRequest(BaseModel):
     base_url: str
     model: str
@@ -53,13 +57,20 @@ class LocalTestRequest(BaseModel):
 @router.get("")
 async def list_credentials(current_user: dict = Depends(get_current_user)):
     """Which providers this user has connected, the endpoint entries for the
-    Settings list (id, name, base URL, models probed live — never a key), and
-    the user's own local endpoint doc for the Settings form to show and
-    prefill. The key providers' secrets are never returned."""
+    Settings list (id, name, base URL, stored thinking level, models probed live —
+    never a key), and the user's own local endpoint doc for the Settings form to
+    show and prefill. The key providers' secrets are never returned.
+
+    `thinking_levels` is the set this deployment's harness accepts, reported rather
+    than duplicated in the browser: a level `pi` does not know would be refused at
+    the next turn, one session after the user chose it, so only the server that
+    builds the argv gets to say what may be chosen.
+    """
     return {
         "connected": await agent_auth.list_connected(current_user["id"]),
         "endpoints": await agent_auth.list_local_endpoints(current_user["id"]),
         "local": await agent_auth.local_credential(current_user["id"]),
+        "thinking_levels": list(model_provider.THINKING_LEVELS),
     }
 
 
@@ -202,6 +213,41 @@ async def test_stored_endpoint(credential_id: UUID, current_user: dict = Depends
     if probe is None:
         raise HTTPException(status_code=404, detail="no such local endpoint")
     return probe
+
+
+@router.put("/endpoints/{credential_id}/thinking")
+async def put_endpoint_thinking(
+    credential_id: UUID,
+    req: ThinkingRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    """Set the reasoning level of exactly one stored endpoint; the next turn on that
+    box asks for it and no other box is touched.
+
+    The body carries one field. The address, model and key are not accepted here —
+    they are copied from the stored doc inside `set_endpoint_thinking` — so the
+    control that changes how much a box thinks cannot be used to move which box the
+    user is talking about, and cannot be used to write a level the harness would
+    refuse.
+
+    A level above `off` is refused (400) while a verbatim models.json override is
+    stored for that endpoint: those bytes, not the level, are what the turn writes,
+    so accepting the pair would let the screen claim a level the request never
+    carries. Resetting the override, or putting the two keys the level needs into
+    that file, is the way out, and the detail says so.
+
+    An id addresses this user's local endpoints only: a foreign id or a key
+    provider's row reads as 404, never as a credential to edit.
+    """
+    try:
+        doc = await agent_auth.set_endpoint_thinking(
+            current_user["id"], credential_id, req.thinking
+        )
+    except LookupError:
+        raise HTTPException(status_code=404, detail="no such local endpoint")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"ok": True, "thinking": doc["thinking"]}
 
 
 @router.delete("/endpoints/{credential_id}")

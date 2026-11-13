@@ -166,6 +166,7 @@ async def test_local_endpoint_with_key_runs_pi(monkeypatch):
                     "base_url": "http://tunnel.example/v1",
                     "model": "llama3.1:8b",
                     "api_key": "my-secret-key",
+                    "thinking": "off",
                 }
             ),
         }
@@ -228,6 +229,7 @@ async def test_local_override_written_verbatim(monkeypatch):
                     "base_url": "http://tunnel.example/v1",
                     "model": "llama3.1:8b",
                     "api_key": "my-secret-key",
+                    "thinking": "off",
                 }
             ),
             "models_json": OVERRIDE_MODELS_JSON,
@@ -259,7 +261,9 @@ async def test_local_override_keyless_no_key_env(monkeypatch):
         return {
             "provider": "local",
             "kind": "endpoint",
-            "secret": json.dumps({"base_url": "http://host:11434/v1", "model": "qwen2:7b"}),
+            "secret": json.dumps(
+                {"base_url": "http://host:11434/v1", "model": "qwen2:7b", "thinking": "off"}
+            ),
             "models_json": OVERRIDE_MODELS_JSON,
         }
 
@@ -278,7 +282,9 @@ async def test_local_endpoint_keyless_has_no_key_env(monkeypatch):
         return {
             "provider": "local",
             "kind": "endpoint",
-            "secret": json.dumps({"base_url": "http://host:11434/v1", "model": "qwen2:7b"}),
+            "secret": json.dumps(
+                {"base_url": "http://host:11434/v1", "model": "qwen2:7b", "thinking": "off"}
+            ),
         }
 
     monkeypatch.setattr(agent_auth, "_get_credential", cred)
@@ -315,7 +321,7 @@ async def test_prefer_local_with_local_credential_runs_pi(monkeypatch):
         return {
             "provider": "local",
             "kind": "endpoint",
-            "secret": json.dumps({"base_url": "http://x/v1", "model": "m"}),
+            "secret": json.dumps({"base_url": "http://x/v1", "model": "m", "thinking": "off"}),
         }
 
     monkeypatch.setattr(agent_auth, "_get_credential", cred)
@@ -368,7 +374,9 @@ async def test_local_mode_local_credential_runs_pi(monkeypatch):
         return {
             "provider": "local",
             "kind": "endpoint",
-            "secret": json.dumps({"base_url": "http://127.0.0.1:11434/v1", "model": "llama3.1:8b"}),
+            "secret": json.dumps(
+                {"base_url": "http://127.0.0.1:11434/v1", "model": "llama3.1:8b", "thinking": "off"}
+            ),
         }
 
     monkeypatch.setattr(agent_auth, "_get_credential", cred)
@@ -393,7 +401,9 @@ async def test_local_mode_override_writes_verbatim_to_box_home(monkeypatch):
         return {
             "provider": "local",
             "kind": "endpoint",
-            "secret": json.dumps({"base_url": "http://127.0.0.1:11434/v1", "model": "llama3.1:8b"}),
+            "secret": json.dumps(
+                {"base_url": "http://127.0.0.1:11434/v1", "model": "llama3.1:8b", "thinking": "off"}
+            ),
             "models_json": OVERRIDE_MODELS_JSON,
         }
 
@@ -412,7 +422,7 @@ async def test_local_mode_prefer_local_with_credential_runs_pi(monkeypatch):
         return {
             "provider": "local",
             "kind": "endpoint",
-            "secret": json.dumps({"base_url": "http://x/v1", "model": "m"}),
+            "secret": json.dumps({"base_url": "http://x/v1", "model": "m", "thinking": "off"}),
         }
 
     monkeypatch.setattr(agent_auth, "_get_credential", cred)
@@ -431,7 +441,7 @@ async def test_local_mode_other_pin_keeps_machine_login(monkeypatch):
         return {
             "provider": "local",
             "kind": "endpoint",
-            "secret": json.dumps({"base_url": "http://x/v1", "model": "m"}),
+            "secret": json.dumps({"base_url": "http://x/v1", "model": "m", "thinking": "off"}),
         }
 
     monkeypatch.setattr(agent_auth, "_get_credential", local_only)
@@ -448,7 +458,9 @@ async def test_local_credential_returns_the_stored_doc(monkeypatch):
         return {
             "provider": "local",
             "kind": "endpoint",
-            "secret": json.dumps({"base_url": "http://x/v1", "model": "m", "api_key": "sk-local"}),
+            "secret": json.dumps(
+                {"base_url": "http://x/v1", "model": "m", "api_key": "sk-local", "thinking": "off"}
+            ),
         }
 
     monkeypatch.setattr(agent_auth, "_get_credential", cred)
@@ -456,7 +468,176 @@ async def test_local_credential_returns_the_stored_doc(monkeypatch):
         "base_url": "http://x/v1",
         "model": "m",
         "api_key": "sk-local",
+        "thinking": "off",
     }
+
+
+# --- The stored level reaches pi: the wire consequence, both directions ---
+#
+# The intake's failure is a turn that burns its whole output on reasoning while the
+# screen says nothing was asked for. A test asserting only that a dict grew would
+# stay green while pi sent nothing, so these assert what pi RECEIVES: the argv it is
+# started with, and the provider file it reads its `reasoning` marker and its budget
+# field out of. The negative half is asserted with the same instruments, because a
+# knob that could not be turned off would be the same bug wearing a different label.
+
+
+def _turn_shape(auth) -> tuple:
+    """What a turn hands pi, as pi sees it: the argv it is started with, and the
+    provider file the turn writes for it. Both are taken from what leaves the
+    service — the argv list and the bytes destined for `.pi/agent/models.json` —
+    rather than from an intermediate object, so a projection that stops short of the
+    child process cannot pass this."""
+    argv = h.build_argv(
+        h.PI,
+        "Say when.",
+        session_key="studio",
+        resume=False,
+        system_prompt="You are a curator.",
+        model=auth.model,
+        thinking=auth.thinking,
+    )
+    provider_files = [
+        content for path, content in auth.files.items() if path.endswith(".pi/agent/models.json")
+    ]
+    assert len(provider_files) == 1, f"a pi turn writes exactly one provider file: {auth.files}"
+    return argv, json.loads(provider_files[0])
+
+
+@pytest.mark.asyncio
+async def test_a_chosen_level_reaches_pi_as_a_level_and_a_bounded_budget(monkeypatch):
+    """`low` on the stored doc becomes `--thinking low` on argv AND a reasoning marker
+    plus a thinking-token budget in the provider file.
+
+    Both halves are needed and neither implies the other: pi-ai sends a budget only
+    when the model is marked as reasoning and the compat names the field, and it only
+    reserves a thinking phase at all when a level was named. Measured on the founder's
+    endpoint, the budget is what turns 'reasoning consumed every output token' into an
+    answer — with it, zero empty answers in ten turns; without it, four in ten.
+    """
+
+    async def cred(_uid, _provider=None):
+        return {
+            "provider": "local",
+            "kind": "endpoint",
+            "secret": json.dumps(
+                {
+                    "base_url": "http://host:11434/v1",
+                    "model": "qwen2:7b",
+                    "api_key": "sk-local",
+                    "thinking": "low",
+                }
+            ),
+        }
+
+    monkeypatch.setattr(agent_auth, "_get_credential", cred)
+    auth = await agent_auth.resolve(uuid.uuid4())
+    argv, doc = _turn_shape(auth)
+
+    assert argv[argv.index("--thinking") + 1] == "low"
+    assert doc["providers"]["local"]["models"][0]["reasoning"] is True
+    # The field pi puts the number under is the vLLM one; the founder's box is vLLM,
+    # and the sibling spellings (`thinking_budget`, `thinking_budget_tokens`) are
+    # Qwen-SGLang and llama.cpp, which would be ignored here.
+    assert doc["providers"]["local"]["compat"]["supportsThinkingTokenBudget"] is True
+
+
+@pytest.mark.asyncio
+async def test_off_leaves_argv_and_provider_file_exactly_as_they_were(monkeypatch):
+    """`off` is not a new behaviour to verify, it is the OLD one, and it is the level
+    every box the founder already connected was given. So the assertion is equality
+    with the literal shapes this card inherited — the exact argv tail and the exact
+    provider keys — not merely 'no budget field'.
+
+    It holds for a reason worth naming: pi's own default is `medium`, so a flag that
+    named nothing would start a thinking phase nobody asked for. That is also why the
+    level is not smuggled into the model shorthand: pi parses the LAST colon of
+    `provider/id:level`, and a vLLM model id may itself contain one.
+    """
+
+    async def cred(_uid, _provider=None):
+        return {
+            "provider": "local",
+            "kind": "endpoint",
+            "secret": json.dumps(
+                {
+                    "base_url": "http://host:11434/v1",
+                    "model": "qwen2:7b",
+                    "api_key": "sk-local",
+                    "thinking": "off",
+                }
+            ),
+        }
+
+    monkeypatch.setattr(agent_auth, "_get_credential", cred)
+    auth = await agent_auth.resolve(uuid.uuid4())
+    argv, doc = _turn_shape(auth)
+
+    assert "--thinking" not in argv
+    assert not any("qwen2:7b:" in arg for arg in argv)  # no level hidden in the shorthand
+    provider = doc["providers"]["local"]
+    # Absent, not `false`: the file an `off` box gets is the file this card
+    # inherited, key for key, and a marker written as False would be a new field
+    # for pi to interpret rather than the absence of one.
+    assert "reasoning" not in provider["models"][0]
+    assert "supportsThinkingTokenBudget" not in provider["compat"]
+    assert "thinkingFormat" not in provider["compat"]
+    assert provider["compat"] == {"supportsDeveloperRole": False, "supportsReasoningEffort": False}
+
+
+@pytest.mark.asyncio
+async def test_a_row_written_before_the_level_existed_refuses_the_turn_instead_of_reasoning(
+    monkeypatch,
+):
+    """A stored doc with no `thinking` key is refused, not read as `off`.
+
+    The refusal is the point. `off` is NOT 'the model does not think' — measured on
+    the founder's endpoint, pi with no level still received 2,170 reasoning tokens
+    with the flag off, because the serving engine's chat template decides. A row that
+    lost its level would therefore resume thinking while the screen reported a bound,
+    which is the failure this card exists to end. And a silent default here would also
+    hide a migration that never ran, so the message names it.
+    """
+
+    async def cred(_uid, _provider=None):
+        return {
+            "provider": "local",
+            "kind": "endpoint",
+            "secret": json.dumps({"base_url": "http://legacy:11434/v1", "model": "legacy:1b"}),
+        }
+
+    monkeypatch.setattr(agent_auth, "_get_credential", cred)
+    with pytest.raises(ValueError, match="missing thinking"):
+        await agent_auth.resolve(uuid.uuid4())
+
+
+@pytest.mark.asyncio
+async def test_a_level_paired_with_a_verbatim_override_is_refused_at_the_turn(monkeypatch):
+    """The stored models.json wins over the level, so a box carrying both would show a
+    level it never sends. The turn refuses rather than running the lie — the same rule
+    `model_override` follows, enforced where the two are actually read together.
+    """
+
+    async def cred(_uid, provider=None):
+        # The override is a column on the endpoint's own row, not another provider:
+        # one box, one row, and the verbatim file is that row's second document.
+        return {
+            "provider": "local",
+            "kind": "endpoint",
+            "models_json": '{"providers": {"stash-local": {"baseUrl": "http://host:11434/v1"}}}',
+            "secret": json.dumps(
+                {
+                    "base_url": "http://host:11434/v1",
+                    "model": "qwen2:7b",
+                    "api_key": "sk-local",
+                    "thinking": "high",
+                }
+            ),
+        }
+
+    monkeypatch.setattr(agent_auth, "_get_credential", cred)
+    with pytest.raises(ValueError, match="thinking level cannot be applied"):
+        await agent_auth.resolve(uuid.uuid4())
 
 
 @pytest.mark.asyncio

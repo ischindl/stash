@@ -25,3 +25,17 @@ GEMINI = Provider("gemini", "GEMINI_API_KEY")
 # set, rides in STASH_LOCAL_KEY which pi's models.json $STASH_LOCAL_KEY
 # interpolation reads.
 LOCAL = Provider("local", "STASH_LOCAL_KEY")
+
+# The reasoning levels a local endpoint can be set to. This is exactly the set
+# `pi` 1.5.2 accepts for `--thinking` (its `VALID_THINKING_LEVELS`), measured
+# from the installed bundle rather than invented here: a level outside it would
+# be rejected by the harness at turn time, one session too late to be useful.
+#
+# `off` is what a fresh endpoint gets and what every endpoint had before this
+# setting existed. It is not a claim that the endpoint will not reason — it is
+# "ask for nothing", which is what Stash shipped before: no `--thinking` flag and
+# no thinking field on the request. What each endpoint does unasked is its own
+# chat template's decision (measured: a vLLM box reasoned 2048 tokens with the
+# level at `off`).
+THINKING_OFF = "off"
+THINKING_LEVELS = ("off", "minimal", "low", "medium", "high", "xhigh", "max")

@@ -155,12 +155,18 @@ async def _run():
             # The secret carried over untouched — same ciphertext bytes (Fernet's
             # random IV means a re-encryption could never equal this), and still
             # exactly one decrypt away from the doc the user typed.
-            assert by_provider["local"]["secret_enc"] == _LEGACY_SECRET
+            #
+            # The byte-identity half now holds for the KEY provider only. Migration
+            # 0272 — the thinking level — rewrites the local doc to carry its fourth
+            # key, and Fernet's random IV means that rewrite cannot reproduce the old
+            # bytes even where the value is unchanged. What the local row must keep is
+            # the DATA, asserted below field by field, and what proves nothing else was
+            # touched is the key provider's byte-identity.
             assert by_provider["anthropic"]["secret_enc"] == _LEGACY_KEY_SECRET
-            assert (
-                json.loads(_BOX_ONE.decrypt(bytes(by_provider["local"]["secret_enc"])))
-                == _LEGACY_DOC
-            )
+            assert json.loads(_BOX_ONE.decrypt(bytes(by_provider["local"]["secret_enc"]))) == {
+                **_LEGACY_DOC,
+                "thinking": "off",
+            }
 
             # A second box is now storable.
             await conn.execute(

@@ -109,6 +109,7 @@ async def test_connect_keyless_stores_endpoint_doc(client: AsyncClient, _stub_pr
         "base_url": "http://my-host:11434/v1",
         "model": "llama3.1:8b",
         "api_key": None,
+        "thinking": "off",
     }
 
 
@@ -123,6 +124,7 @@ async def test_connect_with_key_round_trips(client: AsyncClient, _stub_probe):
         "base_url": "http://my-host:11434/v1",
         "model": "qwen2:7b",
         "api_key": "ws-local-secret",
+        "thinking": "off",
     }
 
 
@@ -233,6 +235,7 @@ async def test_personal_and_workspace_credentials_stay_separate(client: AsyncCli
         "base_url": "http://personal-host:11434/v1",
         "model": "personal-model",
         "api_key": None,
+        "thinking": "off",
     }
     personal_body_json = (
         await client.get("/api/v1/me/agent-credentials", headers=_auth(personal_key))

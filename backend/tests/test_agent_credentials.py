@@ -85,6 +85,9 @@ async def test_connect_local_without_key(client: AsyncClient, _stub_probe):
         "base_url": "http://my-host:11434/v1",
         "model": "llama3.1:8b",
         "api_key": None,
+        # Connecting names a box, not how much it thinks: the stored level is the
+        # one that describes today's behaviour, and only the level control moves it.
+        "thinking": "off",
     }
 
 
@@ -439,6 +442,7 @@ async def test_list_returns_local_doc_including_its_key(client: AsyncClient, _st
         "base_url": "http://tunnel.example/v1",
         "model": "llama3.1:8b",
         "api_key": "sk-local-abcdef",
+        "thinking": "off",
     }
 
 
@@ -451,6 +455,7 @@ async def test_list_returns_local_doc_keyless(client: AsyncClient, _stub_probe):
         "base_url": "http://tunnel.example/v1",
         "model": "llama3.1:8b",
         "api_key": None,
+        "thinking": "off",
     }
 
 
@@ -458,7 +463,15 @@ async def test_list_returns_local_doc_keyless(client: AsyncClient, _stub_probe):
 async def test_list_local_is_null_when_nothing_connected(client: AsyncClient):
     key = await _register(client)
     r = await client.get(LIST_URL, headers=_auth(key))
-    assert r.json() == {"connected": [], "endpoints": [], "local": None}
+    # The payload is one screen's worth of data: what is connected, the user's own
+    # box, and the levels this deployment's harness accepts — reported by the server
+    # so the browser never has to know which levels pi knows.
+    assert r.json() == {
+        "connected": [],
+        "endpoints": [],
+        "local": None,
+        "thinking_levels": ["off", "minimal", "low", "medium", "high", "xhigh", "max"],
+    }
 
 
 @pytest.mark.asyncio
@@ -740,6 +753,7 @@ async def test_local_test_is_a_pure_probe(
         "base_url": stored.base_url,
         "model": "stored-model",
         "api_key": "stored-key",
+        "thinking": "off",
     }
     # The candidate key knocked on the tested box; the stored box only ever
     # heard from the connect that saved it, never from the test route.
