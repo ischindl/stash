@@ -65,7 +65,12 @@ lane, every side recorded per path in the STAS-427 task document `merge-conflict
 moved twice more while that lane was under review and both moves merged into it with zero
 conflicts, so the lane, not the trunk, is where the debt is currently cleared: the trunk write is
 held up because a checkout holds `refs/heads/main`, which makes it an operator leg (`AGENTS.md`,
-*Landing hygiene*), not because anything is unresolved. That refusal is the job working, not a broken job: the trunk
+*Landing hygiene*), not because anything is unresolved. The lane waited long enough for the trunk
+to move under it: `refs/heads/main` was fast-forwarded to `10e11a922` (STAS-431) at 11:00Z on
+2026-11-13 — a lane cut from the still-unanchored trunk, so the trunk's merge base with upstream
+did not move and the debt grew by one more commit beside it — and the STAS-427 lane re-merged that
+trunk commit conflict-free instead of rebasing. Nothing refused that trunk write, because the hook
+below is not installed: with the gate inert, the predicate only speaks when someone runs it. That refusal is the job working, not a broken job: the trunk
 is refused rather than quietly forked. Clearing the debt is always a lane of its own with a
 reviewer, never a side-pick here (`STAS-373` named the predicate; `STAS-427` is the lane that
 cleared it). Pause this agent only on the operator's order.

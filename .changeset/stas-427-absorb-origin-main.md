@@ -10,12 +10,13 @@ first and it is measured, not narrated. On the lane tip
 prints **0** upstream commits left over; the same two probes on `refs/heads/main` exit **1**
 and print **252** upstream commits left over
 (`python -m backend.scripts.upstream_gate check refs/heads/main` →
-`FALSE … ahead/behind=523/252`, merge base `94feb43cf`). The debt is cleared on the lane and
-still open on the trunk. The trunk write is an operator leg, named under *Landing* below.
-K1 makes the anti-fork gate activatable; nothing here makes it active or installed.
+`FALSE … ahead/behind=524/252`, merge base `94feb43cf`, measured 2026-11-13T11:10Z). The debt is
+cleared on the lane and still open on the trunk. The trunk write is an operator leg, named under
+*Landing* below. K1 makes the anti-fork gate activatable; nothing here makes it active or
+installed.
 
-**Shape: four two-parent merges, not one, because both sides moved while the lane was under
-review.** No rebase, no squash, no cherry-pick series — 252 upstream commits and our 530 are
+**Shape: five two-parent merges, not one, because both sides kept moving while the lane was under
+review.** No rebase, no squash, no cherry-pick series — 252 upstream commits and our 533 are
 all reachable as themselves.
 
 | merge | parents | committed tree vs a naive auto-merge of the same two parents | hand-resolved |
@@ -24,14 +25,22 @@ all reachable as themselves.
 | `f4037c868` | `955ac2952` + `ca1b17e71` | — | re-merged the trunk, which had moved under the lane |
 | `5869cd7e2` | `f4037c868` + `476e2ead1` | `943b9ea2d` vs `943b9ea2d` — **equal** | **0** |
 | `c1fda3c7b` | `4936d76f3` + `41b217aa0` | `517c00ab2` vs `517c00ab2` — **equal** | **0** |
+| `1b4cfc8d6` | `cc8c95b51` + `10e11a922` | `3955fa8c0` vs `3955fa8c0` — **equal** | **0** |
+
+The fifth merge is a **trunk** re-merge, not an absorb: while this lane waited, `refs/heads/main`
+was fast-forwarded to `10e11a922` (STAS-431) at 11:00:17Z on 2026-11-13, a landing of a lane that
+was itself cut from the unanchored trunk, so the trunk's own merge base with upstream did not move
+and the debt grew by one more commit sitting beside it. Nothing refused that write — see
+*Enforcement* — which is the whole cost of an inert gate, stated here rather than argued.
 
 A merge whose committed tree equals `git merge-tree --write-tree` of its own parents had
-nothing picked by hand, which is why the last two rows are evidence and not assertion. Two
+nothing picked by hand, which is why the last three rows are evidence and not assertion. Four
 normal commits sit on top of the merges: `4936d76f3` and `48c036e4d`, each a `uv lock`
-re-resolve to upstream's freshly bumped release number.
+re-resolve to upstream's freshly bumped release number, and `95cf69c2b` with `cc8c95b51`, the
+two corrections to this record.
 
 **What users get:** the product-side difference is small and it is real, and it is not what
-the card was for. Over the trunk the lane moves 27 files (+1729 / −1843), and the upstream
+the card was for. Over the trunk the lane moves 27 files (+1749 / −1843), and the upstream
 bytes in it are `fa7453845` "Remove sharp and libvips from Stash web builds (#1292)" and
 `57a0156da` "Patch the dependencies behind Stash's 93 Dependabot alerts (#1294)" plus two
 release bumps. The rest of the 252 commits arrived as ancestry already carried: against the
@@ -120,8 +129,10 @@ re-dated in the card's log every time `refs/remotes/origin/main` moves.
 **Enforcement, stated precisely.** This card makes the gate *activatable*; it does not make it
 *active*. `.githooks/reference-transaction.sh` is still not installed on this machine —
 `.git/hooks/` holds no `reference-transaction` and `git config --get core.hooksPath` still
-exits 1 — and `backend/scripts/install_hooks.py` was not run, because hook installation is the
-operator's leg (K3) and writes outside every path this card may touch.
+exits 1, both re-measured 2026-11-13T11:12Z — and `backend/scripts/install_hooks.py` was not
+run, because hook installation is the operator's leg (K3) and writes outside every path this
+card may touch. That is why the trunk write described above could happen unrefused: with the
+hook inert, the predicate is only ever a question someone has to think to ask.
 
 **Note:** this repo has no tooling that consumes `.changeset/`; `CHANGELOG.md`'s Unreleased
 bullet is the authoritative release note. This file is the removal and survival record the
