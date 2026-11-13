@@ -7,9 +7,10 @@ rule true instead of merely enforced.
 
 Why a daily cadence and not a weekly one: upstream moves about two commits a day, and the
 last time this was left alone the gap ran six weeks and reached 28 conflicted paths — measured
-2026-11-12 by the job's own refusal list, and cleared the same day by STAS-427, whose merge
-commit now sits in `refs/heads/main`. Our migration tail had to be renumbered as damage control
-while it grew (STAS-371, STAS-374).
+2026-11-12 by the job's own refusal list. STAS-427 resolved all 28 on a lane of its own the same
+day; the trunk carries that anchor only once the lane lands, and while `refs/heads/main` is
+unlanded the predicate on it is still FALSE. Our migration tail had to be renumbered as damage
+control while it grew (STAS-371, STAS-374).
 
 ## The run
 
@@ -57,13 +58,17 @@ stop. It is not your index to clean.
 
 ## While upstream is unabsorbed
 
-The trunk carried this state until STAS-427 anchored it on 2026-11-12, and the state returns the
-moment upstream moves ahead and a day is skipped. In it, this job exits 1 every day and prints
-its conflict list — 28 paths at that measurement, all 28 now inside the merged line, every side
-recorded per path in the STAS-427 task document `merge-conflict-ledger`. That refusal is the job
-working, not a broken job: the trunk is refused rather than quietly forked. Clearing the debt is
-always a lane of its own with a reviewer, never a side-pick here (`STAS-373` named the predicate;
-`STAS-427` is the lane that cleared it). Pause this agent only on the operator's order.
+The trunk still carried this state when STAS-427 finished its lane work on 2026-11-13, and the
+state returns the moment upstream moves ahead and a day is skipped. In it, this job exits 1 every
+day and prints its conflict list — 28 paths at that measurement, all 28 resolved on the STAS-427
+lane, every side recorded per path in the STAS-427 task document `merge-conflict-ledger`. Upstream
+moved twice more while that lane was under review and both moves merged into it with zero
+conflicts, so the lane, not the trunk, is where the debt is currently cleared: the trunk write is
+held up because a checkout holds `refs/heads/main`, which makes it an operator leg (`AGENTS.md`,
+*Landing hygiene*), not because anything is unresolved. That refusal is the job working, not a broken job: the trunk
+is refused rather than quietly forked. Clearing the debt is always a lane of its own with a
+reviewer, never a side-pick here (`STAS-373` named the predicate; `STAS-427` is the lane that
+cleared it). Pause this agent only on the operator's order.
 
 That lane has to be creatable, which is why the installed hook does not refuse lane creation
 while the trunk itself is unanchored. `reference-transaction` refuses every write that would move `refs/heads/main`, and for
