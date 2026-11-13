@@ -34,7 +34,7 @@ Two failures those lines exist to catch, both seen on a real box:
   removed worktree's code while the shell stands elsewhere. Re-run the shebang check after every
   install, and prefer `.venv/bin/python -m pytest` over a bare `pytest`.
 - An exact pin moved by a top-up install. `backend/requirements-dev.txt` starts with
-  `-r requirements.txt`, which carries `celery[redis]>=5.4` against `pyproject.toml`'s exact
+  `-r requirements.txt`, which carries `celery[redis]==5.7.0` against `pyproject.toml`'s exact
   `click==8.3.2`. Print both sides and require them to agree:
 
 ```bash

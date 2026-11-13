@@ -23,7 +23,12 @@ anthropic>=1.9.0
 nh3>=0.2
 claude-agent-sdk>=0.1.50
 mcp>=1.23.0,<2
-celery[redis]>=5.4
+# Exact pin: celery 5.7.0 is where a task that declares no ceiling began reading the
+# global conf instead of None, so an unbounded range let that change land underneath the
+# suite and made one assertion green in one lane venv and red in another (STAS-431 AC8).
+# Re-run backend/tests/test_celery_visibility_timeout.py and
+# backend/tests/test_agent_run_resolution.py before moving this pin.
+celery[redis]==5.7.0
 duckdb>=1.1
 opentelemetry-proto>=1.27
 redis>=5.0
