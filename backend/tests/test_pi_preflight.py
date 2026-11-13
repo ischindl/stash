@@ -25,6 +25,9 @@ def _pi_auth() -> agent_auth.RunAuth:
         files={"/home/sprite/.pi/agent/models.json": "{}"},
         endpoint=ENDPOINT,
         model="llama3.1:8b",
+        # A level above `off` on purpose: a fixture that carried `off` could not
+        # tell a forwarded level from one the service invented on the way.
+        thinking="low",
     )
 
 
@@ -120,6 +123,9 @@ async def test_reachable_endpoint_builds_pi_argv_with_model(monkeypatch):
     assert len(calls) == 1
     assert argv_calls[0]["harness"] is h.PI
     assert argv_calls[0]["model"] == "llama3.1:8b"
+    # The box's stored level travels with the turn: this is the only route from the
+    # credential doc to pi's argv, and a level dropped here never bounds anything.
+    assert argv_calls[0]["thinking"] == "low"
     assert argv_calls[0]["resume"] is False  # no native id yet → turn 1
 
 

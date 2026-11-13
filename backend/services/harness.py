@@ -119,11 +119,12 @@ def build_argv(
     `resume` says whether to continue an existing session vs create fresh.
     `model` is the LOCAL endpoint's model id (pi only).
 
-    `thinking` is that endpoint's stored reasoning level (pi only). Absent or
-    `off` leaves the argv exactly as it was before the level existed — no
-    `--thinking` flag — because pi's own default is `medium`, so naming a level
-    the user never chose would start a thinking phase Stash never asked for. An
-    unknown level is refused here rather than left for pi to reject mid-turn.
+    `thinking` is that endpoint's stored reasoning level (pi only) and it is
+    required: pi's own default is `medium`, so a turn that named no level would
+    silently start a thinking phase nobody chose. `off` is the level that asks pi
+    for nothing and leaves the argv exactly as it was before levels existed — no
+    `--thinking` flag. An unknown level is refused here rather than left for pi to
+    reject mid-turn.
     """
     if harness is CLAUDE:
         # Claude always carries its deterministic id: --session-id creates it on
@@ -194,12 +195,12 @@ def build_argv(
             system_prompt,
             "--no-extensions",
         ]
-        if thinking is not None and thinking != model_provider.THINKING_OFF:
-            if thinking not in model_provider.THINKING_LEVELS:
-                raise ValueError(
-                    f"unknown thinking level {thinking!r}: pi accepts "
-                    + ", ".join(model_provider.THINKING_LEVELS)
-                )
+        if thinking not in model_provider.THINKING_LEVELS:
+            raise ValueError(
+                f"pi requires a thinking level: {thinking!r} is not one of "
+                + ", ".join(model_provider.THINKING_LEVELS)
+            )
+        if thinking != model_provider.THINKING_OFF:
             # The level is named on the command line, never in the model id:
             # an Ollama-style id is allowed to contain colons, and pi reads its
             # provider config as JSON, so a suffix there would either become

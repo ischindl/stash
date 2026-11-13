@@ -268,6 +268,10 @@ def test_pi_argv_is_the_verified_one_shot_form():
         resume=False,
         system_prompt="sys",
         model="mock-1",
+        # `off` is the level every box was migrated to, and this literal is the
+        # argv those boxes already run with: naming a level here is the proof
+        # that the level changes nothing when it asks for nothing.
+        thinking="off",
     )
     assert argv == [
         "pi",
@@ -291,6 +295,7 @@ def test_pi_resume_argv_appends_session_flag_only():
         resume=True,
         system_prompt="sys",
         model="mock-1",
+        thinking="off",
     )
     assert resumed[-2:] == ["--session", "01a02a53-f82f-76bf-9d88-38759358c244"]
     assert "--session-id" not in resumed
@@ -299,6 +304,56 @@ def test_pi_resume_argv_appends_session_flag_only():
 def test_pi_argv_without_model_fails_loud():
     with pytest.raises(ValueError):
         h.build_argv(h.PI, "hi", session_key=None, resume=False, system_prompt="sys")
+
+
+def test_pi_argv_carries_a_bounded_level_as_its_own_flag():
+    """A chosen level reaches pi as `--thinking <level>` and nothing else changes.
+
+    The level never rides on the model id: pi parses the LAST colon of
+    `provider/id:level`, and an Ollama-style id (`llama3.1:8b`) already contains
+    one, so a shorthand would silently rename the model instead of bounding it.
+    """
+    argv = h.build_argv(
+        h.PI,
+        "hi",
+        session_key=None,
+        resume=False,
+        system_prompt="sys",
+        model="llama3.1:8b",
+        thinking="low",
+    )
+    assert argv[argv.index("--thinking") + 1] == "low"
+    assert argv[argv.index("--model") + 1] == "local/llama3.1:8b"
+
+
+def test_pi_argv_without_a_level_fails_loud():
+    """No level is not the same as `off`: pi's own default is `medium`, so a turn
+    that names nothing starts a thinking phase nobody chose. Every local turn
+    carries the box's stored level, so a missing one is a broken projection."""
+    with pytest.raises(ValueError, match="thinking level"):
+        h.build_argv(
+            h.PI,
+            "hi",
+            session_key=None,
+            resume=False,
+            system_prompt="sys",
+            model="mock-1",
+        )
+
+
+def test_pi_argv_refuses_a_level_pi_does_not_know():
+    """Refused here rather than left for pi to reject mid-turn, and the message
+    names the set the caller can choose from."""
+    with pytest.raises(ValueError, match="minimal"):
+        h.build_argv(
+            h.PI,
+            "hi",
+            session_key=None,
+            resume=False,
+            system_prompt="sys",
+            model="mock-1",
+            thinking="extraordinary",
+        )
 
 
 def test_pi_fixture_maps_to_contract_events():
