@@ -1251,9 +1251,12 @@ async def test_a_ceiling_the_worker_would_beat_is_refused_and_changes_nothing(
         ).status_code == 400
 
     # Raising the worker's own ceilings moves the bound, because it was never a
-    # second copy of the number.
-    monkeypatch.setattr(celery.conf, "task_soft_time_limit", 3300)
-    monkeypatch.setattr(celery.conf, "task_time_limit", 3600)
+    # second copy of the number. The patch goes through the mapping, not attributes:
+    # `celery.conf` is a ChainMap, so its keys never live in the instance dict, and
+    # pytest's `setattr` teardown answers a found value with `delattr` on a key it
+    # cannot delete. `setitem` is the same override with a teardown that restores.
+    monkeypatch.setitem(celery.conf, "task_soft_time_limit", 3300)
+    monkeypatch.setitem(celery.conf, "task_time_limit", 3600)
     assert worker_turn_ceiling_seconds() == 3300
     accepted = await client.patch(url, json={"turn_timeout_seconds": 3000}, headers=console)
     assert accepted.status_code == 200
