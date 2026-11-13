@@ -63,8 +63,8 @@ export default function AgentModelSection() {
   const [local, setLocal] = useState<LocalEndpointDoc | null>(null);
   // The levels the server says this deployment's harness accepts. Held from the
   // load rather than written out here, so a level pi would refuse can never be
-  // offered — and an empty list (a server too old to report one) shows no control
-  // rather than a control that guesses.
+  // offered, and never invented here either: the server reports its accepted
+  // levels on every answer, so this is a copy of its list and nothing else.
   const [thinkingLevels, setThinkingLevels] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -75,7 +75,7 @@ export default function AgentModelSection() {
         setConnected(status.connected);
         setEndpoints(status.endpoints);
         setLocal(status.local);
-        setThinkingLevels(status.thinking_levels ?? []);
+        setThinkingLevels(status.thinking_levels);
         setLoadError(null);
       })
       .catch((e) => {
@@ -719,16 +719,14 @@ function EndpointRow({
               key: {keyDoc.api_key}
             </div>
           )}
-          {thinkingLevels.length > 0 && (
-            <ThinkingLevelControl
-              storedLevel={storedLevel}
-              levels={thinkingLevels}
-              busy={busy}
-              draft={draftLevel}
-              onDraftChange={setDraftLevel}
-              onSave={saveLevel}
-            />
-          )}
+          <ThinkingLevelControl
+            storedLevel={storedLevel}
+            levels={thinkingLevels}
+            busy={busy}
+            draft={draftLevel}
+            onDraftChange={setDraftLevel}
+            onSave={saveLevel}
+          />
         </div>
         <div className="flex shrink-0 flex-wrap justify-end gap-2">
           {keyDoc && (
@@ -800,18 +798,14 @@ function ThinkingLevelControl({
           onChange={(e) => onDraftChange(e.target.value)}
           className="rounded-md border border-border bg-surface px-2 py-1 font-mono text-[12px] text-foreground"
         >
-          {/* A stored level the server no longer lists stays visible rather than
-              silently becoming something else: the row reports what is stored. */}
-          {levels.includes(storedLevel) && (
-            <option value={storedLevel}>{storedLevel} (stored)</option>
-          )}
-          {levels
-            .filter((level) => level !== storedLevel)
-            .map((level) => (
-              <option key={level} value={level}>
-                {level}
-              </option>
-            ))}
+          {/* The server's own list in the server's own order, with the stored one
+              labelled: a stored level is always one the server accepts, since it
+              refuses a level outside this very list on its way in. */}
+          {levels.map((level) => (
+            <option key={level} value={level}>
+              {level === storedLevel ? `${level} (stored)` : level}
+            </option>
+          ))}
         </select>
       </label>
       <button

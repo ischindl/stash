@@ -55,7 +55,7 @@ def upgrade() -> None:
     from backend.integrations.storage import _decrypt, _encrypt
 
     for row in rows:
-        doc = json.loads(_decrypt(row.secret_enc) or "")
+        doc = json.loads(_decrypt(row.secret_enc))
         if "thinking" in doc:
             continue  # already in the new format; nothing to carry forward
         doc["thinking"] = THINKING_OFF

@@ -814,14 +814,4 @@ describe("AgentModelSection per-endpoint reasoning level", () => {
       false
     );
   });
-
-  it("shows no level control when the server reports no levels it accepts", async () => {
-    listModelEndpoints.mockResolvedValue(status({ thinking_levels: [] }));
-    renderSection();
-    await screen.findByText("box-one");
-
-    // An empty answer is the server saying it cannot honour any level; inventing a
-    // list would offer choices that fail at the turn.
-    expect(within(rowOf("box-one")).queryByText("Reasoning")).toBeNull();
-  });
 });
