@@ -2530,11 +2530,17 @@ export async function connectAgentKey(provider: string, apiKey: string): Promise
 /** One connected local endpoint, as `GET /agent-credentials` lists it. `name` is
  *  derived by the server from the base URL's host — `ConnectRequest` has no name
  *  field, so there is nothing to type. An unreachable box keeps its row with an
- *  empty `models` and the probe's own `probe_error`. The key never travels here. */
+ *  empty `models` and the probe's own `probe_error`. The key never travels here.
+ *
+ *  `thinking` is the reasoning level stored for this box, and `thinking_levels`
+ *  (on the status payload) is the set this deployment's harness accepts. Both come
+ *  from the server on purpose: how much a box reasons is a property of the box, and
+ *  a level the harness cannot name would only be refused at the next turn. */
 export type ModelEndpoint = {
   id: string;
   name: string;
   base_url: string;
+  thinking: string;
   models: string[];
   probe_error?: string;
 };
@@ -2542,12 +2548,18 @@ export type ModelEndpoint = {
 /** The stored document of the endpoint a run resolves to when nothing is pinned:
  *  the OLDEST connected one. It carries no id, so a key-reveal control can only be
  *  attributed to a list row by base_url equality. */
-export type LocalEndpointDoc = { base_url: string; model: string; api_key: string };
+export type LocalEndpointDoc = {
+  base_url: string;
+  model: string;
+  api_key: string;
+  thinking: string;
+};
 
 export type ModelEndpointsStatus = {
   connected: string[];
   endpoints: ModelEndpoint[];
   local: LocalEndpointDoc | null;
+  thinking_levels: string[];
 };
 
 export async function listModelEndpoints(): Promise<ModelEndpointsStatus> {
@@ -2629,6 +2641,22 @@ export async function deleteLocalEndpoint(
   credentialId: string,
 ): Promise<{ ok: boolean; connected: string[] }> {
   return apiFetch(`/api/v1/me/agent-credentials/endpoints/${credentialId}`, { method: "DELETE" });
+}
+
+/** Set one box's reasoning level. The body carries the level and nothing else:
+ *  the server copies the address, model and key out of the stored doc, so the
+ *  control that changes how much a box thinks cannot move which box is addressed.
+ *  A level is not applied to an endpoint whose models.json is stored verbatim — the
+ *  route answers 400 and says what to do instead — so `apiFetch`'s error text is
+ *  the server's own and the caller surfaces it rather than a phantom success. */
+export async function setEndpointThinking(
+  credentialId: string,
+  thinking: string,
+): Promise<{ ok: boolean; thinking: string }> {
+  return apiFetch(`/api/v1/me/agent-credentials/endpoints/${credentialId}/thinking`, {
+    method: "PUT",
+    body: JSON.stringify({ thinking }),
+  });
 }
 
 export async function disconnectAgentCredential(provider: string): Promise<string[]> {

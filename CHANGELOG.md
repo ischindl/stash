@@ -7,6 +7,22 @@ everything before it is captured in git history (`git log`), not here.
 
 ### Added
 
+- A local model box now has a reasoning level you can choose. Every endpoint row in
+  Settings → Cloud agent model carries a "Reasoning" selector (`off`, `minimal`, `low`,
+  `medium`, `high`, `xhigh`, `max`) with an explicit Save, and the level you saved is what
+  that box's next turn runs with. Until now the level was not yours to set: Stash shipped a
+  fixed `off` and never asked the model to think within a budget, so a curator turn on a box
+  whose server reasons by default could spend its entire output on reasoning and answer with
+  nothing — the failure that reads as "0 B answer, 27 kB of thinking". Choosing a level
+  bounds the thinking phase instead: measured on the founder's own vLLM box over ten
+  identical curator turns, the unbounded setting produced 4 empty answers out of 10 where
+  `low` produced none, and the median turn went from 44 s to 13 s. `off` keeps behaving
+  exactly as it does today — for a box whose chat template reasons regardless, no level is
+  what stops it; a level is what stops reasoning from eating the answer. The level is stored
+  per box, so a fast laptop box and a rack box can be set differently, and a box whose
+  `models.json` you edit by hand refuses a level until you either put the two matching keys
+  in that file or reset the override — it will not show you a level it cannot send.
+
 - A curator's run ceiling is now the curator's own setting. One number —
   `AGENT_TURN_TIMEOUT_SECONDS`, default 600 — used to be the wall for every curator, so a lane
   pointed at a slow local model box died at 600 s exactly like a lane that finishes in a minute,

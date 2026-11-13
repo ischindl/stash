@@ -14,6 +14,7 @@ import {
   probeLocalEndpoint,
   probeSavedEndpoint,
   PROBE_ONLY_MODEL,
+  setEndpointThinking,
   startAgentOAuth,
   type LocalEndpointDoc,
   type LocalProbeResult,
@@ -60,6 +61,11 @@ export default function AgentModelSection() {
   const [connected, setConnected] = useState<string[]>([]);
   const [endpoints, setEndpoints] = useState<ModelEndpoint[]>([]);
   const [local, setLocal] = useState<LocalEndpointDoc | null>(null);
+  // The levels the server says this deployment's harness accepts. Held from the
+  // load rather than written out here, so a level pi would refuse can never be
+  // offered — and an empty list (a server too old to report one) shows no control
+  // rather than a control that guesses.
+  const [thinkingLevels, setThinkingLevels] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
 
@@ -69,6 +75,7 @@ export default function AgentModelSection() {
         setConnected(status.connected);
         setEndpoints(status.endpoints);
         setLocal(status.local);
+        setThinkingLevels(status.thinking_levels ?? []);
         setLoadError(null);
       })
       .catch((e) => {
@@ -101,7 +108,12 @@ export default function AgentModelSection() {
               onChange={setConnected}
             />
           ))}
-          <EndpointsPanel endpoints={endpoints} local={local} onChanged={refresh} />
+          <EndpointsPanel
+            endpoints={endpoints}
+            local={local}
+            thinkingLevels={thinkingLevels}
+            onChanged={refresh}
+          />
         </div>
       )}
       {loadError && <p className="text-[12px] text-error">{loadError}</p>}
@@ -365,10 +377,12 @@ function ProbeVerdictLine({
 function EndpointsPanel({
   endpoints,
   local,
+  thinkingLevels,
   onChanged,
 }: {
   endpoints: ModelEndpoint[];
   local: LocalEndpointDoc | null;
+  thinkingLevels: string[];
   onChanged: () => void;
 }) {
   const [baseUrl, setBaseUrl] = useState("");
@@ -486,6 +500,7 @@ function EndpointsPanel({
               key={endpoint.id}
               endpoint={endpoint}
               keyDoc={local && local.base_url === endpoint.base_url ? local : null}
+              thinkingLevels={thinkingLevels}
               onRemoved={seedDraftAfterRemoval}
             />
           ))}
@@ -572,6 +587,7 @@ function EndpointsPanel({
 function EndpointRow({
   endpoint,
   keyDoc,
+  thinkingLevels,
   onRemoved,
 }: {
   endpoint: ModelEndpoint;
@@ -579,6 +595,8 @@ function EndpointRow({
    *  server reveals a key for the endpoint a run resolves to by default and for
    *  no other, so every other row shows no key affordance at all. */
   keyDoc: LocalEndpointDoc | null;
+  /** The levels this deployment's harness accepts, as the server reported them. */
+  thinkingLevels: string[];
   /** Fired only once the server confirms the removal, with the address to leave
    *  behind as the add-form's draft. A refusal fires nothing. */
   onRemoved: (removedBaseUrl: string) => void;
@@ -593,13 +611,43 @@ function EndpointRow({
   // answered for it, so one row's answer can never be read as another's.
   const [probed, setProbed] = useState<ProbeVerdict | null>(null);
   const [testing, setTesting] = useState(false);
+  // The level the last save answered with. Kept beside the row instead of read
+  // from local state alone, so what the screen shows after a save is the server's
+  // word (`thinking` in its response), not the value the browser had typed in.
+  const [savedLevel, setSavedLevel] = useState<string | null>(null);
+  const storedLevel = savedLevel ?? endpoint.thinking;
+  const [draftLevel, setDraftLevel] = useState(endpoint.thinking);
 
   // The list load live-probes every box, so a reload is by definition the fresher
   // answer for this row: a verdict clicked against an earlier load retires the moment
-  // the row's data is replaced.
+  // the row's data is replaced. The level follows the same rule — the load's own
+  // value wins, and an unsaved draft is retyped from it rather than left pointing at
+  // a level the row no longer has.
   useEffect(() => {
     setProbed(null);
+    setSavedLevel(null);
+    setDraftLevel(endpoint.thinking);
   }, [endpoint]);
+
+  // Save writes the level and nothing else, and the row answers with the server's
+  // own confirmation. A refused save — the stored models.json override included —
+  // keeps the draft as typed, because a failed write should not destroy what was
+  // chosen, while the sentence under the control goes on naming the level the server
+  // actually holds and the server's own words appear under the row. The claim about
+  // the box is that sentence, never the selector's value, so no phantom success is
+  // readable here.
+  async function saveLevel() {
+    setBusy(true);
+    setError(null);
+    try {
+      const answer = await setEndpointThinking(endpoint.id, draftLevel);
+      setSavedLevel(answer.thinking);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not change the reasoning level");
+    } finally {
+      setBusy(false);
+    }
+  }
 
   // The dial happens server-side with the stored key — the only key this box has ever
   // been seen with — and nothing about the row is written. No reload either: the
@@ -671,6 +719,16 @@ function EndpointRow({
               key: {keyDoc.api_key}
             </div>
           )}
+          {thinkingLevels.length > 0 && (
+            <ThinkingLevelControl
+              storedLevel={storedLevel}
+              levels={thinkingLevels}
+              busy={busy}
+              draft={draftLevel}
+              onDraftChange={setDraftLevel}
+              onSave={saveLevel}
+            />
+          )}
         </div>
         <div className="flex shrink-0 flex-wrap justify-end gap-2">
           {keyDoc && (
@@ -710,5 +768,63 @@ function EndpointRow({
       )}
       {error && <p className="mt-2 text-[12px] text-error">{error}</p>}
     </li>
+  );
+}
+
+/** The reasoning level of one box: a draft selector plus an explicit Save, the same
+ *  two-step the curator's run ceiling uses, so nothing is written by a click that
+ *  only moved a control. The options and the current value both come from the
+ *  server — this component never computes what `off` means or which levels exist,
+ *  because the harness that has to honour them is on the other side of the request. */
+function ThinkingLevelControl({
+  storedLevel,
+  levels,
+  busy,
+  draft,
+  onDraftChange,
+  onSave,
+}: {
+  storedLevel: string;
+  levels: string[];
+  busy: boolean;
+  draft: string;
+  onDraftChange: (level: string) => void;
+  onSave: () => Promise<void>;
+}) {
+  return (
+    <div className="mt-2 flex flex-wrap items-center gap-2">
+      <label className="flex items-center gap-2 text-[12px] text-muted-foreground">
+        Reasoning
+        <select
+          value={draft}
+          onChange={(e) => onDraftChange(e.target.value)}
+          className="rounded-md border border-border bg-surface px-2 py-1 font-mono text-[12px] text-foreground"
+        >
+          {/* A stored level the server no longer lists stays visible rather than
+              silently becoming something else: the row reports what is stored. */}
+          {levels.includes(storedLevel) && (
+            <option value={storedLevel}>{storedLevel} (stored)</option>
+          )}
+          {levels
+            .filter((level) => level !== storedLevel)
+            .map((level) => (
+              <option key={level} value={level}>
+                {level}
+              </option>
+            ))}
+        </select>
+      </label>
+      <button
+        type="button"
+        onClick={onSave}
+        disabled={busy || draft === storedLevel}
+        className="rounded-md border border-border px-2.5 py-1 text-[12px] text-foreground hover:bg-raised disabled:opacity-60"
+      >
+        Save level
+      </button>
+      <span className="text-[11.5px] text-muted-foreground">
+        how much this box may think before it answers; its next turn uses {storedLevel}
+      </span>
+    </div>
   );
 }

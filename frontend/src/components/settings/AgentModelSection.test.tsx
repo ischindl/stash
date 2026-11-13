@@ -11,6 +11,7 @@ const probeSavedEndpoint = vi.fn();
 const connectLocalEndpoint = vi.fn();
 const deleteLocalEndpoint = vi.fn();
 const disconnectAgentCredential = vi.fn();
+const setEndpointThinking = vi.fn();
 
 // Mocked at the module boundary on purpose: the two PROBE_ONLY_MODEL pins below
 // read the arguments that actually leave this component, which is the only place
@@ -26,6 +27,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
     connectLocalEndpoint: (...args: unknown[]) => connectLocalEndpoint(...args),
     deleteLocalEndpoint: (...args: unknown[]) => deleteLocalEndpoint(...args),
     disconnectAgentCredential: (...args: unknown[]) => disconnectAgentCredential(...args),
+    setEndpointThinking: (...args: unknown[]) => setEndpointThinking(...args),
   };
 });
 
@@ -33,20 +35,34 @@ const FIRST = {
   id: "cred-1",
   name: "box-one",
   base_url: "http://box-one:11434/v1",
+  thinking: "off",
   models: ["llama3.1:8b", "qwen2:7b"],
 };
 const SECOND = {
   id: "cred-2",
   name: "box-two",
   base_url: "http://box-two:11434/v1",
+  thinking: "off",
   models: ["gemma3:4b"],
 };
 // The server names only one endpoint's key — the one an unpinned run resolves to,
-// which is the OLDEST connected row. Nothing else in the UI may show a key.
-const DEFAULT_DOC = { base_url: FIRST.base_url, model: "llama3.1:8b", api_key: "sk-local-42" };
+// which is the OLDEST connected row. Nothing else in the UI may show a key. The doc
+// carries the box's reasoning level too, because the row has to display what is stored.
+const DEFAULT_DOC = {
+  base_url: FIRST.base_url,
+  model: "llama3.1:8b",
+  api_key: "sk-local-42",
+  thinking: "off",
+};
 
 function status(over: Partial<ModelEndpointsStatus> = {}): ModelEndpointsStatus {
-  return { connected: ["local"], endpoints: [FIRST, SECOND], local: DEFAULT_DOC, ...over };
+  return {
+    connected: ["local"],
+    endpoints: [FIRST, SECOND],
+    local: DEFAULT_DOC,
+    thinking_levels: ["off", "minimal", "low", "medium", "high", "xhigh", "max"],
+    ...over,
+  };
 }
 
 function renderSection() {
@@ -718,5 +734,94 @@ describe("AgentModelSection per-endpoint re-test", () => {
       expect(within(row).queryByText(/Reachable and authenticated/)).toBeNull();
       expect(within(row).getByText("freshly-probed:1")).toBeDefined();
     });
+  });
+});
+
+// The reasoning level is the setting this card exists to add, and the reason it is a
+// setting is that the founder's box was reasoning without being asked to. So these
+// pin the two ways that claim could be a lie on screen: the row showing a level the
+// server never reported, and a level that looks saved but was never written.
+describe("AgentModelSection per-endpoint reasoning level", () => {
+  function rowOf(name: string): HTMLElement {
+    return screen.getByText(name).closest("li") as HTMLElement;
+  }
+
+  function levelSelect(row: HTMLElement) {
+    return within(row).getByLabelText("Reasoning") as HTMLSelectElement;
+  }
+
+  it("shows the level the server reported for that box, not a computed default", async () => {
+    listModelEndpoints.mockResolvedValue(
+      status({
+        endpoints: [{ ...FIRST, thinking: "low" }, { ...SECOND, thinking: "high" }],
+      }),
+    );
+    renderSection();
+    await screen.findByText("box-one");
+
+    // Each row carries its own box's level: a shared or defaulted value here would
+    // show a bound that the other box's next turn does not have.
+    expect(levelSelect(rowOf("box-one")).value).toBe("low");
+    expect(levelSelect(rowOf("box-two")).value).toBe("high");
+  });
+
+  it("offers only the levels the server says this harness accepts", async () => {
+    listModelEndpoints.mockResolvedValue(status({ thinking_levels: ["off", "low"] }));
+    renderSection();
+    await screen.findByText("box-one");
+
+    const options = Array.from(levelSelect(rowOf("box-one")).options).map((o) => o.value);
+    expect(options).toEqual(["off", "low"]);
+    // A level `pi` does not know would be refused at the next turn, one session after
+    // the click, so the browser must never be able to name one.
+    expect(options).not.toContain("medium");
+  });
+
+  it("writes nothing until Save is clicked, then names the box and the level only", async () => {
+    setEndpointThinking.mockResolvedValue({ ok: true, thinking: "low" });
+    renderSection();
+    await screen.findByText("box-one");
+    const row = rowOf("box-one");
+
+    fireEvent.change(levelSelect(row), { target: { value: "medium" } });
+    expect(setEndpointThinking).not.toHaveBeenCalled();
+
+    fireEvent.click(within(row).getByRole("button", { name: "Save level" }));
+    await waitFor(() => expect(setEndpointThinking).toHaveBeenCalledWith("cred-1", "medium"));
+    // The other box is untouched by a save on this one — the level is per box.
+    expect(setEndpointThinking.mock.calls.length).toBe(1);
+  });
+
+  it("keeps showing the stored level and the server's own words when the save is refused", async () => {
+    setEndpointThinking.mockRejectedValue(
+      new ApiError(400, '{"detail":"the thinking level cannot be applied"}'),
+    );
+    renderSection();
+    await screen.findByText("box-one");
+    const row = rowOf("box-one");
+
+    fireEvent.change(levelSelect(row), { target: { value: "high" } });
+    fireEvent.click(within(row).getByRole("button", { name: "Save level" }));
+
+    // What the box will actually do stays on screen and it is the server's word: the
+    // sentence under the control still names `off`, the refusal shows verbatim, and
+    // Save stays clickable because the draft and the stored level differ. The draft
+    // keeps what was typed instead of being destroyed by a failed write; the claim
+    // about the box is the sentence, not the selector.
+    await waitFor(() => expect(within(row).getByText(/cannot be applied/)).toBeDefined());
+    expect(within(row).getByText(/next turn uses off/)).toBeDefined();
+    expect(within(row).getByRole("button", { name: "Save level" }).hasAttribute("disabled")).toBe(
+      false
+    );
+  });
+
+  it("shows no level control when the server reports no levels it accepts", async () => {
+    listModelEndpoints.mockResolvedValue(status({ thinking_levels: [] }));
+    renderSection();
+    await screen.findByText("box-one");
+
+    // An empty answer is the server saying it cannot honour any level; inventing a
+    // list would offer choices that fail at the turn.
+    expect(within(rowOf("box-one")).queryByText("Reasoning")).toBeNull();
   });
 });
