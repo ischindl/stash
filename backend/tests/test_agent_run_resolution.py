@@ -28,6 +28,7 @@ Both violate the invariant `agent_service.mark_run` states: every path after
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 import signal
 from contextlib import contextmanager
@@ -133,6 +134,15 @@ def _capture_alerts(monkeypatch: pytest.MonkeyPatch) -> list[str]:
 
     monkeypatch.setattr(alert_service, "send_alert", fake_send_alert)
     return sent
+
+
+def _decorator_of(module, function_name: str) -> str:
+    """The decorator line above a module-level def, read from its module source."""
+    lines = inspect.getsource(module).splitlines()
+    definition = next(i for i, line in enumerate(lines) if line.startswith(f"def {function_name}("))
+    return next(
+        lines[i].strip() for i in range(definition - 1, -1, -1) if lines[i].strip().startswith("@")
+    )
 
 
 @pytest.fixture
@@ -733,10 +743,16 @@ def test_reaper_runs_on_beat_as_a_sweep():
     assert entries["reap-stranded-agent-runs"]["task"] == (
         "backend.tasks.agent_schedules.reap_stranded_runs"
     )
-    # It is a sweep, not a harness run: it declares no ceiling of its own, so it
-    # inherits the global one and can never hold a worker slot past a real run.
-    assert agent_schedules.reap_stranded_runs.soft_time_limit == celery.conf.task_soft_time_limit
-    assert agent_schedules.reap_stranded_runs.time_limit == celery.conf.task_time_limit
+    # It is a sweep, not a harness run: what keeps it from ever holding a worker
+    # slot past a real run is that its decorator declares no ceiling, so the
+    # worker enforces the global conf ceiling when it executes the task. Assert
+    # that declaration off the source, not off the task object: celery mirrors
+    # `task_time_limit` onto the object in some versions (its `Task.from_config`
+    # binding) and leaves it None in others, so an attribute equality here has a
+    # verdict that moves with the installed dependency instead of with the code.
+    assert _decorator_of(agent_schedules, "reap_stranded_runs") == (
+        '@celery.task(name="backend.tasks.agent_schedules.reap_stranded_runs")'
+    )
 
 
 def test_reaper_waits_out_the_ceiling_a_live_run_may_still_be_under():
