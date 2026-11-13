@@ -157,11 +157,14 @@ def run_due() -> int:
 
 
 @celery.task(name="backend.tasks.agent_schedules.run_scheduled_agent")
-def run_scheduled_agent(agent_id: str, stamp: str) -> None:
-    # The beat consumed the tick and metered the run before dispatching (`mark_run`
-    # in `_run_due`), so this body always owes a metered run.
+def run_scheduled_agent(agent_id: str, stamp: str, metered: bool = True) -> None:
+    # The beat charged this tick only if it dispatched it, and only metered the
+    # lane the platform pays for (`metered` is that answer, resolved from the
+    # credential the run dials). Everything downstream that can refund has to be
+    # told which of the two this was, or an unmetered local lane's crash would
+    # hand back a credit that was never taken.
     agent_uuid = UUID(agent_id)
-    _run_guarded(agent_uuid, True, _run_scheduled_agent(agent_uuid, stamp))
+    _run_guarded(agent_uuid, metered, _run_scheduled_agent(agent_uuid, stamp, metered))
 
 
 @celery.task(name="backend.tasks.agent_schedules.run_curator_now")
@@ -171,12 +174,20 @@ def run_curator_now(
     metered: bool = True,
     catchup_remaining: int | None = None,
     catchup: bool = False,
+    platform_initiated: bool = False,
 ) -> None:
     agent_uuid = UUID(agent_id)
     _run_guarded(
         agent_uuid,
         metered,
-        _run_curator_now(agent_uuid, full_history, metered, catchup_remaining, catchup),
+        _run_curator_now(
+            agent_uuid,
+            full_history,
+            metered,
+            catchup_remaining,
+            catchup,
+            platform_initiated,
+        ),
     )
 
 
@@ -186,6 +197,7 @@ async def _run_curator_now(
     metered: bool = True,
     catchup_remaining: int | None = None,
     catchup: bool = False,
+    platform_initiated: bool = False,
 ) -> None:
     """A user-requested curator run: same execution as the daily tick, minus
     the due-check — the user is the trigger. The router already enforced the
@@ -200,8 +212,15 @@ async def _run_curator_now(
     stored watermark is only advanced after success — a failed backfill must
     not have thrown away the incremental position.
 
-    `metered=False` is for runs the platform initiates on its own (the
-    first-day curator): they must not eat the user's free monthly allowance."""
+    `metered=False` means the platform owes nothing for this tick, either because
+    it initiated the run or because the lane dials the customer's own endpoint
+    (`agent_auth.costs_platform_tokens`).
+
+    `platform_initiated=True` says who triggered the run, which is what the
+    switched-off-curator guard actually asks. It used to infer that from
+    `metered=False`, and the two come apart as soon as a user-triggered run on a
+    local endpoint is unmetered: the inference would answer "success" and run
+    nothing, which is the silent no-op this card exists to remove."""
     from ..services import (
         agent_service,
         scoped_curation_service,
@@ -216,7 +235,13 @@ async def _run_curator_now(
         async with _run_lock(agent, workspace):
             agent = await agent_service.get_agent_by_id(agent_id)
             await _run_curator_locked(
-                agent, workspace, full_history, metered, catchup_remaining, catchup
+                agent,
+                workspace,
+                full_history,
+                metered,
+                catchup_remaining,
+                catchup,
+                platform_initiated,
             )
     except sprite_agent_service.TurnInProgress:
         # No mark_run and no charge happened: leave the active run untouched.
@@ -266,7 +291,9 @@ async def _pending_input(agent: dict, workspace) -> bool:
     )
 
 
-async def _run_curator_locked(agent, workspace, full_history, metered, catchup_remaining, catchup):
+async def _run_curator_locked(
+    agent, workspace, full_history, metered, catchup_remaining, catchup, platform_initiated
+):
     from ..services import (
         agent_service,
         billing_service,
@@ -276,7 +303,12 @@ async def _run_curator_locked(agent, workspace, full_history, metered, catchup_r
     )
 
     agent_id = UUID(str(agent["id"]))
-    if not metered and agent["run_mode"] != "scheduled":
+    # A platform-triggered pass (first-day, catch-up) is only for a curator the
+    # user left switched on. The question is the TRIGGER, so it reads the trigger:
+    # inferring it from `metered` would misanswer the moment a user-triggered run
+    # is unmetered for costing the platform nothing, turning a legitimate manual
+    # run into a task that reports `started` and does nothing.
+    if platform_initiated and agent["run_mode"] != "scheduled":
         return
     if catchup:
         if workspace is None:
@@ -391,9 +423,18 @@ async def _queue_curator_catchup(
         return
     # Only successful, advancing, bounded batches can continue. No retry
     # chain on failure or permission revocation, and no paid personal runs.
+    # `metered=False` here because the PLATFORM is the trigger for a follow-on
+    # pass, not because of which endpoint it dials; `platform_initiated` below is
+    # that trigger, said in the open. Metering this chain is deferred to the
+    # first paid tier by operator directive (STAS-423).
     run_curator_now.apply_async(
         args=[str(agent["id"])],
-        kwargs={"metered": False, "catchup_remaining": remaining - 1, "catchup": True},
+        kwargs={
+            "metered": False,
+            "platform_initiated": True,
+            "catchup_remaining": remaining - 1,
+            "catchup": True,
+        },
         countdown=15,
     )
 
@@ -459,9 +500,12 @@ async def _maybe_dispatch_first_day_run(scope_user_id: UUID, agent: dict, now: d
         return
     if not await _pending_input(agent, workspace):
         return
-    # Unmetered: the platform is the trigger, so the run must not eat the
-    # scope's free monthly curator allowance.
-    run_curator_now.delay(str(agent["id"]), metered=False)
+    # Unmetered, and platform-triggered, for the same reason: the platform is the
+    # trigger, so the run must not eat the scope's free monthly curator allowance,
+    # and only a curator the user left switched on may be run at all. The `await`
+    # above is taken for its side effect (refuse an unrunnable lane); the metering
+    # answer is not consulted because this trigger is unmetered either way.
+    run_curator_now.delay(str(agent["id"]), metered=False, platform_initiated=True)
 
 
 async def _run_due() -> int:
@@ -493,37 +537,16 @@ async def _dispatch_due_agent(agent, stamp, workspace):
     from ..services import agent_auth, agent_service, billing_service, scoped_curation_service
 
     user_id = UUID(str(agent["user_id"]))
-    # Consume the tick up front so a skipped, slow, or failing run can't be
-    # re-fired by the next beat. The curator's delta watermark is separate
-    # (curated_through) and only advances after a successful run, so a
-    # skipped or failed run never discards un-curated changes.
-    month_runs = await agent_service.mark_run(agent["id"])
-    # Sleep-time compute is metered: free accounts get a monthly curator
-    # allowance; Pro and enterprise are unlimited.
-    if (
-        agent["is_curator"]
-        and month_runs > settings.FREE_CURATOR_RUNS_PER_MONTH
-        and not await billing_service.is_pro(user_id)
-    ):
-        # WARNING, for the same reason as the no-credential skip below: this fires
-        # once per tick in a beat that ticks every minute, and INFO there is
-        # unreadable on the self-hosted box where `docker compose logs` is the only
-        # console. The difference from that skip is that this one is a spend limit
-        # the operator can lift, and the lane behind it is a backlog that will never
-        # drain while it stands — so both numbers are named, not just the fact.
-        logger.warning(
-            "agent schedule: curator monthly allowance spent for user %s (%s of %s runs used "
-            "this month) — every tick will skip until the allowance is raised or the account "
-            "goes Pro",
-            user_id,
-            month_runs,
-            settings.FREE_CURATOR_RUNS_PER_MONTH,
-        )
-        await agent_service.mark_run_skipped(agent["id"], "credits")
-        return 0
-    # No runnable credential (unconnected free user) → nothing can run.
+    # Resolve the credential first, before any gate and before any counter. That
+    # order is mechanical, not stylistic: the allowance gate may only be applied
+    # to a lane the platform pays tokens for, so the metering answer has to exist
+    # before the gate can be evaluated at all. It also changes which reason a
+    # tick reports when BOTH states are true (a spent allowance and no runnable
+    # credential): the row now says `skipped_no_credential` where it said
+    # `skipped_credits`, because the credential is the actionable one. Neither
+    # state moves the counter. Pinned by AC10.
     try:
-        await scoped_curation_service.require_run_auth(agent, workspace=workspace)
+        metered = await scoped_curation_service.require_run_auth(agent, workspace=workspace)
     except (agent_auth.NeedsAuth, agent_auth.ProviderNotConfigured):
         # WARNING, not INFO: this skip recurs every tick forever, INFO drowns
         # in a beat that ticks every minute, and `docker compose logs` is the
@@ -536,16 +559,49 @@ async def _dispatch_due_agent(agent, stamp, workspace):
         )
         await agent_service.mark_run_skipped(agent["id"], "no_credential")
         return 0
+    # Sleep-time compute is metered: free accounts get a monthly curator
+    # allowance; Pro and enterprise are unlimited. A lane on the customer's own
+    # endpoint costs the platform no tokens, so it has no allowance to spend and
+    # this gate does not apply to it.
+    if (
+        agent["is_curator"]
+        and metered
+        and agent_service.free_allowance_spent(agent)
+        and not await billing_service.is_pro(user_id)
+    ):
+        # WARNING, for the same reason as the no-credential skip below: this fires
+        # once per tick in a beat that ticks every minute, and INFO there is
+        # unreadable on the self-hosted box where `docker compose logs` is the only
+        # console. The difference from that skip is that this one is a spend limit
+        # the operator can lift, and the lane behind it is a backlog that will never
+        # drain while it stands — so both numbers are named, not just the fact.
+        # The count printed is the one that WORKED, not a value this tick moved.
+        logger.warning(
+            "agent schedule: curator monthly allowance spent for user %s (%s of %s runs used "
+            "this month) — every tick will skip until the allowance is raised or the account "
+            "goes Pro",
+            user_id,
+            agent_service.month_runs_used(agent),
+            settings.FREE_CURATOR_RUNS_PER_MONTH,
+        )
+        await agent_service.mark_run_skipped(agent["id"], "credits")
+        return 0
     # Cost gate: skip the curator (and the sprite wake) when nothing changed
     # since its watermark. Idle users cost one EXISTS per day.
     if agent["is_curator"] and not await _pending_input(agent, workspace):
         await agent_service.mark_run_skipped(agent["id"], "no_changes")
         return 0
-    run_scheduled_agent.delay(str(agent["id"]), stamp)
+    # The only path that charges: this tick dispatched a real run, so it consumes
+    # the clock slot and, on a metered lane, one run of the allowance. Every skip
+    # above resolved its tick through `mark_run_skipped` and touched no counter.
+    # This applies to every due agent, curator or not — the counter means worked
+    # runs for all of them; only the allowance GATE stays curator-only.
+    await agent_service.mark_run(agent["id"], metered=metered)
+    run_scheduled_agent.delay(str(agent["id"]), stamp, metered=metered)
     return 1
 
 
-async def _run_scheduled_agent(agent_id: UUID, stamp: str) -> None:
+async def _run_scheduled_agent(agent_id: UUID, stamp: str, metered: bool = True) -> None:
     from ..services import (
         agent_service,
         scoped_curation_service,
@@ -563,12 +619,14 @@ async def _run_scheduled_agent(agent_id: UUID, stamp: str) -> None:
     try:
         async with _run_lock(agent, workspace):
             agent = await agent_service.get_agent_by_id(agent_id)
-            await _run_scheduled_locked(agent, stamp, workspace)
+            await _run_scheduled_locked(agent, stamp, workspace, metered)
     except sprite_agent_service.TurnInProgress:
         if workspace is not None:
-            # Upstream's scoped lane: this dispatch metered and ran nothing, so its
+            # Upstream's scoped lane: this dispatch charged and ran nothing, so its
             # own credit comes back (`test_busy_scoped_curator_refunds_only_skipped_run`).
-            await _skip_busy_curator(agent_id, metered=True)
+            # A scoped lane is metered by definition (the backend's key pays), but the
+            # value travels rather than being re-guessed here.
+            await _skip_busy_curator(agent_id, metered=metered)
             return
         # The personal lane's fence is ours, and the rule that comes with it: a
         # dispatch that never held the fence owns nothing to write, and the monthly
@@ -584,7 +642,7 @@ async def _run_scheduled_agent(agent_id: UUID, stamp: str) -> None:
         )
 
 
-async def _run_scheduled_locked(agent, stamp, workspace):
+async def _run_scheduled_locked(agent, stamp, workspace, metered: bool = True):
     from ..database import get_pool
     from ..services import agent_service, alert_service, curation_service, sprite_agent_service
 
@@ -620,10 +678,10 @@ async def _run_scheduled_locked(agent, stamp, workspace):
         await agent_service.mark_run_succeeded(agent_id)
     except Exception as e:
         if workspace is not None and isinstance(e, sprite_agent_service.TurnInProgress):
-            await _skip_busy_curator(agent_id, metered=True)
+            await _skip_busy_curator(agent_id, metered=metered)
             return
         logger.exception("agent schedule: run failed for agent %s", agent_id)
-        await agent_service.mark_run_failed(agent_id, str(e))
+        await agent_service.mark_run_failed(agent_id, str(e), metered=metered)
         email = await get_pool().fetchval("SELECT email FROM users WHERE id = $1", user_id)
         # Asked before the call, never caught after it: a mode that sends no
         # operational alerts makes send_alert raise, and a raise here would

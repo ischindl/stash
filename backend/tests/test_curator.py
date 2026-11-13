@@ -456,7 +456,9 @@ async def test_curator_run_does_not_echo_loop(
     await _make_due(_db_pool, curator["id"], datetime.now(UTC) - timedelta(minutes=2))
 
     dispatched = []
-    monkeypatch.setattr(run_scheduled_agent, "delay", lambda *args: dispatched.append(args))
+    monkeypatch.setattr(
+        run_scheduled_agent, "delay", lambda *args, **kwargs: dispatched.append(args)
+    )
     assert await _run_due() == 1
     await _run_scheduled_agent(UUID(dispatched[0][0]), dispatched[0][1])
 
@@ -493,7 +495,9 @@ async def test_curator_run_keeps_full_toolset(
     await _make_due(_db_pool, curator["id"], datetime.now(UTC) - timedelta(minutes=2))
 
     dispatched = []
-    monkeypatch.setattr(run_scheduled_agent, "delay", lambda *args: dispatched.append(args))
+    monkeypatch.setattr(
+        run_scheduled_agent, "delay", lambda *args, **kwargs: dispatched.append(args)
+    )
     await _run_due()
     await _run_scheduled_agent(UUID(dispatched[0][0]), dispatched[0][1])
 
@@ -528,7 +532,9 @@ async def test_failed_curator_run_preserves_watermark(
 
     monkeypatch.setattr(sprite_agent_service, "run_scheduled", boom)
     dispatched = []
-    monkeypatch.setattr(run_scheduled_agent, "delay", lambda *args: dispatched.append(args))
+    monkeypatch.setattr(
+        run_scheduled_agent, "delay", lambda *args, **kwargs: dispatched.append(args)
+    )
     assert await _run_due() == 1
     await _run_scheduled_agent(UUID(dispatched[0][0]), dispatched[0][1])
     send_alert.assert_awaited_once()
@@ -574,7 +580,9 @@ async def test_failed_run_records_error_and_refunds_credit(
     real_run_scheduled = sprite_agent_service.run_scheduled
     monkeypatch.setattr(sprite_agent_service, "run_scheduled", boom)
     dispatched = []
-    monkeypatch.setattr(run_scheduled_agent, "delay", lambda *args: dispatched.append(args))
+    monkeypatch.setattr(
+        run_scheduled_agent, "delay", lambda *args, **kwargs: dispatched.append(args)
+    )
     await _run_due()
     await _run_scheduled_agent(UUID(dispatched[0][0]), dispatched[0][1])
     send_alert.assert_awaited_once()
@@ -626,7 +634,7 @@ async def test_recompute_runs_curator_now(client: AsyncClient, sprite_exec, _db_
     )
 
     started = []
-    run_curator_now.delay = lambda agent_id: started.append(agent_id)
+    run_curator_now.delay = lambda agent_id, **kwargs: started.append(agent_id)
     r = await client.post("/api/v1/me/memory/recompute", headers=_auth(key))
     assert r.status_code == 202
     curator = await agent_service.get_or_create_curator(uid)
@@ -724,24 +732,33 @@ async def test_recompute_409_when_nothing_changed(client: AsyncClient, _db_pool)
 @pytest.mark.asyncio
 async def test_recompute_metered_like_the_scheduler(client: AsyncClient, _db_pool, monkeypatch):
     """Manual runs draw from the same monthly sleep-time allowance: free
-    accounts stop at the cap, enterprise is unlimited."""
+    accounts stop at the cap, enterprise is unlimited.
+
+    The lane is a CLOUD credential, because that is the only lane an allowance
+    can bind: a curator dialling the customer's own endpoint costs the platform no
+    tokens, so it is never metered and no cap applies to it (pinned by
+    `test_a_manual_run_on_a_box_lane_spends_no_allowance`). The local endpoint this
+    fixture used to connect was chosen as the cheapest runnable credential, not as
+    the subject; once metering follows the credential, keeping it would have made
+    the fixture contradict the assertion right below it. STAS-131 removed the
+    no-credential fallback, so a credential is needed either way.
+    """
     from backend.config import settings
     from backend.services import agent_auth
     from backend.tasks.agent_schedules import run_curator_now
 
-    # The recompute trigger resolves the user's credentials up front; a fresh
-    # user has none, so give them a connected local endpoint to test the
-    # metering in isolation (STAS-131 removed the no-credential fallback).
-    async def local_cred(user_id, provider=None):
-        if provider == "local":
+    async def cloud_cred(user_id, provider=None):
+        if provider in (None, "anthropic"):
             return {
-                "provider": "local",
-                "kind": "endpoint",
-                "secret": '{"base_url": "http://127.0.0.1:11434/v1", "model": "m", "thinking": "off"}',
+                "provider": "anthropic",
+                "kind": "api_key",
+                "secret": "sk-ant-test-key",
+                "models_json": None,
             }
         return None
 
-    monkeypatch.setattr(agent_auth, "_get_credential", local_cred)
+    monkeypatch.setattr(agent_auth, "_get_credential", cloud_cred)
+    monkeypatch.setattr(settings, "AGENT_EXEC_MODE", "sprites")
 
     key, uid = await _register(client)
     curator = await agent_service.get_or_create_curator(uid)
@@ -759,7 +776,7 @@ async def test_recompute_metered_like_the_scheduler(client: AsyncClient, _db_poo
     assert r.status_code == 402
 
     await _db_pool.execute("UPDATE users SET plan = 'enterprise' WHERE id = $1", uid)
-    run_curator_now.delay = lambda agent_id: None
+    run_curator_now.delay = lambda agent_id, **kwargs: None
     r = await client.post("/api/v1/me/memory/recompute", headers=_auth(key))
     assert r.status_code == 202
 

@@ -17,7 +17,7 @@ from httpx import AsyncClient
 from backend.config import settings
 from backend.database import get_pool
 from backend.integrations.slack import client as slack_client
-from backend.services import agent_service, alert_service, memory_service
+from backend.services import agent_auth, agent_service, alert_service, memory_service
 from backend.tasks import agent_schedules
 
 from .conftest import unique_name
@@ -81,7 +81,7 @@ async def _failing_scheduled_run(
     held_at_failure: list[str] = []
 
     async def resolved_credential(user_id, prefer_provider=None, model_id=None, credential_id=None):
-        return None
+        return _runnable_cloud_auth()
 
     async def failed_turn(agent, stamp, read_position):
         held_at_failure.extend(
@@ -93,7 +93,9 @@ async def _failing_scheduled_run(
     monkeypatch.setattr(sprite_agent_service, "run_scheduled", failed_turn)
     dispatched: list[tuple] = []
     monkeypatch.setattr(
-        agent_schedules.run_scheduled_agent, "delay", lambda *args: dispatched.append(args)
+        agent_schedules.run_scheduled_agent,
+        "delay",
+        lambda *args, **kwargs: dispatched.append(args),
     )
     assert await agent_schedules._run_due() == 1
     return uuid.UUID(dispatched[0][0]), dispatched[0][1], held_at_failure
@@ -295,12 +297,31 @@ async def test_scoped_curator_catchup_is_bounded_and_requires_progress(
         assert queued == [
             {
                 "args": [str(agent["id"])],
-                "kwargs": {"metered": False, "catchup_remaining": 1, "catchup": True},
+                "kwargs": {
+                    "metered": False,
+                    "platform_initiated": True,
+                    "catchup_remaining": 1,
+                    "catchup": True,
+                },
                 "countdown": 15,
             }
         ]
     else:
         assert queued == []
+
+
+def _runnable_cloud_auth() -> agent_auth.RunAuth:
+    """A resolved credential for a faked `agent_auth.resolve`.
+
+    These fakes patch the resolver only to say "this lane is runnable", and used
+    to return `None` because the call was awaited purely for its side effect.
+    `require_run_auth` now answers the metering question off the auth it got back
+    — no endpoint means a cloud key the platform funds, so metered — which makes
+    the returned object load-bearing. A real `RunAuth` is the honest stub; the
+    alternative would be a `None` guard that pretends to know the answer."""
+    from backend.services import harness as harness_mod
+
+    return agent_auth.RunAuth(harness=harness_mod.CLAUDE)
 
 
 @pytest.mark.asyncio
@@ -320,7 +341,7 @@ async def test_run_due_failure_sends_alert(client: AsyncClient, sprite_exec, mon
     )
 
     async def fake_resolve(user_id, prefer_provider=None, model_id=None, credential_id=None):
-        return None
+        return _runnable_cloud_auth()
 
     async def fake_run_scheduled(agent, stamp, read_position):
         raise RuntimeError("agent turn failed: opencode error")
@@ -331,7 +352,9 @@ async def test_run_due_failure_sends_alert(client: AsyncClient, sprite_exec, mon
 
     dispatched = []
     monkeypatch.setattr(
-        agent_schedules.run_scheduled_agent, "delay", lambda *args: dispatched.append(args)
+        agent_schedules.run_scheduled_agent,
+        "delay",
+        lambda *args, **kwargs: dispatched.append(args),
     )
     assert await agent_schedules._run_due() == 1
     await agent_schedules._run_scheduled_agent(uuid.UUID(dispatched[0][0]), dispatched[0][1])
@@ -506,7 +529,7 @@ async def test_run_due_records_no_changes_skip(client: AsyncClient, sprite_exec,
     )
 
     async def fake_resolve(user_id, prefer_provider=None, model_id=None, credential_id=None):
-        return None
+        return _runnable_cloud_auth()
 
     gated_by: list[str] = []
 
@@ -882,12 +905,16 @@ async def test_catchup_bound_a_lane_claims_tracks_the_allowance_not_the_constant
     claim = AsyncMock(return_value=False)
     monkeypatch.setattr(agent_service, "claim_catchup", claim)
 
-    await agent_schedules._run_curator_locked(agent, {"id": uuid.uuid4()}, False, False, None, True)
+    await agent_schedules._run_curator_locked(
+        agent, {"id": uuid.uuid4()}, False, False, None, True, True
+    )
     assert claim.await_args.args[1] == agent_schedules.CURATOR_CATCHUP_PASSES - 1
 
     monkeypatch.setattr(settings, "FREE_CURATOR_RUNS_PER_MONTH", 310)
     assert agent_schedules.curator_catchup_pass_ceiling() == 10
-    await agent_schedules._run_curator_locked(agent, {"id": uuid.uuid4()}, False, False, None, True)
+    await agent_schedules._run_curator_locked(
+        agent, {"id": uuid.uuid4()}, False, False, None, True, True
+    )
     assert claim.await_args.args[1] == 10 - 1
 
 
@@ -937,7 +964,12 @@ async def test_a_chain_started_under_a_raised_allowance_queues_the_wider_budget(
     assert queued == [
         {
             "args": [str(agent["id"])],
-            "kwargs": {"metered": False, "catchup_remaining": 8, "catchup": True},
+            "kwargs": {
+                "metered": False,
+                "platform_initiated": True,
+                "catchup_remaining": 8,
+                "catchup": True,
+            },
             "countdown": 15,
         }
     ]
@@ -950,7 +982,12 @@ async def test_a_chain_started_under_a_raised_allowance_queues_the_wider_budget(
     assert queued == [
         {
             "args": [str(agent["id"])],
-            "kwargs": {"metered": False, "catchup_remaining": 6, "catchup": True},
+            "kwargs": {
+                "metered": False,
+                "platform_initiated": True,
+                "catchup_remaining": 6,
+                "catchup": True,
+            },
             "countdown": 15,
         }
     ]

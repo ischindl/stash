@@ -447,8 +447,16 @@ export async function getCurator(): Promise<{
     last_run_at: string | null;
     last_run_outcome: string | null;
     last_run_error: string | null;
+    /** Worked runs this curator charged against the account's allowance this
+     *  window — the same per-row figure the settings surface shows. */
+    month_run_count: number;
+    month_run_anchor: string | null;
   };
   next_run_at: string | null;
+  /** The allowance this account is held to, or `null` when it has none (Pro,
+   *  internal, and enterprise accounts are uncapped). It describes the account
+   *  that owns the curator — the workspace's scope user, not whoever signed in. */
+  free_runs_per_month: number | null;
   prompt: string;
   backfill_prompt: string;
   instructions: string | null;
@@ -2728,14 +2736,32 @@ export type Curator = {
    *  no ceiling can be stored for it. */
   turn_timeout_seconds: number | null;
   effective_turn_timeout_seconds: number | null;
+  /** Worked runs THIS curator has charged against the account's monthly allowance,
+   *  counted in the window named by `month_run_anchor`. A per-row figure, not an
+   *  account total: the ceiling it is compared against is the same entitlement for
+   *  every curator of the account and arrives on the list envelope, so a row always
+   *  shows its own numerator against a shared denominator. */
+  month_run_count: number;
+  month_run_anchor: string | null;
   folder_name?: string | null;
   wiki_folder_id?: string | null;
   event_backlog?: { distinct_events: number; raw_rows: number; distinct_sessions: number } | null;
 };
 
-export async function listCurators(): Promise<Curator[]> {
-  const data = await apiFetch<{ curators: Curator[] }>(`${ME}/curators`);
-  return data.curators;
+/** What `GET /me/curators` answers. The envelope comes back whole rather than
+ *  unpacked to just the rows, because the ceiling below describes the account and
+ *  no curator row can carry it. */
+export type CuratorList = {
+  curators: Curator[];
+  /** The monthly allowance this account is held to, or `null` when it has none:
+   *  a Pro, internal, or enterprise account is uncapped, so an absent value is a
+   *  fact about the account and not a missing number — a surface renders "no cap"
+   *  from it and never substitutes a numeral of its own. */
+  free_runs_per_month: number | null;
+};
+
+export async function listCurators(): Promise<CuratorList> {
+  return apiFetch<CuratorList>(`${ME}/curators`);
 }
 
 /** `folder_id` is a `session_folders.id` — what `listSessionFolders` returns. A

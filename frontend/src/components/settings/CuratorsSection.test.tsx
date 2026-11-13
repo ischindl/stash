@@ -52,8 +52,23 @@ function curator(over: Partial<Curator>): Curator {
     // carries its own number rather than one shared stand-in for a default.
     turn_timeout_seconds: null,
     effective_turn_timeout_seconds: 720,
+    // Each row carries its own worked-run count; a test that cares about the
+    // allowance overrides this rather than sharing one stand-in across all of them.
+    month_run_count: 0,
+    month_run_anchor: "2026-09-01",
     ...over,
   };
+}
+
+/** What `listCurators` answers now: the rows plus the account's monthly ceiling.
+ *
+ *  The ceiling describes the account rather than a curator, so it travels on the
+ *  envelope and no row carries it. A test that needs an account with no cap passes
+ *  null explicitly, because the component has to read that as unlimited and never
+ *  as a zero or a numeral it invented.
+ */
+function listResponse(curators: Curator[], freeRunsPerMonth: number | null = 10) {
+  return { curators, free_runs_per_month: freeRunsPerMonth };
 }
 
 // The workspace pair every account can have (the shared-wiki one only exists on the
@@ -130,7 +145,7 @@ function optionValues(select: HTMLElement): string[] {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  listCurators.mockResolvedValue([WORKSPACE, EXTERNAL, ATLAS, BEANIE]);
+  listCurators.mockResolvedValue(listResponse([WORKSPACE, EXTERNAL, ATLAS, BEANIE]));
   listModelEndpoints.mockResolvedValue({ connected: ["local"], endpoints: [BOX_ONE, BOX_TWO], local: null });
   listSessionFolders.mockResolvedValue({
     folders: [
@@ -159,9 +174,9 @@ describe("CuratorsSection rows", () => {
   });
 
   it("says so when the project behind a curator is gone", async () => {
-    listCurators.mockResolvedValue([
+    listCurators.mockResolvedValue(listResponse([
       folderCurator({ id: "cur-gone", curator_folder_id: "f-gone", folder_name: null }),
-    ]);
+    ]));
 
     renderSection();
 
@@ -217,7 +232,7 @@ describe("CuratorsSection model picker", () => {
   });
 
   it("offers the model list grouped by box and keeps an orphaned model visible", async () => {
-    listCurators.mockResolvedValue([
+    listCurators.mockResolvedValue(listResponse([
       folderCurator({
         id: "cur-orphan",
         curator_folder_id: "f-atlas",
@@ -226,7 +241,7 @@ describe("CuratorsSection model picker", () => {
         credential_id: "cred-1",
         model_id: "removed-last-night:1",
       }),
-    ]);
+    ]));
 
     renderSection();
     const atlas = await rowNamed("Project Atlas");
@@ -417,9 +432,9 @@ describe("CuratorsSection create and delete", () => {
 // guards against.
 describe("CuratorsSection blocked state", () => {
   it("states which curator cannot run and exactly what to connect", async () => {
-    listCurators.mockResolvedValue([
+    listCurators.mockResolvedValue(listResponse([
       curator({ id: "cur-blocked", last_run_outcome: "skipped_no_credential" }),
-    ]);
+    ]));
 
     renderSection();
     const row = await rowNamed("Workspace curator");
@@ -431,24 +446,60 @@ describe("CuratorsSection blocked state", () => {
     expect(within(row).queryByText(/Next run/)).toBeNull();
   });
 
-  it("says nothing for the outcomes that are not a block", async () => {
-    listCurators.mockResolvedValue([
+  it("says nothing for the outcomes that are a healthy tick", async () => {
+    listCurators.mockResolvedValue(listResponse([
       curator({ id: "cur-ran", last_run_outcome: "ran" }),
       curator({ id: "cur-clean", last_run_outcome: "skipped_no_changes" }),
-      curator({ id: "cur-credits", last_run_outcome: "skipped_credits" }),
       curator({ id: "cur-never", last_run_outcome: null }),
-    ]);
+    ]));
 
     renderSection();
-    // All four are healthy scheduled rows: each keeps its own schedule chip.
-    expect(await screen.findAllByText(/Next run/)).toHaveLength(4);
+    // All three are healthy scheduled rows: each keeps its own schedule chip.
+    expect(await screen.findAllByText(/Next run/)).toHaveLength(3);
     expect(screen.queryByText("No model connected")).toBeNull();
+    expect(screen.queryByText("Allowance spent")).toBeNull();
+  });
+
+  // A spent allowance is a designed skip like a missing model — no error row, no
+  // watchdog alert, and it repeats every tick — but it is not the same thing. A
+  // missing model needs the user to act and never clears on its own; a spent
+  // allowance needs no action and clears at the month boundary. Saying "no changes"
+  // for the second one is what this row used to do, and it read as a healthy
+  // schedule that had simply found nothing to do.
+  it("states a spent allowance as its own block, and names when it clears", async () => {
+    listCurators.mockResolvedValue(
+      listResponse([
+        curator({ id: "cur-spent", last_run_outcome: "skipped_credits", month_run_count: 10 }),
+        curator({
+          id: "cur-paused-credits",
+          curator_wiki: "external",
+          schedule_cron: null,
+          next_run_at: null,
+          last_run_outcome: "skipped_credits",
+          month_run_count: 10,
+        }),
+      ]),
+    );
+
+    renderSection();
+    const spent = await rowNamed("Workspace curator");
+
+    expect(within(spent).getByText("Allowance spent")).toBeDefined();
+    expect(within(spent).getByText(/first day of next month/)).toBeDefined();
+    expect(within(spent).getByText("10 of 10 free runs used this month.")).toBeDefined();
+    // Its next tick is another skip, so the date is not its state.
+    expect(within(spent).queryByText(/Next run/)).toBeNull();
+
+    // The user turned the second one off; the spent allowance is not why it is idle.
+    const paused = await rowNamed("Shared-wiki curator");
+    expect(within(paused).getByText("Idle", { selector: "span.rounded-full" })).toBeDefined();
+    expect(within(paused).queryByText("Allowance spent")).toBeNull();
   });
 
   it("leaves a paused curator labelled Idle even after a blocked tick", async () => {
-    listCurators.mockResolvedValue([
+    listCurators.mockResolvedValue(listResponse([
       curator({ id: "cur-paused", schedule_cron: null, next_run_at: null, last_run_outcome: "skipped_no_credential" }),
-    ]);
+    ]));
 
     renderSection();
     const row = await rowNamed("Workspace curator");
@@ -467,7 +518,7 @@ describe("CuratorsSection blocked state", () => {
 // one sentence, no control, and no digit, which the last case pins.
 describe("CuratorsSection run ceiling", () => {
   it("sends a typed ceiling as that curator's own number", async () => {
-    listCurators.mockResolvedValue([WORKSPACE]);
+    listCurators.mockResolvedValue(listResponse([WORKSPACE]));
 
     renderSection();
     const row = await rowNamed("Workspace curator");
@@ -485,7 +536,7 @@ describe("CuratorsSection run ceiling", () => {
   });
 
   it("clears back to the deployment default with an explicit null", async () => {
-    listCurators.mockResolvedValue([SCOPED_PINNED]);
+    listCurators.mockResolvedValue(listResponse([SCOPED_PINNED]));
 
     renderSection();
     const row = await rowNamed("Shared-wiki curator");
@@ -502,7 +553,7 @@ describe("CuratorsSection run ceiling", () => {
   });
 
   it("leaves saving disabled for a ceiling too broken for the server to accept", async () => {
-    listCurators.mockResolvedValue([WORKSPACE]);
+    listCurators.mockResolvedValue(listResponse([WORKSPACE]));
 
     renderSection();
     const row = await rowNamed("Workspace curator");
@@ -519,7 +570,7 @@ describe("CuratorsSection run ceiling", () => {
   });
 
   it("renders the server's refusal instead of a ceiling that was never stored", async () => {
-    listCurators.mockResolvedValue([WORKSPACE]);
+    listCurators.mockResolvedValue(listResponse([WORKSPACE]));
     patchCurator.mockRejectedValue(
       new ApiError(
         400,
@@ -541,7 +592,7 @@ describe("CuratorsSection run ceiling", () => {
   // a ceiling must keep stating the server's exact number, so no future change can
   // fix the case below by silencing this one.
   it("states which number the next run will actually use", async () => {
-    listCurators.mockResolvedValue([WORKSPACE, SCOPED_PINNED]);
+    listCurators.mockResolvedValue(listResponse([WORKSPACE, SCOPED_PINNED]));
 
     renderSection();
     const scoped = await rowNamed("Workspace curator");
@@ -555,7 +606,7 @@ describe("CuratorsSection run ceiling", () => {
   });
 
   it("shows one sentence and no ceiling control on a lane that resolves none", async () => {
-    listCurators.mockResolvedValue([ATLAS, BEANIE]);
+    listCurators.mockResolvedValue(listResponse([ATLAS, BEANIE]));
 
     renderSection();
     const atlas = await rowNamed("Project Atlas");
@@ -572,5 +623,60 @@ describe("CuratorsSection run ceiling", () => {
     // stored 1200 predates its lane resolving no ceiling and must not be rendered.
     expect(atlas.textContent).not.toContain("720");
     expect(beanie.textContent).not.toContain("1200");
+  });
+});
+
+describe("CuratorsSection allowance line", () => {
+  it("states the runs worked against the account's ceiling", async () => {
+    listCurators.mockResolvedValue(
+      listResponse([curator({ id: "cur-ws", month_run_count: 3 })], 10),
+    );
+
+    renderSection();
+    const row = await rowNamed("Workspace curator");
+
+    // Both numerals come from the response, so the sentence is checked whole rather
+    // than as a number plucked out of it: a ceiling copied into the component would
+    // make it wrong in silence.
+    expect(within(row).getByText("3 of 10 free runs used this month.")).toBeDefined();
+  });
+
+  it("renders no line for an account the allowance does not bound", async () => {
+    listCurators.mockResolvedValue(
+      listResponse([curator({ id: "cur-ws", month_run_count: 41 })], null),
+    );
+
+    renderSection();
+    const row = await rowNamed("Workspace curator");
+
+    // The response says this account has no cap. Every careless handling of that
+    // null — a nullish default of zero, a falsy-or, a ceiling defaulted to ten —
+    // lands here as a numeral stating a limit the account does not have.
+    expect(within(row).queryByText(/free runs used this month/)).toBeNull();
+  });
+
+  it("renders no line for a lane that has never charged the allowance", async () => {
+    listCurators.mockResolvedValue(
+      listResponse([curator({ id: "cur-local", month_run_count: 0, last_run_outcome: "ran" })], 10),
+    );
+
+    renderSection();
+    const row = await rowNamed("Workspace curator");
+
+    // A curator on the customer's own endpoint is never metered, so its counter is
+    // provably zero: "0 of 10 used" would imply a metering that never happened.
+    expect(within(row).queryByText(/free runs used this month/)).toBeNull();
+  });
+
+  it("renders no allowance state at all while the list is still in flight", async () => {
+    // An unset value and a server-said null look identical to a fallback that
+    // defaults the ceiling, which would state a cap to an uncapped account on every
+    // single load.
+    listCurators.mockReturnValue(new Promise(() => null));
+
+    renderSection();
+
+    expect(await screen.findByText("Loading…")).toBeDefined();
+    expect(screen.queryByText(/free runs used this month/)).toBeNull();
   });
 });

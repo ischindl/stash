@@ -17,6 +17,7 @@ import {
   type CuratorRun,
   type EndUserRef,
 } from "@/lib/api";
+import { curatorAllowanceLine } from "@/lib/curator-allowance";
 import { cn } from "@/lib/utils";
 
 export default function CuratorRoute() {
@@ -88,6 +89,17 @@ function Curator() {
         </p>
       )}
 
+      {/* A curator stopped by a spent allowance is the other resolved skip: it writes
+          no `last_run_error`, so the page would otherwise report a schedule that
+          produced nothing as healthy. Unlike a missing model it clears by itself, and
+          the banner says when. */}
+      {data.curator.last_run_outcome === "skipped_credits" && (
+        <p className="mb-12 rounded border border-error/40 bg-error/5 px-5 py-4 text-[14px] text-error">
+          Skipped: this month’s free runs are used up — the curator starts again on the first
+          day of next month.
+        </p>
+      )}
+
       {data.curator.last_run_error && (
         <p className="mb-12 rounded border border-error/40 bg-error/5 px-5 py-4 text-[14px] text-error">
           Last run failed: {data.curator.last_run_error}
@@ -156,7 +168,11 @@ function Curator() {
 
       <PromptSection nightly={data.prompt} backfill={data.backfill_prompt} />
 
-      <Runs runs={data.runs} onStarted={refresh} />
+      <Runs
+        runs={data.runs}
+        allowance={curatorAllowanceLine(data.curator, data.free_runs_per_month)}
+        onStarted={refresh}
+      />
     </>
   );
 }
@@ -272,7 +288,15 @@ function PromptTab({
   );
 }
 
-function Runs({ runs, onStarted }: { runs: CuratorRun[]; onStarted: () => void }) {
+function Runs({
+  runs,
+  allowance,
+  onStarted,
+}: {
+  runs: CuratorRun[];
+  allowance: string | null;
+  onStarted: () => void;
+}) {
   const [running, setRunning] = useState(false);
   const [armingBackfill, setArmingBackfill] = useState(false);
   const [runError, setRunError] = useState<string | null>(null);
@@ -294,6 +318,11 @@ function Runs({ runs, onStarted }: { runs: CuratorRun[]; onStarted: () => void }
 
   return (
     <section>
+      {/* Stated above the controls that spend it, and read from the same response that
+          carries the run count and the ceiling, so the number on screen and the runs the
+          curator has actually charged cannot be two readings of the row. Nothing shows
+          for an account with no cap or a lane that has charged nothing. */}
+      {allowance && <p className="mb-2 text-[13px] text-muted-foreground">{allowance}</p>}
       <div className="flex items-baseline justify-between gap-4">
         <SectionHeading>Recent runs</SectionHeading>
         <div className="flex items-center gap-2">

@@ -112,8 +112,11 @@ Before starting:
   your first login. With neither, every scheduled curator skips every tick — the
   backend logs `no runnable model` at WARNING and each curator row reads
   `No model connected` until a model exists.
-- `FREE_CURATOR_RUNS_PER_MONTH` (default 10) bounds how many curator runs an
-  account may start in a calendar month, and it also sets how far a backlog may
+- `FREE_CURATOR_RUNS_PER_MONTH` (default 10) bounds how many runs one curator of
+  an account may **work** in a calendar month. It counts the runs that actually
+  ran: a tick that stops at a gate — no model connected, nothing new to curate,
+  the allowance already spent — consumes its clock slot and spends none of the
+  allowance. It also sets how far a backlog may
   be chased: the catch-up ceiling is that allowance spread over the month that
   funds it, floored at 8 passes, so raising it is what lets a large backlog drain
   faster. Those chase passes are not billed: the catch-up chain dispatches with
@@ -121,12 +124,23 @@ Before starting:
   the credit gate look at. At the default allowance of 10 the ceiling is exactly 8
   passes (10 // 31 is 0, so the floor rules), while an allowance of 1000 gives about
   32 unmetered passes per lane per 24 h — the monthly tally never sees them.
-  Metering that chain waits for the first paid tier. Past the allowance, non-Pro
-  curators stop dead mid-backlog: every later
+  Metering that chain waits for the first paid tier. Only a lane the platform pays
+  tokens for is metered at all: a curator dialling the local endpoint you connected
+  runs unmetered, so its allowance is never spent and, with nothing charged, no
+  consumption numeral is shown for it. A count the pre-fix code recorded anyway is
+  not a metering verdict: migration 0273 lowers the rows past the allowance to the
+  runs the month can prove, and the rest roll off when the calendar month turns.
+  Past the allowance, non-Pro curators stop dead mid-backlog: every later
   tick logs `curator monthly allowance spent` at WARNING, the row reads
-  `skipped_credits`, and the stale-watermark watchdog names it — runs spent, the
-  allowance, and the events still pending. A lane frozen there never drains on its
-  own; raise the allowance or make the account Pro.
+  `skipped_credits`, the stale-watermark watchdog names it — runs spent, the
+  allowance, and the events still pending — and Settings → Curators states it on the
+  row ("N of 10 free runs used this month") instead of reporting a healthy schedule
+  that quietly produced nothing; an account with no allowance (Pro, internal, or
+  enterprise) is shown no numeral at all. When the allowance is spent *and* no model
+  is runnable, the reason reported is the missing model, because that is the one an
+  operator can act on. A lane frozen there never drains on its
+  own; raise the allowance, make the account Pro, or move the curator onto the
+  customer's own endpoint, which takes it out of metering.
 - `AGENT_TURN_TIMEOUT_SECONDS` (default 600) is the *default* run ceiling: how
   many seconds one curator run may take before it is cut off and its lane freed.
   A ceiling is a property of a curator, not of the process — Settings → Curators

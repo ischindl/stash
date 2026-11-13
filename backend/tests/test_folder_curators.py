@@ -1057,6 +1057,13 @@ async def test_a_project_curator_in_an_activated_workspace_keeps_its_own_lane(
                 "credential_id": credential_id,
             }
         )
+        # A recorder that forwards. `require_run_auth` answers the metering
+        # question off the RunAuth the resolver returned, so a spy that returned
+        # nothing would turn this test's question into an attribute error on None.
+        # Forwarding keeps the recorded arguments AND the real answer.
+        return await real(
+            user_id, prefer_provider=prefer_provider, model_id=model_id, credential_id=credential_id
+        )
 
     monkeypatch.setattr(agent_auth, "resolve", spy)
     await scoped_curation_service.require_run_auth(agent)

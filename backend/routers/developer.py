@@ -15,9 +15,11 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from ..auth import API_KEY_ACCESS_LEVELS, create_api_key, get_current_user, get_scope
+from ..config import settings
 from ..database import get_pool
 from ..services import (
     agent_service,
+    billing_service,
     curation_service,
     end_user_service,
     permission_service,
@@ -308,6 +310,16 @@ async def get_curator(
     return {
         "curator": curator,
         "next_run_at": agent_service.next_run_at(curator),
+        # The allowance this account is held to, or NULL when it has none: a Pro,
+        # internal, or enterprise account (`billing_service.is_pro`) is unlimited,
+        # so the client renders a cap only when the value is a number and never a
+        # denominator it invented itself. `curator.month_run_count` counts THIS
+        # curator's worked runs, not an account total.
+        "free_runs_per_month": (
+            None
+            if await billing_service.is_pro(scope_user_id)
+            else settings.FREE_CURATOR_RUNS_PER_MONTH
+        ),
         "prompt": prompt,
         # What a backfill would send instead: the same prompt with no
         # watermark, so the run bootstraps from the full history.

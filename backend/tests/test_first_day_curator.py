@@ -87,9 +87,12 @@ async def test_first_day_conversation_dispatches_unmetered_runs(
     # cannot cause an empty run in the developer's own Memory wiki.
     expected = {"internal", "external"} if include_internal else {"external"}
     assert await _dispatched_wikis(pool, dispatched) == expected
-    # The platform is the trigger, so the runs must not eat the workspace's
-    # free monthly curator allowance.
-    assert all(kwargs == {"metered": False} for _, kwargs in dispatched)
+    # The platform is the trigger, and it says so twice now: `metered=False`
+    # because the platform pays for a trigger of its own, and
+    # `platform_initiated=True` because only a curator the user left switched on
+    # may be run by it. The two used to be one flag, which is why a user-triggered
+    # run on a free-to-the-platform endpoint could have been silently dropped.
+    assert all(kwargs == {"metered": False, "platform_initiated": True} for _, kwargs in dispatched)
 
 
 @pytest.mark.asyncio
@@ -141,8 +144,9 @@ async def test_each_curator_is_gated_by_its_own_feed(
 @pytest.mark.asyncio
 async def test_paused_curator_stays_paused_on_first_day(client, pool, dispatched):
     """The first-day tick is a platform trigger, so it may never run a curator
-    the user parked: `metered=False` says the platform pays, not that the
-    platform overrides the user's own switch."""
+    the user parked: `platform_initiated=True` is the trigger said in the open,
+    not inferred from `metered=False` (which now also means "the platform pays
+    nothing because this lane dials the customer's own endpoint")."""
     scope_id = await _workspace_with_conversation(client)
     await pool.execute(
         "UPDATE agents SET run_mode='chat' WHERE user_id=$1 AND is_curator", scope_id
@@ -222,7 +226,7 @@ async def test_personal_first_day_conversation_dispatches_an_unmetered_run(
     user_id = await _personal_user_with_conversation(client)
     await _first_day_curator_tick(user_id)
     assert await _dispatched_wikis(pool, dispatched) == {"internal"}
-    assert dispatched[0][1] == {"metered": False}
+    assert dispatched[0][1] == {"metered": False, "platform_initiated": True}
 
 
 @pytest.mark.asyncio

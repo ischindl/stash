@@ -14,6 +14,7 @@ import {
   type ModelEndpoint,
   type SessionFolder,
 } from "@/lib/api";
+import { curatorAllowanceLine } from "@/lib/curator-allowance";
 
 // A curator made idle has no cron left on its row to restore, so switching its
 // schedule back on installs this one — the same nightly hour the server gives a
@@ -36,6 +37,11 @@ function decodePin(value: string): { credentialId: string | null; modelId: strin
 
 export default function CuratorsSection() {
   const [curators, setCurators] = useState<Curator[]>([]);
+  // The account's monthly ceiling, read off the list envelope. `null` is the
+  // server's answer for an account that has no cap — not "still loading": the
+  // line that renders it lives inside each row, and a row only exists once the
+  // fetch that carried this value has resolved.
+  const [freeRunsPerMonth, setFreeRunsPerMonth] = useState<number | null>(null);
   const [endpoints, setEndpoints] = useState<ModelEndpoint[]>([]);
   const [folders, setFolders] = useState<SessionFolder[]>([]);
   const [loading, setLoading] = useState(true);
@@ -45,8 +51,9 @@ export default function CuratorsSection() {
   // and the projects that can still get a curator.
   const refresh = useCallback(() => {
     Promise.all([listCurators(), listModelEndpoints(), listSessionFolders()])
-      .then(([curatorRows, status, folderRows]) => {
-        setCurators(curatorRows);
+      .then(([curatorList, status, folderRows]) => {
+        setCurators(curatorList.curators);
+        setFreeRunsPerMonth(curatorList.free_runs_per_month);
         setEndpoints(status.endpoints);
         setFolders(folderRows.folders);
         setLoadError(null);
@@ -82,6 +89,7 @@ export default function CuratorsSection() {
                 key={curator.id}
                 curator={curator}
                 endpoints={endpoints}
+                freeRunsPerMonth={freeRunsPerMonth}
                 onChanged={refresh}
               />
             ))}
@@ -106,10 +114,12 @@ function titleFor(curator: Curator): string {
 function CuratorRow({
   curator,
   endpoints,
+  freeRunsPerMonth,
   onChanged,
 }: {
   curator: Curator;
   endpoints: ModelEndpoint[];
+  freeRunsPerMonth: number | null;
   onChanged: () => void;
 }) {
   const confirm = useConfirm();
@@ -124,7 +134,16 @@ function CuratorRow({
   // it is a *resolved* outcome, so the watchdog stays quiet and `last_run_error`
   // stays empty: this row is the only place the block can surface.
   const noModel = !isIdle && curator.last_run_outcome === "skipped_no_credential";
+  // A spent allowance is the other self-repeating skip: it resolves with no error
+  // row and no watchdog alert, and unlike the missing model it clears by itself —
+  // at the start of the next calendar month, which is what the row has to say so
+  // the wait is not read as a fault to fix.
+  const creditsSpent = !isIdle && curator.last_run_outcome === "skipped_credits";
   const backlog = curator.event_backlog;
+  // The account's ceiling beside this row's own worked-run count, or null when
+  // there is nothing to state — an uncapped account, or a lane that has charged
+  // nothing at all.
+  const allowance = curatorAllowanceLine(curator, freeRunsPerMonth);
   // Whether this row's lane resolves a ceiling at all is the server's answer, read
   // once so both branches below speak from the same value.
   const resolvedCeiling = curator.effective_turn_timeout_seconds;
@@ -202,6 +221,10 @@ function CuratorRow({
               <span className="rounded-full border border-error/40 bg-error/10 px-2 py-0.5 text-[11px] font-medium text-error">
                 No model connected
               </span>
+            ) : creditsSpent ? (
+              <span className="rounded-full border border-error/40 bg-error/10 px-2 py-0.5 text-[11px] font-medium text-error">
+                Allowance spent
+              </span>
             ) : (
               curator.next_run_at && (
                 <span className="rounded-full bg-raised px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
@@ -216,10 +239,19 @@ function CuratorRow({
               set ANTHROPIC_API_KEY on the backend.
             </p>
           )}
+          {creditsSpent && (
+            <p className="mt-0.5 text-[12.5px] text-error">
+              This month’s free runs are used up, so every scheduled run is skipping. The count
+              starts again on the first day of next month.
+            </p>
+          )}
           {isFolderCurator && backlog && (
             <p className="mt-0.5 text-[12.5px] text-muted-foreground">
               {backlog.distinct_events} unread events
             </p>
+          )}
+          {allowance && (
+            <p className="mt-0.5 text-[12.5px] text-muted-foreground">{allowance}</p>
           )}
         </div>
         {isFolderCurator && (

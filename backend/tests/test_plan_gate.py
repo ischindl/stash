@@ -127,13 +127,25 @@ async def test_free_curator_credits_exhausted_skips_run(
     )
     assert after["curated_through"] == watermark  # skipped run never discards un-curated changes
     assert after["last_run_outcome"] == "skipped_credits"
+    # The invariant this card adds, on top of the skip it always asserted: a tick
+    # that refused for the allowance charged nothing for refusing. The beat used to
+    # call `mark_run` first and gate on the number it handed back, so this row would
+    # read 11 here — and 12 after the next tick. The fixture's `sprite_exec` resolves
+    # a cloud (metered, no endpoint) credential, which is what keeps the credit gate
+    # the only reason this tick can skip now that auth resolves first.
+    charged = await _db_pool.fetchval(
+        "SELECT month_run_count FROM agents WHERE id = $1", UUID(curator["id"])
+    )
+    assert charged == settings.FREE_CURATOR_RUNS_PER_MONTH
 
     # Enterprise grant → the same overdue curator runs on the next beat.
     await _db_pool.execute("UPDATE users SET plan = 'enterprise' WHERE id = $1", uid)
     await _make_due(_db_pool, curator["id"], watermark)
 
     dispatched = []
-    monkeypatch.setattr(run_scheduled_agent, "delay", lambda *args: dispatched.append(args))
+    monkeypatch.setattr(
+        run_scheduled_agent, "delay", lambda *args, **kwargs: dispatched.append(args)
+    )
     assert await _run_due() == 1
     await _run_scheduled_agent(UUID(dispatched[0][0]), dispatched[0][1])
     assert sprite_exec.calls != []

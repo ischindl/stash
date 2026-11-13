@@ -93,6 +93,33 @@ class RunAuth:
     thinking: str | None = None
 
 
+def costs_platform_tokens(auth: RunAuth) -> bool:
+    """Does a turn running on this auth cost the platform anything it bills for?
+
+    One question, one place, so no call site re-derives the answer from a
+    provider name, a base URL, or the exec mode. Spelled positively because
+    every caller wants the positive form: a metered curator run is one that
+    costs the platform tokens.
+
+    The answer rests on a bijection rather than on new state. `endpoint` is
+    written by `_local_auth` and by no other constructor, and `_local_auth` is
+    reached only from a credential of kind `endpoint` — `_byo_auth` for the
+    `local` provider, or `_pinned_auth`, which refuses any credential that is
+    not an endpoint row, so a pinned lane is always a local lane. A run with
+    `endpoint is None` therefore dials a harness the platform funds, and a run
+    with an endpoint dials the customer's own OpenAI-compatible server: the
+    platform's cost there is the turn machinery, not the tokens, and the
+    curator allowance exists to ration tokens.
+
+    The one lane that looks like a counterexample is not: in local exec mode a
+    connected endpoint under a foreign pin resolves to `CLAUDE` with no endpoint
+    (`resolve`), because the turn rides the machine's own provider login rather
+    than the customer's endpoint doc. That answer is metered here and is metered
+    today, so the definition changes no behaviour on it.
+    """
+    return auth.endpoint is None
+
+
 # What a user typed into the base URL field, refused. The test-connection route
 # answers with this same string so the form cannot learn two different messages
 # for one mistake.

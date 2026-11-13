@@ -168,13 +168,35 @@ async def workspace_for_agent(agent: dict) -> dict | None:
 _UNSET = object()
 
 
-async def require_run_auth(agent: dict, *, workspace=_UNSET) -> None:
+async def require_run_auth(agent: dict, *, workspace=_UNSET) -> bool:
+    """Require a runnable credential for this agent's next run, and answer the
+    metering question for the caller that is about to dispatch it.
+
+    The name stays imperative because the requirement is unchanged: an
+    unrunnable lane still raises `NeedsAuth` or `ProviderNotConfigured`. The
+    return is not a success flag — it is whether this run costs the platform
+    tokens, and therefore whether the free curator allowance may charge it. A
+    caller that dispatches has to bill correctly, and resolving the credential a
+    second time to learn the answer would be a second source of truth, so the
+    answer travels on the one call that proves the lane runnable.
+
+    A scoped workspace run is metered: `require_configured` means the backend's
+    own key pays for it, which is a real platform cost whatever the customer has
+    connected. Every other lane is metered exactly when the credential this run
+    dials is not the customer's own endpoint — the answer
+    `agent_auth.costs_platform_tokens` reads off the `RunAuth` that `resolve`
+    returned. The arguments passed to `resolve` here stay as they are (no
+    `model_id`, no `credential_id`): a curator whose row carries a stale pin runs
+    today, and naming the pin would turn that into a hard error. The manual
+    "Run now" route does name them, on purpose.
+    """
     if workspace is _UNSET:
         workspace = await workspace_for_agent(agent)
     if workspace is not None:
         require_configured()
-        return
-    await agent_auth.resolve(UUID(str(agent["user_id"])), agent["model_provider"])
+        return True
+    auth = await agent_auth.resolve(UUID(str(agent["user_id"])), agent["model_provider"])
+    return agent_auth.costs_platform_tokens(auth)
 
 
 def system_prompt(purpose: str) -> str:

@@ -98,6 +98,14 @@ async def _curator_row(row) -> dict:
     from . import scoped_curation_service
 
     curator = _row(row)
+    # The client prints this number as the allowance already spent, so the payload
+    # carries the count of runs that worked IN THE CURRENT PERIOD -- the same
+    # reading the allowance gate compares against -- and not the raw column, whose
+    # value belongs to the month its own anchor names. A lane that stopped being
+    # charged (paused, or running on the customer's own endpoint) keeps that stale
+    # value in the row, and a stale number printed as "this month" is a lie about
+    # work nobody did.
+    curator["month_run_count"] = month_runs_used(curator)
     workspace = await scoped_curation_service.workspace_for_agent(curator)
     if workspace is not None:
         curator["effective_turn_timeout_seconds"] = turn_ceiling_seconds(curator)
@@ -730,8 +738,17 @@ async def list_scheduled() -> list[dict]:
 
 
 def month_runs_used(agent: dict) -> int:
-    """Scheduled runs consumed in the current calendar month. An anchor from a
-    prior month means the counter is stale; mark_run resets it on the next run."""
+    """Scheduled runs that WORKED in the current calendar month. An anchor from a
+    prior month means the counter is stale; mark_run resets it on the next run.
+
+    This is the ONLY reading of `month_run_count` a consumer may use: the two
+    allowance gates, the stale-curator alert line, and the number the curator
+    endpoints hand the client all come through here, because the raw column names
+    the period its own anchor carries and a lane that stopped ticking — paused, or
+    never charged again because it runs on the customer's endpoint — keeps that
+    stale value. Printing the raw column would state last month's runs as this
+    month's consumption, which is the misreading this card exists to remove.
+    """
     anchor = agent.get("month_run_anchor")
     today = date.today()
     if anchor is None or (anchor.year, anchor.month) != (today.year, today.month):
@@ -739,14 +756,40 @@ def month_runs_used(agent: dict) -> int:
     return agent["month_run_count"]
 
 
+def free_allowance_spent(agent: dict) -> bool:
+    """The free curator allowance, as one predicate.
+
+    Both places that may refuse a run for the allowance call this. Two spellings
+    of the same gate — a `>=` cap comparison in the router, a comparison against
+    the count `mark_run` had just returned in the beat — drifted apart for as
+    long as both existed, and the beat's spelling could only be evaluated after
+    it had already charged the run it was refusing. Reading `month_runs_used`
+    keeps this synchronous and keeps its subject the runs that actually worked.
+
+    The pro/enterprise exemption is deliberately NOT folded in here: it is a
+    billing question, it needs an await, and each call site already has the
+    `is_pro` answer at hand. The per-allowance is also per `agents` row, not per
+    account, while `config` describes it as an account-level entitlement; this
+    card does not widen that meaning.
+    """
+    return month_runs_used(agent) >= settings.FREE_CURATOR_RUNS_PER_MONTH
+
+
 async def mark_run(agent_id: UUID, metered: bool = True) -> int:
     """Consume the cron tick and meter the run against the calendar month.
-    Returns the run count within the current month (including this one) —
-    the free-tier curator credit gate reads it.
+    Returns the run count within the current month (including this one).
 
-    `metered=False` consumes the tick without touching the month counter —
-    for runs the platform initiates on its own (the first-day curator), which
-    must not eat the user's free allowance.
+    No gate reads that return value any more: the allowance is decided by
+    `free_allowance_spent` BEFORE this call, so a tick that refuses never
+    charges. The return is the worked count, for callers that want to log it.
+
+    `metered=False` consumes the tick without touching the month counter, and it
+    now carries two meanings, both of which are "the platform owes nothing for
+    this tick": a run the PLATFORM initiates (the first-day curator and the
+    catch-up chain, which must not eat the user's allowance), and a run the
+    platform does not PAY for (a curator dialling the customer's own endpoint —
+    `agent_auth.costs_platform_tokens`). Never set it by guessing or by
+    recovering from a failure; it comes from the credential the run dials.
 
     Also clears last_run_error and stamps the outcome as started. Every path
     after this call must resolve the outcome as ran, failed, or skipped — except
@@ -832,13 +875,28 @@ async def claim_catchup(agent_id: UUID, limit: int) -> bool:
 
 
 async def mark_run_skipped(agent_id: UUID, reason: str) -> None:
-    """Resolve a consumed tick that stopped at a designed scheduler gate.
+    """Resolve a consumed tick that stopped at a designed scheduler gate, and own
+    the WHOLE resolution of that tick.
+
+    This is the single exit for a skip, so it stamps what `mark_run` used to
+    stamp on the way in: the clock slot is consumed (`last_run_at`) so the next
+    cron tick is not re-fired a minute later, the stale error is cleared, and the
+    outcome is written. A caller must NOT also call `mark_run` for a tick that
+    ends here — that charge was the defect this contract removes: a lane whose
+    feed was permanently empty or whose allowance was spent kept buying ticks it
+    never worked, and a skip refunded nothing back. A skip therefore charges no
+    run, and the metered/unmetered question never reaches it.
 
     The outcome is stored as `skipped_{reason}`, and `agents_last_run_outcome`
     is a CHECK-constrained set (created in migration 0184, widened by 0211) — a
-    new gate has to add its value there or the write is rejected."""
+    new gate has to add its value there or the write is rejected.
+
+    `last_run_error` stays NULL by design: a designed skip is not a failed run.
+    That is what the stale-curator watchdog reads, which is why it names an
+    allowance-stopped curator by its counter and not by an error string."""
     await get_pool().execute(
-        "UPDATE agents SET last_run_outcome = $2 WHERE id = $1",
+        "UPDATE agents SET last_run_at = now(), last_run_error = NULL, "
+        "last_run_outcome = $2 WHERE id = $1",
         agent_id,
         f"skipped_{reason}",
     )

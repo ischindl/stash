@@ -22,6 +22,7 @@ resolver would only prove the branch exists, not that it fires.
 import logging
 import uuid
 from datetime import UTC, datetime, timedelta
+from uuid import UUID
 
 import pytest
 from httpx import AsyncClient
@@ -197,3 +198,119 @@ async def test_a_successful_run_clears_the_blocked_state(
     await agent_service.mark_run_succeeded(agent["id"])
 
     assert await _outcome(agent["id"]) == ("ran", None)
+
+
+# --- The allowance, stated by the API rather than by each surface (STAS-412) ---
+
+
+@pytest.mark.asyncio
+async def test_the_curators_endpoint_states_the_cap_and_the_rows_carry_their_own(
+    client: AsyncClient, _db_pool
+):
+    """A surface can only state a limit it was given, and a per-row number can
+    only come from a row.
+
+    `free_runs_per_month` is account-level entitlement and so travels on the
+    envelope, never invented from a numeral in the client; `month_run_count`
+    travels on each curator row and counts that row's worked runs. The two
+    coexist without one being averaged into the other: the account's allowance is
+    what one curator consumes at a time, so the page has to be able to show a
+    different numerator per row against one denominator.
+    """
+    key, uid = await _register(client)
+    internal = await agent_service.get_or_create_curator(uid)
+    await agent_service.get_or_create_curator(uid, wiki="team")
+    await get_pool().execute(
+        "UPDATE agents SET month_run_count = 4, month_run_anchor = date_trunc('month', now())::date "
+        "WHERE id = $1",
+        internal["id"],
+    )
+
+    body = (await client.get("/api/v1/me/curators", headers=_auth(key))).json()
+    assert body["free_runs_per_month"] == settings.FREE_CURATOR_RUNS_PER_MONTH
+
+    rows = {row["curator_wiki"]: row for row in body["curators"]}
+    assert rows["internal"]["month_run_count"] == 4
+    assert rows["team"]["month_run_count"] == 0, "a row's count is its own, not the account's total"
+
+
+@pytest.mark.asyncio
+async def test_a_count_left_from_a_past_month_is_not_reported_as_spent_now(
+    client: AsyncClient, _db_pool
+):
+    """The surface prints the row's number as runs already spent this month, so the
+    number it is handed has to be this month's.
+
+    `month_run_count` belongs to the month its own anchor names, and a lane that
+    stopped being charged keeps whatever it last recorded forever — paused by its
+    owner, or moved onto the customer's own endpoint, which this card takes out of
+    metering for good. Echoing that stale number would print last month's work as
+    this month's consumption, the same misreading the card exists to remove, so the
+    payload carries `month_runs_used`: the reading the allowance gate itself
+    consults. The row is not rewritten to make the readout true — the count it
+    recorded stays where it was recorded.
+    """
+    key, uid = await _register(client)
+    curator = await agent_service.get_or_create_curator(uid)
+    await get_pool().execute(
+        "UPDATE agents SET month_run_count = 7, month_run_anchor = "
+        "(date_trunc('month', now()) - interval '1 month')::date WHERE id = $1",
+        curator["id"],
+    )
+
+    body = (await client.get("/api/v1/me/curators", headers=_auth(key))).json()
+    row = next(r for r in body["curators"] if r["id"] == curator["id"])
+    assert row["month_run_count"] == 0, "a period already spent is not this month's consumption"
+    stored = await get_pool().fetchval(
+        "SELECT month_run_count FROM agents WHERE id = $1", curator["id"]
+    )
+    assert stored == 7, "the honest readout reads the period, it does not rewrite history"
+
+
+@pytest.mark.asyncio
+async def test_an_account_with_no_cap_gets_a_null_and_not_a_numeral(client: AsyncClient, _db_pool):
+    """The null rule, pinned: absent means no cap, and a client must never render
+    a denominator it invented for an unlimited account.
+
+    Enterprise is an admin-granted entitlement and `is_pro` covers it along with
+    paid Pro and internal emails; the response carries the difference as absence
+    so that no account is shown a ceiling it does not have.
+    """
+    key, uid = await _register(client)
+    await agent_service.get_or_create_curator(uid)
+    await get_pool().execute("UPDATE users SET plan = 'enterprise' WHERE id = $1", uid)
+
+    body = (await client.get("/api/v1/me/curators", headers=_auth(key))).json()
+    assert body["free_runs_per_month"] is None
+    # The per-row counter still travels: an uncapped account still has a number,
+    # it just has no ceiling to compare it against.
+    assert all("month_run_count" in row for row in body["curators"])
+
+
+@pytest.mark.asyncio
+async def test_the_developer_curator_route_states_the_same_cap(client: AsyncClient, _db_pool):
+    """The second surface reads the same key off its own envelope.
+
+    The developer page's curator is a workspace-scope row, so the entitlement is
+    read for the scope's owner — the same account the beat gates on — and it
+    arrives beside the curator row rather than inside it, because it describes the
+    account and not the agent.
+    """
+    from .test_developer_platform import _developer
+
+    api_key, _, workspace = await _developer(client)
+    scope = {**_auth(api_key), "X-Stash-Scope": workspace["scope_user_id"]}
+
+    # A workspace's scope user carries the enterprise entitlement, so this surface
+    # reads as uncapped — and it reads that way for the same reason the beat gates
+    # it that way: the allowance is looked up for the account that owns the curator
+    # row, which here is the scope user, not the developer who signed in.
+    scope_uid = UUID(workspace["scope_user_id"])
+    body = (await client.get("/api/v1/me/developer/curator", headers=scope)).json()
+    assert body["free_runs_per_month"] is None
+    assert body["curator"]["month_run_count"] == 0
+
+    # The same route on an account the allowance does constrain states the numeral.
+    await get_pool().execute("UPDATE users SET plan = 'free' WHERE id = $1", scope_uid)
+    capped = (await client.get("/api/v1/me/developer/curator", headers=scope)).json()
+    assert capped["free_runs_per_month"] == settings.FREE_CURATOR_RUNS_PER_MONTH

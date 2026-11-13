@@ -328,17 +328,15 @@ async def recompute_memory(
         user_id, user_id, curation_service.position_of(curator), curator["curator_wiki"]
     ):
         raise HTTPException(status_code=409, detail="Nothing new to curate since the last run.")
-    if agent_service.month_runs_used(curator) >= settings.FREE_CURATOR_RUNS_PER_MONTH:
-        from ..services import billing_service
-
-        if not await billing_service.is_pro(user_id):
-            raise HTTPException(
-                status_code=402,
-                detail=f"Free accounts get {settings.FREE_CURATOR_RUNS_PER_MONTH} sleep-time "
-                "curator runs per month; Pro is unlimited.",
-            )
+    # Resolve the credential BEFORE the allowance gate: the gate may only bind a
+    # run the platform pays tokens for, so the metering answer has to exist first.
+    # The observable consequence is which 402 a user with both problems gets — the
+    # connect-a-model sentence rather than the allowance one, at the same status
+    # code. That is the actionable message, and neither refusal charges.
+    # This call keeps naming the agent's pin and model: a manual run dials exactly
+    # the endpoint the curator's row names (unlike the beat, which passes neither).
     try:
-        await agent_auth.resolve(
+        auth = await agent_auth.resolve(
             user_id,
             curator["model_provider"],
             model_id=curator.get("model_id"),
@@ -352,7 +350,19 @@ async def recompute_memory(
         )
     except agent_auth.ProviderNotConfigured:
         raise HTTPException(status_code=503, detail="The agent is not configured.")
-    run_curator_now.delay(curator["id"])
+    metered = agent_auth.costs_platform_tokens(auth)
+    if metered and agent_service.free_allowance_spent(curator):
+        from ..services import billing_service
+
+        if not await billing_service.is_pro(user_id):
+            raise HTTPException(
+                status_code=402,
+                detail=f"Free accounts get {settings.FREE_CURATOR_RUNS_PER_MONTH} sleep-time "
+                "curator runs per month; Pro is unlimited.",
+            )
+    # A curator on the customer's own endpoint is dispatched unmetered, so a manual
+    # run there spends no allowance either — the same predicate the beat consults.
+    run_curator_now.delay(curator["id"], metered=metered)
     return {"status": "started", "agent_id": curator["id"]}
 
 
@@ -368,10 +378,28 @@ async def list_scope_curators(
     ones — with what an operator steers them by: schedule, model pick, current
     watermark, last outcome, next run, and (for folder curators) how much of
     their scoped feed is still unread."""
-    from ..services import agent_service
+    from ..config import settings
+    from ..services import agent_service, billing_service
 
     await _check_scope_access(scope_user_id, current_user["id"])
     curators = await agent_service.list_curators(scope_user_id)
+    # The allowance itself, so no client has to copy a numeral out of config to
+    # state a cap. NULL means this account has no cap at all — `is_pro` covers
+    # paid Pro, internal, and enterprise (see `billing_service.is_pro`, and
+    # `plan_label` for why a granted account is never rendered as a paid one) —
+    # so a client renders a denominator only when one is present and never shows
+    # a numeral to an account that has none.
+    # `month_run_count` on each row is PER CURATOR ROW, not an account total;
+    # `config` describes the allowance as an account-level entitlement, and this
+    # route does not silently widen that meaning into an aggregate. Its value is
+    # the runs that worked in the current calendar month (`month_runs_used`, the
+    # reading the gate itself uses), never the raw column, whose number belongs to
+    # the month its own anchor names.
+    free_runs_per_month = (
+        None
+        if await billing_service.is_pro(scope_user_id)
+        else settings.FREE_CURATOR_RUNS_PER_MONTH
+    )
     folder_ids = [UUID(str(c["curator_folder_id"])) for c in curators if c["curator_folder_id"]]
     folders: dict[str, tuple[str, str | None]] = {}
     if folder_ids:
@@ -398,7 +426,7 @@ async def list_scope_curators(
                 UUID(folder_id),
             )
         out.append(entry)
-    return {"curators": out}
+    return {"curators": out, "free_runs_per_month": free_runs_per_month}
 
 
 @router.post("/curators", status_code=201)
