@@ -8,7 +8,6 @@ kind of row gets exactly the treatment it should: exporter damage repaired,
 prose and hand-authored files byte-identical.
 """
 
-import asyncio
 import os
 import subprocess
 import sys
@@ -127,13 +126,13 @@ async def _fetch(ids: dict[str, uuid.UUID]) -> dict[str, asyncpg.Record]:
     return rows
 
 
-def test_backfill_repairs_exporter_damage_and_nothing_else():
-    asyncio.run(_create_db())
+async def test_backfill_repairs_exporter_damage_and_nothing_else():
+    await _create_db()
     try:
         _alembic("0186")
-        ids = asyncio.run(_seed())
+        ids = await _seed()
         _alembic("head")
-        rows = asyncio.run(_fetch(ids))
+        rows = await _fetch(ids)
 
         damaged = rows["damaged.gdoc"]
         assert damaged["content"] == (
@@ -156,4 +155,4 @@ def test_backfill_repairs_exporter_damage_and_nothing_else():
         assert rows["SKILL.md"]["content"] == HAND_AUTHORED_SKILL_MD
         assert rows["SKILL.md"]["embed_stale"] is False
     finally:
-        asyncio.run(_drop_db())
+        await _drop_db()

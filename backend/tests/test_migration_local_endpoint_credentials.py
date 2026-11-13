@@ -20,7 +20,6 @@ endpoint row + one anthropic key row), runs the chain, and asserts:
       exactly and only.
 """
 
-import asyncio
 import json
 import os
 import subprocess
@@ -115,8 +114,8 @@ async def _seed_legacy_rows() -> uuid.UUID:
     return user
 
 
-def test_local_endpoint_rows_survive_the_reshape_with_names_and_ids():
-    asyncio.run(_run())
+async def test_local_endpoint_rows_survive_the_reshape_with_names_and_ids():
+    await _run()
 
 
 async def _run():

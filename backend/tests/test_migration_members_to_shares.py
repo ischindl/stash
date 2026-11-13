@@ -14,7 +14,6 @@ memberships did (viewer -> read, editor -> write, creator owns, stranger gets
 nothing, nested content rides the folder-share cascade).
 """
 
-import asyncio
 import os
 import subprocess
 import sys
@@ -93,9 +92,9 @@ async def _member(conn, ws: uuid.UUID, user: uuid.UUID, role: str, primary: bool
     )
 
 
-def test_members_become_shares_preserving_access():
+async def test_members_become_shares_preserving_access():
     """Seed pre-0118, run 0118->0120, assert access is preserved exactly."""
-    asyncio.run(_run())
+    await _run()
 
 
 async def _run():

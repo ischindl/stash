@@ -23,7 +23,6 @@ things that matter:
       with `off` would silently undo his setting.
 """
 
-import asyncio
 import json
 import os
 import subprocess
@@ -143,8 +142,8 @@ async def _seed_rows() -> uuid.UUID:
     return user
 
 
-def test_local_endpoint_docs_gain_the_level_without_losing_anything_else():
-    asyncio.run(_run())
+async def test_local_endpoint_docs_gain_the_level_without_losing_anything_else():
+    await _run()
 
 
 async def _run():
