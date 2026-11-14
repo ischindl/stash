@@ -16,9 +16,8 @@ here drifts from it.
 Installing the Stash CLI puts a **`stash-mcp`** executable on your `PATH` (it ships in the same
 `stashai` package — there is nothing else to install). Running it starts a [Model Context
 Protocol](https://modelcontextprotocol.io) server that speaks the **stdio** transport and
-exposes the current **102 tools** listed in the [Tool reference](#tool-reference): search, the
-unified VFS, sources, files & pages, tables, skills, sessions, trash, sharing, publishing, and
-the reward-model loop (traces, intuitions, prompt optimization).
+exposes the current **69 tools** listed in the [Tool reference](#tool-reference): search, the
+unified VFS, sources, files & pages, tables, skills, sessions, trash, sharing, and publishing.
 
 Three properties define the integration:
 
@@ -91,7 +90,7 @@ Two practical notes:
 
 ## Tool reference
 
-The 102 tools the server exposes, grouped by area. Every name below exists on the shipped
+The 69 tools the server exposes, grouped by area. Every name below exists on the shipped
 server, and the guard test compares this table against `cli/mcp_server.py` in both directions.
 
 ### Search and the VFS
@@ -212,56 +211,6 @@ server, and the guard test compares this table against `cli/mcp_server.py` in bo
 | `stash_share_object` | Share a folder/page/file/session/table with a person by email |
 | `stash_unshare_object` | Revoke a share |
 | `stash_list_shares` | Who an object is shared with, its link level, and the MCP handle to dial |
-
-### Traces and reward models
-
-| Tool | What it does |
-| --- | --- |
-| `stash_traces` | List captured agent traces, with automatic success and action-credit summaries |
-| `stash_trace` | One trace's actions, annotations, and automatic credit evaluation |
-| `stash_import_traces` | Import agent trace JSON/JSONL for viewing, credit, and learning |
-| `stash_annotate_trace` | Add the user's feedback to a trace or action for reward-model training |
-| `stash_train_reward_model` | Queue asynchronous training from selected traces and their annotations |
-| `stash_reward_function_list` | Your reward functions — the judge evals of the Evals UI, with IDs, rubrics and readiness, not trained checkpoints |
-| `stash_reward_function_get` | A reward function's instructions, traits, current version and score endpoint — the version to pass when editing its rubric |
-| `stash_reward_function_create` | Save a ready-to-score reward function from explicit criteria: 1-12 unique traits, each with what counts as good and bad |
-| `stash_reward_function_set_rubric` | Replace a rubric with explicit user criteria, refusing a stale base version instead of overwriting newer edits |
-| `stash_reward_function_score` | Judge work with a saved reward function: a 0-1 score, per-trait grades, reasons and fixes, plus the logged call id |
-
-### Intuitions
-
-Personal judges the user trains from their own labels, so a decision can follow their taste.
-
-| Tool | What it does |
-| --- | --- |
-| `stash_intuition_create` | Create an intuition model: `choice` labels or `preference` comparisons |
-| `stash_intuition_list` | The user's intuition models |
-| `stash_intuition_get` | One model's definition: labels, rubric questions, head weights, metrics, versions |
-| `stash_intuition_add_examples` | Add labeled examples — single items or A/B comparisons |
-| `stash_intuition_predict` | Judge one item: label, per-label probabilities, confidence, rubric answers |
-| `stash_intuition_compare` | Ask a preference model which of two items the user would prefer |
-| `stash_intuition_review` | Record the user's verdict on a served prediction |
-| `stash_intuition_edit_draft` | Change draft-version fields; edited rubric questions are re-asked on train |
-| `stash_intuition_train` | Grade ungraded examples, refit the draft head, report held-out metrics |
-| `stash_intuition_promote` | Make the draft the active version (refused when the gate fails) |
-| `stash_intuition_run_outcome` | Report how the task ended, 0 failed to 1 succeeded, crediting every decision the model made during that run |
-| `stash_intuition_credit` | Whether the model's decisions inside runs predicted how those runs ended: success rate per decision, learned weights, held-out accuracy |
-| `stash_intuition_feedback` | Attach feedback to a served call days later — a person's correction, what actually happened, or another system's verdict |
-| `stash_intuition_monitoring` | How the model is doing in use: calls and failures per day, accuracy and calibration against feedback, drift versus its training examples |
-| `stash_intuition_label_queue` | Unreviewed calls ranked by how much labelling each would teach the model, with the reasons and the review call to send the label back |
-| `stash_intuition_improve` | Search for better rubric questions in the background, then read each candidate's held-out accuracy, the winner, and the regression gate |
-
-### Prompt optimization
-
-| Tool | What it does |
-| --- | --- |
-| `stash_optimization_begin` | Authorize rounds of candidate generation and remote scoring of runs |
-| `stash_optimization_start_run` | Get the prompt instructions for a new task before it starts |
-| `stash_optimization_finish_run` | Submit a completed task for remote reward scoring |
-| `stash_optimization_record_outcome` | Record a measured business metric for a run |
-| `stash_optimization_abandon_run` | Record a task that could not complete |
-| `stash_optimization_status` | Status, instructions, reward and business trends, version history |
-| `stash_optimization_control` | Pause/resume optimization or roll back to a previously promoted prompt |
 
 ## VFS path format
 
