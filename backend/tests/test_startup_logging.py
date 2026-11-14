@@ -12,7 +12,6 @@ module logger.
 import io
 import logging
 import sys
-from contextlib import asynccontextmanager
 
 import pytest
 import pytest_asyncio
@@ -73,21 +72,11 @@ async def app_startup(restored_root_logging, monkeypatch):
     one of the two masking layers this file exists to defeat. The pool is
     restored afterwards because ``init_db`` replaces the module-global pool
     and lifespan shutdown nulls it, which would strand every later test.
-
-    The intuition-MCP stand-in is not a convenience: its streamable-HTTP session
-    manager may be run once per process instance, and this file enters the real
-    lifespan once per test. What the file measures is logging, so the unrelated
-    task group is neutralised and the lifespan itself stays real.
     """
     captured = io.StringIO()
     monkeypatch.setattr(sys, "stderr", captured)
     monkeypatch.setenv("STASH_DISABLE_DEMO_SEED", "1")
 
-    @asynccontextmanager
-    async def mcp_lifespan():
-        yield
-
-    monkeypatch.setattr(main_module.intuition_mcp.mcp.session_manager, "run", mcp_lifespan)
     saved_pool = db_module.pool
     try:
         async with main_module.lifespan(main_module.app):

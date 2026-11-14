@@ -77,11 +77,12 @@ celery.conf.update(
     # lands on a second worker mid-run. The window therefore has to outlive the
     # longest run a task may legally take, which is the largest per-task
     # `time_limit` the task registry carries: the global `task_time_limit` below
-    # bounds only the tasks whose decorator declares none, and 15 decorators
-    # declare their own today, the longest being
-    # `backend.tasks.reward_models.train_evaluator` at 3900 s. The pin test
-    # `tests/test_celery_visibility_timeout.py` reads that maximum from the
-    # registry, so a decorator that outlives this window reddens the build.
+    # bounds only the tasks whose decorator declares none. Upstream's retirement of
+    # the evals surface took the 15 decorators that declared their own ceilings with
+    # it, so the registry maximum today is that global 1800 s. The window is kept
+    # deliberately wider than the current maximum. The pin test
+    # `tests/test_celery_visibility_timeout.py` reads that maximum from the registry,
+    # so a decorator that outlives this window reddens the build.
     # Accepted trade-off: a task whose worker died now requeues after 2 h instead
     # of 1 h. That is deliberate — these are paid, non-idempotent harness turns,
     # so a duplicate run is worse than a slow retry, and the contended-dispatch
