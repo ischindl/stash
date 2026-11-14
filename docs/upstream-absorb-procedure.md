@@ -7,10 +7,13 @@ rule true instead of merely enforced.
 
 Why a daily cadence and not a weekly one: upstream moves about two commits a day, and the
 last time this was left alone the gap ran six weeks and reached 28 conflicted paths — measured
-2026-11-12 by the job's own refusal list. STAS-427 resolved all 28 on a lane of its own the same
-day; the trunk carries that anchor only once the lane lands, and while `refs/heads/main` is
-unlanded the predicate on it is still FALSE. Our migration tail had to be renumbered as damage
-control while it grew (STAS-371, STAS-374).
+2026-11-12 by the job's own refusal list. STAS-427 resolved all 28 on a lane of its own the same day,
+and that lane landed: the trunk's own reflog names it
+(`72998ad18 refs/heads/main@{2026-11-13 15:11:39 +0100}: fusion landing: STAS-427`). The predicate was
+FALSE again inside twelve hours, because the debt is re-opened by upstream's next commit rather than
+by an unlanded lane — `1eca3516c` and `419efb459` cost a fresh lane (STAS-439, 12 conflicted paths)
+two days later. Our migration tail had to be renumbered as damage control while it grew (STAS-371,
+STAS-374).
 
 ## The run
 

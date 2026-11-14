@@ -11,9 +11,9 @@ commits left over (548 of ours on top). The same predicate on `refs/heads/main` 
 sits at `8674d5500` with merge base `41b217aa0` and `ahead/behind=544/2`. The debt is cleared on
 the lane and still open on the trunk; the trunk write is an operator leg, named under *Landing*.
 
-**Shape: one two-parent merge plus five normal commits on top of it.** No rebase, no squash, no
-cherry-pick series. Four of the five are named in the *Post-merge repairs* paragraph below and the
-fifth is this record.
+**Shape: one two-parent merge plus six normal commits on top of it.** No rebase, no squash, no
+cherry-pick series. Five of the six are named in the *Post-merge repairs* paragraph below and the
+sixth is this record.
 
 | merge | parents | committed tree vs a naive `merge-tree` of the same two parents | hand-resolved |
 |---|---|---|---|
@@ -80,7 +80,11 @@ so the merge took our blob whole; `backend/tests/conftest.py` loses the `rm_titl
 that imported `backend.services.rm`; `backend/celery_app.py`'s visibility-timeout comment named the
 15 evals decorators and their 3900 s ceiling — none survive, so it states that the registry maximum
 is the global 1800 s, and the pin test still reads the maximum from the registry; two frontend test
-fixtures kept declaring `reward_models_enabled` on a `User` whose type no longer has it;
+fixtures kept declaring `reward_models_enabled` on a `User` whose type no longer has it; and
+`frontend/src/components/developer/platform-access.test.tsx`, which this card took as upstream's
+blob, had to be handed back our fork's own `show_tools_and_chat` fixture field, because
+`frontend/src/lib/types.ts` still requires that field and `next build` runs the type check —
+upstream's blob inside our tree is not a compiling tree, and `TS2741` at six sites is what said so;
 `cli/tests/test_mcp_registry.py`'s pinned surface and `docs/stash-mcp-integration.md` drop the 33
 retired tools (both files are fork-side, so no upstream blob was at risk and no assertion was
 weakened); `uv.lock` is re-resolved with `uv lock` for pyproject `0.1.491`, never hand-edited; and
@@ -98,7 +102,7 @@ projects with `Missing: sharp@ from lock file` — the pair is upstream's, the o
 `"sharp": "<0.0.0-0"` and the sharp-free lock come from upstream's own releases, and STAS-427 already
 records the disposition; it is the reason three frontend CI jobs (`frontend-lint`, `frontend-test`,
 `frontend-build`) cannot reach a verdict on GitHub. (b) `frontend` ESLint is red — 11 errors and 10
-warnings across 7 files — and every one of those 7 files is **byte-identical to `refs/heads/main`**,
+warnings across 10 files — and every one of those 10 files is **byte-identical to `refs/heads/main`**,
 so the verdict is trunk's, not this merge's; it is now visible because the unlocked install sidesteps
 (a). Re-measured with the lockfile-pinned `eslint-plugin-react-hooks@7.0.1` the verdict is identical
 (11 errors, 10 warnings), so it is not an artifact of the sidestep either. (c) `www`'s vitest suite is
@@ -111,10 +115,9 @@ not.
 **The green set, as measured on this box.** `ruff check backend/ cli/` and
 `ruff format --check backend/ cli/` at the pinned `ruff==0.15.6`; `cli/tests` **712 passed**;
 `plugins/tests` **429 passed**; `pytest backend/tests --collect-only` **2192 tests collected, zero
-errors**; the whole backend suite against `pgvector/pgvector:pg16` on a probed port, which came home
-**2188 passed, 4 failed** in 33 min, and those four are the founder and dogfood overlay guards named
-above, not a fourth unknown: fixed in the same card and green on re-run, 13 passed across the three
-compose and release-contract files; `frontend` vitest
+errors**; the whole backend suite against `pgvector/pgvector:pg16` on a probed port: **2192 passed,
+zero failed** in 24 min, with `DATABASE_URL` pinned to that card-owned container in the same
+invocation so the chain could not reach any other server; `frontend` vitest
 **468 passed (78 files)**, `next build` with its type-check pass, and `www` `next build`. Two
 lessons are worth keeping: an earlier draft of this record's green set was polluted by its own
 `compileall` run, whose `__pycache__` directory inside `stashai/plugin/assets/` reddened two
