@@ -44,8 +44,5 @@ services:
   sync-worker:
     image: stash-backend:dogfood
 
-  reward-worker:
-    image: stash-backend:dogfood
-
   beat:
     image: stash-backend:dogfood

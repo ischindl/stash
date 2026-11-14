@@ -83,8 +83,8 @@ being deployed, which is why no step in this runbook has to move a checkout.
 and compose resolves interpolations for every command including `config`.
 
 Lanes this stack actually runs today: `backend`, `worker`, `heavy-worker`, `beat`,
-`frontend`. `sync-worker` and `reward-worker` are pinned by the founder file so they
-can never come up on a different commit, but they have no container: do not start
+`frontend`. `sync-worker` is pinned by the founder file so it
+can never come up on a different commit, but it has no container: do not start
 `sync-worker` casually, it has a backlog measured in hundreds of tasks.
 
 ## Build the pair, from the commit and nothing else

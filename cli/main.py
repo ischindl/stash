@@ -75,7 +75,6 @@ from .formatting import (
     print_empty_state,
     print_user,
 )
-from .test_cmd import test_app
 
 app = typer.Typer(
     name="stash",
@@ -2166,7 +2165,6 @@ skills_app = typer.Typer(
     )
 )
 app.add_typer(skills_app, name="skills")
-app.add_typer(test_app, name="test")
 
 
 @skills_app.command("add")
@@ -6287,26 +6285,6 @@ def _show_import_status() -> None:
         return
     if s["errors"]:
         console.print(f"  [yellow]{s['errors']} conversations failed[/yellow]")
-
-
-@app.command("history-bridge")
-def history_bridge_cmd():
-    """Let the eval wizard search local Codex history without importing it.
-
-    Uses your existing Stash login. Only requested excerpts leave this computer.
-    Leave this running while using the wizard; Ctrl-C disconnects it.
-    """
-    _require_auth()
-    from .history_bridge import serve
-
-    try:
-        with _client(auto=True) as client:
-            serve(client)
-    except KeyboardInterrupt:
-        console.print("Local history disconnected.")
-    except StashError as exc:
-        console.print(f"[red]Could not connect local history: {exc}[/red]")
-        raise typer.Exit(1) from exc
 
 
 @app.command("import-history")
