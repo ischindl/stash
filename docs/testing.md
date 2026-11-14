@@ -218,7 +218,13 @@ by `test_a_pass_that_owed_input_and_moved_nothing_fails_instead_of_re_reading_it
 loader that hands back the slice it was given and counts the loads, so a run that went back for the
 same characters again fails on the count. A pass's summary is published with its checkpoint, so a
 pass that fails later, or a run the wall cuts, leaves no report of unread work behind. An ingest
-rewind or an overlapping run therefore matches no row instead of being stamped over. Pinned by
+rewind or an overlapping run therefore matches no row instead of being stamped over. Where the read
+starts and what the checkpoint fences on are two different facts, and only the backfill pulls them
+apart: the read begins at the row's own position while the fence keeps the pair the dispatcher loaded,
+so the `full_history` backfill — whose dispatcher zeroes that position inside its own copy of the
+agent — still reads with no watermark, which
+`test_a_full_history_scoped_backfill_reads_from_before_its_watermark` pins against its own control
+run (the ordinary run on that drained row is asserted to hand the model nothing at all). Pinned by
 `test_scoped_curation.py`'s `test_cursor_is_committed_only_after_all_scopes_succeed`,
 `test_large_files_and_sources_resume_without_skipping_or_unbounded_input`,
 `test_same_timestamp_group_larger_than_event_limit_drains` and

@@ -873,6 +873,9 @@ async def run(
     `read_position` is the pair the dispatcher loaded, not whatever the row holds
     now: the first pass fences its checkpoint on it, so a mid-run rewind or an
     overlapping run makes this one refuse loudly instead of stamping over the other.
+    It is the write anchor only — where the read starts is the row's own position, so a
+    `full_history` backfill, whose dispatcher zeroes that position, still reads with no
+    watermark while writing against the pair it must not throw away.
     """
     require_configured()
     from . import agent_service
@@ -888,12 +891,17 @@ async def run(
     until = datetime.now(UTC)
     session = f"agent-curate-{agent['id']}-{run_stamp}"
     fence = read_position
+    # The read and the write anchor are different facts and only the backfill pulls
+    # them apart: the developer endpoint zeroes the row's position precisely so this run
+    # reads with no watermark, while the pair it may write against stays what its
+    # dispatcher loaded. For every ordinary run the two are the same pair.
+    since = agent["curated_through"]
     cursor = agent.get("curation_cursor") or {}
 
     while True:
         batch = await scoped_curation_inputs.load_batch(
             owner,
-            fence.at,
+            since,
             until,
             internal=internal,
             generation=workspace["curation_generation"],
@@ -922,6 +930,7 @@ async def run(
         moved = await _checkpoint_pass(agent, batch, fence, cursor, scopes[-1])
         if moved:
             fence = curation_service.Position(batch.through)
+            since = batch.through
             cursor = batch.cursor
             # The log entry and the checkpoint are one event: what a pass summarised is
             # published exactly when what it read is durable, so a pass that fails

@@ -2054,6 +2054,53 @@ async def test_a_ceiling_cut_that_completed_no_pass_starts_no_chain(
 
 
 @pytest.mark.asyncio
+async def test_a_full_history_scoped_backfill_reads_from_before_its_watermark(
+    dataset, pool, monkeypatch, sprite_exec
+):
+    """The backfill promise is that the run reads with no watermark, and a per-pass
+    checkpoint must not spend that promise on its own write anchor.
+
+    The lane runs once and drains, so its stored pair stands past every character it was
+    handed. The control is that ordinary run repeated: it hands the model nothing, which
+    is what the watermark is for. The backfill is the same row dispatched by the caller
+    that zeroes the position inside its own copy of the agent, so the read has to go back
+    to the start of the feed while the fenced write still matches on the pair that caller
+    loaded - the one thing a backfill must not throw away.
+    """
+    from backend.services import agent_service, sprite_agent_service
+    from backend.tasks import agent_schedules
+
+    monkeypatch.setattr(curation, "input_budget", lambda ceiling: 2048)
+    agent = await agent_service.get_or_create_curator(dataset.owner, wiki="external")
+    await pool.execute("UPDATE agents SET curated_through=NULL WHERE id=$1", UUID(agent["id"]))
+    read: list[str] = []
+
+    async def record_read(scope, instructions):
+        read.extend(scope.documents)
+        return "Slice read."
+
+    monkeypatch.setattr(curation, "run_scope", record_read)
+    monkeypatch.setattr(agent_schedules.run_curator_now, "apply_async", lambda **kw: None)
+    emptied = await agent_service.get_agent_by_id(UUID(agent["id"]))
+    await sprite_agent_service.run_scheduled(
+        emptied, "backfill-drain", curation_service.position_of(emptied)
+    )
+    drained = sorted(set(read))
+    assert drained
+    read.clear()
+
+    stored = await agent_service.get_agent_by_id(UUID(agent["id"]))
+    assert stored["curated_through"] is not None
+    await sprite_agent_service.run_scheduled(
+        stored, "backfill-control", curation_service.position_of(stored)
+    )
+    assert read == [], "an incremental run re-read input its watermark already covers"
+
+    await agent_schedules._run_curator_now(UUID(agent["id"]), full_history=True, metered=False)
+    assert set(read) == set(drained), "the backfill read from its watermark and so read nothing"
+
+
+@pytest.mark.asyncio
 async def test_an_exhausted_catchup_bound_names_the_backlog_it_left_behind(
     dataset, pool, monkeypatch, caplog
 ):
