@@ -176,17 +176,20 @@ shared-wiki revocation reset in `end_user_service._archive_shared_wiki`, which N
 external curator's position so re-sharing re-curates from the start (migration `0204`
 backfilled the same reset for already-revoked wikis — `test_curation_optout_migration.py`).
 The compare-and-set is what makes each of those moves un-clobberable by a run that read
-before it, and the contract is **one primitive for every forward writer**: the Memory and
-project-folder completions (`agent_service.mark_curated`) and the shared-workspace commit
-(`scoped_curation_service.run`) all execute the same fenced statement —
-`agent_service.advance_watermark` — on the transaction that publishes their writes, anchored on
-the position their dispatcher loaded (never a re-read of the row the run finishes on), so the
-agent row stays locked from the match until that commit lands and no forward writer holds a
-looser rule. A scoped run therefore fails loud on a mid-run move instead of stamping over it:
-`test_scoped_curation.py`'s `test_a_scoped_run_cannot_discard_an_overlapping_run_watermark_advance`,
-`test_a_scoped_run_cannot_swallow_a_concurrent_reset_to_never`, and
-`test_a_full_history_scoped_run_advances_the_position_it_read` (the backfill state, which
-must advance rather than conflict). The window the fence is responsible for is pinned at its two
+before it, and the contract is **one fence for every forward writer**: the Memory and
+project-folder completions (`agent_service.mark_curated`) execute
+`agent_service.advance_watermark`, and the shared-workspace commit
+(`scoped_curation_service._checkpoint_pass`, called at every pass boundary by
+`scoped_curation_service.run`) executes its own fenced UPDATE in its own transaction, after
+re-checking the scope permission. Both anchor on the position their dispatcher loaded (never a
+re-read of the row the run finishes on) and both raise `CuratorWatermarkConflict` when no row
+matches, so no forward writer holds a looser rule. A scoped run therefore fails loud on a
+mid-run move instead of stamping over it:
+`test_scoped_curation.py::test_a_scoped_run_whose_position_moved_underneath_it_refuses_the_pass`
+pins the refusal, the rival's position, the absence of a published summary, and the absence of a
+per-pass meter line, while
+`test_a_full_history_scoped_backfill_reads_from_before_its_watermark` pins the backfill state
+that must advance rather than conflict. The window the fence is responsible for is pinned at its two
 edges by `test_curator.py`'s `test_the_fence_holds_the_agent_row_until_its_commit_lands` (a rival
 that starts its fenced commit while the first transaction is open provably blocks on it and is
 then refused) and `test_a_failure_after_the_fence_publishes_neither_the_watermark_nor_the_window`
@@ -217,8 +220,12 @@ argument is that every pass either drains the backlog or moves the pair. That se
 by `test_a_pass_that_owed_input_and_moved_nothing_fails_instead_of_re_reading_it`, which forces a
 loader that hands back the slice it was given and counts the loads, so a run that went back for the
 same characters again fails on the count. A pass's summary is published with its checkpoint, so a
-pass that fails later, or a run the wall cuts, leaves no report of unread work behind. An ingest
-rewind or an overlapping run therefore matches no row instead of being stamped over. Where the read
+pass that fails later, or a run the wall cuts, leaves no report of unread work behind, and each
+committed pass logs one INFO drain-rate line — pass number, agent, committed instant, the batch's
+own characters, scope count, that pass's wall — which is what makes a cut run readable as the
+passes it finished; `test_one_run_drains_a_document_larger_than_its_budget_in_committed_passes`
+pins one line per committed pass and no line for one that committed nothing. An ingest rewind or
+an overlapping run therefore matches no row instead of being stamped over. Where the read
 starts and what the checkpoint fences on are two different facts, and only the backfill pulls them
 apart: the read begins at the row's own position while the fence keeps the pair the dispatcher loaded,
 so the `full_history` backfill — whose dispatcher zeroes that position inside its own copy of the

@@ -897,8 +897,11 @@ async def run(
     # dispatcher loaded. For every ordinary run the two are the same pair.
     since = agent["curated_through"]
     cursor = agent.get("curation_cursor") or {}
+    pass_number = 0
 
     while True:
+        pass_number += 1
+        pass_wall_started = time.monotonic()
         batch = await scoped_curation_inputs.load_batch(
             owner,
             since,
@@ -929,6 +932,18 @@ async def run(
 
         moved = await _checkpoint_pass(agent, batch, fence, cursor, scopes[-1])
         if moved:
+            # The drain-rate meter: one line per committed pass, because a run the wall
+            # cuts is only readable as the passes it finished. What a pass carried is the
+            # batch's own characters, never the budget it was cut from.
+            logger.info(
+                "curator pass=%s agent=%s committed_through=%s characters=%s scopes=%s wall=%.1fs",
+                pass_number,
+                agent["id"],
+                batch.through.isoformat(),
+                sum(len(item["content"]) for item in batch.documents),
+                len(scopes),
+                time.monotonic() - pass_wall_started,
+            )
             fence = curation_service.Position(batch.through)
             since = batch.through
             cursor = batch.cursor

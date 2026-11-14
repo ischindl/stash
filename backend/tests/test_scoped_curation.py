@@ -1845,14 +1845,16 @@ async def test_a_ceiling_cut_keeps_its_completed_passes_and_the_next_run_resumes
 
 @pytest.mark.asyncio
 async def test_one_run_drains_a_document_larger_than_its_budget_in_committed_passes(
-    dataset, pool, monkeypatch, sprite_exec
+    dataset, pool, monkeypatch, sprite_exec, caplog
 ):
     """One run walks a document its budget cannot hold, and commits as it goes.
 
     The checkpoints between the first slice and the last one move only the cursor half
     of the pair - the instant stays one microsecond behind the document still being
     read - so this is also the proof that a cursor-only advance is a checkpoint. The
-    spy watches each durable write; the row at the end says those writes are the row.
+    spy watches each durable write; the row at the end says those writes are the row,
+    and the drain-rate meter says one line per row-moving pass and never for one that
+    committed nothing.
     """
     from backend.services import agent_service, sprite_agent_service
 
@@ -1877,9 +1879,30 @@ async def test_one_run_drains_a_document_larger_than_its_budget_in_committed_pas
     agent = await agent_service.get_or_create_curator(dataset.owner, wiki="external")
     await pool.execute("UPDATE agents SET curated_through=NULL WHERE id=$1", UUID(agent["id"]))
     agent = await agent_service.get_agent_by_id(UUID(agent["id"]))
-    await sprite_agent_service.run_scheduled(
-        agent, "drain-run", curation_service.position_of(agent)
-    )
+    with caplog.at_level(logging.INFO, logger="backend.services.scoped_curation_service"):
+        await sprite_agent_service.run_scheduled(
+            agent, "drain-run", curation_service.position_of(agent)
+        )
+
+    meter = [
+        record.getMessage()
+        for record in caplog.records
+        if record.name == "backend.services.scoped_curation_service"
+        and record.getMessage().startswith("curator pass=")
+    ]
+    assert [line.split()[1] for line in meter] == [
+        f"pass={number}" for number in range(1, len(checkpoints) + 1)
+    ]
+    first_pass = dict(field.split("=", 1) for field in meter[0].split()[1:])
+    assert set(first_pass) == {
+        "pass",
+        "agent",
+        "committed_through",
+        "characters",
+        "scopes",
+        "wall",
+    }
+    assert int(first_pass["characters"]) > 0
 
     mid_pairs = checkpoints[:-1]
     assert len(mid_pairs) >= 2
@@ -1890,6 +1913,65 @@ async def test_one_run_drains_a_document_larger_than_its_budget_in_committed_pas
     current = await agent_service.get_agent_by_id(UUID(agent["id"]))
     assert current["curation_cursor"] == {}
     assert current["curated_through"] == checkpoints[-1][0]
+
+
+@pytest.mark.asyncio
+async def test_a_scoped_run_whose_position_moved_underneath_it_refuses_the_pass(
+    dataset, pool, monkeypatch, sprite_exec, caplog
+):
+    """An overlapping run that moved the pair this pass fenced on is not stamped over.
+
+    The pass boundary is where this lane writes, so it is where a mid-run rewind or an
+    overlapping advance has to be caught: the UPDATE matches the pair the pass started
+    from, matches no row once that pair is gone, and the run ends loud with the rival's
+    position standing, nothing published, and no meter line for a pass that committed
+    nothing.
+    """
+    from backend.services import agent_service, sprite_agent_service
+
+    await pool.execute(
+        "UPDATE files SET extracted_text=$2 WHERE id=$1", dataset.private_file, "Z" * 6000
+    )
+    monkeypatch.setattr(curation, "input_budget", lambda ceiling: 2048)
+    agent = await agent_service.get_or_create_curator(dataset.owner, wiki="external")
+    await pool.execute("UPDATE agents SET curated_through=NULL WHERE id=$1", UUID(agent["id"]))
+    agent = await agent_service.get_agent_by_id(UUID(agent["id"]))
+
+    rival_stamp = datetime.now(UTC)
+    moved_by_rival = False
+    published: list = []
+
+    async def rival(scope, instructions):
+        nonlocal moved_by_rival
+        if not moved_by_rival:
+            moved_by_rival = True
+            await pool.execute(
+                "UPDATE agents SET curated_through=$2, curated_through_event_id=NULL WHERE id=$1",
+                UUID(agent["id"]),
+                rival_stamp,
+            )
+        return "Curated by the run that got there first."
+
+    async def record_push(*args, **kwargs):
+        published.append(args)
+
+    monkeypatch.setattr(curation, "run_scope", rival)
+    monkeypatch.setattr(curation.memory_service, "push_event", record_push)
+
+    with caplog.at_level(logging.INFO, logger="backend.services.scoped_curation_service"):
+        with pytest.raises(agent_service.CuratorWatermarkConflict):
+            await sprite_agent_service.run_scheduled(
+                agent, "lost-the-race", curation_service.position_of(agent)
+            )
+
+    current = await agent_service.get_agent_by_id(UUID(agent["id"]))
+    assert current["curated_through"] == rival_stamp
+    assert published == []
+    assert [
+        record.getMessage()
+        for record in caplog.records
+        if record.getMessage().startswith("curator pass=")
+    ] == []
 
 
 @pytest.mark.asyncio

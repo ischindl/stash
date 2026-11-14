@@ -66,3 +66,9 @@ thing this card changed. Everything else stayed inside the four.
 pass now publishing alongside that pass's checkpoint, that event went away rather than duplicating
 every summary: no reader selected on `tool_name="curate_wiki"` — the curator's own log reads
 `assistant_message` events — and a report of work that was not yet durable was the part worth losing.
+
+**One log line per committed pass:** `scoped_curation_service` now writes one INFO drain-rate line
+for every pass that committed — pass number, agent, the instant it committed, the characters that
+pass's batch carried, its scope count, and that pass's wall — and no line for a pass that committed
+nothing. That line is what makes a run the ceiling cut off readable as the passes it actually
+finished, and what lets an operator read how fast a lane empties without dialing the model.
