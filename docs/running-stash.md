@@ -146,7 +146,10 @@ Before starting:
   A ceiling is a property of a curator, not of the process — Settings → Curators
   gives each one its own "Run ceiling" in seconds, which is what a lane running
   on a slow local model endpoint needs, and clearing it returns that curator to
-  this setting. A curator's own number bounds both its run and the lock that
+  this setting. The same number also sizes what one pass of that run is handed to
+  read, so a curator with a short ceiling reads a shorter slice per pass rather
+  than reading a full slice and losing it at the wall. A curator's own number
+  bounds both its run and the lock that
   keeps a second run of that curator from starting while the first is still
   going, so the two can never disagree: a lock keyed shorter than the wall would
   expire mid-run and hand the next dispatch a half-finished run. Saving a ceiling

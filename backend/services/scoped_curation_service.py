@@ -919,7 +919,8 @@ async def run(
             tasks = [group.create_task(curate(scope)) for scope in scopes]
         summaries = [task.result() for task in tasks]
 
-        if await _checkpoint_pass(agent, batch, fence, cursor, scopes[-1]):
+        moved = await _checkpoint_pass(agent, batch, fence, cursor, scopes[-1])
+        if moved:
             fence = curation_service.Position(batch.through)
             cursor = batch.cursor
             # The log entry and the checkpoint are one event: what a pass summarised is
@@ -932,6 +933,14 @@ async def run(
                 "\n\n".join(summaries),
                 owner,
                 session_id=session,
+            )
+        elif batch.cursor:
+            # The batch still owes input and the pair moved nowhere, so a slice of this
+            # budget cannot get past where the cursor stands. Say so now instead of
+            # reading the same characters again until the wall arrives.
+            raise RuntimeError(
+                f"A {budget}-character slice cannot advance the curation cursor"
+                f" {batch.cursor.get('partial')}: raise the curator's turn ceiling"
             )
         if not batch.cursor:
             return "Scoped curation completed."

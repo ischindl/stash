@@ -1893,6 +1893,56 @@ async def test_one_run_drains_a_document_larger_than_its_budget_in_committed_pas
 
 
 @pytest.mark.asyncio
+async def test_a_pass_that_owed_input_and_moved_nothing_fails_instead_of_re_reading_it(
+    dataset, pool, monkeypatch, sprite_exec
+):
+    """The loop's termination rule, forced.
+
+    The loader's own floor is what keeps a pass from handing back the slice it was given,
+    so this is unreachable through the real loader today; forcing it is how the rule the
+    loop relies on stays pinned. A pass whose pair moved nowhere while its batch still
+    owed input is a loader that cannot progress: the run says so after that pass, keeps
+    the position the pass before it committed, and does not go back for the same
+    characters until its wall arrives.
+    """
+    from backend.services import agent_service, scoped_curation_inputs, sprite_agent_service
+
+    await pool.execute(
+        "UPDATE files SET extracted_text=$2 WHERE id=$1", dataset.private_file, "Z" * 6000
+    )
+    monkeypatch.setattr(curation, "input_budget", lambda ceiling: 2048)
+    real_load = scoped_curation_inputs.load_batch
+    handed_back: list = []
+    loads = 0
+
+    async def loader_that_cannot_advance(*args, **kwargs):
+        nonlocal loads
+        loads += 1
+        if not handed_back:
+            handed_back.append(await real_load(*args, **kwargs))
+        return handed_back[0]
+
+    async def read_slice(scope, instructions):
+        return "Slice read."
+
+    monkeypatch.setattr(scoped_curation_inputs, "load_batch", loader_that_cannot_advance)
+    monkeypatch.setattr(curation, "run_scope", read_slice)
+    agent = await agent_service.get_or_create_curator(dataset.owner, wiki="external")
+    await pool.execute("UPDATE agents SET curated_through=NULL WHERE id=$1", UUID(agent["id"]))
+    agent = await agent_service.get_agent_by_id(UUID(agent["id"]))
+
+    with pytest.raises(RuntimeError, match="cannot advance the curation cursor"):
+        await sprite_agent_service.run_scheduled(
+            agent, "stuck", curation_service.position_of(agent)
+        )
+
+    assert loads == 2, "the run asked for the same slice again instead of failing"
+    current = await agent_service.get_agent_by_id(UUID(agent["id"]))
+    assert current["curated_through"] == handed_back[0].through
+    assert current["curation_cursor"]["partial"] == handed_back[0].cursor["partial"]
+
+
+@pytest.mark.asyncio
 async def test_a_ceiling_cut_hands_its_unfinished_backlog_to_the_next_catchup_pass(
     dataset, pool, monkeypatch, sprite_exec
 ):
