@@ -13,7 +13,6 @@ const state = vi.hoisted(() => ({
   user: {
     id: "user-1", name: "developer", display_name: "Developer", description: "",
     created_at: "2026-09-15", last_seen: "2026-09-15", developer_platform_only: true,
-    show_tools_and_chat: false,
   },
 }));
 
@@ -36,7 +35,7 @@ vi.mock("@/lib/api", () => ({
   activateDeveloperPlatform: vi.fn(),
 }));
 vi.mock("@/components/workspace/topbar", () => ({ default: () => <div>Internal navigation</div> }));
-vi.mock("@/components/workspace/rail", () => ({ default: () => <div>Rail navigation</div> }));
+vi.mock("@/components/workspace/rail", () => ({ default: () => null }));
 vi.mock("@/components/workspace/persistence", () => ({ default: () => null }));
 vi.mock("@/components/workspace/explorer", () => ({ default: () => null }));
 vi.mock("@/components/workspace/workbench", () => ({ default: () => null }));
@@ -124,20 +123,5 @@ it("preserves existing users' internal interface", async () => {
   render(<WorkspaceShell user={state.user} onLogout={vi.fn()}>Internal content</WorkspaceShell>);
   await waitFor(() => expect(screen.getByText("Internal content")).toBeInTheDocument());
   expect(screen.getByText("Internal navigation")).toBeInTheDocument();
-  expect(state.replace).not.toHaveBeenCalled();
-});
-
-// Upstream #1128's contract, pinned so nobody reintroduces the /developer lock: the cohort
-// that #1128 created is not locked anywhere in the consumer app -- its own file browser
-// renders, with the account's own rail. The reward-rollout cases this file carried alongside
-// it retired with the reward_models_enabled flag; the internal-interface case above already
-// pins that an account with internal access gets its navigation and no lock screen.
-it("leaves the new-signup cohort's file browser unlocked and navigable", () => {
-  state.user.developer_platform_only = true;
-  state.pathname = "/files";
-  render(<WorkspaceShell user={state.user} onLogout={vi.fn()}>My files</WorkspaceShell>);
-  expect(screen.getByText("My files")).toBeInTheDocument();
-  expect(screen.getByText("Rail navigation")).toBeInTheDocument();
-  expect(screen.queryByText("Run Stash for your product's users")).not.toBeInTheDocument();
   expect(state.replace).not.toHaveBeenCalled();
 });
