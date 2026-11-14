@@ -183,6 +183,19 @@ everything before it is captured in git history (`git log`), not here.
   visible. The checkbox, the `hide_curator` parameter, and the stored preference are
   removed outright.
 
+### Removed
+
+- The evals product is gone, following upstream's removal of it from the open-source repo. Traces and
+  their annotation screen, intuitions, reward functions, the Evals UI, prompt optimization, and the
+  workers that trained them are deleted outright rather than hidden behind a flag, and the MCP surface
+  drops the 33 tools that served them (`stash_intuition_*`, `stash_optimization_*`,
+  `stash_reward_function_*`, `stash_trace`, `stash_traces`, `stash_import_traces`,
+  `stash_annotate_trace`, `stash_train_reward_model`) — 102 tools down to 69. Two things stay, because
+  upstream kept them and the database still carries them: `reward_models_enabled` and
+  `product_checkpoint` remain columns on `users`, so no migration is dropped and the alembic chain
+  stays a single head (an API profile keeps reporting the flag even though nothing reads it any more),
+  and the `/folders/` navigation is unaffected, because `rail.tsx` carries that matcher itself.
+
 ### Fixed
 
 - The folder share panel stays on screen on a narrow display, and with it the address you
