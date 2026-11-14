@@ -45,7 +45,21 @@ slice now, which is what `docs/running-stash.md` says.
 
 **What did not change:** the ceiling values, `_MAX_TURNS`, `_MAX_CONCURRENT_SCOPES`, the failure
 message `Scoped curation exceeded its run time limit`, and the fence itself — `CuratorWatermarkConflict`
-still fires when an ingest rewind or an overlapping run moves the pair this pass started from.
+still fires when an ingest rewind or an overlapping run moves the pair this pass started from. One
+promise the loop nearly broke and keeps: the developer platform's `full_history` backfill still reads
+with no watermark. Its dispatcher zeroes the position inside its own copy of the agent while holding
+on to the stored pair as the write anchor, and once the loop had read from the anchor instead of from
+the row, a backfill would have found an empty window and reported success having curated nothing.
+
+**Two files outside the card's own limit list, said out loud.** The intake told this card to
+reach only `scoped_curation_service.py`, `scoped_curation_inputs.py`, `curation_service.py` and
+`agent_schedules.py`. Two more carry part of the work and neither was touched quietly:
+`sprite_agent_service.py` (12 lines) is where the wall converts its timeout into a failure, and
+the catch-up chain needs to tell a run the ceiling ended from a run that broke, so that one site
+raises `RunCeilingExceeded(RuntimeError)` with the message text byte-identical — string matching on
+the operator-facing sentence and a wall-clock guess inside the scheduler were the rejected
+alternatives; and `docs/running-stash.md` (5 lines) states what the ceiling bounds, which is the
+thing this card changed. Everything else stayed inside the four.
 
 **One logging change worth naming:** a scope used to push its own `tool_result` event
 (`tool_name="curate_wiki"`) as soon as it finished, before the batch was committed. With one push per
