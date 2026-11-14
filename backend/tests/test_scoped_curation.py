@@ -1765,6 +1765,133 @@ async def test_cursor_is_committed_only_after_all_scopes_succeed(
 
 
 @pytest.mark.asyncio
+async def test_a_ceiling_cut_keeps_its_completed_passes_and_the_next_run_resumes_them(
+    dataset, pool, monkeypatch, sprite_exec
+):
+    """The defect this card exists for, in one run and the run after it.
+
+    The pass that finishes is durable even though the run its ceiling cut off was
+    still reading, and the next run starts where that checkpoint says rather than at
+    the beginning of the backlog again. The cut is the run's own one-second ceiling;
+    the pass it stops is held open by the fake below.
+    """
+    from backend.services import agent_service, sprite_agent_service
+
+    await pool.execute(
+        "UPDATE files SET extracted_text=$2 WHERE id=$1", dataset.private_file, "X" * 10000
+    )
+    monkeypatch.setattr(curation, "input_budget", lambda ceiling: 2048)
+    agent = await agent_service.get_or_create_curator(dataset.owner, wiki="external")
+    await pool.execute(
+        "UPDATE agents SET curated_through=NULL, turn_timeout_seconds=$2 WHERE id=$1",
+        UUID(agent["id"]),
+        1,
+    )
+    file_key = f"file:{dataset.private_file}"
+    first_slice = asyncio.Event()
+    hold = asyncio.Event()
+    read_offsets: list[int] = []
+
+    async def read_one_slice_then_hold(scope, instructions):
+        document = scope.documents.get(file_key)
+        if document is None:
+            return "Nothing of mine in this slice."
+        read_offsets.append(document["chunk"]["offset"] if "chunk" in document else 0)
+        if not first_slice.is_set():
+            first_slice.set()
+            return "First slice read."
+        await hold.wait()
+        return "Never reached: the ceiling cuts this pass off."
+
+    monkeypatch.setattr(curation, "run_scope", read_one_slice_then_hold)
+    agent = await agent_service.get_agent_by_id(UUID(agent["id"]))
+    with pytest.raises(RuntimeError, match="run time limit"):
+        await sprite_agent_service.run_scheduled(
+            agent, "cut-run", curation_service.position_of(agent)
+        )
+
+    cut = await agent_service.get_agent_by_id(UUID(agent["id"]))
+    assert read_offsets[0] == 0 and read_offsets[1] > 0
+    # The checkpoint stands where the completed pass stopped, not where the pass the
+    # wall stopped had got to, and not at the beginning of the document.
+    assert cut["curated_through"] is not None
+    partial = cut["curation_cursor"]["partial"]
+    assert list(partial) == [key for key in partial if key.startswith(file_key)]
+    assert list(partial.values()) == [read_offsets[1]]
+    assert (
+        await pool.fetchval(
+            "SELECT count(*) FROM history_events WHERE session_id LIKE 'agent-curate-%' "
+            "AND event_type='assistant_message'"
+        )
+        == 1
+    )
+
+    async def report_what_is_read(scope, instructions):
+        document = scope.documents.get(file_key)
+        if document is not None:
+            read_offsets.append(document["chunk"]["offset"] if "chunk" in document else 0)
+        return "Slice read."
+
+    monkeypatch.setattr(curation, "run_scope", report_what_is_read)
+    resumes_at = len(read_offsets)
+    await sprite_agent_service.run_scheduled(cut, "resumed-run", curation_service.position_of(cut))
+    current = await agent_service.get_agent_by_id(UUID(agent["id"]))
+    # The next run reads the rest of the document rather than its first slice again.
+    assert read_offsets[resumes_at] == read_offsets[1]
+    assert read_offsets[resumes_at:] == sorted(read_offsets[resumes_at:])
+    assert current["curation_cursor"] == {}
+
+
+@pytest.mark.asyncio
+async def test_one_run_drains_a_document_larger_than_its_budget_in_committed_passes(
+    dataset, pool, monkeypatch, sprite_exec
+):
+    """One run walks a document its budget cannot hold, and commits as it goes.
+
+    The checkpoints between the first slice and the last one move only the cursor half
+    of the pair - the instant stays one microsecond behind the document still being
+    read - so this is also the proof that a cursor-only advance is a checkpoint. The
+    spy watches each durable write; the row at the end says those writes are the row.
+    """
+    from backend.services import agent_service, sprite_agent_service
+
+    await pool.execute(
+        "UPDATE files SET extracted_text=$2 WHERE id=$1", dataset.private_file, "Z" * 6000
+    )
+    monkeypatch.setattr(curation, "input_budget", lambda ceiling: 2048)
+    checkpoints: list[tuple[datetime, dict]] = []
+    real_checkpoint = curation._checkpoint_pass
+
+    async def record_checkpoint(agent_, batch, fence, cursor, scope):
+        moved = await real_checkpoint(agent_, batch, fence, cursor, scope)
+        if moved:
+            checkpoints.append((batch.through, dict(batch.cursor)))
+        return moved
+
+    async def read_slice(scope, instructions):
+        return "Slice read."
+
+    monkeypatch.setattr(curation, "_checkpoint_pass", record_checkpoint)
+    monkeypatch.setattr(curation, "run_scope", read_slice)
+    agent = await agent_service.get_or_create_curator(dataset.owner, wiki="external")
+    await pool.execute("UPDATE agents SET curated_through=NULL WHERE id=$1", UUID(agent["id"]))
+    agent = await agent_service.get_agent_by_id(UUID(agent["id"]))
+    await sprite_agent_service.run_scheduled(
+        agent, "drain-run", curation_service.position_of(agent)
+    )
+
+    mid_pairs = checkpoints[:-1]
+    assert len(mid_pairs) >= 2
+    assert len({through for through, _ in mid_pairs}) == 1
+    assert len({json.dumps(cursor, sort_keys=True) for _, cursor in mid_pairs}) == len(mid_pairs)
+    assert all(cursor["partial"] for _, cursor in mid_pairs)
+    assert checkpoints[-1][1] == {}
+    current = await agent_service.get_agent_by_id(UUID(agent["id"]))
+    assert current["curation_cursor"] == {}
+    assert current["curated_through"] == checkpoints[-1][0]
+
+
+@pytest.mark.asyncio
 async def test_same_timestamp_group_larger_than_event_limit_drains(dataset, pool, monkeypatch):
     from backend.services import curation_service, scoped_curation_inputs
 
