@@ -24,7 +24,7 @@ function render(ui: ReactNode) {
   return renderBase(ui, { wrapper: ConfirmDialogProvider });
 }
 
-const auth = vi.hoisted(() => ({ user: { reward_models_enabled: true } }));
+const auth = vi.hoisted(() => ({ user: {} }));
 vi.mock("@/hooks/useAuth", () => ({ useAuth: () => auth }));
 
 const router = vi.hoisted(() => ({
@@ -187,16 +187,6 @@ describe("SkillsPage", () => {
     }
   });
 
-  it("keeps an empty library simple while making skill creation available", async () => {
-    vi.mocked(listSkills).mockResolvedValue([]);
-
-    render(<SkillsPage />);
-
-    expect(await screen.findByText("No skills yet.")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /new skill/i })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Grid" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "List" })).not.toBeInTheDocument();
-  });
 
   it("creates the skill through the inline composer and navigates to it", async () => {
     vi.mocked(createSkill).mockResolvedValue({ folder_id: "folder-9", name: "My Skill" });
@@ -380,11 +370,9 @@ describe("SkillsPage", () => {
 });
 
 
-it("keeps the existing Skills empty state for accounts outside the rollout", async () => {
-  auth.user.reward_models_enabled = false;
+it("shows the Skills empty state", async () => {
   vi.mocked(listSkills).mockResolvedValue([]);
   render(<SkillsPage />);
   expect(await screen.findByText("Create one from your terminal:")).toBeVisible();
   expect(screen.getByRole("button", { name: "Grid" })).toBeVisible();
-  auth.user.reward_models_enabled = true;
 });

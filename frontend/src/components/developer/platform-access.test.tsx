@@ -13,7 +13,7 @@ const state = vi.hoisted(() => ({
   user: {
     id: "user-1", name: "developer", display_name: "Developer", description: "",
     created_at: "2026-09-15", last_seen: "2026-09-15", developer_platform_only: true,
-    reward_models_enabled: false, show_tools_and_chat: false,
+    show_tools_and_chat: false,
   },
 }));
 
@@ -36,8 +36,7 @@ vi.mock("@/lib/api", () => ({
   activateDeveloperPlatform: vi.fn(),
 }));
 vi.mock("@/components/workspace/topbar", () => ({ default: () => <div>Internal navigation</div> }));
-vi.mock("@/components/workspace/rail", () => ({ default: () => <div>Legacy navigation</div> }));
-vi.mock("@/components/workspace/reward-rail", () => ({ default: () => <div>Reward navigation</div> }));
+vi.mock("@/components/workspace/rail", () => ({ default: () => <div>Rail navigation</div> }));
 vi.mock("@/components/workspace/persistence", () => ({ default: () => null }));
 vi.mock("@/components/workspace/explorer", () => ({ default: () => null }));
 vi.mock("@/components/workspace/workbench", () => ({ default: () => null }));
@@ -47,7 +46,6 @@ beforeEach(() => {
   state.pathname = "/developer";
   state.scope = null;
   state.user.developer_platform_only = true;
-  state.user.reward_models_enabled = false;
   state.replace.mockClear();
   state.logout.mockClear();
 });
@@ -129,43 +127,17 @@ it("preserves existing users' internal interface", async () => {
   expect(state.replace).not.toHaveBeenCalled();
 });
 
-it.each(["/", "/developer"])("new accounts enter traces from %s", (pathname) => {
-  state.user.reward_models_enabled = true;
-  state.pathname = pathname;
-  render(<WorkspaceShell user={state.user} onLogout={vi.fn()}>Old home</WorkspaceShell>);
-  expect(state.replace).toHaveBeenCalledWith("/reward-models");
-  expect(screen.queryByText("Old home")).not.toBeInTheDocument();
-});
-
-it.each([true, false])("the stored rollout flag controls reward navigation (%s)", (enabled) => {
-  state.user.developer_platform_only = false;
-  state.user.reward_models_enabled = enabled;
-  state.pathname = "/skills";
-  render(<WorkspaceShell user={state.user} onLogout={vi.fn()}>Skills</WorkspaceShell>);
-  expect(screen.queryByText("Reward navigation") !== null).toBe(enabled);
-});
-
-// Upstream #1128's contract, pinned so nobody reintroduces the /developer lock:
-// the cohort that #1128 created (BOTH flags true) is not locked anywhere in the
-// consumer app — its own file browser renders, with its own navigation.
+// Upstream #1128's contract, pinned so nobody reintroduces the /developer lock: the cohort
+// that #1128 created is not locked anywhere in the consumer app -- its own file browser
+// renders, with the account's own rail. The reward-rollout cases this file carried alongside
+// it retired with the reward_models_enabled flag; the internal-interface case above already
+// pins that an account with internal access gets its navigation and no lock screen.
 it("leaves the new-signup cohort's file browser unlocked and navigable", () => {
   state.user.developer_platform_only = true;
-  state.user.reward_models_enabled = true;
   state.pathname = "/files";
   render(<WorkspaceShell user={state.user} onLogout={vi.fn()}>My files</WorkspaceShell>);
   expect(screen.getByText("My files")).toBeInTheDocument();
-  expect(screen.getByText("Reward navigation")).toBeInTheDocument();
-  expect(screen.queryByText("Legacy navigation")).not.toBeInTheDocument();
+  expect(screen.getByText("Rail navigation")).toBeInTheDocument();
   expect(screen.queryByText("Run Stash for your product's users")).not.toBeInTheDocument();
-  expect(state.replace).not.toHaveBeenCalled();
-});
-
-it("keeps an account without the reward flag on the legacy rail", () => {
-  state.user.developer_platform_only = false;
-  state.user.reward_models_enabled = false;
-  state.pathname = "/files";
-  render(<WorkspaceShell user={state.user} onLogout={vi.fn()}>My files</WorkspaceShell>);
-  expect(screen.getByText("Legacy navigation")).toBeInTheDocument();
-  expect(screen.queryByText("Reward navigation")).not.toBeInTheDocument();
   expect(state.replace).not.toHaveBeenCalled();
 });

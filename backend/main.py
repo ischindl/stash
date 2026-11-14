@@ -22,12 +22,10 @@ from .routers import (
     agent_chat,
     agent_credentials,
     agent_docs,
-    agent_judge,
     agents,
     aggregate,
     analytics,
     batch,
-    behaviors,
     billing,
     bulk_export,
     clips,
@@ -35,23 +33,16 @@ from .routers import (
     demo,
     developer,
     discover,
-    evals,
     exports,
     files,
     files_tree,
-    intuition_mcp,
-    intuitions,
     machine,
     marketing,
     mcp_servers,
     memory,
     mini_programs,
-    model_wizard,
-    optimization,
     pins,
     publish,
-    reward_models,
-    rm_evaluators,
     security_audit,
     session_folders,
     sessions,
@@ -63,14 +54,12 @@ from .routers import (
     tables,
     tasks,
     telegram,
-    test_sets,
     transcripts,
     trash,
     user_knowledge,
     users,
     vfs,
     webhooks,
-    workbench,
     workspace_agent_credentials,
 )
 from .services import demo_service, share_mcp_urls
@@ -121,13 +110,9 @@ async def lifespan(app: FastAPI):
     except Exception:
         logger.exception("seed_demo failed at startup")
     try:
-        # Both MCP session managers are process-wide: every share URL shares one
-        # share-MCP server, and the intuition server runs one streamable-HTTP task
-        # group, so both task groups have to outlive any single request.
-        async with (
-            share_mcp.session_runtime(),
-            intuition_mcp.mcp.session_manager.run(),
-        ):
+        # The share-MCP session runtime is process-wide: every share URL shares
+        # one share-MCP server, so its task group has to outlive any single request.
+        async with share_mcp.session_runtime():
             yield
     finally:
         await close_db()
@@ -193,19 +178,6 @@ app.include_router(session_folders.public_router)
 app.include_router(sessions.router)
 app.include_router(trash.router)
 app.include_router(pins.router)
-app.include_router(reward_models.router)
-app.include_router(optimization.router)
-app.include_router(rm_evaluators.router)
-app.include_router(workbench.router)
-app.include_router(intuitions.router)
-app.include_router(evals.router)
-app.include_router(behaviors.router)
-app.include_router(agent_judge.router)
-app.include_router(test_sets.router)
-app.include_router(model_wizard.router)
-app.include_router(model_wizard.public_router)
-# MCP over streamable HTTP at /mcp/intuitions (see routers/intuition_mcp.py).
-app.mount("/mcp", intuition_mcp.app)
 app.include_router(mcp_servers.router)
 app.include_router(publish.router)
 app.include_router(security_audit.router)
