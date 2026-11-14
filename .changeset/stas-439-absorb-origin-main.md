@@ -11,9 +11,12 @@ commits left over (548 of ours on top). The same predicate on `refs/heads/main` 
 sits at `8674d5500` with merge base `41b217aa0` and `ahead/behind=544/2`. The debt is cleared on
 the lane and still open on the trunk; the trunk write is an operator leg, named under *Landing*.
 
-**Shape: one two-parent merge plus six normal commits on top of it.** No rebase, no squash, no
-cherry-pick series. Five of the six are named in the *Post-merge repairs* paragraph below and the
-sixth is this record.
+**Shape: one two-parent merge, with normal commits on top of it and no rewriting underneath it.** No
+rebase, no squash, no cherry-pick series. The code-bearing commits are named in the *Post-merge
+repairs* paragraph below; the rest are records of this absorption. `git cherry -v
+refs/heads/main refs/heads/fusion/stas-439` prints the lane's own contribution and nothing else
+beside upstream's two debt commits, because the lane already contains every commit `refs/heads/main`
+carries.
 
 | merge | parents | committed tree vs a naive `merge-tree` of the same two parents | hand-resolved |
 |---|---|---|---|
@@ -142,6 +145,12 @@ final commit, re-read from the ref at that moment.
 
 Re-read `git rev-parse refs/heads/main` before and after; those two SHAs are the proof. It is
 refused if `refs/heads/main` is no longer `8674d5500`, which is the CAS doing its job.
+
+Because the write lands while the trunk's own checkout holds the branch, that checkout then sits
+behind its ref and reads the difference as a huge revert of work that already landed — STAS-424
+measured precisely that phantom. Reconcile it with `git restore --staged --worktree --source=HEAD .`,
+the source named rather than assumed, and only after the same `status --porcelain` came back empty
+*before* the write; a dirty trunk checkout is a STOP-and-report condition, not a cleanup.
 
 **Enforcement, stated precisely.** Unlike the STAS-427 record, the gate on this machine **is**
 active: `.git/hooks/reference-transaction` is a symlink to `.githooks/reference-transaction.sh`
