@@ -1096,21 +1096,25 @@ async def test_successful_scoped_batches_queue_and_drain_without_skipping_privat
     agent = await agent_service.get_or_create_curator(dataset.owner, wiki="external")
     await pool.execute("UPDATE agents SET curated_through=NULL WHERE id=$1", UUID(agent["id"]))
     # A small event limit must split the real input rather than moving the
-    # watermark over unseen data. Re-run only the tasks actually dispatched.
+    # watermark over unseen data. One dispatch now drains every slice it can.
     await agent_schedules._run_curator_now(UUID(agent["id"]), metered=False)
-    passes = 1
-    while queued:
-        task = queued.pop(0)
-        await agent_schedules._run_curator_now(UUID(task["args"][0]), **task["kwargs"])
-        passes += 1
-        assert passes <= agent_schedules.CURATOR_CATCHUP_PASSES
     current = await agent_service.get_agent_by_id(UUID(agent["id"]))
     latest_input = await pool.fetchval(
         "SELECT max(created_at) FROM history_events WHERE owner_user_id=$1 "
         "AND session_id NOT LIKE 'agent-curate-%'",
         dataset.owner,
     )
-    assert passes >= 2
+    # Each committed pass publishes exactly one summary event, so this counts the
+    # checkpoints the run made durable - the number that says no slice was skipped.
+    checkpoints = await pool.fetchval(
+        "SELECT count(*) FROM history_events WHERE owner_user_id=$1 "
+        "AND event_type='assistant_message' AND session_id LIKE 'agent-curate-%'",
+        dataset.owner,
+    )
+    assert checkpoints >= 2
+    # Nothing had to be re-queued: the whole drain fitted inside the run's own ceiling,
+    # so the catch-up chain stays what it is for - a cut run's unfinished backlog.
+    assert queued == []
     assert current["curated_through"] >= latest_input
     assert current["last_run_outcome"] == "ran"
     assert current["month_run_count"] == 0
@@ -1688,9 +1692,14 @@ async def test_large_files_and_sources_resume_without_skipping_or_unbounded_inpu
 @pytest.mark.asyncio
 @pytest.mark.parametrize("failure", ["exception", "empty_completion"])
 async def test_cursor_is_committed_only_after_all_scopes_succeed(
-    dataset, pool, monkeypatch, sprite_exec, failure
+    dataset, client, pool, monkeypatch, sprite_exec, failure
 ):
     from backend.services import agent_service, sprite_agent_service
+    from backend.tasks.session_titles import generate_session_title
+
+    # `sprite_exec` hands the app a test Anthropic key, which turns the per-push title
+    # dispatch on, and a test run has no broker to receive it.
+    monkeypatch.setattr(generate_session_title, "delay", lambda *a, **k: None)
 
     await pool.execute(
         "UPDATE files SET extracted_text=$2 WHERE id=$1", dataset.private_file, "X" * 10000
@@ -1711,12 +1720,21 @@ async def test_cursor_is_committed_only_after_all_scopes_succeed(
         agent, "chunk-one", curation_service.position_of(agent)
     )
     before = await agent_service.get_agent_by_id(UUID(agent["id"]))
-    assert before["curation_cursor"]
+    # A run is a loop of passes now, so one successful run walks the chunked file to its
+    # end instead of stopping after the first 2048 characters: the cursor it lands on is
+    # empty because the file was read, not skipped. The mid-file commit this assertion
+    # used to show is pinned directly by
+    # `test_a_cursor_only_pass_is_checkpointed_and_its_next_run_resumes_the_rest`.
+    assert before["curation_cursor"] == {}
     assert "X" * 100 not in json.dumps([s.documents for s in seen if s.purpose == "shared"])
 
     async def failed(*args):
         raise RuntimeError("Model unavailable")
 
+    # The first run read everything that was pending, so the failing run has to be
+    # given input of its own: the invariant is that a run which fails over material it
+    # loaded leaves the pair exactly where the last completed pass left it.
+    await _push(client, dataset.key, [_event("private-job", "private", "A lesson after the drain")])
     if failure == "empty_completion":
 
         async def create(**kwargs):

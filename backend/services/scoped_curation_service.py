@@ -769,101 +769,70 @@ async def run_scope(scope: CurationScope, instructions: str | None) -> str:
     raise RuntimeError("Curator exhausted its tool turns before completing")
 
 
-async def run(
-    agent: dict,
-    workspace: dict,
-    run_stamp: str,
-    read_position: curation_service.Position,
-) -> str:
-    """Each private run and the shared run start with completely fresh model state.
+async def _pass_scopes(
+    agent: dict, workspace: dict, session: str, batch: scoped_curation_inputs.Batch
+) -> list[CurationScope]:
+    """Every scope with a claim on one batch.
 
-    `read_position` is the pair the dispatcher loaded, not whatever the row holds
-    now: the completion below fences on it, so a mid-run rewind or an overlapping
-    run makes this one refuse loudly instead of stamping over the other.
+    A private scope appears only when the batch holds material that user may see: an
+    empty private scope would spend a model turn to report nothing.
     """
-    require_configured()
-    from . import agent_service
-
     owner = workspace["scope_user_id"]
-    # One ceiling read and one budget per run. The wall wraps the whole run, and the
-    # batch loaded below is the one every scoping of this run reads a slice of, so the
-    # number is derived once and no scope multiplies it.
-    budget = input_budget(agent_service.turn_ceiling_seconds(agent))
-    since = agent["curated_through"]
-    until = datetime.now(UTC)
-    batch = await scoped_curation_inputs.load_batch(
-        owner,
-        since,
-        until,
-        internal=agent["curator_wiki"] == "internal",
-        generation=workspace["curation_generation"],
-        cursor=agent.get("curation_cursor"),
-        max_chars=budget,
-    )
-    session = f"agent-curate-{agent['id']}-{run_stamp}"
-    scopes = []
     if agent["curator_wiki"] == "internal":
         memory = await files_tree_service.get_or_create_memory_folder(owner, owner)
-        scopes.append(
-            await load_scope(workspace, "internal", memory["id"], [], session, batch=batch)
+        return [await load_scope(workspace, "internal", memory["id"], [], session, batch=batch)]
+    users = await get_pool().fetch(
+        "SELECT id,wiki_folder_id,share_wiki FROM end_users WHERE workspace_id=$1 ORDER BY id",
+        workspace["id"],
+    )
+    scopes: list[CurationScope] = []
+    for user in users:
+        private = await load_scope(
+            workspace,
+            "private",
+            user["wiki_folder_id"],
+            [user["id"]],
+            session,
+            batch=batch,
         )
-    else:
-        users = await get_pool().fetch(
-            "SELECT id,wiki_folder_id,share_wiki FROM end_users WHERE workspace_id=$1 ORDER BY id",
-            workspace["id"],
+        if any(key.startswith(("session:", "file:", "source:")) for key in private.documents):
+            scopes.append(private)
+    scopes.append(
+        await load_scope(
+            workspace,
+            "shared",
+            workspace["external_wiki_folder_id"],
+            [u["id"] for u in users if u["share_wiki"]],
+            session,
+            batch=batch,
         )
-        for user in users:
-            private = await load_scope(
-                workspace,
-                "private",
-                user["wiki_folder_id"],
-                [user["id"]],
-                session,
-                batch=batch,
-            )
-            if any(key.startswith(("session:", "file:", "source:")) for key in private.documents):
-                scopes.append(private)
-        scopes.append(
-            await load_scope(
-                workspace,
-                "shared",
-                workspace["external_wiki_folder_id"],
-                [u["id"] for u in users if u["share_wiki"]],
-                session,
-                batch=batch,
-            )
-        )
-    concurrency = asyncio.Semaphore(_MAX_CONCURRENT_SCOPES)
+    )
+    return scopes
 
-    async def curate(scope: CurationScope) -> str:
-        async with concurrency:
-            summary = await run_scope(scope, agent["system_prompt"])
-            record = f"{scope.purpose} wiki {scope.destination}:\n{summary}"
-            await memory_service.push_event(
-                owner,
-                agent["name"],
-                "tool_result",
-                record,
-                owner,
-                session_id=scope.session_id,
-                tool_name="curate_wiki",
-            )
-            return record
 
-    # A failed scope cancels and joins its siblings before releasing the run lock.
-    async with asyncio.TaskGroup() as group:
-        tasks = [group.create_task(curate(scope)) for scope in scopes]
-    summaries = [task.result() for task in tasks]
-    # Commit progress under the same permission lock as writes. The scheduler
-    # must not later overwrite a concurrent opt-out's reset watermark, so the write
-    # is fenced on the exact pair this run read: an ingest rewind, a reset to never,
-    # or an overlapping run that moved the watermark meanwhile matches no row, and
-    # the run that loses is recorded as a failure rather than a silent clobber.
+async def _checkpoint_pass(
+    agent: dict,
+    batch: scoped_curation_inputs.Batch,
+    fence: curation_service.Position,
+    cursor: dict,
+    scope: CurationScope,
+) -> bool:
+    """Move the durable watermark to where one completed pass read, and say whether it moved.
+
+    The write is under the same permission lock as the page writes and is fenced on
+    the exact pair this pass started from: an ingest rewind, a reset to never, or an
+    overlapping run that moved the watermark meanwhile matches no row, and the pass
+    that loses is recorded as a failure rather than a silent clobber. The first pass
+    of a run fences on the pair the dispatcher loaded; every later one fences on the
+    pair the pass before it committed, which is the same compare-and-set one step
+    further along. A pair that did not move is not written and not reported as a pass.
+    """
+    from . import agent_service
+
+    if (batch.through, batch.cursor, fence.event_id) == (fence.at, cursor, None):
+        return False
     async with get_pool().acquire() as conn, conn.transaction():
-        await scopes[-1].check(conn)
-        from . import agent_service, curation_service
-
-        read = read_position
+        await scope.check(conn)
         advanced = await conn.execute(
             "UPDATE agents SET curated_through=$2, curated_through_event_id=NULL, "
             "curation_cursor=$3 "
@@ -872,8 +841,8 @@ async def run(
             UUID(str(agent["id"])),
             batch.through,
             batch.cursor,
-            read.at,
-            read.event_id,
+            fence.at,
+            fence.event_id,
         )
         if advanced != "UPDATE 1":
             current = await conn.fetchrow(
@@ -882,15 +851,87 @@ async def run(
             )
             raise agent_service.CuratorWatermarkConflict(
                 UUID(str(agent["id"])),
-                read,
+                fence,
                 curation_service.position_of(dict(current)) if current else None,
             )
-    await memory_service.push_event(
-        owner,
-        agent["name"],
-        "assistant_message",
-        "\n\n".join(summaries),
-        owner,
-        session_id=session,
-    )
-    return "Scoped curation completed."
+    return True
+
+
+async def run(
+    agent: dict,
+    workspace: dict,
+    run_stamp: str,
+    read_position: curation_service.Position,
+) -> str:
+    """A run is a loop of passes, not one batch: read a slice, curate it everywhere
+    it applies, then make that slice durable before reading the next one.
+
+    Each pass gets completely fresh model state in every scope, and the most a run its
+    ceiling cuts off can ever discard is the pass in flight — never the whole run, which
+    is what made a curator whose backlog outran its wall repeat its first slice forever.
+
+    `read_position` is the pair the dispatcher loaded, not whatever the row holds
+    now: the first pass fences its checkpoint on it, so a mid-run rewind or an
+    overlapping run makes this one refuse loudly instead of stamping over the other.
+    """
+    require_configured()
+    from . import agent_service
+
+    owner = workspace["scope_user_id"]
+    ceiling = agent_service.turn_ceiling_seconds(agent)
+    # The wall wraps the whole run and every scope reads a slice of the same batch, so
+    # the budget is derived once from that ceiling and no scope multiplies it.
+    budget = input_budget(ceiling)
+    internal = agent["curator_wiki"] == "internal"
+    # One boundary for the whole run: input that arrives while this run works waits for
+    # the next scheduled run, exactly as it did when a run was one pass.
+    until = datetime.now(UTC)
+    session = f"agent-curate-{agent['id']}-{run_stamp}"
+    fence = read_position
+    cursor = agent.get("curation_cursor") or {}
+
+    while True:
+        batch = await scoped_curation_inputs.load_batch(
+            owner,
+            fence.at,
+            until,
+            internal=internal,
+            generation=workspace["curation_generation"],
+            cursor=cursor,
+            max_chars=budget,
+        )
+        if not batch.documents and batch.cursor:
+            raise RuntimeError(
+                f"A curator ceiling of {ceiling}s buys {budget} input characters, which is "
+                "less than the smallest pass the loader can make: raise the curator's"
+                " turn ceiling"
+            )
+        scopes = await _pass_scopes(agent, workspace, session, batch)
+        concurrency = asyncio.Semaphore(_MAX_CONCURRENT_SCOPES)
+
+        async def curate(scope: CurationScope) -> str:
+            async with concurrency:
+                summary = await run_scope(scope, agent["system_prompt"])
+                return f"{scope.purpose} wiki {scope.destination}:\n{summary}"
+
+        # A failed scope cancels and joins its siblings before releasing the run lock.
+        async with asyncio.TaskGroup() as group:
+            tasks = [group.create_task(curate(scope)) for scope in scopes]
+        summaries = [task.result() for task in tasks]
+
+        if await _checkpoint_pass(agent, batch, fence, cursor, scopes[-1]):
+            fence = curation_service.Position(batch.through)
+            cursor = batch.cursor
+            # The log entry and the checkpoint are one event: what a pass summarised is
+            # published exactly when what it read is durable, so a pass that fails
+            # later, or a run the wall cuts, leaves no report of unread work behind.
+            await memory_service.push_event(
+                owner,
+                agent["name"],
+                "assistant_message",
+                "\n\n".join(summaries),
+                owner,
+                session_id=session,
+            )
+        if not batch.cursor:
+            return "Scoped curation completed."
