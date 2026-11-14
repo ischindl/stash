@@ -52,9 +52,6 @@ services:
   sync-worker:
     image: stash-backend:main-11e0644a-pi
 
-  reward-worker:
-    image: stash-backend:main-11e0644a-pi
-
   beat:
     image: stash-backend:main-11e0644a-pi
 

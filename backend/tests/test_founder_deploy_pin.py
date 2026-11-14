@@ -159,7 +159,7 @@ def test_every_pinned_lane_names_a_local_commit_tag():
 
 
 def test_all_backend_lanes_share_one_tag():
-    """backend, worker, heavy-worker, sync-worker, reward-worker and beat run the same
+    """backend, worker, heavy-worker, sync-worker and beat run the same
 
     code against the same queues and the same database. Splitting them across builds
     is the bug the dogfood overlay's own test guards: the missed queue keeps

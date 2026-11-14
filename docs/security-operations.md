@@ -172,7 +172,7 @@ counts as unset.
 
 The mode is announced once per process at worker startup: `WARNING` when
 disabled, `INFO` naming team and channel when configured. Every Celery worker lane
-carries that line — `worker`, `heavy-worker`, `sync-worker` and `reward-worker`
+carries that line — `worker`, `heavy-worker` and `sync-worker`
 share one Celery app, so they share the startup hook. `backend` and `beat` do not:
 the web process makes no alert call and runs no worker-startup hook, and `beat` is
 a scheduler that never boots one.
