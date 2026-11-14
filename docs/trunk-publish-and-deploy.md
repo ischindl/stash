@@ -240,6 +240,37 @@ the founder database reads `0225` and `alembic heads` inside the running
 `stash-backend:main-11e0644a-pi` reads `0225 (head)`, so today's stack is self-consistent
 and no forward move is available without that decision.
 
+### Booting a proven image off the island's `0225` is red at `0273`, measured 2026-11-14
+
+The prohibition below says the founder database's migration is the boot of a proven image and
+nothing else. That instrument was measured against a faithful copy of tonight's island data, and
+it does not land a coherent schema at this distance:
+
+- The pair was built from trunk `39cb45957` by the recipe above: `stash-backend:main-39cb4595-base`
+  (4.12 GB), `stash-backend:main-39cb4595-pi` (4.55 GB), `stash-frontend:main-39cb4595` (167 MB),
+  each exit 0. **The frontend half of the wedge below is gone**: `docker build frontend/` at this
+  commit compiles with zero type errors, which `ef10258cc`'s fixture corrections had already
+  made true for every commit at or after it.
+- The copy: `pg_dump -Fd -j 4` of the island at `0225` = 4.5 GB in 10 m 16 s, `pg_restore -j 6`
+  into a `pgvector/pgvector:pg16` whose `PGDATA` is bind-mounted on a roomy disk (the dump and the
+  copy must not live on `/` or `/home`: 33 GB and 19 GB free respectively). The copy read back the
+  source's stamp `0225` and the same seven row counts (`history_events` 4 905 837,
+  `security_audit_events` 140 567, `page_edits` 6 591, `sessions` 3 201, `pages` 205, `agents` 33,
+  `users` 28).
+- The boot: 48 lines of `asyncpg.exceptions.UndefinedTableError: relation "rm_scoring_runs" does
+  not exist` from application startup, `/health` never answered (300 s of `000`), and the copy's
+  `alembic_version` ended at **`0213` — behind where it started**. The chain advanced
+  `0225 → 0256` while two uvicorn workers each ran their own `upgrade head` over the same
+  database, and the id `0225` in the copy names a schema position that trunk's `0225` does not:
+  `rm_scoring_runs` is created by trunk's `0214`, which a boot that starts at `0225` never
+  applies. This is the ambiguous-id trap, not a bug in the candidate.
+
+So no forward move exists that both satisfies the prohibition and works, and the rescue stays the
+operator's decision. Nothing above re-stamped anything by hand, the founder database was not
+touched (it still reads `0225` with its lanes on `main-11e0644a-pi`), and
+`docker-compose.founder.yml` was left naming `11e0644a`, because the pin is a claim about the
+stack and the container readings still measure that older pair.
+
 ### The deployable band's frontend does not build, measured 2026-11-12
 
 That band has a second, independent wedge, and it is why the founder frontend is still
