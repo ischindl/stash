@@ -357,6 +357,15 @@ async def _run_curator_locked(
             await _skip_busy_curator(agent_id, metered=metered)
             return
         await agent_service.mark_run_failed(agent_id, str(e), metered=metered)
+        if isinstance(e, sprite_agent_service.RunCeilingExceeded):
+            # The run's own ceiling ended it, not a broken curator. Each pass it
+            # finished is already durable, so the backlog it did not reach goes to the
+            # next catch-up pass while that chain still has bound left - and only while
+            # the lane actually advanced, which the progress gate below answers. The
+            # failure stands: the row still reports `failed` and the task still raises.
+            await _dispatch_curator_catchup(
+                agent, now, catchup_remaining, workspace=workspace, after_ceiling=True
+            )
         raise
     await _dispatch_curator_catchup(agent, now, catchup_remaining, workspace=workspace)
 
@@ -376,13 +385,25 @@ _WORKSPACE_UNSET = object()
 
 
 async def _dispatch_curator_catchup(
-    agent: dict, run_started: datetime, remaining: int, *, workspace=_WORKSPACE_UNSET
+    agent: dict,
+    run_started: datetime,
+    remaining: int,
+    *,
+    workspace=_WORKSPACE_UNSET,
+    after_ceiling: bool = False,
 ) -> None:
-    """A dispatch failure must not undo a successfully completed batch."""
+    """A dispatch failure must not undo the work the run left behind.
+
+    `after_ceiling` says the run ended on its own ceiling rather than on a broken
+    curator, which is the one case where the outcome row says `failed` and the chain
+    still has to continue: the passes under that failure completed and checkpointed.
+    """
     from ..services import alert_service
 
     try:
-        await _queue_curator_catchup(agent, run_started, remaining, workspace=workspace)
+        await _queue_curator_catchup(
+            agent, run_started, remaining, workspace=workspace, after_ceiling=after_ceiling
+        )
     except Exception:
         logger.exception("agent schedule: catch-up dispatch failed for agent %s", agent["id"])
         # Asked before the call, never caught after it: a mode that sends no
@@ -396,20 +417,27 @@ async def _dispatch_curator_catchup(
 
 
 async def _queue_curator_catchup(
-    agent: dict, run_started: datetime, remaining: int, *, workspace=_WORKSPACE_UNSET
+    agent: dict,
+    run_started: datetime,
+    remaining: int,
+    *,
+    workspace=_WORKSPACE_UNSET,
+    after_ceiling: bool = False,
 ) -> None:
     from ..services import agent_service, billing_service, scoped_curation_service
 
     if workspace is _WORKSPACE_UNSET:
         workspace = await scoped_curation_service.workspace_for_agent(agent)
-    if remaining <= 0 or workspace is None:
+    if workspace is None:
         return
     current = await agent_service.get_agent_by_id(UUID(str(agent["id"])))
     through = current["curated_through"]
     before = agent["curated_through"]
     if (
         current["run_mode"] != "scheduled"
-        or current["last_run_outcome"] != "ran"
+        # A failure ends the chain, except the failure a ceiling causes: that one has
+        # completed passes behind it and unread material in front of it.
+        or (current["last_run_outcome"] != "ran" and not after_ceiling)
         or through is None
         or (
             before is not None
@@ -421,8 +449,21 @@ async def _queue_curator_catchup(
         return
     if not await _pending_input(current, workspace):
         return
-    # Only successful, advancing, bounded batches can continue. No retry
-    # chain on failure or permission revocation, and no paid personal runs.
+    if remaining <= 0:
+        # Loud, because this is the one bound that silently stops a curator from ever
+        # catching up: the lane is still behind and nothing else will re-queue it until
+        # the next scheduled tick.
+        logger.warning(
+            "agent schedule: curator %s exhausted its %s catch-up passes with input still"
+            " pending; the checkpoint holds the rest for the next scheduled run",
+            agent["id"],
+            curator_catchup_pass_ceiling(),
+        )
+        return
+    # Advancing and bounded are what a chain always required, and the ceiling case keeps
+    # both: the progress gate above refuses a cut run that checkpointed no pass, so a
+    # lane that cannot get through even one pass is never turned into a chain of paid
+    # retries. Permission revocation still ends it, and no personal run is paid here.
     # `metered=False` here because the PLATFORM is the trigger for a follow-on
     # pass, not because of which endpoint it dials; `platform_initiated` below is
     # that trigger, said in the open. Metering this chain is deferred to the

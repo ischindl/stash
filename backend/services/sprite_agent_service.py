@@ -342,6 +342,16 @@ class TurnInProgress(RuntimeError):
     """Another turn is already running in this session."""
 
 
+class RunCeilingExceeded(RuntimeError):
+    """A scoped run outlived the ceiling its own row names.
+
+    The dispatch that owns the run distinguishes this from any other failure: the
+    ceiling cut a run that was making progress, and everything it had completed is
+    already durable. What is left is a backlog that needs another pass, not a broken
+    run that needs a retry.
+    """
+
+
 async def _endpoint_reachable(sprite: sprite_service.Sprite, base_url: str) -> bool:
     """Sprite-side probe of the user's local endpoint: any HTTP response
     (even 401/404) proves the server is up; connection failure, DNS, and
@@ -750,7 +760,7 @@ async def _run_scheduled_turn(
                     timeout=ceiling,
                 )
             except TimeoutError as exc:
-                raise RuntimeError("Scoped curation exceeded its run time limit") from exc
+                raise RunCeilingExceeded("Scoped curation exceeded its run time limit") from exc
     user = await user_service.get_user_by_id(user_id)
     if user is None:
         return ""

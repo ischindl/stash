@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import logging
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from uuid import UUID
@@ -1889,6 +1890,159 @@ async def test_one_run_drains_a_document_larger_than_its_budget_in_committed_pas
     current = await agent_service.get_agent_by_id(UUID(agent["id"]))
     assert current["curation_cursor"] == {}
     assert current["curated_through"] == checkpoints[-1][0]
+
+
+@pytest.mark.asyncio
+async def test_a_ceiling_cut_hands_its_unfinished_backlog_to_the_next_catchup_pass(
+    dataset, pool, monkeypatch, sprite_exec
+):
+    """The chain used to start only after a run that succeeded, so the failure shape
+    that this card makes normal - a run its own ceiling cut off after completing some
+    passes - stopped dead and waited a day for the next tick.
+
+    The hand-off must not launder the failure either: the row still reports it.
+    """
+    from backend.services import agent_service, billing_service
+    from backend.tasks import agent_schedules
+
+    await pool.execute(
+        "UPDATE files SET extracted_text=$2 WHERE id=$1", dataset.private_file, "X" * 10000
+    )
+    monkeypatch.setattr(curation, "input_budget", lambda ceiling: 2048)
+
+    async def entitled(_):
+        return True
+
+    monkeypatch.setattr(billing_service, "is_pro", entitled)
+    agent = await agent_service.get_or_create_curator(dataset.owner, wiki="external")
+    await pool.execute(
+        "UPDATE agents SET curated_through=NULL, turn_timeout_seconds=$2 WHERE id=$1",
+        UUID(agent["id"]),
+        1,
+    )
+    first_slice = asyncio.Event()
+    hold = asyncio.Event()
+
+    async def read_one_slice_then_hold(scope, instructions):
+        if f"file:{dataset.private_file}" not in scope.documents:
+            return "Nothing of mine in this slice."
+        if not first_slice.is_set():
+            first_slice.set()
+            return "First slice read."
+        await hold.wait()
+        return "Never reached: the ceiling cuts this pass off."
+
+    monkeypatch.setattr(curation, "run_scope", read_one_slice_then_hold)
+    queued = []
+    monkeypatch.setattr(
+        agent_schedules.run_curator_now, "apply_async", lambda **kw: queued.append(kw)
+    )
+    with pytest.raises(RuntimeError, match="run time limit"):
+        await agent_schedules._run_curator_now(UUID(agent["id"]), metered=False)
+
+    current = await agent_service.get_agent_by_id(UUID(agent["id"]))
+    assert current["curated_through"] is not None
+    assert current["last_run_outcome"] == "failed"
+    (dispatch,) = queued
+    assert dispatch["args"] == [str(agent["id"])]
+    assert dispatch["countdown"] == 15
+    assert dispatch["kwargs"] == {
+        "metered": False,
+        "platform_initiated": True,
+        # Two passes of the chain are already spent: the one that just ran, and the
+        # hand-off this dispatch is.
+        "catchup_remaining": agent_schedules.curator_catchup_pass_ceiling() - 2,
+        "catchup": True,
+    }
+
+
+@pytest.mark.asyncio
+async def test_a_ceiling_cut_that_completed_no_pass_starts_no_chain(
+    dataset, pool, monkeypatch, sprite_exec
+):
+    """The other half of the hand-off, and the reason it cannot become a retry loop:
+    a cut that checkpointed nothing has nothing to hand over, so the progress gate
+    refuses and the lane waits for its next scheduled run instead of burning a chain.
+    """
+    from backend.services import agent_service, billing_service
+    from backend.tasks import agent_schedules
+
+    await pool.execute(
+        "UPDATE files SET extracted_text=$2 WHERE id=$1", dataset.private_file, "X" * 10000
+    )
+    monkeypatch.setattr(curation, "input_budget", lambda ceiling: 2048)
+
+    async def entitled(_):
+        return True
+
+    monkeypatch.setattr(billing_service, "is_pro", entitled)
+    agent = await agent_service.get_or_create_curator(dataset.owner, wiki="external")
+    await pool.execute(
+        "UPDATE agents SET curated_through=NULL, turn_timeout_seconds=$2 WHERE id=$1",
+        UUID(agent["id"]),
+        1,
+    )
+    hold = asyncio.Event()
+
+    async def hold_the_first_slice(scope, instructions):
+        if f"file:{dataset.private_file}" in scope.documents:
+            await hold.wait()
+        return "Never reached: the ceiling cuts this pass off."
+
+    monkeypatch.setattr(curation, "run_scope", hold_the_first_slice)
+    queued = []
+    monkeypatch.setattr(
+        agent_schedules.run_curator_now, "apply_async", lambda **kw: queued.append(kw)
+    )
+    with pytest.raises(RuntimeError, match="run time limit"):
+        await agent_schedules._run_curator_now(UUID(agent["id"]), metered=False)
+
+    current = await agent_service.get_agent_by_id(UUID(agent["id"]))
+    assert current["curated_through"] is None
+    assert current["last_run_outcome"] == "failed"
+    assert queued == []
+
+
+@pytest.mark.asyncio
+async def test_an_exhausted_catchup_bound_names_the_backlog_it_left_behind(
+    dataset, pool, monkeypatch, caplog
+):
+    """The bound that stops a chain while input is still pending used to be silent."""
+    from backend.services import agent_service, billing_service, scoped_curation_service
+    from backend.tasks import agent_schedules
+
+    async def entitled(_):
+        return True
+
+    monkeypatch.setattr(billing_service, "is_pro", entitled)
+    agent = await agent_service.get_or_create_curator(dataset.owner, wiki="external")
+    await pool.execute(
+        "UPDATE agents SET curated_through=now() - interval '1 day' WHERE id=$1",
+        UUID(agent["id"]),
+    )
+    current = await agent_service.get_agent_by_id(UUID(agent["id"]))
+    # The pair this run started from, which is the half the progress gate compares.
+    started_from = {**current, "curated_through": None, "curation_cursor": {}}
+    workspace = await scoped_curation_service.workspace_for_agent(current)
+    queued = []
+    monkeypatch.setattr(
+        agent_schedules.run_curator_now, "apply_async", lambda **kw: queued.append(kw)
+    )
+
+    with caplog.at_level(logging.WARNING):
+        await agent_schedules._queue_curator_catchup(
+            started_from, datetime.now(UTC), 0, workspace=workspace, after_ceiling=True
+        )
+
+    assert queued == []
+    warned = [
+        record.getMessage()
+        for record in caplog.records
+        if record.name == "backend.tasks.agent_schedules" and record.levelno == logging.WARNING
+    ]
+    assert any(
+        str(agent["id"]) in message and "input still pending" in message for message in warned
+    )
 
 
 @pytest.mark.asyncio
