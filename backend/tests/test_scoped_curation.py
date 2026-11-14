@@ -96,6 +96,8 @@ async def dataset(client, pool, monkeypatch):
 
 
 async def scope(data, purpose, user="public"):
+    from backend.services import scoped_curation_inputs
+
     async with curation.get_pool().acquire() as conn:
         await approve_fixture_pages(conn, data.workspace)
     if purpose == "shared":
@@ -104,14 +106,21 @@ async def scope(data, purpose, user="public"):
     else:
         destination = data.users[user]["wiki_folder_id"]
         users = [data.users[user]["id"]]
+    batch = await scoped_curation_inputs.load_batch(
+        data.owner,
+        None,
+        datetime.now(UTC),
+        internal=purpose == "internal",
+        generation=data.workspace["curation_generation"],
+        max_chars=2048,
+    )
     return await curation.load_scope(
         data.workspace,
         purpose,
         destination,
         users,
         "agent-curate-security-test",
-        None,
-        datetime.now(UTC),
+        batch=batch,
     )
 
 
@@ -797,6 +806,10 @@ async def test_scoped_run_timeout_preserves_progress_and_releases_lock(
 
     monkeypatch.setattr(curation, "run_scope", stuck)
     monkeypatch.setattr(sprite_agent_service.settings, "AGENT_TURN_TIMEOUT_SECONDS", 0.05)
+    # The wall is 0.05 s, and the slice a ceiling buys is 333 characters per second of
+    # it, so this wall alone would buy no input row at all. Only the rate moves here:
+    # the wall, the outcome and every assertion below stay exactly as they were.
+    monkeypatch.setattr(curation, "_INPUT_CHARS_PER_CEILING_SECOND", 40_000)
     agent = await agent_service.get_or_create_curator(dataset.owner, wiki="external")
     before = await pool.fetchval(
         "SELECT curated_through FROM agents WHERE id=$1", UUID(agent["id"])
@@ -840,6 +853,10 @@ async def test_each_curator_ceiling_sets_its_own_wall_and_its_own_fence(
         await asyncio.Event().wait()
 
     monkeypatch.setattr(curation, "run_scope", stuck)
+    # One- and two-second walls buy 333 and 666 characters at the measured rate, less
+    # than one input row. Raise the rate so both lanes reach run_scope; which wall
+    # gives out first is still the assertion.
+    monkeypatch.setattr(curation, "_INPUT_CHARS_PER_CEILING_SECOND", 40_000)
     # 1 s and 2 s rather than a realistic 900 s and 1200 s: this test waits both
     # walls out, and which one gives out first is the assertion.
     pair = {}
@@ -884,6 +901,9 @@ async def test_a_run_that_takes_its_own_fence_uses_the_same_ceiling(
         await asyncio.Event().wait()
 
     monkeypatch.setattr(curation, "run_scope", stuck)
+    # A 1 s wall buys 333 characters at the measured rate, less than one row: raise the
+    # rate so the run reaches run_scope, where the wall is what this test waits for.
+    monkeypatch.setattr(curation, "_INPUT_CHARS_PER_CEILING_SECOND", 40_000)
     curator = await agent_service.get_or_create_curator(dataset.owner, wiki="external")
     await pool.execute(
         "UPDATE agents SET turn_timeout_seconds=$2 WHERE id=$1",
@@ -916,6 +936,9 @@ async def test_an_unset_ceiling_fences_the_run_with_the_setting_it_read(
 
     monkeypatch.setattr(curation, "run_scope", stuck)
     monkeypatch.setattr(sprite_agent_service.settings, "AGENT_TURN_TIMEOUT_SECONDS", 0.05)
+    # As in `test_scoped_run_timeout_preserves_progress_and_releases_lock`: the patched
+    # wall is far too short to buy an input row, so only the rate is raised here.
+    monkeypatch.setattr(curation, "_INPUT_CHARS_PER_CEILING_SECOND", 40_000)
     agent = await agent_service.get_or_create_curator(dataset.owner, wiki="external")
     with pytest.raises(RuntimeError, match="run time limit"):
         await _run_curator_now(UUID(agent["id"]), metered=False)
@@ -956,6 +979,9 @@ async def test_a_scoped_run_never_writes_a_stop_flag_only_a_chat_lane_reads(
         await asyncio.Event().wait()
 
     monkeypatch.setattr(curation, "run_scope", stuck)
+    # The second half sets a 1 s ceiling: raise the rate so its slice still holds a row
+    # and the wall is what ends the run.
+    monkeypatch.setattr(curation, "_INPUT_CHARS_PER_CEILING_SECOND", 40_000)
     await pool.execute(
         "UPDATE agents SET turn_timeout_seconds=$2 WHERE id=$1", UUID(str(agent["id"])), 1
     )
@@ -1546,8 +1572,6 @@ async def test_session_manifest_does_not_promote_event_offsets_to_document_bound
         dataset.users["private"]["wiki_folder_id"],
         [dataset.users["private"]["id"]],
         "agent-curate-session-chunks",
-        None,
-        until,
         batch=batch,
     )
     requests = []
@@ -1635,8 +1659,6 @@ async def test_large_files_and_sources_resume_without_skipping_or_unbounded_inpu
             dataset.users["private"]["wiki_folder_id"],
             [dataset.users["private"]["id"]],
             "agent-curate-file-source-chunks",
-            since,
-            datetime.now(UTC),
             batch=batch,
         )
         for doc in batch.documents:
@@ -1673,7 +1695,7 @@ async def test_cursor_is_committed_only_after_all_scopes_succeed(
     await pool.execute(
         "UPDATE files SET extracted_text=$2 WHERE id=$1", dataset.private_file, "X" * 10000
     )
-    monkeypatch.setattr(curation, "_MAX_INPUT_CHARS", 2048)
+    monkeypatch.setattr(curation, "input_budget", lambda ceiling: 2048)
     agent = await agent_service.get_or_create_curator(dataset.owner, wiki="external")
     await pool.execute("UPDATE agents SET curated_through=NULL WHERE id=$1", UUID(agent["id"]))
     seen = []
@@ -1748,6 +1770,7 @@ async def test_same_timestamp_group_larger_than_event_limit_drains(dataset, pool
             internal=False,
             generation=dataset.workspace["curation_generation"],
             cursor=cursor,
+            max_chars=2048,
         )
         seen.extend(d["key"] for d in batch.documents)
         since, cursor = batch.through, batch.cursor

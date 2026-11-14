@@ -37,9 +37,34 @@ logger = logging.getLogger(__name__)
 _READ_CHARS = 16_000
 _MAX_TURNS = 40
 _MAX_CONCURRENT_SCOPES = 4
-# One shared text budget covers serialized history, uploaded files and source
-# documents. Oversized inputs resume from durable offsets in later runs.
-_MAX_INPUT_CHARS = 200_000
+# Input characters that one second of a curator's own run ceiling buys. This is the
+# one number that sizes a pass, so its provenance is spelled out: it is the input
+# volume the founder production lane was handed per second of its ceiling, measured
+# on 2026-11-10 (curator 2c86d9f1 mark_run 11:45:46.060 -> wall raised 11:55:46.110,
+# 600.05 s consumed, AGENT_TURN_TIMEOUT_SECONDS 600) against the 200_000-character
+# slice that lane was given and an eligible backlog of 1,930,114 characters, i.e. a
+# lane that always fills whatever slice it is offered. It is NOT an independent
+# throughput probe: the live probe of STAS-438 Step 1 could not run here because no
+# model credential exists on that host, so the numerator inherits the incumbent
+# budget and only its denominator is measured. Treat it as the starting calibration,
+# not as a settled rate; what bounds the damage of a wrong value is the per-pass
+# checkpoint in `run`, not this number.
+_INPUT_CHARS_PER_CEILING_SECOND = 333
+
+
+def input_budget(ceiling_seconds: int | float) -> int:
+    """How many input characters one run of a curator may be handed, from its ceiling.
+
+    Two facts make this the shape it is. The value bounds ONE batch, and every
+    scoping of that run reads a filtered slice of that same batch, so N scopes never
+    multiply it. And the wall wraps the whole run, not a scope, so one pass has to
+    fit inside the ceiling the curator's own row names.
+    """
+    if ceiling_seconds <= 0:
+        raise ValueError(f"a curator run ceiling must be positive, got {ceiling_seconds}")
+    return int(ceiling_seconds * _INPUT_CHARS_PER_CEILING_SECOND)
+
+
 # Re-ingesting retrievals feeds historical cross-user copies back into the
 # shared corpus. Shared learning uses primary interactions and vendor results.
 _RETRIEVAL_TOOLS = ("search_stash", "stash_vfs", "recall", "load_skill")
@@ -535,11 +560,14 @@ async def load_scope(
     destination: UUID,
     user_ids: list[UUID],
     session_id: str,
-    since,
-    until,
     *,
-    batch: scoped_curation_inputs.Batch | None = None,
+    batch: scoped_curation_inputs.Batch,
 ) -> CurationScope:
+    """One scoping over the batch its run loaded.
+
+    `batch` is required because the run's input budget is a whole-run number: a
+    scoping that loaded its own batch would hand every sibling the full budget again.
+    """
     scope = CurationScope(
         workspace["id"],
         workspace["scope_user_id"],
@@ -582,15 +610,6 @@ async def load_scope(
             }
             if writable:
                 scope.writable[p["id"]] = dict(p)
-        if batch is None:
-            batch = await scoped_curation_inputs.load_batch(
-                scope.owner_id,
-                since,
-                until,
-                internal=purpose == "internal",
-                generation=workspace["curation_generation"],
-                max_chars=_MAX_INPUT_CHARS,
-            )
         for item in batch.documents:
             if item["end_user_id"] not in user_ids and not (
                 purpose == "internal" and item["end_user_id"] is None
@@ -763,7 +782,13 @@ async def run(
     run makes this one refuse loudly instead of stamping over the other.
     """
     require_configured()
+    from . import agent_service
+
     owner = workspace["scope_user_id"]
+    # One ceiling read and one budget per run. The wall wraps the whole run, and the
+    # batch loaded below is the one every scoping of this run reads a slice of, so the
+    # number is derived once and no scope multiplies it.
+    budget = input_budget(agent_service.turn_ceiling_seconds(agent))
     since = agent["curated_through"]
     until = datetime.now(UTC)
     batch = await scoped_curation_inputs.load_batch(
@@ -773,16 +798,14 @@ async def run(
         internal=agent["curator_wiki"] == "internal",
         generation=workspace["curation_generation"],
         cursor=agent.get("curation_cursor"),
-        max_chars=_MAX_INPUT_CHARS,
+        max_chars=budget,
     )
     session = f"agent-curate-{agent['id']}-{run_stamp}"
     scopes = []
     if agent["curator_wiki"] == "internal":
         memory = await files_tree_service.get_or_create_memory_folder(owner, owner)
         scopes.append(
-            await load_scope(
-                workspace, "internal", memory["id"], [], session, since, until, batch=batch
-            )
+            await load_scope(workspace, "internal", memory["id"], [], session, batch=batch)
         )
     else:
         users = await get_pool().fetch(
@@ -796,8 +819,6 @@ async def run(
                 user["wiki_folder_id"],
                 [user["id"]],
                 session,
-                since,
-                until,
                 batch=batch,
             )
             if any(key.startswith(("session:", "file:", "source:")) for key in private.documents):
@@ -809,8 +830,6 @@ async def run(
                 workspace["external_wiki_folder_id"],
                 [u["id"] for u in users if u["share_wiki"]],
                 session,
-                since,
-                until,
                 batch=batch,
             )
         )

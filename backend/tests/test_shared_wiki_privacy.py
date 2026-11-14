@@ -61,14 +61,23 @@ async def test_unreviewed_shared_is_hidden_but_private_still_readable(dataset, c
 
 @pytest.mark.asyncio
 async def test_unreviewed_shared_is_not_a_curator_reference(dataset):
+    from backend.services import scoped_curation_inputs
+
+    batch = await scoped_curation_inputs.load_batch(
+        dataset.owner,
+        None,
+        None,
+        internal=False,
+        generation=dataset.workspace["curation_generation"],
+        max_chars=2048,
+    )
     raw = await curation.load_scope(
         dataset.workspace,
         "shared",
         dataset.workspace["external_wiki_folder_id"],
         [dataset.users["public"]["id"]],
         "privacy-test",
-        None,
-        None,
+        batch=batch,
     )
     assert str(dataset.shared) not in raw.documents
 
@@ -304,14 +313,23 @@ async def test_shared_folder_names_and_attachments_are_not_published(
 
 @pytest.mark.asyncio
 async def test_quarantined_title_collision_is_recoverable_without_exposing_body(dataset):
+    from backend.services import scoped_curation_inputs
+
+    batch = await scoped_curation_inputs.load_batch(
+        dataset.owner,
+        None,
+        None,
+        internal=False,
+        generation=dataset.workspace["curation_generation"],
+        max_chars=2048,
+    )
     shared = await curation.load_scope(
         dataset.workspace,
         "shared",
         dataset.workspace["external_wiki_folder_id"],
         [dataset.users["public"]["id"]],
         "privacy-test",
-        None,
-        None,
+        batch=batch,
     )
     result = await shared.tool(
         "write_page", {"page_id": None, "title": "Index", "content": "New lesson"}

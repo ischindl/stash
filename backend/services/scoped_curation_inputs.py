@@ -31,7 +31,7 @@ async def load_batch(
     internal: bool,
     generation: int,
     cursor: dict | None = None,
-    max_chars: int = 200_000,
+    max_chars: int,
     max_items: int | None = None,
 ) -> Batch:
     baseline = since.isoformat() if since else None
