@@ -13,6 +13,9 @@ const state = vi.hoisted(() => ({
   user: {
     id: "user-1", name: "developer", display_name: "Developer", description: "",
     created_at: "2026-09-15", last_seen: "2026-09-15", developer_platform_only: true,
+    // show_tools_and_chat is our fork's own required User field, absent upstream,
+    // so upstream's blob of this file never mentions it.
+    show_tools_and_chat: false,
   },
 }));
 
