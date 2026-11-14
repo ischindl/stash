@@ -19,9 +19,6 @@ export default function LegalShell({ title, updated, children }: Props) {
             stash
           </Link>
           <nav className="flex items-center gap-6 text-[14px] text-dim">
-            <Link href="/docs" className="transition hover:text-ink">
-              Docs
-            </Link>
             <Link href="/" className="transition hover:text-ink">
               Home
             </Link>

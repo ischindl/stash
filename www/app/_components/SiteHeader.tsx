@@ -17,8 +17,7 @@ const NAV = [
   ["GitHub", GITHUB_URL],
 ];
 
-// One header everywhere. `wide` drops the max width for the docs shell, which
-// runs full-bleed with its own sidebar.
+// One header everywhere.
 export default function SiteHeader({
   current,
   wide = false,

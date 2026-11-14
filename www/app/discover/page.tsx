@@ -74,9 +74,6 @@ function Header() {
           <Link href="/discover" className="text-ink">
             Discover
           </Link>
-          <Link href="/docs" className="transition hover:text-ink">
-            Docs
-          </Link>
           <Link href="/contact-sales" className="transition hover:text-ink">
             Contact sales
           </Link>

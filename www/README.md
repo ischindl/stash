@@ -8,21 +8,8 @@ Standalone Next.js app for joinstash.ai. Lives alongside `frontend/`, `backend/`
 cd www
 npm install
 npm run dev    # http://localhost:3100
-npm test       # vitest: CLI-docs guards (test/) + contact-sales action tests
+npm test       # vitest: contact-sales action tests
 ```
-
-The guards in `test/` check `app/docs/cli/page.tsx` against `cli/main.py` — every
-documented command/flag exists, every exposed command is documented, and each entry's
-`args=` string is bracketed the way the command's `typer` signature really reads
-(required options unbracketed, defaulted ones bracketed, positional count matched, and
-the params table's `required: true` markers read that same signature — a row naming a
-short and long flag together, `-n, --limit`, counting as that long flag) —
-and CI's `www-test` job runs them on every push. The registry they check against is read
-out of every `add_typer` call in `cli/main.py`, and a group registered without a literal
-`name=` is a hard error naming that line — never a group silently dropped from the guard.
-Prose outside that pinned page is guarded too: a separate test sweeps every page under
-`app/docs/` and fails on any `stash …` invocation `cli/main.py` does not expose, so a demo
-mock cannot invent a command that the reference omits.
 
 ## Stack
 

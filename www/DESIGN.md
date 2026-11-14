@@ -34,7 +34,7 @@ on decoration.
 
 ## Rhythm
 - Section vertical padding: 64–112px (`py-16 md:py-28`).
-- Max content width: 1180px. Docs run full-bleed with a 272px sidebar and a 232px TOC rail.
+- Max content width: 1180px.
 - Headline ≤ 9 words. Sub-copy ≤ 2 short lines, in `--text-dim`, never a paragraph.
 
 ## Pages

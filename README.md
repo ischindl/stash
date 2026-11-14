@@ -32,7 +32,7 @@ flowchart LR
     E --> A
 ```
 
-[**Try Stash**](https://app.joinstash.ai) · [**Read the docs**](https://www.joinstash.ai/docs)
+[**Try Stash**](https://app.joinstash.ai)
 
 For CLI setup, local development, and self-hosting, see [Running this repository](docs/running-stash.md).
 

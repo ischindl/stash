@@ -24,5 +24,3 @@ hits = stash.search_events("Lisbon")
 Everything the API offers is a method on `Stash`: events and transcripts,
 pages and folders, files, tables, and Skills. Errors raise `StashError`
 with the API's status code and detail — nothing fails silently.
-
-The full API reference lives at [joinstash.ai/docs](https://joinstash.ai/docs).
