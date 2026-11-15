@@ -18,6 +18,19 @@ Backfill reads every existing row once: an endpoint row is named from the
 host in its own (encrypted) base_url, a key row from its provider. An empty
 database therefore never touches the encryption keyring at all.
 
+The statements are conditional in shape, not in meaning: the founder database
+carries this reshape from the fork's own chain, so convergence meets the columns,
+both indexes and the primary key already in place. Unguarded it died with `column
+"id" of relation "user_agent_credentials" already exists`. The key is guarded
+rather than written conditionally, because dropping it is refused outright on that
+lineage - measured: `cannot drop constraint user_agent_credentials_pkey ...
+because other objects depend on it`, the dependent object being
+`agents_credential_id_fkey` - and the key the fork left standing is already this
+revision's end state (`PRIMARY KEY (id)`, byte-identical in
+`pg_get_constraintdef` to a chain built from empty). The backfill selects only
+unnamed rows, so a lineage whose rows already carry names never hands a ciphertext
+to the encryption keyring.
+
 Revision ID: 0263
 Revises: 0262
 """
@@ -38,44 +51,77 @@ def upgrade() -> None:
     op.execute(
         """
         ALTER TABLE user_agent_credentials
-        ADD COLUMN id uuid NOT NULL DEFAULT gen_random_uuid(),
-        ADD COLUMN name text
+        ADD COLUMN IF NOT EXISTS id uuid NOT NULL DEFAULT gen_random_uuid(),
+        ADD COLUMN IF NOT EXISTS name text
         """
     )
-    op.execute("ALTER TABLE user_agent_credentials DROP CONSTRAINT user_agent_credentials_pkey")
-    op.execute("ALTER TABLE user_agent_credentials ADD PRIMARY KEY (id)")
+    if not _primary_key_is_id():
+        op.execute("ALTER TABLE user_agent_credentials DROP CONSTRAINT user_agent_credentials_pkey")
+        op.execute("ALTER TABLE user_agent_credentials ADD PRIMARY KEY (id)")
     # The one-row-per-provider rule keeps its exact meaning for the providers it
     # fits — the API keys, whose connect has always overwritten — and steps
     # aside for 'local', where each row is a separate box.
     op.execute(
         """
-        CREATE UNIQUE INDEX one_key_credential_per_user_provider
+        CREATE UNIQUE INDEX IF NOT EXISTS one_key_credential_per_user_provider
         ON user_agent_credentials (user_id, provider)
         WHERE provider <> 'local'
         """
     )
     # Every read of this table is per user (and for 'local' ordered by age).
     op.execute(
-        "CREATE INDEX user_agent_credentials_user ON user_agent_credentials (user_id, provider, created_at)"
+        "CREATE INDEX IF NOT EXISTS user_agent_credentials_user "
+        "ON user_agent_credentials (user_id, provider, created_at)"
     )
     _backfill_names()
     op.execute("ALTER TABLE user_agent_credentials ALTER COLUMN name SET NOT NULL")
     op.execute(
-        "ALTER TABLE agents ADD COLUMN credential_id UUID REFERENCES user_agent_credentials(id)"
+        "ALTER TABLE agents ADD COLUMN IF NOT EXISTS credential_id UUID "
+        "REFERENCES user_agent_credentials(id)"
+    )
+
+
+def _primary_key_is_id() -> bool:
+    """Whether this table's primary key already stands on `id` alone.
+
+    The founder-lineage databases hold the reshape this revision exists to
+    perform, so the shipped key here is already the end state and `agents`'s
+    `credential_id` foreign key depends on it: re-deriving the key from the
+    catalog is what tells the two lineages apart, where a stamp cannot.
+    """
+    return bool(
+        op.get_bind()
+        .execute(
+            sa.text(
+                "SELECT count(*) = 1 AND bool_and(k.column_name = 'id') "
+                "FROM information_schema.table_constraints tc "
+                "JOIN information_schema.key_column_usage k "
+                "ON k.constraint_name = tc.constraint_name "
+                "AND k.table_schema = tc.table_schema "
+                "WHERE tc.table_schema = current_schema() "
+                "AND tc.table_name = 'user_agent_credentials' "
+                "AND tc.constraint_type = 'PRIMARY KEY'"
+            )
+        )
+        .scalar()
     )
 
 
 def _backfill_names() -> None:
-    """Name every credential row that already exists.
+    """Name every credential row that does not have a name yet.
 
     A key row is named after its provider. An endpoint row is named after the
     host in its own base_url, which is the one part of the doc the founder
     recognises as "that box". The decrypt happens per row, never up front, so a
-    fresh or empty database runs this without an encryption keyring configured.
+    fresh or empty database runs this without an encryption keyring configured -
+    and a database whose rows were named by its own lineage has nothing to
+    decrypt, because unnamed rows are the only ones it selects.
     """
     bind = op.get_bind()
     rows = bind.execute(
-        sa.text("SELECT id, provider, kind, secret_enc FROM user_agent_credentials")
+        sa.text(
+            "SELECT id, provider, kind, secret_enc FROM user_agent_credentials WHERE name IS NULL"
+        )
     ).fetchall()
     if not rows:
         return

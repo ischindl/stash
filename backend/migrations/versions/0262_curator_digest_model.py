@@ -8,6 +8,12 @@ instead of rereading transcripts. When it is NULL the curator runs the single
 phase it always has. The split pays on a long window — the expensive model
 sees compressed extracts, not 500 raw events.
 
+The two adds are conditional. The founder database carries both columns from the
+fork's own chain, and this revision sits above that database's stamp, so
+convergence runs the statement where the columns already exist. Unguarded it died
+with `column "digest_provider" of relation "agents" already exists`. Postgres
+decides from its catalog; both columns are plain nullable TEXT either way.
+
 Revision ID: 0262
 Revises: 0261
 """
@@ -22,7 +28,9 @@ depends_on = None
 
 def upgrade() -> None:
     op.execute(
-        "ALTER TABLE agents ADD COLUMN digest_provider TEXT, ADD COLUMN digest_model_id TEXT"
+        "ALTER TABLE agents "
+        "ADD COLUMN IF NOT EXISTS digest_provider TEXT, "
+        "ADD COLUMN IF NOT EXISTS digest_model_id TEXT"
     )
 
 

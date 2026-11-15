@@ -25,6 +25,15 @@ marker into one owner's ordering at one instant, not a reference to live
 material: history is prunable, and the watermark must stay readable (and the
 pair comparable) after the row it names is gone.
 
+Both statements are conditional in shape, not in meaning. The founder database
+carries this column and this constraint from the fork's own chain, so convergence
+meets them already present — unguarded, the add died with `column
+"curated_through_event_id" of relation "agents" already exists`. The constraint is
+dropped before it is re-added, the form `*_privacy_tags` and
+`*_github_pull_requests` use, so Postgres re-validates every stored pair against
+the rule it is about to install and the surviving object is this file's own
+definition.
+
 Revision ID: 0266
 Revises: 0265
 """
@@ -38,7 +47,8 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.execute("ALTER TABLE agents ADD COLUMN curated_through_event_id uuid")
+    op.execute("ALTER TABLE agents ADD COLUMN IF NOT EXISTS curated_through_event_id uuid")
+    op.execute("ALTER TABLE agents DROP CONSTRAINT IF EXISTS agents_curated_through_pair_check")
     op.execute(
         "ALTER TABLE agents ADD CONSTRAINT agents_curated_through_pair_check "
         "CHECK (curated_through IS NOT NULL OR curated_through_event_id IS NULL)"

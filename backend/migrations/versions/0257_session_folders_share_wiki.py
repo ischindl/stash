@@ -10,11 +10,17 @@ personal.
 Default FALSE is deliberate — a new project contributes nothing to the shared
 wiki until the developer clears it on purpose.
 
+The add is conditional, and only that: the founder database carries this column
+from the fork's own chain while its stamp sits below this revision, so
+convergence runs the statement against a database that already has it. Unguarded
+it died with `column "share_wiki" of relation "session_folders" already exists`.
+Postgres reads its own catalog to decide, and the column it creates when it is
+missing has the same type, default and NOT NULL as before.
+
 Revision ID: 0257
 Revises: 0256
 """
 
-import sqlalchemy as sa
 from alembic import op
 
 revision = "0257"
@@ -24,9 +30,9 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.add_column(
-        "session_folders",
-        sa.Column("share_wiki", sa.Boolean, nullable=False, server_default=sa.false()),
+    op.execute(
+        "ALTER TABLE session_folders ADD COLUMN IF NOT EXISTS share_wiki BOOLEAN "
+        "NOT NULL DEFAULT false"
     )
 
 
