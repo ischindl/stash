@@ -1,72 +1,47 @@
-"""The public site may only advertise routes the product actually serves.
+"""The public site may only carry surfaces the product actually serves.
 
-STAS-442: joinstash.ai shipped a REST reference for /api/v1/rm after the
-reward-model routers were deleted, so every example on the page returned 404.
+STAS-442 deleted the reward-model product's public docs, and with them the subject of
+this file's first scan: www/app/docs no longer exists, so "every /api/v1/... path the
+site documents is a real FastAPI route" iterated zero files and stayed green while
+claiming nothing. STAS-446 removed that predicate along with its subject rather than
+keep a passing test that asserts nothing. The file keeps its name because the invariant
+below is still about which API surfaces the public site may carry.
 
-Three properties here are load-bearing, and each one fails out loud:
+Two properties are load-bearing here, and each one fails out loud:
 
-(a) `test_every_documented_api_path_is_a_real_route` is the intake's requirement:
-    every /api/v1/... path the marketing site documents must exist in FastAPI's
-    own route table. It goes inert the moment www/app/docs is gone, which is why
-    the card does not stop at it.
-(b) `test_retired_surfaces_stay_off_the_public_site` is the predicate that still
-    bites after that deletion, and the reason (a) needs no fallback branch.
-    RETIRED stays narrow on purpose: a future truthful CLI page under /docs must
-    not fail it.
-(c) `test_the_guard_reads_real_public_files` plus route_paths()'s own assertion
-    are the anti-vacuity floors: a wrong REPO_ROOT or a renamed tree fails loudly
-    instead of letting (a) pass over an empty file set.
+(a) `test_retired_surfaces_stay_off_the_public_site` is the predicate with a real
+    subject: the retired markers must stay off every `.ts`/`.tsx` file the site ships
+    and off `www/next.config.ts`. RETIRED stays narrow on purpose: a future truthful
+    page under /docs must not fail it.
+(b) `test_the_guard_reads_real_public_files` is the anti-vacuity floor, and it is the
+    reason `sources()` refuses to return an empty list: a renamed or hollowed-out tree
+    fails loudly instead of letting the scan pass over nothing.
 """
 
-import re
 from pathlib import Path
 
-from backend.main import app
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
-DOCS_ROOT = REPO_ROOT / "www" / "app" / "docs"
 WWW_APP = REPO_ROOT / "www" / "app"
 NEXT_CONFIG = REPO_ROOT / "www" / "next.config.ts"
 
-DOCUMENTED_PATH = re.compile(r"/api/v1/[A-Za-z0-9_{}/<>.-]*")
-PLACEHOLDER = re.compile(r"<[^>/]*>|\{[^}/]*\}")
-
 # The retired markers are held without their leading slash and joined at the use site.
 # A quoted marker starting slash-reward would be byte-identical to a FastAPI router
-# prefix literal, and this card's acceptance gate is that no such prefix literal
+# prefix literal, and STAS-442's acceptance gate is that no such prefix literal
 # survives anywhere under backend/. Same predicate, still one codepath.
 RETIRED = ("api/v1/rm/", "docs/gepa", "docs/training", "reward-models")
 
 
 def sources(root: Path) -> list[Path]:
     if not root.is_dir():
-        return []
-    return sorted(p for p in root.rglob("*") if p.suffix in {".ts", ".tsx"} and p.is_file())
+        raise AssertionError(f"scanned tree is missing, refusing to scan nothing: {root}")
+    found = sorted(p for p in root.rglob("*") if p.suffix in {".ts", ".tsx"} and p.is_file())
+    if not found:
+        raise AssertionError(f"scanned tree holds no .ts/.tsx file: {root}")
+    return found
 
 
 def relative(path: Path) -> str:
     return path.relative_to(REPO_ROOT).as_posix()
-
-
-def normalize(path: str) -> str:
-    return PLACEHOLDER.sub("{}", path).rstrip("/") or "/"
-
-
-def route_paths() -> set[str]:
-    paths = {route.path for route in app.routes if hasattr(route, "methods")}
-    assert "/api/v1/users/me" in paths, "the FastAPI route table did not load"
-    return {normalize(p) for p in paths}
-
-
-def test_every_documented_api_path_is_a_real_route():
-    live = route_paths()
-    offenders = []
-    for source in sources(DOCS_ROOT):
-        for line_no, line in enumerate(source.read_text().splitlines(), start=1):
-            for match in DOCUMENTED_PATH.findall(line):
-                if normalize(match) not in live:
-                    offenders.append(f"{relative(source)}:{line_no}: {match}")
-    assert not offenders, "documented paths with no FastAPI route:\n" + "\n".join(offenders)
 
 
 def test_retired_surfaces_stay_off_the_public_site():
@@ -81,3 +56,4 @@ def test_retired_surfaces_stay_off_the_public_site():
 
 def test_the_guard_reads_real_public_files():
     assert len(sources(WWW_APP)) > 10, f"expected the www app tree under {relative(WWW_APP)}"
+    assert NEXT_CONFIG.is_file(), f"expected the public site config at {relative(NEXT_CONFIG)}"

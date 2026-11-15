@@ -43,11 +43,13 @@ in `backend/celery_app.py` are untouched.
 
 **What users get:** a public site that claims only what the product does, and one
 deterministic guard so it cannot drift again.
-`backend/tests/test_documented_api_routes.py` reads the FastAPI route table from
-`backend.main.app` and every `.ts`/`.tsx` file under `www/app`, and fails naming
-`file:line` for any `/api/v1/...` path the server does not route, for any reappearance
-of `/api/v1/rm/`, `/docs/gepa`, `/docs/training` or `/reward-models` on the public site,
-and for a `www` tree it cannot actually read. No network, no LLM, no skip, no warning mode.
+`backend/tests/test_documented_api_routes.py` scans every `.ts`/`.tsx` file under
+`www/app` plus `www/next.config.ts` and fails naming `file:line` for any reappearance of
+`/api/v1/rm/`, `/docs/gepa`, `/docs/training` or `/reward-models` on the public site, and
+for a `www` tree it cannot actually read. No network, no LLM, no skip, no warning mode.
+STAS-446 later removed this file's second scan, which had compared every `/api/v1/...`
+path in `www/app/docs` against the FastAPI route table: the tree it scanned is the tree
+this card deleted, so the scan iterated zero files and passed while asserting nothing.
 
 **What is deliberately NOT removed:** the `rm_*` table family and
 `users.reward_models_enabled` stay in the schema exactly as they are. Their retention is
