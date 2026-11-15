@@ -243,6 +243,69 @@ at the offset the checkpoint names rather than at the start of the document) and
 `test_one_run_drains_a_document_larger_than_its_budget_in_committed_passes` (one run walks a document
 its budget cannot hold, committing several times at one instant with a different cursor each time).
 
+**A history drain has a position of its own, and that pair is the only position a draining run reads
+or writes.** `agents.curated_through` stays the monotone incremental watermark — the clamp is what
+makes an ingest rewind un-clobberable — while `agents.drain_through` beside `agents.drain_cursor` is
+the resumable read position of a `full_history` backfill, whose backlog sits *behind* that watermark
+by design. A run that checkpointed a drain into the watermark was therefore refused by the very clamp
+that makes the watermark safe and re-read its first slice on every dispatch until the worker killed
+the task (measured on the founder copy 2026-11-14: one dispatch worked 1437.8 s and died at Celery's
+`task_soft_time_limit = 1500` with nothing durable, because the lane had no wall of its own and the
+only position it could write was the monotone one). Three things keep the two positions honest. The
+drain is *seeded by its absence*: `drain_through IS NULL AND drain_cursor = '{}'` is a seed meaning
+"read the whole feed", and `curation_service.drain_of` is the single reader of that rule, so a
+second dispatch on a lane already draining resumes the pair it finds instead of re-zeroing it —
+`test_two_history_drain_dispatches_resume_one_position_rather_than_rereading_it` pins the disjoint
+read sets, and both dispatches leave `curated_through` byte-identical. `agent_service.advance_drain`
+advances the pair at every committed pass with the same fence as the watermark and deliberately *no*
+monotone clamp, because a drain's forward guarantee comes from its own read (`complete_through`
+promises a position strictly ahead of what it read) while a drain behind the watermark is exactly its
+job — `test_every_committed_pass_of_a_drain_moves_the_drain_position_and_no_more` counts one advance
+per meter line, and `test_mark_curated_cannot_walk_the_watermark_back` holds the other half: the
+drain moves, the watermark does not. And when the drain reaches the end of its feed, `finish_drain`
+retires the pair and hands the covered past to `advance_watermark` fenced on the incremental pair the
+dispatcher loaded *before* the drain existed — anchoring that write on the pair that just retired
+would fence one position by the value of another, and fencing it on the position the pass read (rather
+than where the same transaction had just put the pair) is the one shape that made a personal-lane
+drain unable to ever retire: the hand-off refused the run's own commit and raised a conflict blaming
+another run, forever at the end of every feed. Both lanes are pinned on that retirement:
+`test_a_personal_drain_that_reaches_the_end_retires_its_pair_and_hands_off` asserts the pair is gone
+and the watermark holds the ground, because a run that merely "succeeded" would also have been true
+with the pair still pending.
+
+**A run's wall is one number, and it both bounds the work a run starts and decides when the run
+stops.** `agent_service.run_wall_seconds` is where a row becomes a wall on *both* lanes: the worker's
+own `worker_turn_ceiling_seconds()` caps the curator's ceiling and a commit reserve is subtracted, so
+`task_soft_time_limit` is never the first thing that fires (`test_celery_visibility_timeout.py` asserts
+that inequality against the live celery config). The scoped loop reads that same number once and
+checks it *before* starting a pass, against the slowest pass already run, and returns a summary naming
+the undrained feed and the position the drain stands at rather than starting work it cannot finish —
+that pre-pass check is the normal exit of a long drain and the `asyncio.wait_for` wall is the rescue
+for a scope that hangs, which is why both exist and neither may be deleted
+(`test_a_run_stops_before_a_pass_it_cannot_finish_inside_its_wall` asserts the passes read equal the
+passes committed, next to `test_a_ceiling_cut_keeps_its_completed_passes_and_the_next_run_resumes_them`
+pinning what survives a rescue). On the personal lane the same wall sizes the batch: `_budget_kept`
+is the one place a character budget is cut, called both by `changes_since` (so the feed stops where
+the pass will) and by `complete_through` (so the run cannot commit characters it was never shown) —
+`test_the_feed_a_draining_pass_is_handed_ends_where_its_commit_will_stand` is about that boundary, not
+about the arithmetic, and `test_only_a_reader_at_the_drains_own_position_is_sized_by_that_drain` keeps
+the budget off every reader that is not a drain pass, including the owner browsing their own feed.
+
+**Whether a chain may continue is the cost of the next pass, never the plan of its owner.**
+`agent_schedules._chain_permitted` resolves `metered` from `require_run_auth` (the one source of truth
+for whether a run spends platform tokens), allows when the pass costs nothing the monthly allowance
+rations *or* the owner has an unlimited plan, and writes one INFO line carrying both answers and the
+decision, because a reader of the log must be able to tell a declined chain from a stalled one. The
+lane tests that used to sit in the catch-up path are gone deliberately: a `plan='free'` account whose
+curator dials its own endpoint was denied the only drain its own box could have paid for, and a
+metered free lane stays closed because the predicate says so, not because of which lane it is —
+`test_queued_catchup_rechecks_execution_gates` therefore varies the *cost* answer (its
+`metered_lane` and `local_endpoint` modes are one row on one free account) and
+`test_the_chain_permission_line_names_both_answers_and_the_decision` pins the accounting line in both
+directions. Honest gap, reported rather than patched: a scoped workspace answers `metered=True` by
+construction because the backend's key pays, so an operator running a scoped workspace on their own
+hardware cannot demonstrate the free-lane half of this rule from that workspace's row.
+
 **The ceiling is also the number the input slice is sized from, and the rate that converts one to the
 other is measured, not guessed.** `input_budget` multiplies the ceiling by
 `_INPUT_CHARS_PER_CEILING_SECOND`, and `run` reads the ceiling once, so the slice one pass is handed
@@ -263,21 +326,35 @@ A chain that reaches its pass bound with input pending now logs that instead of 
 nothing to hand over, so it cannot become a chain of retries) and
 `test_an_exhausted_catchup_bound_names_the_backlog_it_left_behind`.
 
-**The run ceiling is one curator's own number on the lane that resolves one, and it is
-the same number on both sides of that wall.** `agent_service.turn_ceiling_seconds` is the only code
-in the tree that names a scoped run's ceiling: the curator's `agents.turn_timeout_seconds`, or
-`AGENT_TURN_TIMEOUT_SECONDS` while that column is null. `sprite_agent_service` resolves it once per run and hands that one value to
-`asyncio.wait_for` and to the TTL of the `scoped-curator-{id}` lock fencing the lane, so the two
-cannot drift: a lock keyed shorter than the wall expires mid-run and hands the next dispatch a
-half-finished run, which is the single-flight guarantee migration 0258 exists to hold. The write
+**The run ceiling is one curator's own number on the lane that resolves one, and the
+wall is that number capped by the worker and shortened by a commit reserve.**
+`agent_service.turn_ceiling_seconds` is the only code in the tree that names a run's
+ceiling: the curator's `agents.turn_timeout_seconds`, or `AGENT_TURN_TIMEOUT_SECONDS`
+while that column is null. `agent_service.run_wall_seconds` turns that ceiling into the
+wall a run may work to: `min(turn_ceiling_seconds, worker_turn_ceiling_seconds()) -
+RUN_COMMIT_RESERVE_SECONDS`. The cap is what makes the wall reachable at all — a wall
+at or above the worker's own ceiling is a wall the worker beats, and
+`SoftTimeLimitExceeded` lands outside the coroutine, where no `except` can resolve the
+lane, refund its credit, or continue its chain (the founder lane measured exactly that
+on 2026-11-14). The reserve is the time the commit still needs after the last batch
+returns: the checkpoint, the `push_event` publish, and `mark_run_succeeded`. The
+`scoped-curator-{id}` lock keeps the UNcapped ceiling as its TTL: a fence expiring
+while its own run is still writing the wiki would hand the next dispatch a
+half-finished run, which is the single-flight guarantee migration 0258 exists to hold,
+so fence TTL and wall are two numbers by design and a later reader must not fuse them.
+`sprite_agent_service` resolves both once per run. The write
 path closes the other gap — `worker_turn_ceiling_seconds()` reads the celery conf, and a ceiling at
 or above it is refused at PATCH, because a run the worker kills never reaches the chore that marks
-it failed and refunds its curator credit. Only the scoped lane reads any of that: the lane answer
+it failed and refunds its curator credit. Both curator lanes are now walled: the scoped lane through
+`scoped_curation_service.run`, and — since STAS-447 — the personal lane too, whose curator turn is
+wrapped in the same wall and raises the same `RunCeilingExceeded`. A sprite's interactive turn keeps
+no wall of its own: it has a different owner and a different budget than a curator's bounded batch.
+The lane answer
 is `scoped_curation_service.workspace_for_agent`, the same call the dispatcher makes, and it
 returns `None` twice — for a folder curator, and for every curator of an account with no External
-wiki. Those runs fall through to `run_chat`, where no `wait_for` carries a per-curator number and
-the only wall is Celery's own task limit, so a curator payload for such a lane carries
-`effective_turn_timeout_seconds: null` and a PATCH naming `turn_timeout_seconds` on it is refused
+wiki; those runs take the personal wall. What still does not carry a per-curator number is the
+curator *payload*: a lane whose ceiling the API refuses to store keeps
+`effective_turn_timeout_seconds: null`, and a PATCH naming `turn_timeout_seconds` on it is refused
 rather than stored. Pinned by `test_scoped_curation.py`'s
 `test_scoped_run_timeout_preserves_progress_and_releases_lock` (the wall, the progress that
 outlives it, the lock released), `test_each_curator_ceiling_sets_its_own_wall_and_its_own_fence`

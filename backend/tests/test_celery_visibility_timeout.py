@@ -42,3 +42,38 @@ def test_the_redis_requeue_window_outlives_the_longest_legal_task():
         f"{longest_task} may run {longest_run}s while the broker re-queues at "
         f"{window}s: the copy lands on a second worker mid-run"
     )
+
+
+def _agent(turn_timeout_seconds):
+    """A row whose only relevant field is its ceiling; `run_wall_seconds` reads nothing else."""
+    return {"id": "pin-test", "turn_timeout_seconds": turn_timeout_seconds}
+
+
+def test_no_curator_ceiling_leaves_the_worker_the_first_thing_to_fire():
+    """Every ceiling, set or unset, small or absurd, must give the run a wall the
+    worker cannot beat. The founder lane measured the alternative on 2026-11-14: a
+    personal-lane run had no wall of its own, `task_soft_time_limit` fired at 1500 s,
+    and the raise landed outside the coroutine, where nothing resolves the lane,
+    refunds the credit, or continues the chain. A ceiling with no room left for the
+    commit is refused loudly rather than rounded up to the worker's own number."""
+    from backend.services import agent_service
+
+    for turn_timeout_seconds in (None, 1, 1499, 10_000):
+        agent = _agent(turn_timeout_seconds)
+        own = agent_service.turn_ceiling_seconds(agent)
+        try:
+            wall = agent_service.run_wall_seconds(agent)
+        except ValueError:
+            # Refused, and only because the ceiling cannot fit a commit at all.
+            assert own <= agent_service.RUN_COMMIT_RESERVE_SECONDS, (
+                f"a ceiling of {own}s leaves room for a commit but was refused"
+            )
+            continue
+        assert wall < celery.conf.task_soft_time_limit, (
+            f"a ceiling of {own}s walls the run at {wall}s, at or above the worker's "
+            f"soft limit of {celery.conf.task_soft_time_limit}s: the worker fires first"
+        )
+        assert wall <= own, (
+            f"the wall {wall}s exceeds the ceiling {own}s it was derived from: "
+            "a run would be allowed outliving its own ceiling"
+        )

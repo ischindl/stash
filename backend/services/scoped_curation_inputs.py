@@ -164,16 +164,25 @@ async def load_batch(
 
 
 async def has_pending(agent: dict, workspace: dict, *, until: datetime | None = None) -> bool:
-    """Only eligible source input, never the curator's own wiki writes."""
+    """Only eligible source input, never the curator's own wiki writes.
+
+    Asked of the pair the curator would actually read next, which is its drain pair while a
+    history drain is in flight. A gate that consulted the incremental watermark instead
+    would call a lane mid-drain caught up — or, from the other side, would see the gap
+    between an old watermark and `now` as fresh input and keep a caught-up lane awake.
+    """
     from datetime import UTC
 
+    from . import curation_service
+
+    since, cursor = curation_service.read_position_of(agent)
     batch = await load_batch(
         UUID(str(agent["user_id"])),
-        agent["curated_through"],
+        since,
         until or datetime.now(UTC),
         internal=agent["curator_wiki"] == "internal",
         generation=workspace["curation_generation"],
-        cursor=agent.get("curation_cursor"),
+        cursor=cursor,
         max_chars=1024,
         max_items=1,
     )

@@ -25,11 +25,22 @@ _COLUMNS = (
     "id, user_id, name, model_provider, system_prompt, run_mode, "
     "schedule_cron, schedule_prompt, is_default, is_curator, slack_bound, "
     "telegram_bound, last_run_at, last_run_error, last_run_outcome, curated_through, "
-    "curated_through_event_id, "
+    "curated_through_event_id, drain_through, drain_cursor, "
     "curator_wiki, curator_folder_id, model_id, credential_id, digest_provider, digest_model_id, "
     "turn_timeout_seconds, "
     "month_run_count, month_run_anchor, curation_cursor, created_at"
 )
+
+# Two positions live on an agent row, and conflating them is the defect STAS-447
+# removes. `curated_through` (+ its event half) is the INCREMENTAL watermark: what
+# the nightly delta has consumed, and its advance is monotone, because that is what
+# makes a deliberate ingest rewind (`memory_service._rewind_curated_through`) safe
+# from being clobbered by a run that read before it. `drain_through` + `drain_cursor`
+# is the BACKFILL's read position: where a history drain resumes, moved at every
+# committed pass and read by the next dispatch. It is the only position a draining
+# run reads or writes, and `drain_through IS NULL` means no drain is in flight.
+# A drain may move backwards and forwards as its passes land, so it carries no
+# monotone clamp; the watermark keeps its, and a backfill never touches it.
 
 
 # The curator runs nightly, inside a quiet window (08:00–11:59 UTC = midnight–4am
@@ -83,6 +94,44 @@ def turn_ceiling_seconds(agent: dict) -> int:
     if ceiling is None:
         return settings.AGENT_TURN_TIMEOUT_SECONDS
     return ceiling
+
+
+# What has to still happen after the last batch of work returns: the checkpoint
+# commit, the `push_event` publish that keeps the log entry and the checkpoint one
+# event, and `mark_run_succeeded`. A wall at or above the worker's soft limit is a
+# wall the worker beats, and `SoftTimeLimitExceeded` then lands OUTSIDE the
+# coroutine, where no `except` can resolve the lane, refund a spent credit, or
+# continue the chain — the founder lane measured exactly that on 2026-11-14
+# (`agent run aborted before it resolved: SoftTimeLimitExceeded`).
+RUN_COMMIT_RESERVE_SECONDS = 30
+
+
+def run_wall_seconds(agent: dict) -> int:
+    """Seconds a curator run may work before it must stop and commit what it holds.
+
+    The run's own ceiling is not enough on its own: a ceiling at or above what the
+    worker enforces is never reached, because the worker kills the task from outside
+    the coroutine and the chore that marks the run failed, refunds its credit, and
+    hands the unread backlog to the next pass never runs. So the wall is the earlier
+    of the two ceilings, minus the reserve that the commit itself needs.
+
+    The 2026-11-14 founder measurement sizes that reserve so far: a scoped pass
+    checkpointed and published inside the 600 s ceiling it was given, and the worker
+    won the 1500 s personal run instead — so 30 s is the starting figure, to be
+    corrected from the per-pass `wall=` figure the drain run prints."""
+    from ..celery_app import worker_turn_ceiling_seconds
+
+    worker = worker_turn_ceiling_seconds()
+    own = turn_ceiling_seconds(agent)
+    wall = min(own, worker) - RUN_COMMIT_RESERVE_SECONDS
+    if wall <= 0:
+        raise ValueError(
+            f"no run wall left for agent {agent['id']}: the earlier of its own ceiling "
+            f"({own}s) and the worker's ({worker}s) does not exceed the "
+            f"{RUN_COMMIT_RESERVE_SECONDS}s a commit needs. Either raise "
+            "AGENT_TURN_TIMEOUT_SECONDS or lower the worker's task ceilings."
+        )
+    return wall
 
 
 async def _curator_row(row) -> dict:
@@ -964,7 +1013,9 @@ class CuratorWatermarkConflict(Exception):
         )
 
 
-async def advance_watermark(conn, agent_id: UUID, read: Position, through: Position) -> Position:
+async def advance_watermark(
+    conn, agent_id: UUID, read: Position, through: Position, cursor: dict | None = None
+) -> Position:
     """The one fenced forward write on the curator watermark — every writer that
     moves it ahead runs THIS statement, on the connection that commits it.
 
@@ -994,18 +1045,26 @@ async def advance_watermark(conn, agent_id: UUID, read: Position, through: Posit
     database cannot disagree about which of two positions is further along.
     `greatest` on the instant alone could not express the case this exists for — a
     mid-tie proposal inside an instant the column already consumed whole must clamp,
-    while the same proposal next to a mid-tie stored position must advance."""
+    while the same proposal next to a mid-tie stored position must advance.
+
+    `cursor` travels with the write when a caller has one: the scoped lane checkpoints a
+    run mid-document, so its watermark and the cursor that resumes the same instant are
+    one fact and are written by one statement. Passing nothing leaves the cursor alone,
+    which is what every other writer of the watermark wants.
+    """
     args: list = [agent_id, read.at, read.event_id]
     clamp = position_ahead(args, through, "curated_through", "curated_through_event_id")
+    cursor_write = "" if cursor is None else ", curation_cursor = $6::jsonb"
     row = await conn.fetchrow(
         "UPDATE agents SET "
         "curated_through = CASE WHEN " + clamp + " THEN curated_through ELSE $4::timestamptz END, "
         "curated_through_event_id = CASE WHEN " + clamp + " THEN curated_through_event_id "
-        "ELSE $5::uuid END "
+        "ELSE $5::uuid END" + cursor_write + " "
         "WHERE id = $1 AND (curated_through, curated_through_event_id) "
         "IS NOT DISTINCT FROM ($2::timestamptz, $3::uuid) "
         "RETURNING curated_through, curated_through_event_id",
         *args,
+        *([cursor] if cursor is not None else []),
     )
     if row is None:
         # No row matched: the position moved under the run (or the agent row is
@@ -1039,6 +1098,109 @@ async def mark_curated(agent_id: UUID, read: Position, through: Position) -> Pos
     overlapping runs until STAS-250)."""
     async with get_pool().acquire() as conn, conn.transaction():
         return await advance_watermark(conn, agent_id, read, through)
+
+
+class CuratorDrainConflict(Exception):
+    """The drain position moved between the pair a pass read and the pair it earned.
+
+    The sibling of `CuratorWatermarkConflict` for the other position a curator owns: a
+    history drain's resumable pair. Refusing the write is the whole point — the run that
+    loses the race would otherwise curate a slice a run that already committed it has
+    read, and the drain would report progress it did not make."""
+
+    def __init__(self, agent_id: UUID, read_at: datetime | None, stored_at: datetime | None):
+        self.agent_id = agent_id
+        self.read_at = read_at
+        self.stored_at = stored_at
+        super().__init__(
+            f"curator drain conflict for agent {agent_id}: the pass read drain position "
+            f"{read_at} but the stored drain position is now {stored_at}; the drain moved "
+            "under the pass, so its advance was refused"
+        )
+
+
+async def advance_drain(
+    conn,
+    agent_id: UUID,
+    read_at: datetime | None,
+    read_cursor: dict,
+    through: datetime,
+    cursor: dict,
+) -> None:
+    """Move a history drain to where one committed pass read it — never the watermark.
+
+    Run it on your own transaction's `conn`, exactly like `advance_watermark`, so the
+    fence holds the agent row until the curation it is stamping commits. Two positions
+    exist on this row and they never share a write: `curated_through` is the day-to-day
+    delta watermark and is monotone by contract, while `drain_through` + `drain_cursor`
+    is the backfill's resumable position and STARTS behind that watermark, which is why it
+    cannot travel on `advance_watermark` — the clamp that makes the watermark safe refuses
+    every one of a drain's first passes (the measured symptom: `watermark not moved: run
+    proposed … stored position kept at …`).
+
+    There is no monotone clamp here on purpose — a drain moving backwards relative to the
+    watermark is its whole job — so the safety is the fence: the pair the pass read, both
+    halves, since a pass can stop inside one instant and an instant alone would let two
+    overlapping passes each claim it. A pair that did not move is not a pass and is not
+    written here; the caller's no-move rule covers that. A proposal strictly behind where
+    the pair stands is not a pass either, it is a bug, and it raises.
+    """
+    if read_at is not None and through < read_at:
+        raise ValueError(
+            f"curator {agent_id} drain would move from {read_at} back to {through}: a drain "
+            "commits where its pass stopped reading, never behind it"
+        )
+    moved = await conn.execute(
+        "UPDATE agents SET drain_through = $2::timestamptz, drain_cursor = $3::jsonb"
+        " WHERE id = $1 AND drain_through IS NOT DISTINCT FROM $4::timestamptz"
+        " AND drain_cursor = $5::jsonb",
+        agent_id,
+        through,
+        cursor or {},
+        read_at,
+        read_cursor or {},
+    )
+    if moved != "UPDATE 1":
+        current = await conn.fetchrow(
+            "SELECT drain_through, drain_cursor FROM agents WHERE id = $1", agent_id
+        )
+        raise CuratorDrainConflict(agent_id, read_at, current["drain_through"] if current else None)
+
+
+async def finish_drain(
+    conn,
+    agent_id: UUID,
+    read_at: datetime | None,
+    read_cursor: dict,
+    watermark_read: Position,
+    through: Position,
+) -> Position:
+    """Retire a finished drain and hand what it covered to the watermark, in one transaction.
+
+    Two fenced statements under one row lock. The pair is cleared where the drain stands —
+    a position nothing will read again must not survive, or the next dispatch curates the
+    already-curated past. Then the watermark moves forward through `advance_watermark`,
+    which is monotone-safe at this instant by construction: everything the drain read sits
+    behind what the drain reached.
+
+    The watermark write fences on `watermark_read` — the stored incremental pair its
+    dispatcher loaded BEFORE the drain was seeded, not the drain pair the pass just read.
+    Those two pairs are separated by the whole drain, and only one of them names the
+    watermark's event half, so anchoring here on the pair that just retired would fence a
+    write to one position on the value of another.
+    """
+    cleared = await conn.execute(
+        "UPDATE agents SET drain_through = NULL, drain_cursor = '{}'::jsonb"
+        " WHERE id = $1 AND drain_through IS NOT DISTINCT FROM $2::timestamptz"
+        " AND drain_cursor = $3::jsonb",
+        agent_id,
+        read_at,
+        read_cursor,
+    )
+    if cleared != "UPDATE 1":
+        current = await conn.fetchrow("SELECT drain_through FROM agents WHERE id = $1", agent_id)
+        raise CuratorDrainConflict(agent_id, read_at, current["drain_through"] if current else None)
+    return await advance_watermark(conn, agent_id, watermark_read, through)
 
 
 async def set_system_prompt(agent_id: UUID, text: str | None) -> dict:

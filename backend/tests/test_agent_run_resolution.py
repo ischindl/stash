@@ -228,7 +228,7 @@ def test_soft_time_limit_escape_resolves_the_lane_and_names_its_cause(
 ):
     lane = worker_loop.run_until_complete(_lane())
 
-    async def stalled_turn(*args):
+    async def stalled_turn(*args, **kwargs):
         _arm_soft_time_limit()
         await _stall()
 
@@ -256,7 +256,7 @@ def test_soft_time_limit_escape_of_an_unmetered_run_refunds_nothing(
     hand one back — `greatest(count - 1, 0)` would silently buy a free run."""
     lane = worker_loop.run_until_complete(_lane())
 
-    async def stalled_turn(*args):
+    async def stalled_turn(*args, **kwargs):
         _arm_soft_time_limit()
         await _stall()
 
@@ -307,7 +307,7 @@ def test_escape_after_the_lane_recorded_success_leaves_the_record_alone(
         _arm_soft_time_limit()
         await _stall()
 
-    async def succeeding_turn(*args):
+    async def succeeding_turn(*args, **kwargs):
         return None
 
     monkeypatch.setattr(sprite_agent_service, "run_scheduled", succeeding_turn)
@@ -334,7 +334,7 @@ def test_catchable_turn_failure_keeps_its_own_cause(monkeypatch, lane_locks, wor
     lane = worker_loop.run_until_complete(_lane())
     alerts = _capture_alerts(monkeypatch)
 
-    async def failing_turn(*args):
+    async def failing_turn(*args, **kwargs):
         raise RuntimeError("provider exploded")
 
     monkeypatch.setattr(sprite_agent_service, "run_scheduled", failing_turn)
@@ -362,7 +362,7 @@ def test_nightly_body_escape_resolves_the_lane_too(monkeypatch, lane_locks, work
     # from the beat's side or this test runs a lane that never started.
     worker_loop.run_until_complete(agent_service.mark_run(lane["id"]))
 
-    async def stalled_turn(*args):
+    async def stalled_turn(*args, **kwargs):
         _arm_soft_time_limit()
         await _stall()
 
@@ -388,7 +388,7 @@ def test_worker_shutdown_cancellation_resolves_the_lane(monkeypatch, lane_locks,
     sits at `BaseException` level for exactly this escape."""
     lane = worker_loop.run_until_complete(_lane())
 
-    async def cancelled_turn(*args):
+    async def cancelled_turn(*args, **kwargs):
         raise asyncio.CancelledError()
 
     monkeypatch.setattr(sprite_agent_service, "run_scheduled", cancelled_turn)
@@ -413,7 +413,7 @@ def test_guard_releases_the_lock_when_the_coroutine_release_blows_up(
     """
     lane = worker_loop.run_until_complete(_lane())
 
-    async def finished_turn(*args):
+    async def finished_turn(*args, **kwargs):
         return None
 
     async def exploding_release(self) -> None:
@@ -447,7 +447,7 @@ def test_nightly_body_releases_the_lock_without_stamping_the_resolved_lane(
     lane = worker_loop.run_until_complete(_lane())
     worker_loop.run_until_complete(agent_service.mark_run(lane["id"]))
 
-    async def finished_turn(*args):
+    async def finished_turn(*args, **kwargs):
         return None
 
     async def exploding_release(self) -> None:
@@ -476,7 +476,7 @@ def test_a_failing_resolution_still_propagates_the_original_escape(
     one state the reaper is built to read — rather than being logged away."""
     lane = worker_loop.run_until_complete(_lane())
 
-    async def stalled_turn(*args):
+    async def stalled_turn(*args, **kwargs):
         _arm_soft_time_limit()
         await _stall()
 

@@ -343,12 +343,16 @@ class TurnInProgress(RuntimeError):
 
 
 class RunCeilingExceeded(RuntimeError):
-    """A scoped run outlived the ceiling its own row names.
+    """A curator run outlived the wall its own ceiling allows (`run_wall_seconds`).
 
     The dispatch that owns the run distinguishes this from any other failure: the
     ceiling cut a run that was making progress, and everything it had completed is
     already durable. What is left is a backlog that needs another pass, not a broken
     run that needs a retry.
+
+    Both curator lanes raise it — the scoped lane and, since STAS-447, the personal
+    lane too. It is the alternative to the worker's `SoftTimeLimitExceeded`, which
+    arrives from outside the coroutine and resolves none of this.
     """
 
 
@@ -548,7 +552,12 @@ def _feed_window(agent: dict) -> tuple[str | None, str | None]:
     window `created_at > T`, which shows none of the tie tail it never read and
     lets the run report a drained wiki while the backlog still counts it. Both
     halves therefore leave here together, read through the one accessor that
-    understands the pair."""
+    understands the pair.
+
+    A run reading a history drain arrives here with that pair already in the position
+    fields: the dispatcher hands a draining run its drain position in place of the
+    watermark, and the drain pair has no event half, so the window is the instant alone.
+    """
     from . import curation_service
 
     position = curation_service.position_of(agent)
@@ -694,6 +703,7 @@ async def run_scheduled(
     *,
     workspace=_WORKSPACE_UNSET,
     scoped_lock_held: bool = False,
+    draining: bool = False,
 ) -> str:
     """Run a scheduled agent headless — one turn into a fresh per-run session —
     and return the result text.
@@ -720,7 +730,7 @@ async def run_scheduled(
     owner_user_id = UUID(str(agent["user_id"]))
     try:
         return await _run_scheduled_turn(
-            agent, run_stamp, read_position, workspace, scoped_lock_held
+            agent, run_stamp, read_position, workspace, scoped_lock_held, draining
         )
     finally:
         await _close_run_sessions(
@@ -734,8 +744,13 @@ async def _run_scheduled_turn(
     read_position: Position,
     workspace=_WORKSPACE_UNSET,
     scoped_lock_held: bool = False,
+    draining: bool = False,
 ) -> str:
-    """The dispatch itself; `run_scheduled` is what closes what this leaves behind."""
+    """The dispatch itself; `run_scheduled` is what closes what this leaves behind.
+
+    `draining` says the run reads a history drain's position rather than the incremental
+    feed, which is the dispatcher's fact to know and this lane's fact to pass: a drain
+    whose pair is freshly seeded holds no position yet, so nothing in the row says it."""
     from . import scoped_curation_service, user_service
 
     user_id = UUID(str(agent["user_id"]))
@@ -745,9 +760,12 @@ async def _run_scheduled_turn(
     if workspace is not None:
         # Scoped runs use fresh in-process model state. Their per-agent lock
         # already serializes every run; a second session lock is unnecessary.
-        # Resolved once because the wall and the lock fence the SAME run: a lock
-        # keyed on a shorter number than the wall expires while the run is still
-        # going and hands the next dispatch a half-finished run.
+        # Resolved twice on purpose, from two resolvers that differ by the commit
+        # reserve: the wall is `run_wall_seconds`, the number a run may work to,
+        # while the fence keeps the full ceiling. A lock keyed on the shorter
+        # number would expire while its own run is still writing the wiki and hand
+        # the next dispatch a half-finished run — which is the single-flight
+        # guarantee migration 0258 exists to hold.
         ceiling = agent_service.turn_ceiling_seconds(agent)
         async with (
             contextlib.nullcontext()
@@ -756,8 +774,10 @@ async def _run_scheduled_turn(
         ):
             try:
                 return await asyncio.wait_for(
-                    scoped_curation_service.run(agent, workspace, run_stamp, read_position),
-                    timeout=ceiling,
+                    scoped_curation_service.run(
+                        agent, workspace, run_stamp, read_position, draining=draining
+                    ),
+                    timeout=agent_service.run_wall_seconds(agent),
                 )
             except TimeoutError as exc:
                 raise RunCeilingExceeded("Scoped curation exceeded its run time limit") from exc
@@ -790,6 +810,34 @@ async def _run_scheduled_turn(
             raise RuntimeError("digest phase returned no extracts")
 
     session_id, message = await build_scheduled_turn(agent, run_stamp, extracts)
+    if not agent["is_curator"]:
+        # A sprite's interactive turn has a different owner and a different budget
+        # than a curator's bounded batch, so it keeps today's behaviour: no wall of
+        # its own here.
+        return await _scheduled_chat_turn(agent, user, owner_name, session_id, message)
+    # A curator's personal-lane turn had no wall at all: nothing between it and
+    # Celery's `task_soft_time_limit`, and the founder lane measured the result on
+    # 2026-11-14 — the worker's raise lands outside this coroutine, so the lane was
+    # resolved by the run-escape guard as `aborted before it resolved`, its credit
+    # stayed spent, and no catch-up pass was queued. Raising RunCeilingExceeded
+    # instead hands the dispatch a cause it already understands: a cut run whose
+    # completed work is durable and whose backlog needs the next pass.
+    wall = agent_service.run_wall_seconds(agent)
+    try:
+        return await asyncio.wait_for(
+            _scheduled_chat_turn(agent, user, owner_name, session_id, message), timeout=wall
+        )
+    except TimeoutError as exc:
+        raise RunCeilingExceeded(
+            f"Curator curation exceeded its run time limit of {wall}s"
+        ) from exc
+
+
+async def _scheduled_chat_turn(
+    agent: dict, user: dict, owner_name: str, session_id: str, message: str
+) -> str:
+    """The personal-lane turn itself, factored out so the wall above can wrap it."""
+    user_id = UUID(str(agent["user_id"]))
     return await run_chat(
         user_id,
         owner_name,

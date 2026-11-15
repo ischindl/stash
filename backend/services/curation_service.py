@@ -162,6 +162,110 @@ def position_of(agent: dict) -> Position:
     return Position(instant, UUID(str(event_id)) if event_id is not None else None)
 
 
+def drain_of(agent: dict) -> tuple[datetime, dict] | None:
+    """The drain position this row is resuming from, or None when no drain is in flight.
+
+    A drain is in flight exactly when its pair carries a value: an instant, or a cursor
+    naming where inside an instant its last committed pass stopped. A drain that has
+    committed nothing carries neither, and reading the feed from its beginning IS the
+    resume point for it — so seeding one is the absence of a pair rather than a row of its
+    own, and no marker can drift out of sync with the work it claimed to describe.
+    """
+    instant = agent.get("drain_through")
+    cursor = agent.get("drain_cursor") or {}
+    if instant is None and not cursor:
+        return None
+    return instant, cursor
+
+
+def read_position_of(agent: dict) -> tuple[datetime | None, dict]:
+    """Where this curator's feed is read from: the drain pair, or the incremental pair.
+
+    Two positions live on an agent row and exactly one of them is live at a time. While a
+    history drain is in flight it owns the read — its backlog sits BEHIND the watermark,
+    so a reader that consulted the watermark would skip everything the drain had not
+    reached and call the lane caught up. Every reader asks here — a run's first pass, the
+    next dispatch, and the pending-input check that decides whether a lane is worth
+    waking — so the three cannot disagree about what a curator has left to read.
+    """
+    drain = drain_of(agent)
+    if drain is not None:
+        return drain
+    return agent.get("curated_through"), agent.get("curation_cursor") or {}
+
+
+def _budget_kept(events: list[dict], max_event_chars: int | None) -> int | None:
+    """How many leading events a character budget can carry, or None when all of them fit.
+
+    One definition, because two readers of the same feed have to cut it in the same place:
+    this is what `complete_through` commits through and what `changes_since` refuses to
+    show, so the last event a curator is handed is the last event its run may record. Two
+    rules keep a drain from stalling on it: a timestamp group is never split (an event is
+    shown and committed with its whole instant or not at all), and an oversized FIRST group
+    is never refused — that would make the budget smaller than the smallest pass the feed
+    can make, and the drain would read the same characters forever (#1272).
+
+    The characters counted are each event's whole content, not the snippet the feed renders
+    it as: the budget bounds the work a pass takes on, and the model reads past the snippet
+    whenever an event matters.
+    """
+    if max_event_chars is None:
+        return None
+    characters = 0
+    for kept, event in enumerate(events):
+        characters += len(event["content"] or "")
+        if characters > max_event_chars and event["created_at"] > events[0]["created_at"]:
+            return kept
+    return None
+
+
+def drain_budget_of(agent: dict) -> int:
+    """The input characters one draining pass of this curator may carry.
+
+    Sized by the run's own wall, not by its ceiling: a drain exists because the backlog
+    outran the wall, and a slice sized by the ceiling is a slice the wall cannot finish.
+    It reuses the scoped lane's rate constant rather than stating a second one.
+    """
+    from . import agent_service, scoped_curation_service
+
+    return scoped_curation_service.input_budget(agent_service.run_wall_seconds(agent))
+
+
+async def drain_pass_budget(
+    owner_user_id: UUID, position: Position, wiki: str, folder_id: UUID | None = None
+) -> int | None:
+    """The pass budget of the drain standing AT `position`, or None when no drain does.
+
+    This is how the feed knows it is being read by a drain rather than by a person or by an
+    incremental run: a drain pass always reads at its own stored position, so a request
+    naming a different one is not that pass and is served the whole feed as always. Without
+    that discrimination the budget would truncate a human's look at the same lane.
+
+    Exactly one curator row can answer, because `one_curator_per_scope` makes (user, wiki,
+    folder) unique; two answers would mean the index is not what this reads it as, and that
+    is reported rather than averaged over.
+    """
+    from . import agent_service
+
+    if position.at is None:
+        return None
+    standing = [
+        row
+        for row in await agent_service.list_curators(owner_user_id)
+        if row["curator_wiki"] == wiki
+        and row["curator_folder_id"] == folder_id
+        and (drain := drain_of(row)) is not None
+        and drain[0] == position.at
+    ]
+    if len(standing) > 1:
+        raise RuntimeError(
+            f"{len(standing)} curators of {owner_user_id} drain {wiki}"
+            f"{' folder ' + str(folder_id) if folder_id else ''} from "
+            f"{position.at}: one feed request cannot be bounded by two walls"
+        )
+    return drain_budget_of(standing[0]) if standing else None
+
+
 def _position_sql(instant: str, event_id: str) -> str:
     """One pair as a comparable SQL row, in `ahead`'s order.
 
@@ -566,10 +670,17 @@ async def changes_since(
     position: Position,
     wiki: str,
     folder_id: UUID | None = None,
+    *,
+    max_event_chars: int | None = None,
 ) -> dict:
     """The delta the curator reads: history events, changed pages (excl. Memory),
     new files, changed Drive-folder documents, newly hydrated X/Instagram saves,
     and connected-source pointers.
+
+    `max_event_chars` belongs to a history drain, and only to one: it cuts the event list
+    to what one pass of that lane's wall can carry, by the same budget its commit cuts by
+    (see `_budget_kept`). Without it the feed is the feed it has always been, bounded by
+    `_MAX_EVENTS`, which is what an incremental batch has always reached its wall on.
 
     `wiki` scopes the events only — see `_feed_events`. Pages, files, saves, and
     source pointers come from the caller's own scope and are filtered
@@ -587,6 +698,13 @@ async def changes_since(
     events, history_has_more = await _feed_events(
         owner_user_id, position, None, _MAX_EVENTS, wiki, folder_id
     )
+    kept = _budget_kept(events, max_event_chars)
+    if kept is not None:
+        # The cut half stays pending rather than vanishing: the drain's next dispatch
+        # reads it from the position this pass commits, and `history_has_more` is how the
+        # feed says so without inventing a second account of what is left.
+        events = events[:kept]
+        history_has_more = True
     history = [
         {
             "session_id": e.get("session_id"),
@@ -956,20 +1074,19 @@ async def complete_through(
     `wiki` must be the value the run's feed was read with: this decides how far
     that run's watermark may move, so a wider scope here would let the watermark
     step past events the curator was never shown. `folder_id` likewise must be
-    the folder the scoped feed was cut by."""
+    the folder the scoped feed was cut by.
+
+    `max_event_chars` is the same budget the feed was cut by — pass it and the two
+    agree by construction, because both cuts are `_budget_kept` over the same rows.
+    Omit it and the position is bounded by `_MAX_EVENTS` alone, which is the shape
+    every incremental run has always had."""
     events, has_more = await _feed_events(
         owner_user_id, position, until, _MAX_EVENTS, wiki, folder_id
     )
-    if max_event_chars is not None and events:
-        characters = 0
-        for kept, event in enumerate(events):
-            characters += len(event["content"] or "")
-            # Stop before the first group that overflows the budget. A timestamp
-            # group is never split, and an oversized first group never stalls the
-            # run forever, so the next pass receives the remainder (#1272).
-            if characters > max_event_chars and event["created_at"] > events[0]["created_at"]:
-                last = events[kept - 1]
-                return Position(at=last["created_at"], event_id=last["event_id"])
+    cut = _budget_kept(events, max_event_chars)
+    if cut is not None:
+        last = events[cut - 1]
+        return Position(at=last["created_at"], event_id=last["event_id"])
     if not has_more:
         return Position(at=until)
     return Position(at=events[-1]["created_at"], event_id=events[-1]["event_id"])

@@ -293,8 +293,19 @@ async def get_changes(
         raise HTTPException(status_code=400, detail="since_event must be an event uuid")
 
     position = curation_service.Position(since_dt, event_id)
+    # A drain pass is the only reader that arrives at its own stored position, and it is
+    # handed only what one pass of its wall can carry — the same budget its commit is cut
+    # by, so the last event shown is the last event the run may record. Any other reader
+    # (`since` naming anything else) is served the whole feed as it always was.
     feed = await curation_service.changes_since(
-        scope_user_id, current_user["id"], position, wiki, folder
+        scope_user_id,
+        current_user["id"],
+        position,
+        wiki,
+        folder,
+        max_event_chars=await curation_service.drain_pass_budget(
+            scope_user_id, position, wiki, folder
+        ),
     )
     feed["event_backlog"] = await curation_service.curator_event_backlog(
         scope_user_id, wiki, position, folder

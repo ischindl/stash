@@ -83,7 +83,7 @@ async def _failing_scheduled_run(
     async def resolved_credential(user_id, prefer_provider=None, model_id=None, credential_id=None):
         return _runnable_cloud_auth()
 
-    async def failed_turn(agent, stamp, read_position):
+    async def failed_turn(agent, stamp, read_position, draining: bool = False):
         held_at_failure.extend(
             key for key in sprite_exec.redis.data if key.startswith("agent-run:")
         )
@@ -112,7 +112,7 @@ async def test_queued_curator_does_not_run_after_pause(client, pool, sprite_exec
     agent = await agent_service.get_or_create_curator(user_id)
     await pool.execute("UPDATE agents SET run_mode='chat' WHERE id=$1", agent["id"])
 
-    async def forbidden(*args):
+    async def forbidden(*args, **kwargs):
         pytest.fail("A queued job must respect a subsequent pause")
 
     monkeypatch.setattr(sprite_agent_service, "run_scheduled", forbidden)
@@ -283,6 +283,9 @@ async def test_scoped_curator_catchup_is_bounded_and_requires_progress(
 
     monkeypatch.setattr(billing_service, "is_pro", entitled)
     monkeypatch.setattr(scoped_curation_service, "workspace_for_agent", workspace)
+    # Every mode here is a scoped lane, which spends the backend's own key — and the
+    # chain's cost gate asks whether that key is configured at all before it answers.
+    monkeypatch.setattr(settings, "ANTHROPIC_API_KEY", "sk-ant-test-key")
 
     async def pending(*args):
         return mode != "caught_up"
@@ -343,7 +346,7 @@ async def test_run_due_failure_sends_alert(client: AsyncClient, sprite_exec, mon
     async def fake_resolve(user_id, prefer_provider=None, model_id=None, credential_id=None):
         return _runnable_cloud_auth()
 
-    async def fake_run_scheduled(agent, stamp, read_position):
+    async def fake_run_scheduled(agent, stamp, read_position, draining: bool = False):
         raise RuntimeError("agent turn failed: opencode error")
 
     monkeypatch.setattr(agent_auth, "resolve", fake_resolve)
@@ -380,10 +383,10 @@ async def test_run_bookkeeping_failure_sends_alert(client: AsyncClient, sprite_e
     user_id = await _register(client)
     agent = await _make_curator(user_id, curated_hours_ago=72, last_run_error=None)
 
-    async def fake_run_scheduled(agent, stamp, read_position):
+    async def fake_run_scheduled(agent, stamp, read_position, draining: bool = False):
         return ""
 
-    async def boom(user_id, position, now, wiki, folder_id=None):
+    async def boom(user_id, position, now, wiki, folder_id=None, **kwargs):
         raise RuntimeError("watermark write failed")
 
     monkeypatch.setattr(sprite_agent_service, "run_scheduled", fake_run_scheduled)
@@ -595,7 +598,7 @@ async def test_catchup_dispatch_failure_preserves_completed_batch_and_charge(
     uid = await _register(client)
     agent = await _make_curator(uid, curated_hours_ago=72, last_run_error=None)
 
-    async def completed(*args):
+    async def completed(*args, **kwargs):
         return "Completed."
 
     async def unavailable(*args, **kwargs):
@@ -652,10 +655,20 @@ async def test_busy_scoped_curator_refunds_only_skipped_run(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("changed", ["entitlement", "workspace", "input", "auth"])
+@pytest.mark.parametrize(
+    "changed", ["entitlement", "metered_lane", "local_endpoint", "input", "auth"]
+)
 async def test_queued_catchup_rechecks_execution_gates(
     client, pool, monkeypatch, changed, sprite_exec
 ):
+    """The gates a queued pass re-checks, and the one that was never a gate.
+
+    A mode used to live here that denied a chain because the lane had lost its workspace.
+    It is gone, and `local_endpoint` is its replacement: what admits a chained pass is what
+    the pass COSTS, so `metered_lane` and `local_endpoint` are one row on one `plan='free'`
+    account differing only in the answer the cost resolver gives, and only one of them runs
+    a model turn. The plan is not among the variables that separate them.
+    """
     from backend.services import (
         agent_auth,
         billing_service,
@@ -666,35 +679,119 @@ async def test_queued_catchup_rechecks_execution_gates(
     uid = await _register(client)
     agent = await _make_curator(uid, curated_hours_ago=72, last_run_error=None)
 
+    # What the NEXT pass costs, which is the only spend question a chain asks. A scoped
+    # workspace pays with the backend's key; a personal lane pays with whatever it dials.
+    metered = {"entitlement": True, "metered_lane": True, "local_endpoint": False}.get(
+        changed, True
+    )
+
     async def workspace(_):
-        return None if changed == "workspace" else {"id": uuid.uuid4()}
+        return None if changed in ("metered_lane", "local_endpoint") else {"id": uuid.uuid4()}
 
     async def entitled(_):
-        return changed != "entitlement"
+        return changed == "input"
 
     async def pending(*args):
         return changed != "input"
 
-    async def auth(_, **kwargs):
+    async def cost(_, **kwargs):
         if changed == "auth":
             raise agent_auth.ProviderNotConfigured("revoked")
+        return metered
 
-    async def forbidden(*args):
+    started: list[str] = []
+
+    async def pretend_run(*args, **kwargs):
+        started.append("ran")
+        return "Curated."
+
+    async def forbidden(*args, **kwargs):
         pytest.fail("Catch-up must recheck its gates before starting a model run")
 
     monkeypatch.setattr(scoped_curation_service, "workspace_for_agent", workspace)
-    monkeypatch.setattr(scoped_curation_service, "require_run_auth", auth)
+    monkeypatch.setattr(scoped_curation_service, "require_run_auth", cost)
     monkeypatch.setattr(billing_service, "is_pro", entitled)
     monkeypatch.setattr(agent_schedules, "_pending_input", pending)
-    monkeypatch.setattr(sprite_agent_service, "run_scheduled", forbidden)
+    monkeypatch.setattr(
+        sprite_agent_service,
+        "run_scheduled",
+        pretend_run if changed == "local_endpoint" else forbidden,
+    )
     if changed == "auth":
         with pytest.raises(agent_auth.ProviderNotConfigured):
             await agent_schedules._run_curator_now(agent["id"], metered=False, catchup=True)
     else:
         await agent_schedules._run_curator_now(agent["id"], metered=False, catchup=True)
+    if changed == "local_endpoint":
+        assert started == ["ran"], (
+            "a free account's own endpoint was denied its chained pass: permission is the"
+            " cost of the pass, not the plan"
+        )
+        return
     current = await agent_service.get_agent_by_id(agent["id"])
+    assert started == []
     assert current["last_run_outcome"] is None
     assert current["month_run_count"] == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("endpoint", ["own", "platform"])
+async def test_the_chain_permission_line_names_both_answers_and_the_decision(
+    client, pool, monkeypatch, caplog, endpoint
+):
+    """AC (d)'s accounting record, in both directions of the one variable that decides.
+
+    A reader of the log has to be able to tell a declined chain from a stalled one, because
+    the row says only that no next pass arrived. So the line carries the cost answer, the
+    plan answer, and the decision, and it is written whichever way the decision goes — it is
+    the same evidence in both directions, with only the endpoint the curator dials
+    differing between these two modes, and the plan `free` fixed in both.
+    """
+    from backend.services import billing_service, scoped_curation_service
+
+    user_id = await _register(client)
+    agent = await _make_curator(user_id, curated_hours_ago=72, last_run_error=None)
+    agent = await agent_service.get_agent_by_id(agent["id"])
+    started = datetime.now(UTC)
+    # The chain continues from a successful, advancing batch, so the lane is seeded that
+    # way; `agent` keeps the pre-update watermark, which is what makes the advance progress.
+    await pool.execute(
+        "UPDATE agents SET curated_through=$2, run_mode='scheduled', last_run_outcome='ran' "
+        "WHERE id=$1",
+        agent["id"],
+        started + timedelta(milliseconds=1),
+    )
+    metered = endpoint == "platform"
+
+    async def cost(_, **kwargs):
+        return metered
+
+    async def free(_):
+        return False
+
+    async def yes(*args, **kwargs):
+        return True
+
+    monkeypatch.setattr(scoped_curation_service, "require_run_auth", cost)
+    monkeypatch.setattr(billing_service, "is_pro", free)
+    monkeypatch.setattr(agent_schedules, "_pending_input", yes)
+    queued = []
+    monkeypatch.setattr(
+        agent_schedules.run_curator_now, "apply_async", lambda **kw: queued.append(kw)
+    )
+    with caplog.at_level(logging.INFO, logger="backend.tasks.agent_schedules"):
+        await agent_schedules._queue_curator_catchup(agent, started, 2, workspace=None)
+
+    lines = [
+        record.getMessage()
+        for record in caplog.records
+        if "may chain its next pass" in record.getMessage()
+    ]
+    assert len(lines) == 1, f"the chain decision was reported {len(lines)} times: {lines}"
+    assert f"metered={metered}" in lines[0], lines[0]
+    assert "is_pro=False" in lines[0], lines[0]
+    assert ("chaining" if not metered else "declining") in lines[0], lines[0]
+    assert (len(queued) == 1) is (not metered), f"queued={queued} metered={metered}"
 
 
 @pytest.mark.asyncio
@@ -806,6 +903,8 @@ async def test_catchup_uses_pending_input_not_outer_task_start_time(client, pool
 
     monkeypatch.setattr(billing_service, "is_pro", yes)
     monkeypatch.setattr(agent_schedules, "_pending_input", yes)
+    # The lane this queues on is scoped, so its cost answer needs the backend key present.
+    monkeypatch.setattr(settings, "ANTHROPIC_API_KEY", "sk-ant-test-key")
     queued = []
     monkeypatch.setattr(
         agent_schedules.run_curator_now, "apply_async", lambda **kw: queued.append(kw)
@@ -948,6 +1047,8 @@ async def test_a_chain_started_under_a_raised_allowance_queues_the_wider_budget(
     monkeypatch.setattr(scoped_curation_service, "workspace_for_agent", workspace)
     monkeypatch.setattr(billing_service, "is_pro", yes)
     monkeypatch.setattr(agent_schedules, "_pending_input", yes)
+    # A scoped lane's cost answer is only resolvable with the backend key it spends.
+    monkeypatch.setattr(settings, "ANTHROPIC_API_KEY", "sk-ant-test-key")
     queued = []
     monkeypatch.setattr(
         agent_schedules.run_curator_now, "apply_async", lambda **kw: queued.append(kw)

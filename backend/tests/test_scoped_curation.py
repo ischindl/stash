@@ -280,6 +280,22 @@ async def _from_never(pool, agent: dict) -> dict:
     return dict(await pool.fetchrow("SELECT * FROM agents WHERE id = $1", agent_id))
 
 
+def _reserve_nothing_for_the_commit(monkeypatch) -> None:
+    """Make a test's tiny ceiling BE its wall, by taking the commit reserve out.
+
+    `run_wall_seconds` subtracts what a checkpoint commit, a `push_event` publish and
+    `mark_run_succeeded` need, so a 1 s ceiling is refused as a wall that leaves no
+    room to commit — correct for a deployment, unusable for a test that has to wait
+    its wall out. What those tests are about is which wall gives out, what a cut
+    leaves durable, and what fence the lane is held with; the size of the reserve is
+    pinned where it lives, in `test_celery_visibility_timeout.py`. Zeroing it here
+    moves no ceiling, no wall ordering, and no assertion.
+    """
+    from backend.services import agent_service
+
+    monkeypatch.setattr(agent_service, "RUN_COMMIT_RESERVE_SECONDS", 0)
+
+
 @pytest.mark.asyncio
 async def test_separate_model_contexts_and_no_sprite_execution(
     dataset, pool, monkeypatch, sprite_exec
@@ -799,6 +815,7 @@ async def test_failed_shared_run_does_not_report_success_or_advance_watermark(
 async def test_scoped_run_timeout_preserves_progress_and_releases_lock(
     dataset, pool, monkeypatch, sprite_exec
 ):
+    _reserve_nothing_for_the_commit(monkeypatch)
     from backend.services import agent_service, sprite_agent_service
     from backend.tasks.agent_schedules import _run_curator_now
 
@@ -846,6 +863,7 @@ async def test_each_curator_ceiling_sets_its_own_wall_and_its_own_fence(
     while its run is still going and hands the next dispatch a half-finished run.
     The shorter wall is the one that gives out first, which is what makes 'its own
     ceiling' a behaviour and not just a stored number."""
+    _reserve_nothing_for_the_commit(monkeypatch)
     from backend.config import settings
     from backend.services import agent_service
     from backend.tasks.agent_schedules import _run_curator_now
@@ -896,6 +914,7 @@ async def test_a_run_that_takes_its_own_fence_uses_the_same_ceiling(
     `scoped_lock_held=True`; a lane arriving without that flag builds the lock here
     instead. Both sites have to read one source, or the two drift apart precisely
     the way a shared constant lets them."""
+    _reserve_nothing_for_the_commit(monkeypatch)
     from backend.services import agent_service, sprite_agent_service
 
     async def stuck(*args):
@@ -929,6 +948,7 @@ async def test_an_unset_ceiling_fences_the_run_with_the_setting_it_read(
     which this card leaves untouched, are the pair that says there is no second
     codepath: the row with no ceiling still drives its wall through the patched
     setting, and the fence it took carries that same patched number."""
+    _reserve_nothing_for_the_commit(monkeypatch)
     from backend.services import agent_service, sprite_agent_service
     from backend.tasks.agent_schedules import _run_curator_now
 
@@ -958,6 +978,7 @@ async def test_a_scoped_run_never_writes_a_stop_flag_only_a_chat_lane_reads(
     `run_chat`, `_pump_turn` or `_stoppable` — the only readers of
     `agent-turn-stop:{session}`. Both endings of a scoped run are checked: one that
     finishes and one its own ceiling cuts off."""
+    _reserve_nothing_for_the_commit(monkeypatch)
     from backend.services import agent_service, sprite_agent_service
     from backend.tasks.agent_schedules import _run_curator_now
 
@@ -1776,6 +1797,7 @@ async def test_a_ceiling_cut_keeps_its_completed_passes_and_the_next_run_resumes
     the beginning of the backlog again. The cut is the run's own one-second ceiling;
     the pass it stops is held open by the fake below.
     """
+    _reserve_nothing_for_the_commit(monkeypatch)
     from backend.services import agent_service, sprite_agent_service
 
     await pool.execute(
@@ -1844,6 +1866,80 @@ async def test_a_ceiling_cut_keeps_its_completed_passes_and_the_next_run_resumes
 
 
 @pytest.mark.asyncio
+async def test_a_run_stops_before_a_pass_it_cannot_finish_inside_its_wall(
+    dataset, pool, monkeypatch, sprite_exec, caplog
+):
+    """A healthy drain ends at a committed pass boundary, not at the wall that cuts one.
+
+    The sibling of the ceiling-cut test above, and the two are read together: that one
+    pins what survives a run the wall stops, this one pins that a run carrying the same
+    backlog through the same wall is never stopped at all. The loop declines the pass it
+    cannot finish, so nothing is in flight to lose and the next dispatch resumes from a
+    committed position rather than from a discarded slice. Three facts prove it: the call
+    RETURNS (no `RunCeilingExceeded`, no `TimeoutError`), the number of slices the model
+    was handed equals the number of passes that committed — the last thing that ran is the
+    last thing that is durable — and the summary names the position the drain stands at.
+
+    The wall is the row's own 1 s and one pass costs a quarter of it, because the margin a
+    decline leaves is exactly one pass: at a shorter pass the pre-pass check and the rescue
+    wall would race each other on a loaded machine, and which of them answered would be a
+    fact about the test runner rather than about this code.
+    """
+    import logging
+
+    from backend.services import agent_service, sprite_agent_service
+
+    _reserve_nothing_for_the_commit(monkeypatch)
+    await pool.execute(
+        "UPDATE files SET extracted_text=$2 WHERE id=$1", dataset.private_file, "V" * 20000
+    )
+    monkeypatch.setattr(curation, "input_budget", lambda ceiling: 2048)
+    agent = await agent_service.get_or_create_curator(dataset.owner, wiki="external")
+    # A drain in flight, standing two days behind the document it is about to read: the
+    # backlog is several slices wide, so the feed cannot empty inside this wall.
+    await pool.execute(
+        "UPDATE agents SET curated_through = now() - interval '2 days',"
+        " drain_through = now() - interval '2 days', turn_timeout_seconds = 1"
+        " WHERE id = $1",
+        UUID(agent["id"]),
+    )
+    agent = await agent_service.get_agent_by_id(UUID(agent["id"]))
+    slices_read: list[int] = []
+
+    async def read_a_slice_slowly(scope, instructions):
+        await asyncio.sleep(0.25)
+        document = scope.documents.get(f"file:{dataset.private_file}")
+        if document is not None:
+            slices_read.append(document["chunk"]["offset"] if "chunk" in document else 0)
+        return "Slice read."
+
+    monkeypatch.setattr(curation, "run_scope", read_a_slice_slowly)
+    with caplog.at_level(logging.INFO, logger="backend.services.scoped_curation_service"):
+        summary = await sprite_agent_service.run_scheduled(
+            agent, "wall-stop", curation_service.position_of(agent)
+        )
+
+    committed = [
+        record.getMessage()
+        for record in caplog.records
+        if record.getMessage().startswith("curator pass=")
+    ]
+    assert len(slices_read) >= 2, f"a 1 s wall fit no passes at all: {slices_read}"
+    assert len(slices_read) == len(committed), (
+        f"the model was handed {len(slices_read)} slices but {len(committed)} passes are"
+        " durable: the run was cut mid-pass instead of declining one"
+    )
+    assert "undrained" in summary, f"the run reported a drained feed: {summary}"
+    standing = committed[-1].split("committed_through=")[1].split()[0]
+    assert standing in summary, f"the summary did not name {standing}: {summary}"
+    row = await agent_service.get_agent_by_id(UUID(agent["id"]))
+    assert row["drain_through"].isoformat() == standing, (
+        "the drain does not stand where the last committed pass left it"
+    )
+    assert row["last_run_outcome"] != "failed"
+
+
+@pytest.mark.asyncio
 async def test_one_run_drains_a_document_larger_than_its_budget_in_committed_passes(
     dataset, pool, monkeypatch, sprite_exec, caplog
 ):
@@ -1865,8 +1961,8 @@ async def test_one_run_drains_a_document_larger_than_its_budget_in_committed_pas
     checkpoints: list[tuple[datetime, dict]] = []
     real_checkpoint = curation._checkpoint_pass
 
-    async def record_checkpoint(agent_, batch, fence, cursor, scope):
-        moved = await real_checkpoint(agent_, batch, fence, cursor, scope)
+    async def record_checkpoint(agent_, batch, fence, cursor, scope, drain):
+        moved = await real_checkpoint(agent_, batch, fence, cursor, scope, drain)
         if moved:
             checkpoints.append((batch.through, dict(batch.cursor)))
         return moved
@@ -2034,6 +2130,7 @@ async def test_a_ceiling_cut_hands_its_unfinished_backlog_to_the_next_catchup_pa
 
     The hand-off must not launder the failure either: the row still reports it.
     """
+    _reserve_nothing_for_the_commit(monkeypatch)
     from backend.services import agent_service, billing_service
     from backend.tasks import agent_schedules
 
@@ -2096,6 +2193,7 @@ async def test_a_ceiling_cut_that_completed_no_pass_starts_no_chain(
     a cut that checkpointed nothing has nothing to hand over, so the progress gate
     refuses and the lane waits for its next scheduled run instead of burning a chain.
     """
+    _reserve_nothing_for_the_commit(monkeypatch)
     from backend.services import agent_service, billing_service
     from backend.tasks import agent_schedules
 
@@ -2194,6 +2292,9 @@ async def test_an_exhausted_catchup_bound_names_the_backlog_it_left_behind(
         return True
 
     monkeypatch.setattr(billing_service, "is_pro", entitled)
+    # A scoped lane spends the backend's own key, and the chain asks whether that key exists
+    # before it answers what the next pass costs.
+    monkeypatch.setattr(curation.settings, "ANTHROPIC_API_KEY", "sk-ant-test-key")
     agent = await agent_service.get_or_create_curator(dataset.owner, wiki="external")
     await pool.execute(
         "UPDATE agents SET curated_through=now() - interval '1 day' WHERE id=$1",
@@ -2387,4 +2488,182 @@ async def test_truncated_full_replacement_retries_as_small_edit(
     )
     assert (
         await pool.fetchval("SELECT count(*) FROM page_edits WHERE page_id=$1", dataset.shared) == 1
+    )
+
+
+@pytest.mark.asyncio
+async def test_two_history_drain_dispatches_resume_one_position_rather_than_rereading_it(
+    dataset, pool, monkeypatch, sprite_exec, caplog
+):
+    """A backlog two slices wide is drained by two dispatches that never meet twice.
+
+    The drain exists because a curator whose backlog outruns its wall used to restart from
+    its first unread character on every dispatch, so the same slice was curated until the
+    worker's soft time limit killed the task. What makes that impossible is one fact: a
+    dispatch reads the position the dispatch before it committed. This drives the two
+    dispatches through the dispatcher that seeds the drain — the only caller that decides
+    a run is a backfill — and watches three things a re-zeroing bug would break at once:
+    the pair moves and survives the cut run, the second dispatch reads only characters the
+    first never committed, and the incremental watermark is not one byte different, because
+    a drain that wrote it would have been clamped away and reported as a discarded run.
+    """
+    from backend.services import agent_service
+    from backend.tasks import agent_schedules
+
+    _reserve_nothing_for_the_commit(monkeypatch)
+    await pool.execute(
+        "UPDATE files SET extracted_text=$2 WHERE id=$1", dataset.private_file, "Q" * 6000
+    )
+    monkeypatch.setattr(curation, "input_budget", lambda ceiling: 2048)
+    agent = await agent_service.get_or_create_curator(dataset.owner, wiki="external")
+    # A curator whose incremental position is AHEAD of the backlog it is about to drain:
+    # the whole corpus sits behind the watermark, which is the shape that made the old
+    # full-history run unable to checkpoint at all.
+    await pool.execute(
+        "UPDATE agents SET curated_through=now(), turn_timeout_seconds=1 WHERE id=$1",
+        UUID(agent["id"]),
+    )
+    file_key = f"file:{dataset.private_file}"
+    reads: list[int] = []
+    second_read = asyncio.Event()
+    hold = asyncio.Event()
+
+    async def read_one_slice_then_stall(scope, instructions):
+        document = scope.documents.get(file_key)
+        if document is None:
+            return "Nothing of mine in this slice."
+        reads.append(document["chunk"]["offset"] if "chunk" in document else 0)
+        if not second_read.is_set():
+            second_read.set()
+            return "First slice read."
+        await hold.wait()
+        return "Never reached: the wall cuts this pass off."
+
+    monkeypatch.setattr(curation, "run_scope", read_one_slice_then_stall)
+    monkeypatch.setattr(agent_schedules.run_curator_now, "apply_async", lambda **kw: None)
+    agent = await agent_service.get_agent_by_id(UUID(agent["id"]))
+    watermark_before = (str(agent["curated_through"]), str(agent["curated_through_event_id"]))
+
+    with pytest.raises(RuntimeError, match="run time limit"):
+        await agent_schedules._run_curator_now(UUID(agent["id"]), full_history=True, metered=False)
+
+    cut = await agent_service.get_agent_by_id(UUID(agent["id"]))
+    assert cut["drain_through"] is not None, "the committed pass left no resumable position"
+    assert cut["drain_cursor"]["partial"], "the pass stopped mid-document without a cursor"
+    assert str(cut["curated_through"]), "a drain that found no watermark wrote one it invented"
+    assert (str(cut["curated_through"]), str(cut["curated_through_event_id"])) == (
+        watermark_before
+    ), "the drain advanced the incremental watermark instead of its own pair"
+
+    # A second backfill dispatch for the same lane: the routine accident (a re-delivered
+    # broker message, an operator pressing Run now twice) that a seeding bug would turn
+    # into the same first slice curated a second time. `reported` is its own ledger, so
+    # every offset in it belongs to THIS dispatch — nothing has to be sliced away.
+    reported = []
+
+    async def report_what_is_read(scope, instructions):
+        document = scope.documents.get(file_key)
+        if document is not None:
+            offset = document["chunk"]["offset"] if "chunk" in document else 0
+            reported.append(offset)
+            if offset == 0:
+                return "The first slice again, which was already curated."
+        return "Slice read."
+
+    monkeypatch.setattr(curation, "run_scope", report_what_is_read)
+    caplog.set_level(logging.INFO, logger="backend.tasks.agent_schedules")
+    await agent_schedules._run_curator_now(UUID(agent["id"]), full_history=True, metered=False)
+
+    assert reported, "the resumed dispatch read nothing at all"
+    assert 0 not in reported, "the second dispatch re-read the curated first slice"
+    # The stored cursor, not the stalled pass's read, is the contract the next dispatch
+    # honours: it reads the first character the checkpoint says is still unread.
+    checkpointed = next(iter(cut["drain_cursor"]["partial"].values()))
+    assert reported[0] == checkpointed, (
+        "the second dispatch did not resume at the offset the drain cursor names"
+    )
+    assert reported == sorted(reported), "the resumed drain read its slices out of order"
+    assert [
+        line.getMessage()
+        for line in caplog.records
+        if "resumes the history drain" in line.getMessage()
+    ], "the resumed drain was dispatched without saying it resumed"
+    finished = await agent_service.get_agent_by_id(UUID(agent["id"]))
+    assert (finished["drain_through"], finished["drain_cursor"]) == (None, {})
+    assert finished["last_run_outcome"] == "ran"
+
+
+@pytest.mark.asyncio
+async def test_every_committed_pass_of_a_drain_moves_the_drain_position_and_no_more(
+    dataset, pool, monkeypatch, sprite_exec, caplog
+):
+    """One committed pass, one drain advance: the meter and the row are one account.
+
+    The drain-rate meter is how a cut run becomes readable at all, so it is the witness
+    this test checks the durable writes against — a loop that advanced the pair once per
+    RUN rather than once per PASS would keep the lane alive and leave the meter disagreeing
+    with the row. The pair is watched as the database holds it, after each write, and the
+    watermark is watched staying exactly where the drain found it.
+    """
+    from backend.services import agent_service, sprite_agent_service
+
+    await pool.execute(
+        "UPDATE files SET extracted_text=$2 WHERE id=$1", dataset.private_file, "Z" * 6000
+    )
+    monkeypatch.setattr(curation, "input_budget", lambda ceiling: 2048)
+    agent = await agent_service.get_or_create_curator(dataset.owner, wiki="external")
+    # A drain already in flight, standing where the watermark stands: everything the feed
+    # holds sits ahead of it, so this run finishes the drain and its hand-off has somewhere
+    # forward to move the watermark to.
+    await pool.execute(
+        "UPDATE agents SET curated_through=now() - interval '2 days',"
+        " drain_through=now() - interval '2 days' WHERE id=$1",
+        UUID(agent["id"]),
+    )
+    agent = await agent_service.get_agent_by_id(UUID(agent["id"]))
+    watermark_before = agent["curated_through"]
+    advances: list[datetime] = []
+    real_advance = agent_service.advance_drain
+
+    async def record_advance(conn, agent_id, read_at, read_cursor, through, cursor):
+        await real_advance(conn, agent_id, read_at, read_cursor, through, cursor)
+        stored = await conn.fetchrow(
+            "SELECT drain_through, drain_cursor FROM agents WHERE id=$1", agent_id
+        )
+        advances.append((stored["drain_through"], dict(stored["drain_cursor"])))
+
+    monkeypatch.setattr(agent_service, "advance_drain", record_advance)
+
+    async def read_slice(scope, instructions):
+        return "Slice read."
+
+    monkeypatch.setattr(curation, "run_scope", read_slice)
+    with caplog.at_level(logging.INFO, logger="backend.services.scoped_curation_service"):
+        await sprite_agent_service.run_scheduled(
+            agent, "drain-pair-run", curation_service.position_of(agent)
+        )
+
+    meter = [
+        record.getMessage()
+        for record in caplog.records
+        if record.getMessage().startswith("curator pass=")
+    ]
+    assert meter, "a run that drained a document reported no pass"
+    assert len(advances) == len(meter), (
+        f"the meter counted {len(meter)} committed passes but the drain advanced "
+        f"{len(advances)} times"
+    )
+    assert len(
+        {(str(through), json.dumps(cursor, sort_keys=True)) for through, cursor in advances}
+    ) == (len(advances)), "two passes committed the same drain position"
+    committed = [
+        datetime.fromisoformat(line.split("committed_through=")[1].split()[0]) for line in meter
+    ]
+    assert [through for through, _ in advances] == committed, (
+        "the meter reported a position the drain pair does not hold"
+    )
+    done = await agent_service.get_agent_by_id(UUID(agent["id"]))
+    assert (done["drain_through"], done["drain_cursor"]) == (None, {})
+    assert done["curated_through"] > watermark_before, (
+        "the finished drain cleared its pair and handed nothing to the watermark"
     )

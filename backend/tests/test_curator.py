@@ -527,7 +527,7 @@ async def test_failed_curator_run_preserves_watermark(
     watermark = datetime.now(UTC) - timedelta(minutes=2)
     await _make_due(_db_pool, curator["id"], watermark)
 
-    async def boom(agent, stamp, read_position):
+    async def boom(agent, stamp, read_position, draining: bool = False):
         raise RuntimeError("sprite exploded")
 
     monkeypatch.setattr(sprite_agent_service, "run_scheduled", boom)
@@ -574,7 +574,7 @@ async def test_failed_run_records_error_and_refunds_credit(
     )
     await _make_due(_db_pool, curator["id"], datetime.now(UTC) - timedelta(minutes=2))
 
-    async def boom(agent, stamp, read_position):
+    async def boom(agent, stamp, read_position, draining: bool = False):
         raise RuntimeError("sprite exploded")
 
     real_run_scheduled = sprite_agent_service.run_scheduled
@@ -670,7 +670,7 @@ async def test_failed_manual_recompute_records_error(
     key, uid = await _register(client)
     curator = await agent_service.get_or_create_curator(uid)
 
-    async def boom(agent, stamp, read_position):
+    async def boom(agent, stamp, read_position, draining: bool = False):
         raise RuntimeError("harness missing")
 
     monkeypatch.setattr(sprite_agent_service, "run_scheduled", boom)
@@ -702,7 +702,7 @@ async def test_manual_recompute_bookkeeping_failure_records_failed_outcome(
     _key, uid = await _register(client)
     curator = await agent_service.get_or_create_curator(uid)
 
-    async def boom(user_id, curated_through, now, wiki, folder_id=None):
+    async def boom(user_id, curated_through, now, wiki, folder_id=None, **kwargs):
         raise RuntimeError("watermark write failed")
 
     monkeypatch.setattr(curation_service, "complete_through", boom)
@@ -1106,7 +1106,14 @@ async def test_mark_curated_cannot_walk_the_watermark_back(client: AsyncClient, 
     of writing (see test_a_pre_rewind_completion_cannot_swallow_a_reopened_window).
     A never-curated lane must still accept its first advance, and a proposal is
     only legal as a pair: the clamp compares the whole (instant, event), which an
-    instant-only comparison could not do."""
+    instant-only comparison could not do.
+
+    The row's OTHER position is tested here too, because the two are only safe while
+    they stay separate: a history drain reads from behind the watermark by design, so
+    its passes move `drain_through` and must leave this column alone. A drain that
+    travelled on the watermark would be clamped away and read as a discarded run; a
+    drain that wrote it without the clamp would drag the incremental position back
+    through history it had only just started reading."""
     _key, uid = await _register(client)
     curator = await agent_service.get_or_create_curator(uid)
     cid = UUID(curator["id"])
@@ -1132,6 +1139,94 @@ async def test_mark_curated_cannot_walk_the_watermark_back(client: AsyncClient, 
             cid, Position(never), Position(datetime(2030, 1, 1, tzinfo=UTC))
         )
     assert await stored() == later
+
+    # A backfill drains this same lane from BEFORE the watermark the clamp just
+    # protected. Its first pass stops years behind that watermark, which is what a
+    # drain is for, and it lands — while `curated_through` does not move at all.
+    drain_first = datetime(2021, 5, 1, tzinfo=UTC)
+    drain_second = datetime(2022, 9, 1, tzinfo=UTC)
+
+    async def drain_stored() -> tuple:
+        return await _db_pool.fetchrow(
+            "SELECT drain_through, drain_cursor FROM agents WHERE id = $1", cid
+        )
+
+    async def commit_pass(read_at, read_cursor, through, cursor):
+        async with _db_pool.acquire() as conn, conn.transaction():
+            await agent_service.advance_drain(conn, cid, read_at, read_cursor, through, cursor)
+
+    await commit_pass(None, {}, drain_first, {})
+    assert await stored() == later, "a draining pass moved the incremental watermark"
+    assert (await drain_stored())["drain_through"] == drain_first
+
+    # One committed pass, one advance: the second pass fences on where the first left
+    # the pair and moves it forward, still never touching the watermark.
+    await commit_pass(drain_first, {}, drain_second, {"partial": {"file:1": 10}})
+    assert await stored() == later, "a draining pass moved the incremental watermark"
+    moved = await drain_stored()
+    assert moved["drain_through"] == drain_second
+    assert moved["drain_cursor"] == {"partial": {"file:1": 10}}, (
+        "the drain cursor did not travel with its instant"
+    )
+
+    # The pair is a fence, not a hint: a pass that read the first position cannot
+    # commit after the pair moved under it, and a proposal behind where the pair
+    # stands is a bug, not a pass — it raises rather than plateauing the drain.
+    with pytest.raises(agent_service.CuratorDrainConflict):
+        await commit_pass(drain_first, {}, datetime(2023, 1, 1, tzinfo=UTC), {})
+    with pytest.raises(ValueError, match="would move"):
+        await commit_pass(drain_second, {}, drain_first, {})
+    assert (await drain_stored())["drain_through"] == drain_second
+    assert await stored() == later
+
+
+@pytest.mark.asyncio
+async def test_a_personal_drain_that_reaches_the_end_retires_its_pair_and_hands_off(
+    client: AsyncClient, sprite_exec, _db_pool
+):
+    """The last pass of a personal-lane drain hands its covered past to the watermark.
+
+    Retiring a drain is a second fenced write inside the transaction that advanced it, so it
+    can only fence on where that advance PUT the pair: a hand-off fenced on the pair the pass
+    READ refuses the run's own commit. The failure is not rare, it is the END of every
+    personal-lane drain — the feed empties, the hand-off raises a conflict blaming some other
+    run, the pair survives, and the next dispatch raises again forever. This lane is the one
+    the measured incident ran on, so the shape the card was opened on is exactly this one.
+
+    The assertion is therefore about the two positions after the run, not about the run
+    succeeding: the pair must be gone and the watermark must have taken the ground the drain
+    covered, or the same history is read again on the next tick.
+    """
+    from backend.tasks.agent_schedules import _run_curator_now
+
+    _key, uid = await _register(client)
+    curator = await agent_service.get_or_create_curator(uid)
+    cid = UUID(curator["id"])
+    base = datetime(2026, 1, 1, tzinfo=UTC)
+    await _db_pool.executemany(
+        "INSERT INTO history_events (owner_user_id,created_by,agent_name,event_type,"
+        "session_id,content,created_at) "
+        "VALUES ($1,$1,'test','user_message',$2,$3,$4)",
+        [(uid, f"handoff-{i}", f"work {i}", base + timedelta(days=i)) for i in range(3)],
+    )
+    # A drain in flight over a backlog one pass can carry, on a lane that never curated:
+    # the watermark's only write in this run is the hand-off.
+    await _db_pool.execute(
+        "UPDATE agents SET curated_through = NULL, drain_through = $2 WHERE id = $1",
+        cid,
+        base - timedelta(days=1),
+    )
+
+    await _run_curator_now(cid, full_history=True, metered=False)
+
+    row = await agent_service.get_agent_by_id(cid)
+    assert row["last_run_outcome"] == "ran", row["last_run_error"]
+    assert curation_service.drain_of(row) is None, (
+        "the finished drain outlived its own hand-off, so its past is still pending"
+    )
+    assert row["curated_through"] >= base + timedelta(days=2), (
+        "the watermark never took the ground the drain covered"
+    )
 
 
 @pytest.mark.asyncio
@@ -1234,7 +1329,7 @@ async def test_stale_completion_cannot_regress_an_overlapping_run(
     await _db_pool.execute("UPDATE agents SET curated_through = $2 WHERE id = $1", cid, seeded)
     advanced = datetime.now(UTC) + timedelta(minutes=10)
 
-    async def overlapping_run_finished(agent, stamp, read_position):
+    async def overlapping_run_finished(agent, stamp, read_position, draining: bool = False):
         # Stands in for the other run completing mid-turn. It started from the
         # same stored position this run read, so ITS compare-and-set matches and
         # its (newer) watermark lands.
@@ -1321,7 +1416,7 @@ async def test_a_mid_run_ingest_rewind_fails_the_curator_run_loud(
     await _db_pool.execute("UPDATE agents SET curated_through = $2 WHERE id = $1", cid, position)
     meter_before = await _db_pool.fetchval("SELECT month_run_count FROM agents WHERE id = $1", cid)
 
-    async def ingest_older_history(agent, stamp, read_position):
+    async def ingest_older_history(agent, stamp, read_position, draining: bool = False):
         # A late import lands mid-turn; its rewind drags the stored watermark
         # below the position this run read at start. Real ingest path.
         await _push_one(client, key, "conv-late-import", datetime.now(UTC) - timedelta(days=3))
@@ -1373,7 +1468,7 @@ async def test_the_scheduled_curator_run_fails_loud_when_the_watermark_moves(
     await _db_pool.execute("UPDATE agents SET curated_through = $2 WHERE id = $1", cid, seeded)
     advanced = datetime.now(UTC) + timedelta(minutes=10)
 
-    async def overlapping_writer(agent, stamp, read_position):
+    async def overlapping_writer(agent, stamp, read_position, draining: bool = False):
         # The other run advanced the watermark mid-turn; its own CAS matches
         # (it started from the same stored position), so its write lands.
         await agent_service.mark_curated(cid, Position(seeded), Position(advanced))
@@ -1422,7 +1517,7 @@ async def test_double_dispatch_on_one_agent_runs_single_flight(
     turn_released = asyncio.Event()
     turns: list[str] = []
 
-    async def turn_holds_the_agent(agent, stamp, read_position):
+    async def turn_holds_the_agent(agent, stamp, read_position, draining: bool = False):
         turns.append(stamp)
         turn_started.set()
         await turn_released.wait()
@@ -1502,7 +1597,7 @@ async def test_a_requeued_beat_dispatch_never_resolves_the_run_in_flight_outcome
     turn_released = asyncio.Event()
     turns: list[str] = []
 
-    async def turn_holds_the_agent(agent, stamp, read_position):
+    async def turn_holds_the_agent(agent, stamp, read_position, draining: bool = False):
         turns.append(stamp)
         turn_started.set()
         await turn_released.wait()
@@ -1723,3 +1818,115 @@ async def test_text_budget_keeps_an_oversized_first_timestamp_group(client, pool
     assert await curation_service.complete_through(
         uid, through, target, wiki="internal", max_event_chars=100
     ) == Position(at=target)
+
+
+@pytest.mark.asyncio
+async def test_the_feed_a_draining_pass_is_handed_ends_where_its_commit_will_stand(client, pool):
+    """The feed and the commit are cut by one budget, in one place.
+
+    A drain pass reads through `/changes` and commits through `complete_through`. If the
+    two bounded themselves separately, a pass could be handed two events and commit three,
+    and the drain would advance past history no model ever read — a drain that looks like
+    it is progressing while it quietly skips its backlog. So the assertion is about the
+    boundary, not about the arithmetic: the last event shown IS the event the run stands
+    on, and the event that was not shown is exactly what the next read returns.
+    """
+    _, uid = await _register(client)
+    base = datetime(2026, 1, 1, tzinfo=UTC)
+    await pool.executemany(
+        "INSERT INTO history_events (owner_user_id,created_by,agent_name,event_type,session_id,content,created_at) "
+        "VALUES ($1,$1,'test','user_message',$2,$3,$4)",
+        [(uid, f"drain-budget-{i}", "x" * 40, base + timedelta(minutes=i)) for i in range(3)],
+    )
+    start = Position(base - timedelta(seconds=1))
+    budget = 90  # two events fit inside it; the third would overflow it
+    feed = await curation_service.changes_since(
+        uid, uid, start, wiki="internal", max_event_chars=budget
+    )
+    through = await curation_service.complete_through(
+        uid,
+        start,
+        base + timedelta(hours=1),
+        wiki="internal",
+        max_event_chars=budget,
+    )
+    assert feed["counts"]["history"] == 2 and feed["history_has_more"] is True
+    assert feed["history"][-1]["created_at"] == curation_service._iso(through.at), (
+        "the feed ended somewhere other than where the commit will stand"
+    )
+    unread = await curation_service.changes_since(
+        uid, uid, through, wiki="internal", max_event_chars=budget
+    )
+    assert [event["content"] for event in unread["history"]] == ["x" * 40]
+    # A reader the drain is not — one asking for the feed with no budget in hand — is
+    # still served the whole feed, bounded only by the cap it has always been bounded by.
+    assert (await curation_service.changes_since(uid, uid, start, wiki="internal"))["counts"][
+        "history"
+    ] == 3
+
+
+@pytest.mark.asyncio
+async def test_only_a_reader_at_the_drains_own_position_is_sized_by_that_drain(client, pool):
+    """The budget belongs to a pass, and only that pass asks for it.
+
+    `/changes` is a human's endpoint as much as the curator's, so sizing every request by
+    a curator's wall would truncate a person's own look at their history the moment a drain
+    started. The discriminator is the position: a drain pass always reads at the instant its
+    pair names, and any other request is served in full. Two curators cannot both answer one
+    request either — the wiki and the folder decide which row's wall it is.
+    """
+    from backend.services import scoped_curation_service
+
+    key, uid = await _register(client)
+    standing_at = datetime(2026, 2, 2, tzinfo=UTC)
+    # No drain anywhere: nobody is sized, and nothing about the feed changes.
+    assert await curation_service.drain_pass_budget(uid, Position(standing_at), "internal") is None
+    curator = await agent_service.get_or_create_curator(uid, wiki="internal")
+    await pool.execute(
+        "UPDATE agents SET drain_through = $2 WHERE id = $1",
+        UUID(curator["id"]),
+        standing_at,
+    )
+    row = await agent_service.get_agent_by_id(UUID(curator["id"]))
+    budget = await curation_service.drain_pass_budget(uid, Position(standing_at), "internal")
+    assert budget == scoped_curation_service.input_budget(agent_service.run_wall_seconds(row)), (
+        "the feed was sized by something other than the wall this run will be wrapped in"
+    )
+    # The same instant on the other wiki, and an instant one second off, are both readers
+    # this drain is not.
+    assert await curation_service.drain_pass_budget(uid, Position(standing_at), "external") is None
+    assert (
+        await curation_service.drain_pass_budget(
+            uid, Position(standing_at + timedelta(seconds=1)), "internal"
+        )
+        is None
+    )
+    # And a drain belonging to one folder's curator does not size the workspace-wide feed:
+    # the wall that bounds a pass is the wall of the lane being read, not of whichever
+    # curator happens to be behind.
+    folder = await client.post(
+        "/api/v1/me/session-folders", json={"name": "drain-scope"}, headers=_auth(key)
+    )
+    assert folder.status_code == 200
+    folder_id = UUID(folder.json()["id"])
+    folder_curator = await agent_service.create_folder_curator(uid, folder_id)
+    await pool.execute(
+        "UPDATE agents SET drain_through = $2 WHERE id = $1",
+        UUID(folder_curator["id"]),
+        standing_at,
+    )
+    assert (
+        await curation_service.drain_pass_budget(uid, Position(standing_at), "internal") == budget
+    ), "a folder curator's wall sized the workspace-wide feed"
+    sized = await curation_service.drain_pass_budget(
+        uid, Position(standing_at), "internal", folder_id
+    )
+    folder_row = await agent_service.get_agent_by_id(UUID(folder_curator["id"]))
+    assert sized == scoped_curation_service.input_budget(
+        agent_service.run_wall_seconds(folder_row)
+    ), "the folder's feed was not sized by its own curator's wall"
+    assert sized == scoped_curation_service.input_budget(
+        agent_service.run_wall_seconds(
+            await agent_service.get_agent_by_id(UUID(folder_curator["id"]))
+        )
+    )

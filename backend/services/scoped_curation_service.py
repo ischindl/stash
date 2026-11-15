@@ -816,45 +816,81 @@ async def _checkpoint_pass(
     fence: curation_service.Position,
     cursor: dict,
     scope: CurationScope,
+    drain: tuple[datetime, dict] | None,
 ) -> bool:
-    """Move the durable watermark to where one completed pass read, and say whether it moved.
+    """Move the durable position one completed pass read up to, and say whether it moved.
 
-    The write is under the same permission lock as the page writes and is fenced on
-    the exact pair this pass started from: an ingest rewind, a reset to never, or an
-    overlapping run that moved the watermark meanwhile matches no row, and the pass
-    that loses is recorded as a failure rather than a silent clobber. The first pass
-    of a run fences on the pair the dispatcher loaded; every later one fences on the
-    pair the pass before it committed, which is the same compare-and-set one step
-    further along. A pair that did not move is not written and not reported as a pass.
+    The write is under the same permission lock as the page writes and is fenced on the
+    exact pair this pass started from: an ingest rewind, a reset to never, or an
+    overlapping run that moved the position meanwhile matches no row, and the pass that
+    loses is recorded as a failure rather than a silent clobber. The first pass of a run
+    fences on the pair the dispatcher loaded; every later one fences on the pair the pass
+    before it committed, which is the same compare-and-set one step further along. A pair
+    that did not move is not written and not reported as a pass.
+
+    Which pair that is depends on the work the run is doing. A history drain moves its own
+    resumable pair and never the watermark — the backlog it is reading sits behind a
+    watermark that is monotone by contract, so a drain writing the watermark would either
+    be clamped away or, before the clamp existed, drag the incremental position backwards
+    through history it had only just started reading. An incremental pass writes the
+    watermark through `advance_watermark` rather than its own UPDATE, so no forward writer
+    of that column holds a looser statement than the one primitive every other writer uses.
     """
     from . import agent_service
 
     if (batch.through, batch.cursor, fence.event_id) == (fence.at, cursor, None):
         return False
+    agent_id = UUID(str(agent["id"]))
     async with get_pool().acquire() as conn, conn.transaction():
         await scope.check(conn)
-        advanced = await conn.execute(
-            "UPDATE agents SET curated_through=$2, curated_through_event_id=NULL, "
-            "curation_cursor=$3 "
-            "WHERE id=$1 AND (curated_through, curated_through_event_id) "
-            "IS NOT DISTINCT FROM ($4::timestamptz, $5::uuid)",
-            UUID(str(agent["id"])),
-            batch.through,
-            batch.cursor,
-            fence.at,
-            fence.event_id,
-        )
-        if advanced != "UPDATE 1":
-            current = await conn.fetchrow(
-                "SELECT curated_through, curated_through_event_id FROM agents WHERE id=$1",
-                UUID(str(agent["id"])),
-            )
-            raise agent_service.CuratorWatermarkConflict(
-                UUID(str(agent["id"])),
+        if drain is None:
+            await agent_service.advance_watermark(
+                conn,
+                agent_id,
                 fence,
-                curation_service.position_of(dict(current)) if current else None,
+                curation_service.Position(batch.through),
+                batch.cursor,
+            )
+        else:
+            await agent_service.advance_drain(
+                conn, agent_id, drain[0], drain[1], batch.through, batch.cursor
             )
     return True
+
+
+async def _finish_drain(
+    agent: dict,
+    through: datetime | None,
+    cursor: dict,
+    drain: tuple[datetime, dict],
+    watermark_read: curation_service.Position,
+    scope: CurationScope,
+) -> None:
+    """The drain reached the end of its feed: retire its pair and hand the past it read on.
+
+    `watermark_read` is the incremental pair the dispatcher loaded BEFORE this drain had a
+    pair of its own, and it is the only anchor the watermark write may take — anchoring it
+    on the drain pair would fence a write to one position by the value of the other, and
+    would let a re-delivered dispatch hand off the same ground twice.
+    """
+    from . import agent_service
+
+    async with get_pool().acquire() as conn, conn.transaction():
+        await scope.check(conn)
+        await agent_service.finish_drain(
+            conn,
+            UUID(str(agent["id"])),
+            drain[0],
+            drain[1],
+            watermark_read,
+            curation_service.Position(through),
+        )
+    logger.info(
+        "curator %s finished its history drain: handed the watermark forward to %s"
+        " and cleared the drain pair",
+        agent["id"],
+        through,
+    )
 
 
 async def run(
@@ -862,9 +898,16 @@ async def run(
     workspace: dict,
     run_stamp: str,
     read_position: curation_service.Position,
+    draining: bool = False,
 ) -> str:
     """A run is a loop of passes, not one batch: read a slice, curate it everywhere
     it applies, then make that slice durable before reading the next one.
+
+    A run leaves on its own terms: the loop checks its wall before it starts a pass and
+    stops at the last committed boundary when another pass would not fit inside what is
+    left. That pre-pass check is the normal exit of a long drain and the
+    `asyncio.wait_for` wall around this call is the rescue for a scope that hangs — a
+    pass already in flight is the only work a cut run can ever lose.
 
     Each pass gets completely fresh model state in every scope, and the most a run its
     ceiling cuts off can ever discard is the pass in flight — never the whole run, which
@@ -895,11 +938,42 @@ async def run(
     # them apart: the developer endpoint zeroes the row's position precisely so this run
     # reads with no watermark, while the pair it may write against stays what its
     # dispatcher loaded. For every ordinary run the two are the same pair.
-    since = agent["curated_through"]
-    cursor = agent.get("curation_cursor") or {}
+    since, cursor = curation_service.read_position_of(agent)
+    # Which of the row's two positions this run commits. The row answers that first: a
+    # drain in flight owns the read `read_position_of` just handed this run, so it owns the
+    # commit too — a run that read the drain and wrote the watermark is the exact
+    # conflation the drain pair exists to make impossible, and its write would be clamped
+    # away as a regression. `draining` carries only the one fact the row cannot hold: a
+    # drain seeded but not yet committed, whose missing pair means "read the whole feed"
+    # and "commit into the drain". Every committed pair rebinds it below.
+    drain = curation_service.drain_of(agent)
+    if drain is None and draining:
+        drain = (since, cursor)
     pass_number = 0
+    # The loop's own budget, taken once, from the same wall `sprite_agent_service` wraps
+    # this call in — so nothing is subtracted a second time here: that wall already carries
+    # `RUN_COMMIT_RESERVE_SECONDS`. This check is the NORMAL exit of a long drain: it stops
+    # the run at a committed pass boundary with nothing in flight, so the next dispatch
+    # resumes one pass further along. The `asyncio.wait_for` wall stays as the rescue for
+    # a scope that hangs, where no pre-pass check can be reached; deleting it would let a
+    # wedged run sit until the worker kills the task, and deleting this one would make
+    # every healthy drain end on that rescue instead. Both are load-bearing.
+    loop_wall = agent_service.run_wall_seconds(agent)
+    loop_started = time.monotonic()
+    # A pass's cost is only knowable once one has run, so the second pass is bounded by
+    # the first one's measured duration, the third by the longest so far, and so on.
+    slowest_pass = 0.0
 
     while True:
+        if loop_wall - (time.monotonic() - loop_started) <= slowest_pass:
+            # Nothing is in flight to lose: every pass that ran is already durable. Say
+            # how far the drain stands so the run is readable without the row.
+            return (
+                f"Scoped curation stopped at a committed pass with its feed undrained: "
+                f"{pass_number} passes committed through "
+                f"{(since.isoformat() if since else 'the start of the feed')}, and the "
+                f"next dispatch resumes there."
+            )
         pass_number += 1
         pass_wall_started = time.monotonic()
         batch = await scoped_curation_inputs.load_batch(
@@ -930,8 +1004,9 @@ async def run(
             tasks = [group.create_task(curate(scope)) for scope in scopes]
         summaries = [task.result() for task in tasks]
 
-        moved = await _checkpoint_pass(agent, batch, fence, cursor, scopes[-1])
+        moved = await _checkpoint_pass(agent, batch, fence, cursor, scopes[-1], drain)
         if moved:
+            slowest_pass = max(slowest_pass, time.monotonic() - pass_wall_started)
             # The drain-rate meter: one line per committed pass, because a run the wall
             # cuts is only readable as the passes it finished. What a pass carried is the
             # batch's own characters, never the budget it was cut from.
@@ -947,6 +1022,8 @@ async def run(
             fence = curation_service.Position(batch.through)
             since = batch.through
             cursor = batch.cursor
+            if drain is not None:
+                drain = (batch.through, batch.cursor)
             # The log entry and the checkpoint are one event: what a pass summarised is
             # published exactly when what it read is durable, so a pass that fails
             # later, or a run the wall cuts, leaves no report of unread work behind.
@@ -967,4 +1044,9 @@ async def run(
                 f" {batch.cursor.get('partial')}: raise the curator's turn ceiling"
             )
         if not batch.cursor:
+            # Nothing is left to read up to this run's boundary, so a drain that got here
+            # has earned its hand-off. Input that arrived after `until` was never this
+            # drain's backlog — the incremental watermark owns it, exactly as before.
+            if drain is not None:
+                await _finish_drain(agent, since, cursor, drain, read_position, scopes[-1])
             return "Scoped curation completed."

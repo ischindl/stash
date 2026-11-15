@@ -257,6 +257,10 @@ def _run_lock(agent: dict, workspace):
         # The TTL is that lane's own ceiling — the same number its `wait_for` wall
         # uses, resolved by the same resolver — because a lock that expired first
         # would let a second dispatch into a run still writing the wiki.
+        # The TTL and the wall are deliberately two different numbers now: the wall
+        # is the ceiling MINUS `RUN_COMMIT_RESERVE_SECONDS`, so a run stops and
+        # commits before its fence expires, and shortening the fence to match the
+        # wall would open the fence exactly while the commit is still in flight.
         return sprite_agent_service._TurnLock(
             f"scoped-curator-{agent['id']}", agent_service.turn_ceiling_seconds(agent)
         )
@@ -270,13 +274,13 @@ def _run_lock(agent: dict, workspace):
     return sprite_agent_service.agent_run_lock(agent["id"], REAP_STRIKE_AGE_SECONDS)
 
 
-async def _run_turn(agent, stamp, workspace, read):
+async def _run_turn(agent, stamp, workspace, read, draining: bool = False):
     from ..services import sprite_agent_service
 
     if workspace is None:
-        return await sprite_agent_service.run_scheduled(agent, stamp, read)
+        return await sprite_agent_service.run_scheduled(agent, stamp, read, draining=draining)
     return await sprite_agent_service.run_scheduled(
-        agent, stamp, read, workspace=workspace, scoped_lock_held=True
+        agent, stamp, read, workspace=workspace, scoped_lock_held=True, draining=draining
     )
 
 
@@ -286,9 +290,64 @@ async def _pending_input(agent: dict, workspace) -> bool:
     if workspace is not None:
         return await scoped_curation_inputs.has_pending(agent, workspace)
     owner = UUID(str(agent["user_id"]))
-    return await curation_service.has_changes_since(
-        owner, owner, curation_service.position_of(agent), agent["curator_wiki"]
+    drain = curation_service.drain_of(agent)
+    # A drain in flight owns the answer: its backlog is what is pending, and the watermark
+    # says nothing about how much of it is left. No drain pair means no drain, and the
+    # question stays the one it always was — the release-0 check on a curator that has
+    # never run answers through this same unmodified path.
+    position = (
+        curation_service.Position(drain[0])
+        if drain is not None
+        else curation_service.position_of(agent)
     )
+    return await curation_service.has_changes_since(owner, owner, position, agent["curator_wiki"])
+
+
+async def _commit_personal_drain(agent, watermark_read, drain, through) -> None:
+    """Commit where one personal-lane pass read, on the drain's own pair.
+
+    The personal lane has no checkpoint inside the turn — one turn reads one batch — so the
+    boundary the run earned IS its committed pass. It then moves the same fenced primitive
+    the scoped lane moves per pass, so neither lane can advance a drain the other holds,
+    and the watermark is not written here: this run read from before it, and
+    `mark_curated` would refuse that as a regression, which is the log line this card was
+    opened on.
+
+    A boundary that stopped INSIDE the instant the drain stood on cannot be stored: the
+    pair has no event half, so writing the instant would claim the whole tie was read.
+    That is one instant's events outweighing one pass's budget, and it raises with the
+    ceiling named rather than leaving a plateau for the next dispatch to repeat.
+    """
+    from ..database import get_pool
+    from ..services import agent_service
+
+    agent_id = UUID(str(agent["id"]))
+    read_at, read_cursor = drain if drain is not None else (None, {})
+    if through.at is None:
+        raise RuntimeError(
+            f"curator {agent_id} drain committed no position: the feed read nothing and "
+            "offered no boundary to advance to"
+        )
+    if read_at is not None and through.at <= read_at:
+        raise RuntimeError(
+            f"curator {agent_id} cannot drain past {read_at}: the events packed into that"
+            " one instant outweigh what one pass of this run's input budget can hold, and"
+            " the drain pair cannot record a position inside an instant — raise the"
+            " curator's turn ceiling"
+        )
+    async with get_pool().acquire() as conn, conn.transaction():
+        await agent_service.advance_drain(conn, agent_id, read_at, read_cursor, through.at, {})
+        if not await _pending_input(
+            {**agent, "drain_through": through.at, "drain_cursor": {}}, None
+        ):
+            # fenced on where this transaction just PUT the drain, not on the pair the pass
+            # read: the advance above moved it, and a hand-off fenced on the old pair would
+            # refuse the run's own commit — the scoped lane updates its `drain` after every
+            # checkpoint for exactly this reason, and the personal lane has its checkpoint
+            # and its hand-off inside one function.
+            await agent_service.finish_drain(
+                conn, agent_id, through.at, {}, watermark_read, through
+            )
 
 
 async def _run_curator_locked(
@@ -296,9 +355,7 @@ async def _run_curator_locked(
 ):
     from ..services import (
         agent_service,
-        billing_service,
         curation_service,
-        scoped_curation_service,
         sprite_agent_service,
     )
 
@@ -311,46 +368,72 @@ async def _run_curator_locked(
     if platform_initiated and agent["run_mode"] != "scheduled":
         return
     if catchup:
-        if workspace is None:
-            return
-        await scoped_curation_service.require_run_auth(agent, workspace=workspace)
-        owner = UUID(str(agent["user_id"]))
-        if not await billing_service.is_pro(owner) or not await _pending_input(agent, workspace):
+        if not await _chain_permitted(agent, workspace) or not await _pending_input(
+            agent, workspace
+        ):
             return
         if not await agent_service.claim_catchup(agent_id, curator_catchup_pass_ceiling() - 1):
             return
-    # The compare-and-set anchor for mark_curated is the stored position this run
-    # actually loaded — captured BEFORE the full_history override below, which zeroes
-    # the feed's position but must not change what the run may write against.
+    # The compare-and-set anchor for the watermark is the stored position this run
+    # actually loaded — captured BEFORE the drain pair below replaces what the run READS,
+    # which must not change what the run may write against.
     read = curation_service.position_of(agent)
-    if full_history:
+    # A history drain reads and writes its own resumable pair, never the watermark: the
+    # backlog it works through sits behind a watermark that is monotone by contract, so a
+    # run that checkpointed into the watermark would be refused by the very clamp that
+    # makes the watermark safe, and would re-read its first slice on every dispatch until
+    # the worker's soft time limit killed it. A dispatch that finds a pair already set
+    # resumes that pair: seeding a drain in flight back to its beginning is the duplicate
+    # read of the same slice that this whole mechanism exists to make impossible. And a
+    # pair that has committed nothing carries no position to resume from, so the seed is
+    # the ABSENCE of a pair and needs no write that could itself be mistaken for progress.
+    drain = curation_service.drain_of(agent)
+    if full_history and drain is not None:
+        logger.info(
+            "agent schedule: curator %s resumes the history drain it already has at %s"
+            " instead of re-zeroing it",
+            agent_id,
+            drain[0],
+        )
+    draining = full_history or drain is not None
+    if draining:
+        # The pair this run reads and commits. A seeded drain has none yet, and "none yet"
+        # means the whole feed: a backfill starts before the first event ever written.
+        drain_at, drain_cursor = drain if drain is not None else (None, {})
         agent = {
             **agent,
-            "curated_through": None,
+            "curated_through": drain_at,
             "curated_through_event_id": None,
-            "curation_cursor": {},
+            "curation_cursor": drain_cursor,
         }
     now = datetime.now(UTC)
     await agent_service.mark_run(agent_id, metered=metered)
     try:
         # Seconds-resolution stamp so a manual run never shares a session with
         # the beat's minute-stamped run.
-        await _run_turn(agent, now.strftime("%Y%m%d%H%M%S"), workspace, read)
+        await _run_turn(agent, now.strftime("%Y%m%d%H%M%S"), workspace, read, draining)
         if workspace is None:
             # The boundary is computed from the position the run ACTUALLY read from,
-            # which the full_history override moved to `never`: a backfill counts the
-            # whole corpus as its backlog, so its overflow boundary sits under the
-            # stored cursor and the clamp keeps the cursor where an earlier run left
-            # it. The completion write is a compare-and-set on `read`, so an ingest
-            # rewind or an overlapping run cannot be written over.
+            # which a drain moved to its own pair: a backfill counts the whole corpus as
+            # its backlog, so its overflow boundary sits under the stored cursor and the
+            # clamp keeps the cursor where an earlier run left it. The completion write is
+            # a compare-and-set on `read`, so an ingest rewind or an overlapping run cannot
+            # be written over.
             through = await curation_service.complete_through(
                 UUID(str(agent["user_id"])),
                 curation_service.position_of(agent),
                 now,
                 agent["curator_wiki"],
                 agent.get("curator_folder_id"),
+                # A drain is bounded to what its own wall can finish, by the same budget
+                # its feed was cut by; an incremental batch keeps the bound it has always
+                # had (`_MAX_EVENTS`), which reaches its wall.
+                max_event_chars=(curation_service.drain_budget_of(agent) if draining else None),
             )
-            await agent_service.mark_curated(agent_id, read, through)
+            if draining:
+                await _commit_personal_drain(agent, read, drain, through)
+            else:
+                await agent_service.mark_curated(agent_id, read, through)
         await agent_service.mark_run_succeeded(agent_id)
     except Exception as e:
         if workspace is not None and isinstance(e, sprite_agent_service.TurnInProgress):
@@ -364,10 +447,17 @@ async def _run_curator_locked(
             # the lane actually advanced, which the progress gate below answers. The
             # failure stands: the row still reports `failed` and the task still raises.
             await _dispatch_curator_catchup(
-                agent, now, catchup_remaining, workspace=workspace, after_ceiling=True
+                agent,
+                now,
+                catchup_remaining,
+                workspace=workspace,
+                after_ceiling=True,
+                drained=draining,
             )
         raise
-    await _dispatch_curator_catchup(agent, now, catchup_remaining, workspace=workspace)
+    await _dispatch_curator_catchup(
+        agent, now, catchup_remaining, workspace=workspace, drained=draining
+    )
 
 
 async def _skip_busy_curator(agent_id: UUID, *, metered: bool) -> None:
@@ -384,6 +474,44 @@ async def _skip_busy_curator(agent_id: UUID, *, metered: bool) -> None:
 _WORKSPACE_UNSET = object()
 
 
+async def _chain_permitted(agent: dict, workspace) -> bool:
+    """May this curator's chain continue to another pass, and one line saying why not.
+
+    Permission is the COST of the next pass, not the plan of its owner. What the free
+    monthly allowance rations is platform tokens, and `require_run_auth` is the single
+    source of truth for whether this lane spends any: a chained pass on an endpoint the
+    customer pays for themselves costs the platform nothing, so a `plan='free'` account
+    draining months of history gets its chain, while a lane that does spend platform
+    tokens stays unchained unless its owner genuinely has an unlimited plan. Which is why
+    no lane test stands here: the metered answer is the whole predicate, and a check on
+    `workspace is None` would be a second, dumber answer to the same question — the one
+    that denied a founder account the only drain its own box could have paid for.
+
+    The order is the one `_dispatch_due_agent` records as mechanical: the credential is
+    resolved first, and its raise for a lane that cannot run at all (`NeedsAuth`,
+    `ProviderNotConfigured`) is kept and deliberately not swallowed here — a lane that
+    cannot run is not a lane that was declined for cost, and the two must not read alike.
+
+    The line is AC (d)'s accounting record: both inputs and the decision, so a reader of
+    the log can tell a declined chain from a stalled one without the row. It is phrased to
+    collide with neither existing assertion on log prose (no `not moved`, and it does not
+    begin `curator pass=`).
+    """
+    from ..services import billing_service, scoped_curation_service
+
+    metered = await scoped_curation_service.require_run_auth(agent, workspace=workspace)
+    pro = await billing_service.is_pro(UUID(str(agent["user_id"])))
+    allowed = not metered or pro
+    logger.info(
+        "agent schedule: curator %s may chain its next pass: metered=%s is_pro=%s -> %s",
+        agent["id"],
+        metered,
+        pro,
+        "chaining" if allowed else "declining, this pass would spend what the allowance rations",
+    )
+    return allowed
+
+
 async def _dispatch_curator_catchup(
     agent: dict,
     run_started: datetime,
@@ -391,18 +519,27 @@ async def _dispatch_curator_catchup(
     *,
     workspace=_WORKSPACE_UNSET,
     after_ceiling: bool = False,
+    drained: bool = False,
 ) -> None:
     """A dispatch failure must not undo the work the run left behind.
 
     `after_ceiling` says the run ended on its own ceiling rather than on a broken
     curator, which is the one case where the outcome row says `failed` and the chain
     still has to continue: the passes under that failure completed and checkpointed.
+
+    `drained` says the run was working a history drain, so the progress the chain must
+    see is the drain pair's, not the watermark's.
     """
     from ..services import alert_service
 
     try:
         await _queue_curator_catchup(
-            agent, run_started, remaining, workspace=workspace, after_ceiling=after_ceiling
+            agent,
+            run_started,
+            remaining,
+            workspace=workspace,
+            after_ceiling=after_ceiling,
+            drained=drained,
         )
     except Exception:
         logger.exception("agent schedule: catch-up dispatch failed for agent %s", agent["id"])
@@ -423,28 +560,40 @@ async def _queue_curator_catchup(
     *,
     workspace=_WORKSPACE_UNSET,
     after_ceiling: bool = False,
+    drained: bool = False,
 ) -> None:
-    from ..services import agent_service, billing_service, scoped_curation_service
+    from ..services import agent_service, curation_service, scoped_curation_service
 
     if workspace is _WORKSPACE_UNSET:
         workspace = await scoped_curation_service.workspace_for_agent(agent)
-    if workspace is None:
-        return
     current = await agent_service.get_agent_by_id(UUID(str(agent["id"])))
-    through = current["curated_through"]
-    before = agent["curated_through"]
+    if drained:
+        # A draining run progressed on its drain pair, and the watermark says nothing
+        # about it: the backlog being drained sits BEHIND that watermark by design, so a
+        # gate watching the watermark would read a lane that just committed a pass as one
+        # that got nowhere and stop the chain on the pass that needed the next one most.
+        progressed = (current["drain_through"], current.get("drain_cursor") or {}) != (
+            agent["drain_through"],
+            agent.get("drain_cursor") or {},
+        ) and curation_service.drain_of(current) is not None
+    else:
+        through = current["curated_through"]
+        before = agent["curated_through"]
+        progressed = not (
+            through is None
+            or (
+                before is not None
+                and through <= before
+                and current.get("curation_cursor") == agent.get("curation_cursor")
+            )
+        )
     if (
         current["run_mode"] != "scheduled"
         # A failure ends the chain, except the failure a ceiling causes: that one has
         # completed passes behind it and unread material in front of it.
         or (current["last_run_outcome"] != "ran" and not after_ceiling)
-        or through is None
-        or (
-            before is not None
-            and through <= before
-            and current.get("curation_cursor") == agent.get("curation_cursor")
-        )
-        or not await billing_service.is_pro(UUID(str(current["user_id"])))
+        or not progressed
+        or not await _chain_permitted(current, workspace)
     ):
         return
     if not await _pending_input(current, workspace):
@@ -464,6 +613,10 @@ async def _queue_curator_catchup(
     # both: the progress gate above refuses a cut run that checkpointed no pass, so a
     # lane that cannot get through even one pass is never turned into a chain of paid
     # retries. Permission revocation still ends it, and no personal run is paid here.
+    # A lane that stays closed on a free account is closed by that predicate, not by a
+    # test of which lane it is: `_chain_permitted` asks what the next pass costs, and a
+    # personal run dialing the customer's own endpoint answers "nothing the allowance
+    # rations", which is why a founder-account drain of months of history chains at all.
     # `metered=False` here because the PLATFORM is the trigger for a follow-on
     # pass, not because of which endpoint it dials; `platform_initiated` below is
     # that trigger, said in the open. Metering this chain is deferred to the
@@ -697,8 +850,20 @@ async def _run_scheduled_locked(agent, stamp, workspace, metered: bool = True):
     # their completion write on it, so the position written against and the position
     # read cannot drift; a move under the run fails loudly.
     read = curation_service.position_of(agent)
+    # A history drain left open by an earlier dispatch owns the next run's read too, and
+    # the beat's tick is such a next run: it must commit on the drain pair rather than
+    # `mark_curated`, whose monotone clamp would refuse a boundary read from behind the
+    # watermark and log the drain's progress as a discarded run.
+    drain = curation_service.drain_of(agent)
+    if drain is not None:
+        agent = {
+            **agent,
+            "curated_through": drain[0],
+            "curated_through_event_id": None,
+            "curation_cursor": drain[1],
+        }
     try:
-        await _run_turn(agent, stamp, workspace, read)
+        await _run_turn(agent, stamp, workspace, read, drain is not None)
         if agent["is_curator"] and workspace is None:
             # `now` predates the run, so changes made during it stay ahead of
             # the watermark and are picked up next time. If the delta
@@ -710,12 +875,21 @@ async def _run_scheduled_locked(agent, stamp, workspace, metered: bool = True):
             # ingest rewind or an overlapping run cannot be written over.
             through = await curation_service.complete_through(
                 user_id,
-                read,
+                curation_service.position_of(agent),
                 now,
                 agent["curator_wiki"],
                 agent.get("curator_folder_id"),
+                # The beat's tick into a drain in flight is a drain pass: it is cut by the
+                # same budget, or its boundary would stand further ahead than the feed it
+                # was handed and the drain would claim characters nobody showed the model.
+                max_event_chars=(
+                    curation_service.drain_budget_of(agent) if drain is not None else None
+                ),
             )
-            await agent_service.mark_curated(agent_id, read, through)
+            if drain is not None:
+                await _commit_personal_drain(agent, read, drain, through)
+            else:
+                await agent_service.mark_curated(agent_id, read, through)
         await agent_service.mark_run_succeeded(agent_id)
     except Exception as e:
         if workspace is not None and isinstance(e, sprite_agent_service.TurnInProgress):
@@ -733,7 +907,11 @@ async def _run_scheduled_locked(agent, stamp, workspace, metered: bool = True):
             )
     else:
         await _dispatch_curator_catchup(
-            agent, now, curator_catchup_pass_ceiling() - 1, workspace=workspace
+            agent,
+            now,
+            curator_catchup_pass_ceiling() - 1,
+            workspace=workspace,
+            drained=drain is not None,
         )
 
 
