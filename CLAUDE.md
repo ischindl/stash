@@ -159,6 +159,13 @@ write left that tree behind its own ref and the difference read as a huge staged
 that had already landed. That diagnosis and every clause above stand; only the primitive
 changed, because the primitive it named no longer has a tree to move.
 
+A landing also ends a lane: the engine's finalization deletes the ref of the lane it landed, so a
+lane ref that has vanished is not automatically a sweep's doing. Before a sweep deletes any lane of
+its own, it evaluates the measured conjunction in `docs/fusion-lane-sweep-predicate.md` — `done`,
+`mergeDetails.mergeConfirmed`, a `commitSha` contained in trunk or the declared no-op landing, and an
+empty `git diff --quiet main...lane` — with patch-id reported as evidence and never as a substitute
+for the `done` conjunct. Bundle and tag the lane first, so the verdict stays reversible either way.
+
 <!-- stash-context -->
 ## Stash
 
