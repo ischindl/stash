@@ -22,18 +22,28 @@ nowhere while its batch still owed input.
 
 **What was removed:** `_MAX_INPUT_CHARS` and the default `max_chars` on
 `scoped_curation_inputs.load_batch`. There is no constant input budget any more — `input_budget()`
-derives one whole-run number from the run's own ceiling through `_INPUT_CHARS_PER_CEILING_SECOND`, and
+derives one whole-run number from the run's own ceiling — and
 `load_batch` and `load_scope` take their arguments (`max_chars`, `batch=`) as required parameters
 rather than loading a slice of their own behind the run's back. Three scopes on one lane read slices
 of the one batch; they do not spend three budgets.
+*(Corrected by STAS-458: the sizing number this card introduced,
+`_INPUT_CHARS_PER_CEILING_SECOND`, no longer exists — a pass is now priced in model turns from the
+run's wall, not in seconds of ceiling. The rest of this paragraph stands.)*
 
-**Honest about the number.** `_INPUT_CHARS_PER_CEILING_SECOND` is 333 characters per ceiling-second.
+**Honest about the number.** *(Corrected in place by STAS-458; the original claim is kept so the
+correction can be read against it.)* `_INPUT_CHARS_PER_CEILING_SECOND` was 333 characters per
+ceiling-second.
 Its denominator is measured — the 600.05 s the founder curator's own mark_run took to reach its wall
 on 2026-11-10 — but its numerator inherits the input volume that lane was already being handed, so it
-is a calibration carried over from the bound it replaces, not an independent throughput probe. The
+is a calibration carried over from the bound it replaces, not an independent throughput probe. ~~The
 measurement that would have priced the numerator live could not be taken: this host holds no model
 credential the scoped lane can dial. What bounds the damage of a wrong rate is the per-pass
-checkpoint, not that constant.
+checkpoint, not that constant.~~ Both struck sentences were wrong. The probe could be taken — a
+curator pinned to the owner's own endpoint runs the personal lane on this host and stamps its samples
+`lane=personal` — it had simply never been taken; and the checkpoint bounded nothing when the rate was
+~19x off, because every in-flight pass died uncommitted. STAS-458 replaced the whole rate with a turn
+price (95.0 s per 291-character model turn, measured on the founder's box) sized from the run wall;
+see `stas-458-turn-priced-passes.md`.
 
 **What users see when the ceiling does cut a run off:** the run still reports `failed` and the task
 still raises, but it now fails as `RunCeilingExceeded`, and that one failure hands the backlog the cut

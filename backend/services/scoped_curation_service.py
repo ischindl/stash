@@ -37,32 +37,68 @@ logger = logging.getLogger(__name__)
 _READ_CHARS = 16_000
 _MAX_TURNS = 40
 _MAX_CONCURRENT_SCOPES = 4
-# Input characters that one second of a curator's own run ceiling buys. This is the
-# one number that sizes a pass, so its provenance is spelled out: it is the input
-# volume the founder production lane was handed per second of its ceiling, measured
-# on 2026-11-10 (curator 2c86d9f1 mark_run 11:45:46.060 -> wall raised 11:55:46.110,
-# 600.05 s consumed, AGENT_TURN_TIMEOUT_SECONDS 600) against the 200_000-character
-# slice that lane was given and an eligible backlog of 1,930,114 characters, i.e. a
-# lane that always fills whatever slice it is offered. It is NOT an independent
-# throughput probe: the live probe of STAS-438 Step 1 could not run here because no
-# model credential exists on that host, so the numerator inherits the incumbent
-# budget and only its denominator is measured. Treat it as the starting calibration,
-# not as a settled rate; what bounds the damage of a wrong value is the per-pass
-# checkpoint in `run`, not this number.
-_INPUT_CHARS_PER_CEILING_SECOND = 333
+# The wall-seconds one model turn costs, and the batch characters one turn was
+# observed to carry. Measured live on the founder's copy on 2026-11-15 (STAS-458
+# Step 1): demo copy `stashdemo` over a production dump, personal-lane folder curator
+# 42fad1ea, endpoint vLLM Qwen3.8-Flash-Next-FP4-Local-AZ (model `qwen`), the digest
+# arm on the same slow box. Three wall samples carried 0 / 2,255 / 13,647 input
+# characters and spent 1,360.6 / 735.9 / 1,259.1 s, every one dying at its 570 s wall
+# with nothing committed - the zero drain this price replaces. Model turns on this
+# endpoint time at 64-90 s at reasoning level `low` and 90-95 s at `off`, where the
+# endpoint unbinds its default; the slowest arm is priced, not the mean: T = 95 s.
+# Characters per turn is characters x turn_seconds / pass_seconds taking the arm that
+# yields fewer: the binding sample is 2,255 x 95 / 735.9 = 291 (the 13,647-character
+# sample bounds 1,030 and the operator's completed pass 759 - both more generous, so
+# neither is priced). The binding sample died mid-pass, so 291 is the most generous
+# figure its wall licenses, not a mean; a finished pass could only cost fewer
+# characters per turn. What the pair commits at the founder's own numbers: a 570 s
+# wall affords 6 turns x 291 = 1,746 characters, really costing 569 s at that
+# sample's 0.326 s/char - where 333 characters per ceiling-second offered 189,810,
+# one hundred and eight such walls, which is why that lane never reached a checkpoint.
+_MODEL_TURN_SECONDS = 95.0
+_INPUT_CHARS_PER_MODEL_TURN = 291
 
 
-def input_budget(ceiling_seconds: int | float) -> int:
-    """How many input characters one run of a curator may be handed, from its ceiling.
+# The wall-seconds of the cheapest slice this module would ever hand the loader: one
+# turn, or the loader's minimum fillable batch at the calibrated price, whichever
+# costs more. `input_budget` refuses every wall that does not strictly exceed it,
+# which is a superset of the walls the seeded loop declines - so no run ever
+# licenses a pass and then refuses to start it. Read at call time, like the seed,
+# so a test that patches the pair moves the guard with it.
+def _smallest_pass_seconds() -> float:
+    return max(
+        _MODEL_TURN_SECONDS,
+        scoped_curation_inputs.MINIMUM_BATCH_CHARS
+        * _MODEL_TURN_SECONDS
+        / _INPUT_CHARS_PER_MODEL_TURN,
+    )
 
-    Two facts make this the shape it is. The value bounds ONE batch, and every
-    scoping of that run reads a filtered slice of that same batch, so N scopes never
-    multiply it. And the wall wraps the whole run, not a scope, so one pass has to
-    fit inside the ceiling the curator's own row names.
+
+def input_budget(wall_seconds: int | float) -> int:
+    """How many input characters one pass of a curator may be handed, from its run wall.
+
+    The pass is priced in model turns - the smallest unit a curator can be interrupted
+    below - counted out of `agent_service.run_wall_seconds`, the same wall the loop in
+    `run` runs on, not the row's ceiling: a drain exists because the backlog outran the
+    wall, and a slice sized by the ceiling is a slice the wall cannot finish. Two facts
+    carry over from STAS-438: the value bounds ONE batch, which every scoping of the
+    pass reads a filtered slice of, so N scopes never multiply it; and the wall wraps
+    the whole run, so one pass has to fit inside it.
     """
-    if ceiling_seconds <= 0:
-        raise ValueError(f"a curator run ceiling must be positive, got {ceiling_seconds}")
-    return int(ceiling_seconds * _INPUT_CHARS_PER_CEILING_SECOND)
+    if wall_seconds <= 0:
+        raise ValueError(f"a curator run wall must be positive, got {wall_seconds}")
+    minimum = scoped_curation_inputs.MINIMUM_BATCH_CHARS
+    bound = _smallest_pass_seconds()
+    if wall_seconds <= bound:
+        raise ValueError(
+            f"a curator run wall of {wall_seconds}s cannot buy the cheapest pass: the "
+            f"loader's smallest batch of {minimum} characters costs "
+            f"{bound:.1f} wall-seconds at the calibrated "
+            f"{_MODEL_TURN_SECONDS}s per {_INPUT_CHARS_PER_MODEL_TURN}-character model "
+            "turn: raise the curator's run ceiling"
+        )
+    turns = int(wall_seconds // _MODEL_TURN_SECONDS)
+    return max(turns * _INPUT_CHARS_PER_MODEL_TURN, minimum)
 
 
 # Re-ingesting retrievals feeds historical cross-user copies back into the
@@ -903,9 +939,10 @@ async def run(
     """A run is a loop of passes, not one batch: read a slice, curate it everywhere
     it applies, then make that slice durable before reading the next one.
 
-    A run leaves on its own terms: the loop checks its wall before it starts a pass and
-    stops at the last committed boundary when another pass would not fit inside what is
-    left. That pre-pass check is the normal exit of a long drain and the
+    A run leaves on its own terms: the loop checks its wall before it starts a pass -
+    counting the FIRST pass against the calibrated turn price it seeds - and stops at
+    the last committed boundary when another pass would not fit inside what is left.
+    That pre-pass check is the normal exit of a long drain and the
     `asyncio.wait_for` wall around this call is the rescue for a scope that hangs — a
     pass already in flight is the only work a cut run can ever lose.
 
@@ -924,10 +961,13 @@ async def run(
     from . import agent_service
 
     owner = workspace["scope_user_id"]
-    ceiling = agent_service.turn_ceiling_seconds(agent)
     # The wall wraps the whole run and every scope reads a slice of the same batch, so
-    # the budget is derived once from that ceiling and no scope multiplies it.
-    budget = input_budget(ceiling)
+    # the budget is derived once from the run's own wall and no scope multiplies it.
+    # The row's ceiling left this path with STAS-458: it reaches the budget only
+    # through `run_wall_seconds` - capped by the worker, shortened by the commit
+    # reserve - because a slice sized by the ceiling is a slice the wall cannot finish.
+    loop_wall = agent_service.run_wall_seconds(agent)
+    budget = input_budget(loop_wall)
     internal = agent["curator_wiki"] == "internal"
     # One boundary for the whole run: input that arrives while this run works waits for
     # the next scheduled run, exactly as it did when a run was one pass.
@@ -950,19 +990,22 @@ async def run(
     if drain is None and draining:
         drain = (since, cursor)
     pass_number = 0
-    # The loop's own budget, taken once, from the same wall `sprite_agent_service` wraps
-    # this call in — so nothing is subtracted a second time here: that wall already carries
-    # `RUN_COMMIT_RESERVE_SECONDS`. This check is the NORMAL exit of a long drain: it stops
+    # `loop_wall`, taken above from `agent_service.run_wall_seconds`, is the same wall
+    # `sprite_agent_service` wraps this call in - so nothing is subtracted a second
+    # time here: that wall already carries `RUN_COMMIT_RESERVE_SECONDS`. The pre-pass
+    # check against it is the NORMAL exit of a long drain: it stops
     # the run at a committed pass boundary with nothing in flight, so the next dispatch
     # resumes one pass further along. The `asyncio.wait_for` wall stays as the rescue for
     # a scope that hangs, where no pre-pass check can be reached; deleting it would let a
     # wedged run sit until the worker kills the task, and deleting this one would make
     # every healthy drain end on that rescue instead. Both are load-bearing.
-    loop_wall = agent_service.run_wall_seconds(agent)
     loop_started = time.monotonic()
-    # A pass's cost is only knowable once one has run, so the second pass is bounded by
-    # the first one's measured duration, the third by the longest so far, and so on.
-    slowest_pass = 0.0
+    # The loop is seeded with the calibrated turn price, so the very first pass is
+    # bounded by the same subtraction the later ones get: a wall that outlives the
+    # budget's guard by less than one cheap pass never starts one. Every pass that
+    # completes replaces the seed with the longest duration actually measured - the
+    # second pass bounded by the first, the third by the longest so far, and so on.
+    slowest_pass = float(_MODEL_TURN_SECONDS)
 
     while True:
         if loop_wall - (time.monotonic() - loop_started) <= slowest_pass:
@@ -987,9 +1030,10 @@ async def run(
         )
         if not batch.documents and batch.cursor:
             raise RuntimeError(
-                f"A curator ceiling of {ceiling}s buys {budget} input characters, which is "
-                "less than the smallest pass the loader can make: raise the curator's"
-                " turn ceiling"
+                f"A {loop_wall:.1f}s run wall buys {budget} input characters at the "
+                f"calibrated {_MODEL_TURN_SECONDS}s per "
+                f"{_INPUT_CHARS_PER_MODEL_TURN}-character turn, less than the smallest pass "
+                "the loader can make: raise the curator's run ceiling"
             )
         scopes = await _pass_scopes(agent, workspace, session, batch)
         concurrency = asyncio.Semaphore(_MAX_CONCURRENT_SCOPES)
@@ -1006,18 +1050,28 @@ async def run(
 
         moved = await _checkpoint_pass(agent, batch, fence, cursor, scopes[-1], drain)
         if moved:
-            slowest_pass = max(slowest_pass, time.monotonic() - pass_wall_started)
+            pass_seconds = time.monotonic() - pass_wall_started
+            slowest_pass = max(slowest_pass, pass_seconds)
+            characters = sum(len(item["content"]) for item in batch.documents)
             # The drain-rate meter: one line per committed pass, because a run the wall
             # cuts is only readable as the passes it finished. What a pass carried is the
-            # batch's own characters, never the budget it was cut from.
+            # batch's own characters, never the budget it was cut from - and since
+            # STAS-458 the line carries both prices side by side: what the calibration
+            # says a character costs, and what this pass's characters actually cost.
             logger.info(
-                "curator pass=%s agent=%s committed_through=%s characters=%s scopes=%s wall=%.1fs",
+                "curator pass=%s agent=%s committed_through=%s characters=%s scopes=%s "
+                "wall=%.1fs budget=%s turn_seconds=%.4f seconds_per_character=%.4f "
+                "calibrated_seconds_per_character=%.4f",
                 pass_number,
                 agent["id"],
                 batch.through.isoformat(),
-                sum(len(item["content"]) for item in batch.documents),
+                characters,
                 len(scopes),
-                time.monotonic() - pass_wall_started,
+                pass_seconds,
+                budget,
+                _MODEL_TURN_SECONDS,
+                pass_seconds / characters if characters else float("nan"),
+                _MODEL_TURN_SECONDS / _INPUT_CHARS_PER_MODEL_TURN,
             )
             fence = curation_service.Position(batch.through)
             since = batch.through
@@ -1041,7 +1095,7 @@ async def run(
             # reading the same characters again until the wall arrives.
             raise RuntimeError(
                 f"A {budget}-character slice cannot advance the curation cursor"
-                f" {batch.cursor.get('partial')}: raise the curator's turn ceiling"
+                f" {batch.cursor.get('partial')}: raise the curator's run ceiling"
             )
         if not batch.cursor:
             # Nothing is left to read up to this run's boundary, so a drain that got here

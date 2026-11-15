@@ -154,9 +154,12 @@ Before starting:
   A ceiling is a property of a curator, not of the process — Settings → Curators
   gives each one its own "Run ceiling" in seconds, which is what a lane running
   on a slow local model endpoint needs, and clearing it returns that curator to
-  this setting. The same number also sizes what one pass of that run is handed to
-  read, so a curator with a short ceiling reads a shorter slice per pass rather
-  than reading a full slice and losing it at the wall. A curator's own number
+  this setting. What one pass of that run is handed to read is sized from the wall that number
+  resolves to — not the raw ceiling — priced in model turns: turns-the-wall-affords times
+  characters-per-measured-turn, floored at the loader's 1,024-character smallest batch. Because the
+  wall is the ceiling capped by the worker's own task ceiling, no slice is ever sized beyond what the
+  worker can let it walk. A ceiling too small to buy even the cheapest pass (~334 s at the shipped
+  price) fails the run loudly and names the price, rather than draining nothing forever. A curator's own number
   bounds both its run and the lock that
   keeps a second run of that curator from starting while the first is still
   going, so the two can never disagree: a lock keyed shorter than the wall would
@@ -197,7 +200,10 @@ Before starting:
   All four also run with `--loglevel=info`, so an empty window in that log is neither a
   level problem nor a lost record: it means the run never reached a line worth
   printing. The scoped lane additionally writes one `curator pass=` meter line per
-  committed pass, which is the line to watch while a backlog drains.
+  committed pass, which is the line to watch while a backlog drains: it carries the
+  granted `budget=`, the calibrated seconds-per-character, and what the pass's own
+  characters actually cost (`seconds_per_character=`), so calibration drift reads off
+  the worker log without dialing the model.
 
 ```bash
 docker compose -f docker-compose.prod.yml config --quiet

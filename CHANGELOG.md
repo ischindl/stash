@@ -220,6 +220,20 @@ everything before it is captured in git history (`git log`), not here.
 
 ### Fixed
 
+- Curator runs on slow model boxes drain instead of spinning. One pass used to be sized by
+  multiplying the run ceiling by 333 characters per second — a rate whose denominator was how fast
+  an old run died, not how fast the model reads — and on a box like the founder's own vLLM server
+  that asked for ~19× more per pass than the run wall could carry: 199,800 characters offered against
+  a wall that measures ~0.125 s per character, about forty-four walls of reading per pass. The
+  result on the founder stack was 42+ runs, zero checkpoints, a watermark frozen since 2026-08-22.
+  A pass is now priced in model turns — turns-the-wall-affords × characters-per-measured-turn, from
+  95 s per turn and 291 characters per turn measured on a real local box, floored at the loader's
+  1,024-character smallest batch — and it is sized from the run wall rather than the raw ceiling, so
+  the worker's cap reaches the slice too. A ceiling that cannot buy even the cheapest pass (~334 s
+  at the shipped price) now fails the run loudly, naming the price and what to raise, instead of
+  pretending to work forever. The per-pass `curator pass=` log line prints the granted budget, the
+  calibrated price per character, and what the pass's characters actually cost, side by side.
+
 - The folder share panel stays on screen on a narrow display, and with it the address you
   hand an agent. The popover used to be placed by CSS alone: `right-0` pinned it against
   its button and `max-w-[calc(100vw-2rem)]` only ever shrank its width, so the panel's left

@@ -223,7 +223,9 @@ loader that hands back the slice it was given and counts the loads, so a run tha
 same characters again fails on the count. A pass's summary is published with its checkpoint, so a
 pass that fails later, or a run the wall cuts, leaves no report of unread work behind, and each
 committed pass logs one INFO drain-rate line — pass number, agent, committed instant, the batch's
-own characters, scope count, that pass's wall — which is what makes a cut run readable as the
+own characters, scope count, that pass's wall, and since STAS-458 the granted `budget=` beside the
+calibrated `turn_seconds=` / `calibrated_seconds_per_character=` and the `seconds_per_character=` the
+pass's own characters actually cost — which is what makes a cut run readable as the
 passes it finished; `test_one_run_drains_a_document_larger_than_its_budget_in_committed_passes`
 pins one line per committed pass and no line for one that committed nothing. An ingest rewind or
 an overlapping run therefore matches no row instead of being stamped over. Where the read
@@ -306,16 +308,33 @@ directions. Honest gap, reported rather than patched: a scoped workspace answers
 construction because the backend's key pays, so an operator running a scoped workspace on their own
 hardware cannot demonstrate the free-lane half of this rule from that workspace's row.
 
-**The ceiling is also the number the input slice is sized from, and the rate that converts one to the
-other is measured, not guessed.** `input_budget` multiplies the ceiling by
-`_INPUT_CHARS_PER_CEILING_SECOND`, and `run` reads the ceiling once, so the slice one pass is handed
-cannot be widened without widening the wall that bounds it. The constant's provenance is written where
-it is defined and it deserves reading: its denominator is the 600.05 s a founder curator's mark_run
-took to reach its wall on 2026-11-10, while its numerator is the input volume that lane was already
-being handed, so it is a calibration carried over from the previous bound and not an independent
-throughput probe — the live probe that would have measured it could not run, because the host holds no
-model credential the scoped lane can dial. What bounds the damage of a wrong rate is therefore the
-per-pass checkpoint above, not the number. The failure the wall raises says which of the two it was:
+**The input slice is sized from the run wall in model turns, and the price is measured on a real
+box, not carried over.** `input_budget` takes the wall the loop works to
+(`agent_service.run_wall_seconds` — the same number `sprite_agent_service` cuts the run at), returns
+`int(wall // T) * C` floored at the loader's `MINIMUM_BATCH_CHARS`, and `run` reads the wall once, so
+the slice one pass is handed cannot be widened without widening the wall that bounds it. T and C are
+shipped constants — 95.0 s per model turn, 291 characters per turn — measured on the founder's own
+vLLM box at reasoning level OFF, priced from the fewest-characters arm because it walked the
+checkpoint slowest; their provenance is written where they are defined. A wall that cannot buy the
+cheapest slice `input_budget` would return — anything at or below `max(T, MINIMUM_BATCH_CHARS × T / C)`,
+334.3 s at the shipped pair — raises naming the bound, both constants and their units, which is what a
+`_MODEL_TURN_SECONDS`-seeded pre-pass check also declines the first pass against: the guard's
+refuse-set is a SUPERSET of the loop's decline-set by construction (`MINIMUM_BATCH_CHARS ≥ C`), an
+inclusion the tests pin because the plan's original "same set" equality was disproved by its own
+wall-120 row. The 333-characters-per-ceiling-second era could not express any of this — its rate
+priced ~19× more than a wall could carry and no measurement could see it. Three tests keep the price
+under observation instead of under assertion:
+`test_the_granted_budget_fits_the_wall_measured_in_the_sample_its_own_rate` judges the 570 s grant
+against `1277 / 10211` seconds-per-character — the founder lane's own completed pass, copied into the
+test from the measurement and derived from nothing it judges — so a real rate moving above what the
+constants imply reddens the test while the constants sit unread; and
+`test_the_run_hands_the_loader_its_wall_sized_slice_not_its_ceiling` dials a row's ceiling to 10,000 s
+against the worker's cap and spies `load_batch`'s `max_chars` — the wall-sized number, not the
+ceiling-sized one; while the ladder `test_every_granted_wall_affords_the_slice_it_grants` from half a
+turn to 1,200 s asserts every refused wall sits at or below the bound, every granted slice is
+affordable by the wall that granted it, and — via
+`test_a_wall_just_above_the_refusal_starts_a_pass_at_the_loader` — every granted wall reaches the
+loader at least once. The failure the wall raises says which of the two it was:
 `RunCeilingExceeded` is what `asyncio.wait_for` becoming a `TimeoutError` turns into, and it is the
 only failure that continues the catch-up chain — `_run_curator_locked` hands the backlog a cut run did
 not reach to the next pass while that chain has bound left, keeping both brakes it always had (the lane

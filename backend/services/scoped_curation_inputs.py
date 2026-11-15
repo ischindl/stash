@@ -15,6 +15,11 @@ from uuid import UUID
 from ..database import get_pool
 from . import curation_service
 
+# The loader's quantum: it cannot build a batch below this many characters, so it is
+# also the cheapest slice a budget can meaningfully hand it. `input_budget` prices it
+# in wall-seconds and refuses any wall that cannot pay for it.
+MINIMUM_BATCH_CHARS = 1024
+
 
 @dataclass
 class Batch:
@@ -84,7 +89,7 @@ async def load_batch(
         completed = []
         pending_stamp = None
         for index, row in enumerate(rows):
-            if index >= limit or remaining < 1024:
+            if index >= limit or remaining < MINIMUM_BATCH_CHARS:
                 pending_stamp = row["stamp"]
                 break
             offset = int(partial.get(row["key"], 0))
@@ -183,7 +188,7 @@ async def has_pending(agent: dict, workspace: dict, *, until: datetime | None = 
         internal=agent["curator_wiki"] == "internal",
         generation=workspace["curation_generation"],
         cursor=cursor,
-        max_chars=1024,
+        max_chars=MINIMUM_BATCH_CHARS,
         max_items=1,
     )
     return bool(batch.documents)
