@@ -205,7 +205,7 @@ async def test_a_successful_run_clears_the_blocked_state(
 
 @pytest.mark.asyncio
 async def test_the_curators_endpoint_states_the_cap_and_the_rows_carry_their_own(
-    client: AsyncClient, _db_pool
+    client: AsyncClient, _db_pool, billing_on
 ):
     """A surface can only state a limit it was given, and a per-row number can
     only come from a row.
@@ -216,6 +216,10 @@ async def test_the_curators_endpoint_states_the_cap_and_the_rows_carry_their_own
     coexist without one being averaged into the other: the account's allowance is
     what one curator consumes at a time, so the page has to be able to show a
     different numerator per row against one denominator.
+
+    The denominator only exists where billing is configured, hence `billing_on`:
+    the envelope question is an entitlement question, and a box with no Stripe key
+    answers every one of them unlimited.
     """
     key, uid = await _register(client)
     internal = await agent_service.get_or_create_curator(uid)
@@ -268,13 +272,19 @@ async def test_a_count_left_from_a_past_month_is_not_reported_as_spent_now(
 
 
 @pytest.mark.asyncio
-async def test_an_account_with_no_cap_gets_a_null_and_not_a_numeral(client: AsyncClient, _db_pool):
+async def test_an_account_with_no_cap_gets_a_null_and_not_a_numeral(
+    client: AsyncClient, _db_pool, billing_on
+):
     """The null rule, pinned: absent means no cap, and a client must never render
     a denominator it invented for an unlimited account.
 
     Enterprise is an admin-granted entitlement and `is_pro` covers it along with
     paid Pro and internal emails; the response carries the difference as absence
     so that no account is shown a ceiling it does not have.
+
+    `billing_on` because the enterprise grant is the thing under test: on an
+    installation with no Stripe key every account reads uncapped, so without the
+    fixture this would pass without ever consulting the grant.
     """
     key, uid = await _register(client)
     await agent_service.get_or_create_curator(uid)
@@ -288,13 +298,18 @@ async def test_an_account_with_no_cap_gets_a_null_and_not_a_numeral(client: Asyn
 
 
 @pytest.mark.asyncio
-async def test_the_developer_curator_route_states_the_same_cap(client: AsyncClient, _db_pool):
+async def test_the_developer_curator_route_states_the_same_cap(
+    client: AsyncClient, _db_pool, billing_on
+):
     """The second surface reads the same key off its own envelope.
 
     The developer page's curator is a workspace-scope row, so the entitlement is
     read for the scope's owner — the same account the beat gates on — and it
     arrives beside the curator row rather than inside it, because it describes the
     account and not the agent.
+
+    `billing_on` for the same reason as its sibling above: the numeral is a plan
+    answer, and the plan is only consulted on an installation that can charge.
     """
     from .test_developer_platform import _developer
 

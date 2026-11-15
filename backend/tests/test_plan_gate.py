@@ -96,7 +96,7 @@ async def test_mark_run_meters_per_calendar_month(client: AsyncClient, _db_pool)
 
 @pytest.mark.asyncio
 async def test_free_curator_credits_exhausted_skips_run(
-    client: AsyncClient, sprite_exec, _db_pool, monkeypatch
+    client: AsyncClient, sprite_exec, _db_pool, monkeypatch, billing_on
 ):
     """Free accounts get a monthly curator allowance; past it the beat must not
     wake the sprite. Enterprise is unlimited — same state runs after the grant."""

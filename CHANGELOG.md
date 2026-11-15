@@ -183,6 +183,28 @@ everything before it is captured in git history (`git log`), not here.
   visible. The checkbox, the `hide_curator` parameter, and the stored preference are
   removed outright.
 
+- A self-hosted installation no longer asks whether you are on Pro. The plan question has
+  one producer, `billing_service.is_pro`, and nearly all of its call sites never asked
+  whether the installation can charge anybody before consulting it — so on a box with no
+  `STRIPE_SECRET_KEY`, where no Stripe row can ever exist, all of them answered "no"
+  forever. What that cost in practice: the curator's chained catch-up pass was dead and
+  said nothing when it declined, a lane could be frozen as `skipped_credits` against a
+  monthly allowance nobody was billing for, the managed-model lane was refused to an
+  account with no plan to be missing, and Settings was handed a denominator of ten runs.
+  `is_pro` now answers unlimited before it reads the database whenever billing is not
+  configured, so the answer is produced in one place and no gate restates it beside its
+  own call. Where billing IS configured, every gate, its position in the order, its
+  database writes and its 402 stand exactly as they were, and the enterprise grant, the
+  internal-domain list and its kill switch still decide Pro between them. The one
+  refusal still reachable without a Stripe key — "no runnable model" — now names the
+  setting it needs, in the response and in the curator row that is a scheduled lane's
+  only console. This is what makes the founder island's `INTERNAL_EMAIL_DOMAINS=progis.sk`
+  entry unnecessary: it existed to buy a Pro grant on an installation that had no right
+  to ask, and if you keep it it now only marks those addresses internal for analytics.
+  The corollary is said plainly rather than discovered in review: a self-host that does
+  not configure billing is not a multi-tenant paywall, so an account created on one has
+  unlimited curator runs.
+
 ### Removed
 
 - The evals product is gone, following upstream's removal of it from the open-source repo. Traces and

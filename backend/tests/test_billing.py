@@ -64,14 +64,6 @@ def _stripe_signature(payload: bytes, secret: str) -> str:
 
 
 @pytest.fixture
-def billing_on(monkeypatch):
-    monkeypatch.setattr(settings, "STRIPE_SECRET_KEY", "sk_test_x")
-    monkeypatch.setattr(settings, "STRIPE_WEBHOOK_SECRET", "whsec_test_x")
-    monkeypatch.setattr(settings, "STRIPE_MONTHLY_PRICE_ID", "price_test_month")
-    monkeypatch.setattr(settings, "STRIPE_ANNUAL_PRICE_ID", "price_test_year")
-
-
-@pytest.fixture
 def github_enabled(monkeypatch):
     monkeypatch.setattr(settings, "INTEGRATIONS_ENCRYPTION_KEY", Fernet.generate_key().decode())
     monkeypatch.setattr(settings, "GITHUB_OAUTH_CLIENT_ID", "gh-client")

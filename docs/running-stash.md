@@ -103,6 +103,16 @@ Before starting:
   your first login. With neither, every scheduled curator skips every tick — the
   backend logs `no runnable model` at WARNING and each curator row reads
   `No model connected` until a model exists.
+- Leave `STRIPE_SECRET_KEY` unset and this installation evaluates no plan anywhere.
+  Billing exists only while that key is set. Without it there is nothing to charge, so
+  there is no plan to enforce: no cap on connected accounts, no monthly curator
+  allowance, no Pro gate on the curator's catch-up chain, no "upgrade to Pro" sentence,
+  and the client is shown neither a plan name nor a run cap. Every account holds the
+  unlimited entitlement, which is why running your own curators needs no licence, no
+  key, and no Pro grant. The corollary is that `FREE_CURATOR_RUNS_PER_MONTH` and
+  `INTERNAL_EMAIL_DOMAINS` are billing knobs: neither one lifts a curator here. The
+  allowance refuses nobody whether it reads 10 or 1000, and a domain listed in
+  `INTERNAL_EMAIL_DOMAINS` only marks those accounts internal for analytics.
 - `FREE_CURATOR_RUNS_PER_MONTH` (default 10) bounds how many runs one curator of
   an account may **work** in a calendar month. It counts the runs that actually
   ran: a tick that stops at a gate — no model connected, nothing new to curate,
@@ -121,17 +131,24 @@ Before starting:
   consumption numeral is shown for it. A count the pre-fix code recorded anyway is
   not a metering verdict: migration 0273 lowers the rows past the allowance to the
   runs the month can prove, and the rest roll off when the calendar month turns.
-  Past the allowance, non-Pro curators stop dead mid-backlog: every later
-  tick logs `curator monthly allowance spent` at WARNING, the row reads
-  `skipped_credits`, the stale-watermark watchdog names it — runs spent, the
+  The rest of this bullet describes an installation that can charge. Where
+  `STRIPE_SECRET_KEY` is set, an account past its allowance stops non-Pro curators dead
+  mid-backlog: every later tick logs `curator monthly allowance spent` at WARNING, the
+  row reads `skipped_credits`, the stale-watermark watchdog names it — runs spent, the
   allowance, and the events still pending — and Settings → Curators states it on the
   row ("N of 10 free runs used this month") instead of reporting a healthy schedule
   that quietly produced nothing; an account with no allowance (Pro, internal, or
   enterprise) is shown no numeral at all. When the allowance is spent *and* no model
   is runnable, the reason reported is the missing model, because that is the one an
   operator can act on. A lane frozen there never drains on its
-  own; raise the allowance, make the account Pro, or move the curator onto the
-  customer's own endpoint, which takes it out of metering.
+  own; on an installation that bills, the levers are the allowance, a Pro grant, or
+  moving the curator onto the customer's own endpoint, which takes it out of metering.
+  On a box with no `STRIPE_SECRET_KEY` none of those three applies and none is needed:
+  the allowance never refuses anything, so nothing is ever stamped `skipped_credits` and
+  no curator is frozen there. What is left to steer is how far a backlog is chased per
+  day — the catch-up bound named above, which `FREE_CURATOR_RUNS_PER_MONTH` still sizes
+  even though it refuses nothing — and each curator's own run ceiling. Raising that
+  bound buys real model calls on your own spend, because the chase passes are unmetered.
 - `AGENT_TURN_TIMEOUT_SECONDS` (default 600) is the *default* run ceiling: how
   many seconds one curator run may take before it is cut off and its lane freed.
   A ceiling is a property of a curator, not of the process — Settings → Curators

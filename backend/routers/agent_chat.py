@@ -57,8 +57,8 @@ async def chat(
             detail="Connect a Claude, Codex, or OpenRouter key, or a local model, in settings, "
             "or upgrade to Pro to use the managed agent.",
         )
-    except agent_auth.ProviderNotConfigured:
-        raise HTTPException(status_code=503, detail="The agent is not configured.")
+    except agent_auth.ProviderNotConfigured as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     scope_name = current_user["display_name"] or current_user["name"]
     session_id = req.session_id or f"agent-{uuid4().hex}"
     return StreamingResponse(
@@ -117,8 +117,8 @@ async def run_now(
             detail="Connect a Claude, Codex, or OpenRouter key, or a local model, in settings, "
             "or upgrade to Pro to use the managed agent.",
         )
-    except agent_auth.ProviderNotConfigured:
-        raise HTTPException(status_code=503, detail="The agent is not configured.")
+    except agent_auth.ProviderNotConfigured as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     stamp = datetime.now(UTC).strftime("%Y%m%d%H%M%S")
     session_id, message = await sprite_agent_service.build_scheduled_turn(agent, stamp)

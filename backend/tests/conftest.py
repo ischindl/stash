@@ -13,6 +13,7 @@ Required env vars (defaults work against the Docker Compose postgres):
 import asyncio
 import os
 import uuid
+from contextlib import contextmanager
 
 import asyncpg
 import pytest
@@ -28,6 +29,7 @@ os.environ["TEST_DATABASE_URL"] = _TEST_DB_URL
 os.environ["DATABASE_URL"] = _TEST_DB_URL
 
 from backend import database as db_module  # noqa: E402
+from backend.config import settings  # noqa: E402 — must come after env override
 from backend.main import app  # noqa: E402 — must come after env override
 
 
@@ -96,6 +98,41 @@ async def pool(_db_pool):
     yield _db_pool
 
 
+def _managed_billing_settings(m: pytest.MonkeyPatch) -> None:
+    """The four settings a managed installation carries. One definition, because
+    "this deployment can charge" is one fact."""
+    m.setattr(settings, "STRIPE_SECRET_KEY", "sk_test_x")
+    m.setattr(settings, "STRIPE_WEBHOOK_SECRET", "whsec_test_x")
+    m.setattr(settings, "STRIPE_MONTHLY_PRICE_ID", "price_test_month")
+    m.setattr(settings, "STRIPE_ANNUAL_PRICE_ID", "price_test_year")
+
+
+@contextmanager
+def managed_billing(monkeypatch: pytest.MonkeyPatch):
+    """Hold the installation in its managed state for the duration of one block.
+
+    For the half of a paired test that needs the billed answer while the other
+    half runs on a self-host; `billing_on` is this same block stretched over a
+    whole test.
+    """
+    with monkeypatch.context() as m:
+        _managed_billing_settings(m)
+        yield
+
+
+@pytest.fixture
+def billing_on(monkeypatch):
+    """Model a deployment where billing IS configured (the managed install).
+
+    The test suite runs with `STRIPE_SECRET_KEY` unset, which is a self-host: no
+    plan is evaluated anywhere, so every plan gate answers unlimited. A test that
+    asserts a paywall takes this fixture to say out loud which installation it
+    models — without it, it is asserting cloud behaviour on a box that has no cloud.
+    """
+    with managed_billing(monkeypatch):
+        yield
+
+
 @pytest.fixture(autouse=True)
 def _no_first_day_curator_dispatch(monkeypatch):
     """Every event/transcript ingest fires a first-day curator check via
@@ -130,7 +167,6 @@ def unique_name(prefix: str = "user") -> str:
 # --- Shared cloud-agent fixture (mocks the sprite substrate seam) ---
 import json as _json  # noqa: E402
 
-from backend.config import settings  # noqa: E402
 from backend.services import agent_auth, sprite_agent_service, sprite_service  # noqa: E402
 
 

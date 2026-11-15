@@ -359,8 +359,8 @@ async def recompute_memory(
             detail="Connect a Claude, Codex, or OpenRouter key, or a local model, in settings, "
             "or upgrade to Pro to run the Memory curator.",
         )
-    except agent_auth.ProviderNotConfigured:
-        raise HTTPException(status_code=503, detail="The agent is not configured.")
+    except agent_auth.ProviderNotConfigured as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     metered = agent_auth.costs_platform_tokens(auth)
     if metered and agent_service.free_allowance_spent(curator):
         from ..services import billing_service

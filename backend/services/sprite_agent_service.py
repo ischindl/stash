@@ -1042,8 +1042,11 @@ async def run_chat(
         )
     except agent_auth.NeedsAuth:
         raise NeedsAuth
-    except agent_auth.ProviderNotConfigured:
-        raise RuntimeError("cloud agent is not configured")
+    except agent_auth.ProviderNotConfigured as exc:
+        # Carries the cause's own sentence, because a scheduled run's failure lands in
+        # `agents.last_run_error` via `mark_run_failed(str(e))` and that row is the only
+        # console an operator has for a lane nobody is watching interactively.
+        raise RuntimeError(f"The agent cannot run: {exc}") from exc
     # Local exec runs the harness as this machine's own user, so hand the turn
     # its own Stash credentials: without them the `stash` CLI inside it falls
     # back to the developer's ~/.stash, which points at production.

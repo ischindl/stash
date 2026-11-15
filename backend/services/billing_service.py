@@ -1,9 +1,10 @@
 """Per-user Stripe billing: Free (1 connected account) vs Pro ($20/mo, unlimited).
 
 Billing is switched on by STRIPE_SECRET_KEY being set (managed deployment).
-Self-hosted instances leave it unset: billing endpoints 404 and the pay gate
-is a no-op. Enforcement is connect-time only — existing connections keep
-syncing even after a subscription lapses.
+Self-hosted instances leave it unset: billing endpoints 404, the pay gate is a
+no-op, and no plan is evaluated anywhere — `is_pro` answers unlimited, so a
+self-host needs no Pro grant to run its curators. Enforcement is connect-time
+only — existing connections keep syncing even after a subscription lapses.
 
 The user ↔ Stripe customer mapping row is created when checkout starts, so
 every later webhook resolves by stripe_customer_id regardless of event order.
@@ -70,6 +71,25 @@ async def plan_label(user_id: UUID) -> str:
 
 
 async def is_pro(user_id: UUID) -> bool:
+    """The entitlement every plan gate enforces — True where there is no plan to enforce.
+
+    An installation that cannot charge anyone has no plans. With no STRIPE_SECRET_KEY
+    there is nothing to sell, so every account holds the top entitlement and the
+    answer is returned before the database read: a box that never asked the question
+    must not be answered "no" by a Stripe row it will never have. Every plan gate —
+    the curator catch-up chain, the monthly allowance, the managed-model lane, the
+    cap a client is shown — inherits the answer from here, which is why a gate never
+    restates this condition next to its own call.
+
+    Where billing IS configured, the entitlement is an `enterprise` plan (granted by
+    an admin or a redeemed code, no Stripe row), an address on a domain in
+    INTERNAL_EMAIL_DOMAINS, or a subscription in ACTIVE_STATUSES.
+
+    `plan_label` answers a different question — the name the UI shows — and is the
+    only place that name is produced; the two are not interchangeable.
+    """
+    if not billing_enabled():
+        return True
     row = await get_pool().fetchrow(
         "SELECT u.email, u.plan, s.status FROM users u "
         "LEFT JOIN user_subscriptions s ON s.user_id = u.id "

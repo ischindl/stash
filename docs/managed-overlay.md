@@ -5,7 +5,7 @@ Proprietary code that does not get mirrored to the public OSS repo lives under a
 - `backend/managed/` — FastAPI routes, migrations, and helpers that only run in the hosted deployment.
 - `frontend/managed/` — Next.js components and middleware that only run in the hosted deployment.
 
-Anything under a `managed/` subdirectory is private-forever: hosted-only features (Auth0, billing, managed infra) live there and never ship to the community version. Code outside these directories is OSS-eligible by default.
+Anything under a `managed/` subdirectory is private-forever: hosted-only features (Auth0, managed infra) live there and never ship to the community version. Code outside these directories is OSS-eligible by default. Billing is deliberately not on that list: `backend/services/billing_service.py` and `backend/routers/billing.py` are OSS code, and what makes them behave like a hosted product is one environment variable, `STRIPE_SECRET_KEY`. An installation that leaves it unset evaluates no plan at all — see [Running Stash](running-stash.md) — so the paywall is never an artifact that only exists over here.
 
 ## Why the overlay isn't a single top-level `managed/`
 

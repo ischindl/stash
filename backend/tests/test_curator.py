@@ -731,7 +731,9 @@ async def test_recompute_409_when_nothing_changed(client: AsyncClient, _db_pool)
 
 
 @pytest.mark.asyncio
-async def test_recompute_metered_like_the_scheduler(client: AsyncClient, _db_pool, monkeypatch):
+async def test_recompute_metered_like_the_scheduler(
+    client: AsyncClient, _db_pool, monkeypatch, billing_on
+):
     """Manual runs draw from the same monthly sleep-time allowance: free
     accounts stop at the cap, enterprise is unlimited.
 

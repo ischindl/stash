@@ -158,7 +158,11 @@ async def _work_n_runs(agent: dict, monkeypatch: pytest.MonkeyPatch, wanted: int
 
 @pytest.mark.asyncio
 async def test_a_credits_skip_never_spends_a_run(
-    client: AsyncClient, _db_pool, monkeypatch: pytest.MonkeyPatch, sprite_mode
+    client: AsyncClient,
+    _db_pool,
+    monkeypatch: pytest.MonkeyPatch,
+    sprite_mode,
+    billing_on,
 ):
     """AC1/AC3 — the defect itself, across two consecutive due ticks.
 

@@ -643,7 +643,12 @@ async def _managed(user_id: UUID) -> RunAuth:
         raise NeedsAuth
     key = settings.OPENROUTER_API_KEY
     if not key:
-        raise ProviderNotConfigured
+        # Names the setting it needs, because on an installation with no billing this
+        # is the only refusal left, and "not configured" is not something an operator
+        # can act on from a log line or an agent row.
+        raise ProviderNotConfigured(
+            "The managed model lane requires the backend OPENROUTER_API_KEY"
+        )
     return RunAuth(
         harness=MANAGED_HARNESS,
         env={model_provider.OPENROUTER.env_var: key},
