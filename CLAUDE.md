@@ -79,27 +79,51 @@ The second predicate is the load-bearing one. A checkout that is not on `main` i
 trunk, not a source of truth about it, and the count line prints two zeros even for a detached
 checkout that holds no branch at all.
 
-- One mechanism moves local trunk: prove the candidate tip descends from the current ref —
-  `git merge-base --is-ancestor refs/heads/main <tip>` exits 0 only when the candidate
-  already contains current trunk, which is the direction a forward landing needs. Git tests
-  the FIRST operand as the ancestor, so the reversed order proves the opposite: that the tip
-  is already inside trunk — where a stale tree sits, and the read that licenses moving trunk
-  backwards. Then advance the ref by a compare-and-swap write of `refs/heads/main` carrying
-  the expected old value — the move the engine records as `fusion landing: STAS-<id>`. Read
-  `git rev-parse refs/heads/main` immediately before and immediately after the write; those
-  two SHAs are the proof of a landing. A directory's `HEAD` says nothing about a ref.
+- One mechanism moves local trunk for an agent: prove the candidate tip descends from the
+  current ref — `git merge-base --is-ancestor refs/heads/main <tip>` exits 0 only when the
+  candidate already contains current trunk, which is the direction a forward landing needs.
+  Git tests the FIRST operand as the ancestor, so the reversed order proves the opposite:
+  that the tip is already inside trunk — where a stale tree sits, and the read that licenses
+  moving trunk backwards. Then advance the ref by a compare-and-swap write of `refs/heads/main`
+  carrying the expected old value and a reflog reason — the move the engine records as
+  `fusion landing: STAS-<id>` is that CAS write alone; the engine has a
+  second path below that leaves no such row. Read `git rev-parse refs/heads/main`
+  immediately before and immediately after the write; those two SHAs are the proof of a
+  landing. A directory's `HEAD` says nothing about a ref.
+- The engine's merger advances local trunk by two write paths running concurrently in one
+  build, and each path leaves its own record. A compare-and-swap write leaves the reflog row
+  `fusion landing: STAS-<id>`, with or without a trailing SHA. The fast-forward merge run in
+  the checkout that holds `refs/heads/main` leaves `merge <sha>: Fast-forward` and no card id
+  — `merge` has no argument that records a reason. A fast-forward
+  landing writes no `fusion landing:` record.
+- Which record is the valid proof depends on the path, and the path-independent proof is the
+  ref values: `git rev-parse refs/heads/main` immediately before and immediately after the
+  move; containment `git merge-base --is-ancestor refs/heads/fusion/<id> refs/heads/main`
+  rc=0 for an FF or merge-commit lane, or patch-id equality for a squash or rebase lane (a
+  squash finalization deletes the lane ref, so containment cannot run there); and adjacency
+  to the owning card's `AI merge: landed <sha>, finalizing task row` entry in
+  `.fusion/tasks/STAS-<n>/agent-log.jsonl` (measured +1 s to +44 s after the reflog row). A
+  missing marker on an FF landing is not a failed landing. Commit author and committer
+  attribute nobody: this machine holds exactly one git identity, human and engine writes
+  alike.
 - Never advance the trunk ref from a linked worktree by an unguarded write: no `git branch -f`,
   no message-less `update-ref`, no fetch refspec into the trunk branch, no
   `--ignore-other-worktrees` — and never at all while some worktree holds the trunk branch
   checked out, because card work never happens in the trunk checkout and a held ref belongs to
   that tree. When the ref is held, the write is an operator leg: hand over the exact command
   with its expected-old value.
-- Fast-forwarding a checked-out tree is retired as the landing mechanism for this repository's
-  local trunk; the engine repository has its own rail and keeps it. The retired recipe was a
-  `git merge --ff-only` run in a trunk tree, and it had somewhere to land only while some
-  checkout actually held `refs/heads/main`. Against a detached checkout it advances `HEAD` and
-  moves no ref, so it exits 0 and leaves the work unreferenced. The loud variant — a branch not
-  at the tip — fails; the quiet variant does the damage.
+- Fast-forwarding a checked-out tree is retired as the landing mechanism for agents in this
+  repository's local trunk; the engine repository has its own rail and keeps it. The retired
+  recipe was a `git merge --ff-only` run by an agent in a trunk tree, and it had somewhere to
+  land only while some checkout actually held `refs/heads/main`. Against a detached checkout
+  it advances `HEAD` and moves no ref, so it exits 0 and leaves the work unreferenced. The
+  loud variant — a branch not at the tip — fails; the quiet variant does the damage. That
+  retirement is the agent's contract, not a description of the machine: the engine's own
+  fast-forward landing moves a held trunk inside the owning checkout, ref, index and files
+  as one unit, refusing a dirty tree — and, as stated above, it leaves no marker.
+- Whether the engine's two paths should be unified on one landing write with one marker
+  format, or the landing oracle should be redefined as the commit subject for both paths, is
+  the operator's open decision. STAS-451 recorded the question here and chose neither.
 - Verify every tree the landing touches, on both sides. Where a worktree does hold trunk,
   `status --porcelain` must print nothing on BOTH sides of the move, and clean is two facts, not one: the listing is
   empty AND its `write-tree` equals `HEAD^{tree}`. Read the output — a successful exit code

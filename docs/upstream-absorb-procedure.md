@@ -8,8 +8,12 @@ rule true instead of merely enforced.
 Why a daily cadence and not a weekly one: upstream moves about two commits a day, and the
 last time this was left alone the gap ran six weeks and reached 28 conflicted paths — measured
 2026-11-12 by the job's own refusal list. STAS-427 resolved all 28 on a lane of its own the same day,
-and that lane landed: the trunk's own reflog names it
-(`72998ad18 refs/heads/main@{2026-11-13 15:11:39 +0100}: fusion landing: STAS-427`). The predicate was
+and that lane landed on the engine's compare-and-swap path — a reflog row naming a card exists
+only for that path
+(`72998ad18 refs/heads/main@{2026-11-13 15:11:39 +0100}: fusion landing: STAS-427`). The engine's other
+path in operation today is the fast-forward landing in the checkout holding the branch, and a
+fast-forward landing writes no `fusion landing:` record — for those moves the proof is the ref values
+plus the card's `AI merge: landed <sha>` log entry (`AGENTS.md`, *Landing hygiene*). The predicate was
 FALSE again inside twelve hours, because the debt is re-opened by upstream's next commit rather than
 by an unlanded lane — `1eca3516c` and `419efb459` cost a fresh lane (STAS-439, 12 conflicted paths)
 two days later. Our migration tail had to be renumbered as damage control while it grew (STAS-371,
@@ -70,9 +74,12 @@ conflicts, and upstream then moved twice again — `1eca3516c` removed the evals
 release bump `419efb459` followed it — which re-opened the debt against that lane and took a fresh
 lane to clear: STAS-439 resolved 12 conflicted paths (9 content, 3 modify/delete) against
 `419efb459`, every side recorded per path in the STAS-439 task document `merge-conflict-ledger`.
-So a lane, never the trunk, is where the debt is cleared: the trunk write is held up because a
+So a lane, never the trunk, is where the debt is cleared: an *agent's* trunk write is held up because a
 checkout holds `refs/heads/main`, which makes it an operator leg (`AGENTS.md`, *Landing hygiene*),
-not because anything is unresolved. The lane waited long enough for the trunk
+not because anything is unresolved. That rule gates agents only — it does not freeze trunk: the
+engine's own merger advances a held trunk by fast-forwarding the owning checkout, and because a
+fast-forward landing writes no `fusion landing:` record, the move named below carries no marker. The
+lane waited long enough for the trunk
 to move under it: `refs/heads/main` was fast-forwarded to `10e11a922` (STAS-431) at 11:00Z on
 2026-11-13 — a lane cut from the still-unanchored trunk, so the trunk's merge base with upstream
 did not move and the debt grew by one more commit beside it — and the STAS-427 lane re-merged that
