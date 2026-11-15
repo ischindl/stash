@@ -7,6 +7,28 @@ everything before it is captured in git history (`git log`), not here.
 
 ### Added
 
+- A page now says who wrote it. Every write to a page records its writer, and a
+  write that cannot name one no longer happens: the attempt fails where it is
+  made, with the fix in the message, instead of quietly leaving a row that looked
+  like a person's click. That silence was the old behaviour — an empty attribution
+  passed, and five lanes (the URL-import worker, the demo seed, the dev seed
+  script, the Discover import, and the anonymous landing-page publisher) wrote
+  pages that way. So `page_edits.edited_by` was never the question to ask: it holds
+  the scope owner, and a curator's credential *is* its owner's key, so a curator's
+  edit and your own click shared one answer. The writer is `agent_name` and
+  `session_id`, and the count an operator wants is now real:
+  `select count(*) from page_edits where session_id like 'agent-curate-%'` counts
+  curator page writes — the personal lane, the workspace-scoped lane and a
+  two-phase run's digest session alike — and the document says out loud what that
+  filter cannot see (a person, a server lane with no run session, a scheduled agent
+  that is not a curator). A page read carries the same answer without a join, in
+  `last_edit_agent_name` / `last_edit_session_id`, and those names survive the
+  session row and the agent row behind them. A dispatched run's identity now
+  travels into the box it runs on and comes back on the request, and the server
+  checks it names a run your account actually had; it is provenance and never
+  permission, so nothing about who may write a page changed. Table, probe, lane
+  list and the refusals: `docs/page-provenance.md`.
+
 - A local model box now has a reasoning level you can choose. Every endpoint row in
   Settings → Cloud agent model carries a "Reasoning" selector (`off`, `minimal`, `low`,
   `medium`, `high`, `xhigh`, `max`) with an explicit Save, and the level you saved is what

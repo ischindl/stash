@@ -34,6 +34,12 @@ from backend.services import (  # noqa: E402
     table_service,
     user_service,
 )
+from backend.services.page_actor import PageActor, page_actor  # noqa: E402
+
+# This seed has no HTTP request and no agent turn behind it, so it names itself:
+# every page it creates carries this name instead of a NULL that reads as "a
+# human wrote this". See docs/page-provenance.md.
+DEV_SEED_ACTOR = PageActor.system("Dev seed")
 
 logging.basicConfig(
     level=logging.INFO,
@@ -726,7 +732,9 @@ async def _ensure_skills(
             spec["title"],
         )
         if folder is None:
-            folder = await files_tree_service.create_folder(owner_user_id, spec["title"], user["id"])
+            folder = await files_tree_service.create_folder(
+                owner_user_id, spec["title"], user["id"]
+            )
         for page_name in spec["pages"]:
             page = pages.get(page_name)
             if page:
@@ -870,89 +878,102 @@ async def main() -> int:
 
     await database.init_db()
     try:
-        pool = database.get_pool()
-        print("Seeding local development dataset...")
-        created_users: dict[str, dict] = {}
-        created_api_keys: dict[str, str] = {}
-
-        for user in SAMPLE_USERS:
-            row, api_key, created = await _ensure_user(pool, user)
-            created_users[row["name"]] = row
-            if api_key:
-                created_api_keys[row["name"]] = api_key
-            log.info("User %s %s", "created" if created else "found", row["name"])
-
-        default_owner = created_users[SAMPLE_USERS[0]["name"]]
-        seeded_scope_count = 0
-        seeded_session_total = 0
-        seeded_file_total = 0
-
-        if args.user_id or args.user_name:
-            if args.user_id:
-                target_user = await pool.fetchrow(
-                    "SELECT id, name FROM users WHERE id = $1", args.user_id
-                )
-                missing = f"--user-id={args.user_id}"
-            else:
-                target_user = await pool.fetchrow(
-                    "SELECT id, name FROM users WHERE name = $1", args.user_name
-                )
-                missing = f"--user-name={args.user_name}"
-            if not target_user:
-                log.error("No user found for %s", missing)
-                return 1
-
-            owner_user_id = target_user["id"]
-            metrics = await _seed_scope_bundle(owner_user_id, created_users)
-            log.info("Seeded explicit user scope: %s", target_user["name"])
-            seeded_scope_count = 1
-            seeded_session_total += metrics["sessions"]
-            seeded_file_total += metrics["files"]
-        else:
-            owner_user_id = default_owner["id"]
-            metrics = await _seed_scope_bundle(owner_user_id, created_users)
-            await _ensure_external_skill_sample(owner_user_id, default_owner, created_users)
-            log.info("Seeded user scope: %s", default_owner["name"])
-            seeded_scope_count = 1
-            seeded_session_total += metrics["sessions"]
-            seeded_file_total += metrics["files"]
-
-            if args.seed_empty_users:
-                empty_users = await pool.fetch("""
-                    SELECT u.id, u.name
-                    FROM users u
-                    LEFT JOIN skills s ON s.owner_user_id = u.id
-                    WHERE s.id IS NULL
-                    ORDER BY u.created_at
-                    """)
-                for user_row in empty_users:
-                    metrics = await _seed_scope_bundle(user_row["id"], created_users)
-                    seeded_scope_count += 1
-                    seeded_session_total += metrics["sessions"]
-                    seeded_file_total += metrics["files"]
-
-        if seeded_scope_count:
-            log.info("Seeded %d user scope(s).", seeded_scope_count)
-
-        log.info("Seed complete for user scope: %s", owner_user_id)
-        if created_api_keys:
-            log.info("Sample API keys (new users):")
-            for username, key in created_api_keys.items():
-                log.info("  %s: %s", username, key)
-
-        skill_count = await pool.fetchval(
-            "SELECT count(*) FROM skills WHERE owner_user_id = $1",
-            owner_user_id,
-        )
-        print(
-            "Seed complete: "
-            f"users={len(created_users)} "
-            f"sessions={seeded_session_total} "
-            f"files={seeded_file_total} "
-            f"skills={skill_count}"
-        )
+        return await _seed_with_actor(args)
     finally:
         await database.close_db()
+
+
+async def _seed_with_actor(args: argparse.Namespace) -> int:
+    """The whole seed, credited to this script's page writer (`DEV_SEED_ACTOR`).
+
+    Split out from `main` so a test proves the declaration by running this
+    wrapper, not by observing a module-level side effect."""
+    async with page_actor(DEV_SEED_ACTOR):
+        return await _seed(args)
+
+
+async def _seed(args: argparse.Namespace) -> int:
+    pool = database.get_pool()
+    print("Seeding local development dataset...")
+    created_users: dict[str, dict] = {}
+    created_api_keys: dict[str, str] = {}
+
+    for user in SAMPLE_USERS:
+        row, api_key, created = await _ensure_user(pool, user)
+        created_users[row["name"]] = row
+        if api_key:
+            created_api_keys[row["name"]] = api_key
+        log.info("User %s %s", "created" if created else "found", row["name"])
+
+    default_owner = created_users[SAMPLE_USERS[0]["name"]]
+    seeded_scope_count = 0
+    seeded_session_total = 0
+    seeded_file_total = 0
+
+    if args.user_id or args.user_name:
+        if args.user_id:
+            target_user = await pool.fetchrow(
+                "SELECT id, name FROM users WHERE id = $1", args.user_id
+            )
+            missing = f"--user-id={args.user_id}"
+        else:
+            target_user = await pool.fetchrow(
+                "SELECT id, name FROM users WHERE name = $1", args.user_name
+            )
+            missing = f"--user-name={args.user_name}"
+        if not target_user:
+            log.error("No user found for %s", missing)
+            return 1
+
+        owner_user_id = target_user["id"]
+        metrics = await _seed_scope_bundle(owner_user_id, created_users)
+        log.info("Seeded explicit user scope: %s", target_user["name"])
+        seeded_scope_count = 1
+        seeded_session_total += metrics["sessions"]
+        seeded_file_total += metrics["files"]
+    else:
+        owner_user_id = default_owner["id"]
+        metrics = await _seed_scope_bundle(owner_user_id, created_users)
+        await _ensure_external_skill_sample(owner_user_id, default_owner, created_users)
+        log.info("Seeded user scope: %s", default_owner["name"])
+        seeded_scope_count = 1
+        seeded_session_total += metrics["sessions"]
+        seeded_file_total += metrics["files"]
+
+        if args.seed_empty_users:
+            empty_users = await pool.fetch("""
+                SELECT u.id, u.name
+                FROM users u
+                LEFT JOIN skills s ON s.owner_user_id = u.id
+                WHERE s.id IS NULL
+                ORDER BY u.created_at
+                """)
+            for user_row in empty_users:
+                metrics = await _seed_scope_bundle(user_row["id"], created_users)
+                seeded_scope_count += 1
+                seeded_session_total += metrics["sessions"]
+                seeded_file_total += metrics["files"]
+
+    if seeded_scope_count:
+        log.info("Seeded %d user scope(s).", seeded_scope_count)
+
+    log.info("Seed complete for user scope: %s", owner_user_id)
+    if created_api_keys:
+        log.info("Sample API keys (new users):")
+        for username, key in created_api_keys.items():
+            log.info("  %s: %s", username, key)
+
+    skill_count = await pool.fetchval(
+        "SELECT count(*) FROM skills WHERE owner_user_id = $1",
+        owner_user_id,
+    )
+    print(
+        "Seed complete: "
+        f"users={len(created_users)} "
+        f"sessions={seeded_session_total} "
+        f"files={seeded_file_total} "
+        f"skills={skill_count}"
+    )
     return 0
 
 

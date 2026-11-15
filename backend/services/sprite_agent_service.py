@@ -38,6 +38,7 @@ from . import (
 )
 from . import harness as harness_mod
 from .curation_service import CURATOR_SESSION_ID_PREFIX, Position
+from .page_actor import AGENT_NAME_ENV, AGENT_SESSION_ENV, PageActor
 
 logger = logging.getLogger(__name__)
 
@@ -522,6 +523,20 @@ def _system_prompt(owner_name: str, persona: str | None) -> str:
     return f"{base}\n\n{persona}" if persona else base
 
 
+def _attribution_env(agent_name: str, session_id: str) -> dict[str, str]:
+    """The two entries that let the harness's `stash` CLI name the run it runs in.
+
+    The CLI echoes them back as the two headers `backend/auth.py` resolves into a
+    page-write actor, so a page the harness writes is credited to this run and
+    not to the owner whose key the turn carries. Validation is `PageActor.agent`'s:
+    an empty name or session would be a bug at this call site, so it raises here
+    instead of sending a claim the server refuses. `sprite_service._LOCAL_ENV_BLOCKED`
+    filters the inherited environment, not this dict, so both names reach the
+    child unchanged."""
+    actor = PageActor.agent(agent_name, session_id)
+    return {AGENT_NAME_ENV: actor.agent_name, AGENT_SESSION_ENV: actor.session_id}
+
+
 def scheduled_session_prefix(agent: dict) -> str:
     """Prefix of every per-run session id build_scheduled_turn mints for this
     agent — the runs API groups stored history by it."""
@@ -896,6 +911,9 @@ async def _pump_turn(
 
             final = ""
             error: str | None = None
+            # Same identity as the non-streaming lane: both build their harness
+            # environment out of `auth.env`, so this is the one place it is set.
+            auth.env.update(_attribution_env(agent_name, session_id))
             turn = _turn_events(
                 auth,
                 sprite,
@@ -1051,6 +1069,9 @@ async def run_chat(
     # its own Stash credentials: without them the `stash` CLI inside it falls
     # back to the developer's ~/.stash, which points at production.
     auth.env.update(await sprite_service.local_agent_env(user_id))
+    # The run's own identity travels with it, so a page the harness's CLI writes
+    # is credited to this session rather than to the owner whose key it carries.
+    auth.env.update(_attribution_env(agent_name, session_id))
     async with _turn_lock(session_id, settings.AGENT_TURN_TIMEOUT_SECONDS):
         history = await _load_history(owner_user_id, session_id, user_id)
         await memory_service.push_event(

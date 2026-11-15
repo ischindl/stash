@@ -17,6 +17,7 @@ import nh3
 
 from ..database import get_pool
 from . import page_events, permission_service, security_audit_service, skill_service
+from .page_actor import current_actor
 
 logger = logging.getLogger(__name__)
 
@@ -658,10 +659,20 @@ async def _log_page_edit(
     page_id: UUID,
     owner_user_id: UUID,
     edited_by: UUID,
-    agent_name: str | None,
-    session_id: str | None,
     op: str,
 ) -> None:
+    """Record one page body change.
+
+    `edited_by` is always the scope OWNER — the identity the turn's credential
+    resolves to — and never the writer, so this column alone cannot tell a
+    curator's edit from the owner's own click. The writer is `agent_name` /
+    `session_id`, read here from the request- or turn-scoped actor (see
+    `backend/services/page_actor.py`): a name plus a session is a dispatched
+    run, a name with no session is a server lane, and NULL is a human.
+    Probe a run's writes with
+    `select count(*) from page_edits where session_id like 'agent-curate-%'`
+    and never with `edited_by`. Full table: docs/page-provenance.md."""
+    actor = current_actor()
     await get_pool().execute(
         "INSERT INTO page_edits "
         "(page_id, owner_user_id, edited_by, agent_name, session_id, op) "
@@ -669,8 +680,8 @@ async def _log_page_edit(
         page_id,
         owner_user_id,
         edited_by,
-        agent_name,
-        session_id,
+        actor.agent_name,
+        actor.session_id,
         op,
     )
 
@@ -685,10 +696,9 @@ async def create_page(
     content_type: str = "markdown",
     content_html: str = "",
     html_layout: str = "responsive",
-    edit_session_id: str | None = None,
-    edit_agent_name: str | None = None,
     end_user_id: UUID | None = None,
 ) -> dict:
+    actor = current_actor()
     pool = get_pool()
     if folder_id is not None:
         folder = await pool.fetchrow("SELECT owner_user_id FROM folders WHERE id = $1", folder_id)
@@ -718,16 +728,14 @@ async def create_page(
             ch,
             meta,
             created_by,
-            edit_session_id,
-            edit_agent_name,
+            actor.session_id,
+            actor.agent_name,
             end_user_id,
         )
     except asyncpg.UniqueViolationError as e:
         raise DuplicatePageName(owner_user_id, folder_id, name) from e
     page = dict(row)
-    await _log_page_edit(
-        page["id"], owner_user_id, created_by, edit_agent_name, edit_session_id, "create"
-    )
+    await _log_page_edit(page["id"], owner_user_id, created_by, "create")
     if active:
         await _reconcile_embedded_files(page["id"], owner_user_id, created_by, active)
         _schedule_embed(page["id"], active)
@@ -849,8 +857,6 @@ async def update_page(
     guard_content_hash: bool = True,
     expected_content_hash: str | None = None,
     on_conflict: Callable[[dict], Awaitable[str]] | None = None,
-    edit_session_id: str | None = None,
-    edit_agent_name: str | None = None,
     edit_op: str = "update",
     notify: bool = True,
 ) -> dict | None:
@@ -858,6 +864,7 @@ async def update_page(
 
     When `notify` (the default), a content change broadcasts a page-update
     event so open viewers refetch the page."""
+    actor = current_actor()
     pool = get_pool()
     if name is not None:
         await _assert_not_a_skills_instructions(page_id, owner_user_id)
@@ -941,10 +948,10 @@ async def update_page(
             args.append(_content_hash(new_active))
             idx += 1
             sets.append(f"last_edit_session_id = ${idx}")
-            args.append(edit_session_id)
+            args.append(actor.session_id)
             idx += 1
             sets.append(f"last_edit_agent_name = ${idx}")
-            args.append(edit_agent_name)
+            args.append(actor.agent_name)
             idx += 1
         if metadata is not None:
             sets.append(f"metadata = ${idx}::jsonb")
@@ -972,9 +979,7 @@ async def update_page(
         if row:
             page = dict(row)
             if content_changed:
-                await _log_page_edit(
-                    page["id"], owner_user_id, updated_by, edit_agent_name, edit_session_id, edit_op
-                )
+                await _log_page_edit(page["id"], owner_user_id, updated_by, edit_op)
                 if page["content_hash"] != expected_hash:
                     active = _active_content(
                         page["content_type"], page["content_markdown"], page["content_html"]
@@ -984,7 +989,7 @@ async def update_page(
                 if notify:
                     # Tell open viewers so they refetch the page.
                     page_events.publish_page_update(
-                        owner_user_id, page["id"], page["content_hash"], edit_agent_name
+                        owner_user_id, page["id"], page["content_hash"], actor.agent_name
                     )
             return page
 
@@ -1052,8 +1057,6 @@ async def edit_page(
     old_string: str,
     new_string: str,
     mode: str = "replace",
-    edit_session_id: str | None = None,
-    edit_agent_name: str | None = None,
 ) -> dict | None:
     """Surgical edit of a page body: replace a unique `old_string`, or append.
 
@@ -1076,8 +1079,6 @@ async def edit_page(
                 page_id=page_id,
                 owner_user_id=owner_user_id,
                 updated_by=updated_by,
-                edit_session_id=edit_session_id,
-                edit_agent_name=edit_agent_name,
                 edit_op="edit",
                 **edited,
             )

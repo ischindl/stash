@@ -31,6 +31,7 @@ os.environ["DATABASE_URL"] = _TEST_DB_URL
 from backend import database as db_module  # noqa: E402
 from backend.config import settings  # noqa: E402 — must come after env override
 from backend.main import app  # noqa: E402 — must come after env override
+from backend.services.page_actor import PageActor, install, uninstall  # noqa: E402
 
 
 @pytest_asyncio.fixture(scope="session")
@@ -131,6 +132,62 @@ def billing_on(monkeypatch):
     """
     with managed_billing(monkeypatch):
         yield
+
+
+@pytest.fixture(autouse=True)
+def page_actor():
+    """Every page write names its writer, and the suite's default writer is a human.
+
+    Each real lane installs its own actor in production code — an agent turn via
+    `tool_loop`, an HTTP request via `backend/auth.py`, a worker/seed/script at its
+    own edge. What no lane can supply is the identity a test injects into another
+    layer to drive a write through it (the ingest, the search call, a service
+    called directly), so this fixture is that stand-in and the suite's one
+    default. It is also the switch a lane test turns off: a module that defines
+    its own `page_actor` fixture shadows this one, which is how a test proves a
+    lane declares its actor rather than inheriting a courtesy one. A test that
+    needs a *named* human instead of an anonymous one overrides it too, which is
+    the whole reason the injection point is a fixture and not a value buried in
+    `_log_page_edit`. See docs/page-provenance.md.
+
+    Installed through a token and reset on teardown because an ASGI request runs in
+    its caller's context: without the reset, the actor a test's request installed
+    would still be installed for the tests that follow it, and a later assertion
+    about a *missing* actor would pass on that leftover.
+    """
+    token = install(PageActor.human())
+    try:
+        yield PageActor.human()
+    finally:
+        uninstall(token)
+
+
+@pytest.fixture
+def read_page_attribution(_db_pool):
+    """Read back who a page write credited — the one place a lane test may.
+
+    Pass the coroutine that performs the write; the helper runs it and answers
+    with the exception it raised (a lane with no declared actor fails instead of
+    writing empty attribution) or with the `page_edits` rows it left as
+    `(agent_name, edited_by, session_id)`. Returning rows for the whole test
+    rather than one page is deliberate: a seed lane writes many pages and the
+    claim is that *every* one of them names the same writer.
+    """
+
+    async def read(write, *, page_id=None):
+        try:
+            await write()
+        except Exception as exc:  # the write's own failure IS the finding
+            return exc
+        sql = "SELECT agent_name, edited_by, session_id FROM page_edits"
+        args: list = []
+        if page_id is not None:
+            args.append(page_id)
+            sql += " WHERE page_id = $1"
+        rows = await _db_pool.fetch(sql + " ORDER BY created_at", *args)
+        return [tuple(r) for r in rows]
+
+    return read
 
 
 @pytest.fixture(autouse=True)

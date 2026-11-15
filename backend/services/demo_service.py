@@ -26,6 +26,7 @@ from .demo_content import (
     DEMO_SKILL_FILENAME,
     SLIDES_SKILL_MARKDOWN,
 )
+from .page_actor import PageActor, page_actor
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +34,12 @@ DEMO_SYSTEM_USERNAME = "stash-demo"
 
 # Off-switch for tests that want a pristine DB.
 DISABLE_ENV_VAR = "STASH_DISABLE_DEMO_SEED"
+
+# The seed is a writer with no HTTP request and no agent turn behind it. It is
+# entered identically from the app lifespan, the demo janitor's path and a test
+# fixture, so it names itself at the seed's own edge rather than at any one
+# caller — a lane has to be nameable however it was reached.
+DEMO_SEED_ACTOR = PageActor.system("Demo seed")
 
 
 async def seed_demo() -> tuple[UUID, UUID] | None:
@@ -43,6 +50,11 @@ async def seed_demo() -> tuple[UUID, UUID] | None:
     """
     if os.environ.get(DISABLE_ENV_VAR) == "1":
         return None
+    async with page_actor(DEMO_SEED_ACTOR):
+        return await _seed_demo()
+
+
+async def _seed_demo() -> tuple[UUID, UUID]:
     pool = get_pool()
 
     owner_id = await pool.fetchval(

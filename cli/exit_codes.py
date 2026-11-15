@@ -57,6 +57,16 @@ EXIT_AGENT_SIGNAL = 20
 TRANSPORT_ERROR_STATUS = 0
 
 
+# The synthetic status for a run whose injected identity is incomplete. Like the
+# transport case there is no HTTP response behind it, and unlike a 4xx it is not
+# caller-fixable — a half-injected pair is the harness environment's fault, and no
+# retry with different arguments can complete it — so it too sits outside 4xx and
+# exits internal. Failing here, at the CLI's own boundary, is what keeps a write
+# from arriving with half an identity; the server's 400 for the same pair is the
+# other half of the same rule.
+ATTRIBUTION_ERROR_STATUS = 0
+
+
 def classify_status_code(status_code: int) -> int:
     """Map an HTTP status code to a stash CLI exit code.
 

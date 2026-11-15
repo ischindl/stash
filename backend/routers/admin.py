@@ -13,8 +13,17 @@ from ..services import (
     github_skill_import,
     security_audit_service,
 )
+from ..services.page_actor import PageActor, page_actor
 
 router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
+
+# This route is gated by X-Admin-Token, not by get_current_user, so it has no
+# request actor to inherit, and no agent turn behind it either. It is the same
+# writer as `scripts/import_github_skills.py` reached over HTTP — the Discover
+# catalog import — so it carries the same name. Declared at the route and not
+# inside github_skill_import, which the user-facing skills routes also reach with
+# a real request actor installed. See docs/page-provenance.md.
+DISCOVER_IMPORT_ACTOR = PageActor.system("GitHub skill import")
 
 
 async def _record_admin_access(
@@ -170,7 +179,8 @@ async def list_discover_skills():
 async def import_discover_skill(req: RepoRequest):
     """Import (or re-import) every SKILL.md folder in a public GitHub repo."""
     try:
-        summary = await github_skill_import.import_repo(req.repo_url)
+        async with page_actor(DISCOVER_IMPORT_ACTOR):
+            summary = await github_skill_import.import_repo(req.repo_url)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     if summary["skills_found"] == 0:

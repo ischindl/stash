@@ -12,6 +12,7 @@ from pathlib import Path
 
 import httpx
 
+from cli.exit_codes import ATTRIBUTION_ERROR_STATUS
 from stashai import release
 from stashvfs import VfsClientError
 
@@ -28,6 +29,17 @@ class StashError(VfsClientError):
 # Page size when the VFS walks a source's entries. Callers page with the
 # `after` cursor until a page comes back non-full.
 SOURCE_ENTRIES_PAGE = 1000
+
+# Which dispatched run this CLI invocation is running inside, injected by the
+# server into the harness environment (`sprite_agent_service._attribution_env`)
+# and echoed back as request headers, so a page this CLI writes is credited to
+# that run rather than to the owner of the key it carries. The spellings are the
+# ones in `backend/services/page_actor.py`; the CLI ships standalone, so they are
+# repeated here instead of imported.
+AGENT_SESSION_ENV = "STASH_AGENT_SESSION"
+AGENT_NAME_ENV = "STASH_AGENT_NAME"
+AGENT_SESSION_HEADER = "X-Stash-Agent-Session"
+AGENT_NAME_HEADER = "X-Stash-Agent-Name"
 
 
 def split_source_tokens(value: str) -> list[str] | None:
@@ -47,6 +59,10 @@ class StashClient:
         self._auto = auto
         self._internal = False
         self._scan = False
+        # The run this CLI is invoked inside, when a server-dispatched agent turn
+        # injected it. Both halves arrive together, or neither is sent.
+        self._agent_session = os.environ.get(AGENT_SESSION_ENV, "")
+        self._agent_name = os.environ.get(AGENT_NAME_ENV, "")
         self._http = httpx.Client(base_url=self._base_url, timeout=30)
 
     def close(self) -> None:
@@ -95,6 +111,18 @@ class StashClient:
         )
 
     def _headers(self) -> dict[str, str]:
+        if bool(self._agent_session) != bool(self._agent_name):
+            # StashError, not RuntimeError: the exit-boundary contract in
+            # cli/main.py re-raises anything it does not classify, so an
+            # unexpected exception prints a traceback at an agent that has a
+            # perfectly fixable environment to go fix.
+            raise StashError(
+                ATTRIBUTION_ERROR_STATUS,
+                f"{AGENT_SESSION_ENV} and {AGENT_NAME_ENV} must be set together: "
+                f"got session={self._agent_session!r}, agent={self._agent_name!r}. "
+                "The server injects the pair (sprite_agent_service); a half pair "
+                "would credit a page write to a run the server cannot name.",
+            )
         if not self._api_key:
             return {}
         headers = {"Authorization": f"Bearer {self._api_key}"}
@@ -104,6 +132,9 @@ class StashClient:
             headers["X-Stash-Via"] = "auto"
         elif self._scan:
             headers["X-Stash-Via"] = "scan"
+        if self._agent_session:
+            headers[AGENT_SESSION_HEADER] = self._agent_session
+            headers[AGENT_NAME_HEADER] = self._agent_name
         return headers
 
     def _request(self, method: str, path: str, **kwargs) -> httpx.Response:

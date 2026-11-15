@@ -27,8 +27,16 @@ from ..services import (
     shared_skill_service,
 )
 from ..services.files_tree_service import DuplicatePageName
+from ..services.page_actor import PageActor, page_actor
 
 router = APIRouter(prefix="/api/v1/demo", tags=["demo"])
+
+# The demo endpoints are anonymous: a visitor never signs in, so there is no
+# request actor for these writes to inherit and no agent turn behind them
+# either. The lane therefore names itself, so a published demo deck is credited
+# to the lane that wrote it rather than recorded as the demo owner's own click.
+# See docs/page-provenance.md.
+DEMO_PUBLISH_ACTOR = PageActor.system("Demo publish")
 
 # Rate limits — enough headroom for legitimate Q&A flows from a shared
 # office network but tight enough to make scripted abuse uncomfortable.
@@ -119,23 +127,24 @@ async def about(request: Request) -> str:
 @router.post("/pages", status_code=201)
 @limiter.limit(_POST_LIMIT)
 async def create_page(request: Request, req: DemoPageCreate = Body(...)) -> dict[str, Any]:
-    owner_user_id, owner_id = await demo_service.get_demo_scope()
-    name = _unique_page_name(req.title)
-    try:
-        page = await files_tree_service.create_page(
-            owner_user_id=owner_user_id,
-            name=name,
-            created_by=owner_id,
-            folder_id=None,
-            content="",
-            content_type="html",
-            content_html=req.html,
-            html_layout=req.html_layout,
-        )
-    except DuplicatePageName as e:
-        # Extremely unlikely given the random suffix, but surface cleanly.
-        raise HTTPException(status_code=409, detail=str(e))
-    return {"page_id": page["id"], "name": page["name"]}
+    async with page_actor(DEMO_PUBLISH_ACTOR):
+        owner_user_id, owner_id = await demo_service.get_demo_scope()
+        name = _unique_page_name(req.title)
+        try:
+            page = await files_tree_service.create_page(
+                owner_user_id=owner_user_id,
+                name=name,
+                created_by=owner_id,
+                folder_id=None,
+                content="",
+                content_type="html",
+                content_html=req.html,
+                html_layout=req.html_layout,
+            )
+        except DuplicatePageName as e:
+            # Extremely unlikely given the random suffix, but surface cleanly.
+            raise HTTPException(status_code=409, detail=str(e))
+        return {"page_id": page["id"], "name": page["name"]}
 
 
 @router.post("/sessions", status_code=201)
@@ -202,73 +211,78 @@ async def create_session(request: Request, req: DemoSessionCreate = Body(...)) -
 @limiter.limit(_POST_LIMIT)
 async def create_skill(request: Request, req: DemoSkillCreate = Body(...)) -> dict[str, Any]:
     """Wrap demo-created pages/sessions into a skill folder and publish it."""
-    from ..database import get_pool
+    async with page_actor(DEMO_PUBLISH_ACTOR):
+        from ..database import get_pool
 
-    owner_user_id, owner_id = await demo_service.get_demo_scope()
-    pool = get_pool()
+        owner_user_id, owner_id = await demo_service.get_demo_scope()
+        pool = get_pool()
 
-    folder = await files_tree_service.create_folder(
-        owner_user_id, _unique_page_name(req.title), owner_id
-    )
+        folder = await files_tree_service.create_folder(
+            owner_user_id, _unique_page_name(req.title), owner_id
+        )
 
-    for item in req.items:
-        if item.object_type == "page":
-            moved = await pool.execute(
-                "UPDATE pages SET folder_id = $1 WHERE id = $2::uuid AND owner_user_id = $3",
+        for item in req.items:
+            if item.object_type == "page":
+                moved = await pool.execute(
+                    "UPDATE pages SET folder_id = $1 WHERE id = $2::uuid AND owner_user_id = $3",
+                    folder["id"],
+                    item.object_id,
+                    owner_user_id,
+                )
+                if moved != "UPDATE 1":
+                    raise HTTPException(
+                        status_code=400, detail="Skill items must be in the demo scope"
+                    )
+            else:
+                session_external_id = await pool.fetchval(
+                    "SELECT session_id FROM sessions WHERE id = $1::uuid AND owner_user_id = $2 "
+                    "AND deleted_at IS NULL",
+                    item.object_id,
+                    owner_user_id,
+                )
+                if not session_external_id:
+                    raise HTTPException(
+                        status_code=400, detail="Skill items must be in the demo scope"
+                    )
+                await shared_skill_service.materialize_session_page(
+                    owner_user_id, session_external_id, folder["id"], owner_id
+                )
+
+        # Copy the canonical KB pages in so every demo skill ships with the
+        # slides skill + about-Stash docs the agent used to build it.
+        kb_folder_id = await demo_service.get_kb_folder_id()
+        kb_pages = await pool.fetch(
+            "SELECT name, content_markdown, content_type FROM pages "
+            "WHERE folder_id = $1 AND deleted_at IS NULL",
+            kb_folder_id,
+        )
+        for kb_page in kb_pages:
+            await files_tree_service.create_page(
+                owner_user_id,
+                kb_page["name"],
+                owner_id,
+                folder_id=folder["id"],
+                content=kb_page["content_markdown"] or "",
+                content_type=kb_page["content_type"] or "markdown",
+            )
+
+        try:
+            skill = await shared_skill_service.publish_folder(
+                owner_user_id,
+                owner_id,
                 folder["id"],
-                item.object_id,
-                owner_user_id,
+                title=req.title,
+                description=req.description,
             )
-            if moved != "UPDATE 1":
-                raise HTTPException(status_code=400, detail="Skill items must be in the demo scope")
-        else:
-            session_external_id = await pool.fetchval(
-                "SELECT session_id FROM sessions WHERE id = $1::uuid AND owner_user_id = $2 "
-                "AND deleted_at IS NULL",
-                item.object_id,
-                owner_user_id,
-            )
-            if not session_external_id:
-                raise HTTPException(status_code=400, detail="Skill items must be in the demo scope")
-            await shared_skill_service.materialize_session_page(
-                owner_user_id, session_external_id, folder["id"], owner_id
-            )
+        except (ValueError, PermissionError) as e:
+            raise HTTPException(status_code=400, detail=str(e))
 
-    # Copy the canonical KB pages in so every demo skill ships with the
-    # slides skill + about-Stash docs the agent used to build it.
-    kb_folder_id = await demo_service.get_kb_folder_id()
-    kb_pages = await pool.fetch(
-        "SELECT name, content_markdown, content_type FROM pages "
-        "WHERE folder_id = $1 AND deleted_at IS NULL",
-        kb_folder_id,
-    )
-    for kb_page in kb_pages:
-        await files_tree_service.create_page(
-            owner_user_id,
-            kb_page["name"],
-            owner_id,
-            folder_id=folder["id"],
-            content=kb_page["content_markdown"] or "",
-            content_type=kb_page["content_type"] or "markdown",
-        )
-
-    try:
-        skill = await shared_skill_service.publish_folder(
-            owner_user_id,
-            owner_id,
-            folder["id"],
-            title=req.title,
-            description=req.description,
-        )
-    except (ValueError, PermissionError) as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-    base = settings.PUBLIC_URL.rstrip("/")
-    return {
-        "skill_id": skill["id"],
-        "slug": skill["slug"],
-        "app_url": f"{base}/skills/{skill['slug']}",
-    }
+        base = settings.PUBLIC_URL.rstrip("/")
+        return {
+            "skill_id": skill["id"],
+            "slug": skill["slug"],
+            "app_url": f"{base}/skills/{skill['slug']}",
+        }
 
 
 # --- Helpers ---

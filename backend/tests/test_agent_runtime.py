@@ -259,9 +259,15 @@ def test_ask_surface_is_read_only():
 
 @pytest.mark.asyncio
 async def test_edit_provenance_stamped_for_agent_and_null_for_human(scope: UUID, _db_pool):
-    """Agent writes stamp the page + log who/which session; a plain service
-    (human/REST) write logs an edit row but leaves the agent/session NULL."""
+    """A turn's writes stamp the page and log who ran the turn; a write with no
+    turn behind them logs an edit row and leaves the agent/session NULL.
+
+    A turn's identity reaches a page write through the page actor that
+    `tool_loop.stream_tool_loop` installs for it — not through a runtime-private
+    context of agent_runtime's, which was the second provenance channel this card
+    removed. So this test installs what that loop installs."""
     from backend.services import files_tree_service
+    from backend.services.page_actor import PageActor, page_actor
 
     user_id = scope  # the scope id is the user id
 
@@ -278,25 +284,22 @@ async def test_edit_provenance_stamped_for_agent_and_null_for_human(scope: UUID,
     )
     assert h_log["op"] == "create" and h_log["agent_name"] is None
 
-    # Agent path: session + agent name bound in context → stamped + logged.
-    session_token = agent_runtime._session_ctx.set("chat-123")
-    agent_token = agent_runtime._agent_name_ctx.set("Stash Agent")
+    # Agent path: the turn's actor installed → stamped + logged.
     scope_token = agent_runtime._scope_ctx.set(scope)
     user_token = agent_runtime._user_ctx.set(user_id)
     try:
-        created = json.loads(
-            (await agent_runtime._create_page.handler({"name": "Agent doc", "content": "a b"}))[
-                "content"
-            ][0]["text"]
-        )
-        await agent_runtime._edit_page.handler(
-            {"page_id": created["id"], "old_string": "a b", "new_string": "a c"}
-        )
+        async with page_actor(PageActor.agent("Stash Agent", "chat-123")):
+            created = json.loads(
+                (await agent_runtime._create_page.handler({"name": "Agent doc", "content": "a b"}))[
+                    "content"
+                ][0]["text"]
+            )
+            await agent_runtime._edit_page.handler(
+                {"page_id": created["id"], "old_string": "a b", "new_string": "a c"}
+            )
     finally:
         agent_runtime._user_ctx.reset(user_token)
         agent_runtime._scope_ctx.reset(scope_token)
-        agent_runtime._agent_name_ctx.reset(agent_token)
-        agent_runtime._session_ctx.reset(session_token)
 
     page_id = UUID(created["id"])
     cols = await _db_pool.fetchrow(

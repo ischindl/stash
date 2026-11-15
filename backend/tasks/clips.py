@@ -35,6 +35,7 @@ from ..celery_app import celery
 from ..database import get_pool
 from ..services import clip_router, clip_service, url_import_service
 from ..services.article_extraction import ArticleExtractionError
+from ..services.page_actor import PageActor, page_actor
 from ..services.youtube_transcript import TranscriptUnavailable
 from ._celery_helpers import run_async
 
@@ -49,13 +50,21 @@ WINDOW_URLS = BATCH_SIZE
 NEEDS_CLIENT_EXPIRY_HOURS = 24
 EXPIRY_SWEEP_LIMIT = 200
 
+# A URL import has no HTTP request and no agent turn behind it, so this worker
+# names itself at its own edge: the page is credited to the lane that wrote it,
+# not to the owner whose credential the import runs under. Not declared inside
+# clip_service, which the interactive clipper's routes also reach with a real
+# request actor already installed.
+CLIP_IMPORT_ACTOR = PageActor.system("Clip import")
+
 
 async def _process_one(import_id: UUID) -> None:
     row = await url_import_service.claim(import_id)
     if row is None:
         return
     try:
-        result = await clip_router.process_url_import(row)
+        async with page_actor(CLIP_IMPORT_ACTOR):
+            result = await clip_router.process_url_import(row)
     except (
         clip_router.UnsupportedUrlContent,
         ArticleExtractionError,

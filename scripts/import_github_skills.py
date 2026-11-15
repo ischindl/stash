@@ -20,6 +20,7 @@ import asyncio
 import logging
 import sys
 from pathlib import Path
+from uuid import UUID
 
 from dotenv import load_dotenv
 
@@ -31,8 +32,16 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from backend import database  # noqa: E402
 from backend.services import github_skill_import  # noqa: E402
+from backend.services.page_actor import PageActor, page_actor  # noqa: E402
 
 DEFAULT_REPOS_FILE = REPO_ROOT / "scripts" / "discover_skill_repos.txt"
+
+# The importer runs with no HTTP request and no agent turn behind it, so it
+# names itself: each page it creates through shared_skill_service carries this
+# name instead of a NULL that reads as "a human wrote this". Declared here and
+# not inside github_skill_import / shared_skill_service, which the admin and
+# skills routes also reach with a real request actor installed.
+GITHUB_IMPORT_ACTOR = PageActor.system("GitHub skill import")
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("import_github_skills")
@@ -72,6 +81,24 @@ async def main() -> None:
     await database.init_db()
     _reenable_logging()
     owner_user_id, owner_id = await github_skill_import.ensure_curator()
+    await _import_all_with_actor(repo_urls, owner_user_id, owner_id, dry_run=args.dry_run)
+    await database.close_db()
+
+
+async def _import_all_with_actor(
+    repo_urls: list[str], owner_user_id: UUID, owner_id: UUID, *, dry_run: bool
+) -> None:
+    """The whole import, credited to this script's page writer (`GITHUB_IMPORT_ACTOR`).
+
+    Split out from `main` so a test proves the declaration by running this
+    wrapper, not by observing a module-level side effect."""
+    async with page_actor(GITHUB_IMPORT_ACTOR):
+        await _import_all(repo_urls, owner_user_id, owner_id, dry_run=dry_run)
+
+
+async def _import_all(
+    repo_urls: list[str], owner_user_id: UUID, owner_id: UUID, *, dry_run: bool
+) -> None:
     created = updated = failed = 0
     for repo_url in repo_urls:
         try:
@@ -84,7 +111,7 @@ async def main() -> None:
             log.warning("%s: no SKILL.md folders found", repo_url)
             continue
         for skill in skills:
-            if args.dry_run:
+            if dry_run:
                 log.info(
                     "[dry-run] %s (%d files) <- %s",
                     skill["fallback_title"],
@@ -108,7 +135,6 @@ async def main() -> None:
             created += result == "created"
             updated += result == "updated"
     log.info("done: %d created, %d updated, %d failed", created, updated, failed)
-    await database.close_db()
 
 
 if __name__ == "__main__":

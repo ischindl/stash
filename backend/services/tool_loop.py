@@ -30,16 +30,27 @@ from anthropic import AsyncAnthropic
 from ..config import settings
 from .agent_runtime import (
     _TOOLS_BY_NAME,
-    _agent_name_ctx,
     _scope_ctx,
-    _session_ctx,
     _user_ctx,
 )
 from .llm import ModelTier, _model_for
+from .page_actor import PageActor, install, uninstall
 
 logger = logging.getLogger(__name__)
 
 _client: AsyncAnthropic | None = None
+
+
+def _page_actor_for_turn(session_id: str | None, agent_name: str | None) -> PageActor:
+    """Who a page this loop writes belongs to.
+
+    A turn that knows its session and agent names itself, so its edits are
+    countable per run. A turn that knows neither is the one-shot ask lane, whose
+    tool set (`prompts.ASK_TOOL_SET`) is read-only and holds no page-write tool —
+    so nothing can be miscredited, and the human verdict is the honest label."""
+    if session_id and agent_name:
+        return PageActor.agent(agent_name, session_id)
+    return PageActor.human()
 
 
 def _get_client() -> AsyncAnthropic:
@@ -114,8 +125,7 @@ async def stream_tool_loop(
 
     scope_token = _scope_ctx.set(owner_user_id)
     user_token = _user_ctx.set(user_id)
-    session_token = _session_ctx.set(session_id)
-    agent_name_token = _agent_name_ctx.set(agent_name)
+    actor_token = install(_page_actor_for_turn(session_id, agent_name))
     try:
         for turn_idx in range(max_turns):
             assistant_blocks: list[dict] = []
@@ -246,8 +256,7 @@ async def stream_tool_loop(
 
             messages.append({"role": "user", "content": tool_results})
     finally:
-        _agent_name_ctx.reset(agent_name_token)
-        _session_ctx.reset(session_token)
+        uninstall(actor_token)
         _user_ctx.reset(user_token)
         _scope_ctx.reset(scope_token)
 

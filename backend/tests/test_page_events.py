@@ -10,6 +10,7 @@ import pytest
 import pytest_asyncio
 
 from backend.services import files_tree_service, page_events
+from backend.services.page_actor import PageActor, page_actor
 
 
 @pytest_asyncio.fixture
@@ -43,18 +44,19 @@ def test_pubsub_delivers_then_stops_after_unsubscribe():
 
 @pytest.mark.asyncio
 async def test_update_page_notifies_open_viewers(scope, _db_pool):
-    """A content write broadcasts so open viewers refetch. (The collab-state
-    invalidation this test also covered is gone with the collab server: there
-    is no second copy of the document to go stale.)"""
+    """A content write broadcasts so open viewers refetch, and the broadcast names
+    the writer the turn installed — the same actor the `page_edits` row and the
+    page's own last-edit pair get, because all three read one source. (The
+    collab-state invalidation this test also covered is gone with the collab
+    server: there is no second copy of the document to go stale.)"""
     scope_id, user_id = scope
     page = await files_tree_service.create_page(
         owner_user_id=scope_id, name="Live", created_by=user_id, content="v1"
     )
     queue = page_events.subscribe(scope_id)
     try:
-        await files_tree_service.update_page(
-            page["id"], scope_id, user_id, content="v2", edit_agent_name="Stash Agent"
-        )
+        async with page_actor(PageActor.agent("Stash Agent", "chat-123")):
+            await files_tree_service.update_page(page["id"], scope_id, user_id, content="v2")
         event = await asyncio.wait_for(queue.get(), timeout=1)
     finally:
         page_events.unsubscribe(scope_id, queue)

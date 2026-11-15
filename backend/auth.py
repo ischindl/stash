@@ -9,6 +9,12 @@ from fastapi import Depends, Header, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from .database import get_pool
+from .services.page_actor import (
+    AGENT_NAME_HEADER,
+    AGENT_SESSION_HEADER,
+    PageActor,
+    install,
+)
 
 security = HTTPBearer(auto_error=False)
 
@@ -238,6 +244,65 @@ def _set_request_via(request: Request, user: dict | None) -> None:
         request_via.set("web")
 
 
+async def _set_page_actor(request: Request, user: dict | None) -> None:
+    """Resolve who this request's page writes are credited to.
+
+    No agent headers → a human, which is exactly what `agent_name IS NULL` means
+    (docs/page-provenance.md). One header alone → a broken injection, refused:
+    a half claim could credit a write to a run nobody can name. Both → the pair
+    must name a run this owner actually had, checked by one indexed
+    `history_events` lookup (`idx_history_events_agent_session`).
+
+    The claim is provenance, never permission: page authorization stays entirely
+    in `_check_content_access` and the owner-scoped `WHERE` clauses, so the worst
+    a liar achieves is a wrong provenance row inside their own scope. The 400s
+    name the failing check and both header names, so a field 400 in the field
+    reads as its own cause instead of a mystery — including the day a history
+    pruning job starts turning legitimate claims into refusals."""
+    session_id = request.headers.get(AGENT_SESSION_HEADER)
+    agent_name = request.headers.get(AGENT_NAME_HEADER)
+    if not session_id and not agent_name:
+        install(PageActor.human())
+        return
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"{AGENT_SESSION_HEADER}/{AGENT_NAME_HEADER} claim an agent run, but "
+                "this request carries no credential to name the account that ran it"
+            ),
+        )
+    if bool(session_id) != bool(agent_name):
+        missing = AGENT_SESSION_HEADER if not session_id else AGENT_NAME_HEADER
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"{missing} is missing: page attribution arrives as a pair "
+                f"({AGENT_SESSION_HEADER} + {AGENT_NAME_HEADER}), and a half pair "
+                "cannot name the run a page write belongs to"
+            ),
+        )
+    run_exists = await get_pool().fetchval(
+        "SELECT 1 FROM history_events "
+        "WHERE agent_name = $1 AND session_id = $2 AND owner_user_id = $3 LIMIT 1",
+        agent_name,
+        session_id,
+        user["id"],
+    )
+    if not run_exists:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"page attribution claim names no run of this account: history_events "
+                f"has no row for agent_name={agent_name!r}, "
+                f"session_id={session_id!r}, owner_user_id={user['id']} — a "
+                f"{AGENT_SESSION_HEADER} must be a session this account's history "
+                f"already holds, and {AGENT_NAME_HEADER} its agent's name"
+            ),
+        )
+    install(PageActor.agent(agent_name, session_id))
+
+
 async def get_current_user(
     request: Request,
     credentials: HTTPAuthorizationCredentials | None = Depends(security),
@@ -251,6 +316,7 @@ async def get_current_user(
     user = await authenticate_token(credentials.credentials)
     _enforce_key_access(user, request)
     _set_request_via(request, user)
+    await _set_page_actor(request, user)
     return user
 
 
@@ -288,6 +354,7 @@ async def get_current_user_optional(
 ) -> dict | None:
     if credentials is None:
         _set_request_via(request, None)
+        await _set_page_actor(request, None)
         return None
     try:
         return await get_current_user(request, credentials)
