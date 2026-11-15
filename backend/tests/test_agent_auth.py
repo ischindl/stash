@@ -513,7 +513,14 @@ async def test_a_chosen_level_reaches_pi_as_a_level_and_a_bounded_budget(monkeyp
     when the model is marked as reasoning and the compat names the field, and it only
     reserves a thinking phase at all when a level was named. Measured on the founder's
     endpoint, the budget is what turns 'reasoning consumed every output token' into an
-    answer — with it, zero empty answers in ten turns; without it, four in ten.
+    answer — with it, ten counted turns gave zero empty answers; without it, four of
+    the ten, each one `stopReason: length` at exactly that ceiling. The run is
+    STAS-428's task document `step0-measurement`, Run B: the founder's endpoint,
+    ten counted turns per arm, tools off, a 1280-token ceiling. Run E of the same
+    record answers all ten in both arms at the 8192 ceiling Stash ships today and
+    leaves the level-named arm the slower one, so those rates belong to that
+    ceiling and that shape; what this test pins is the mechanism, that a named
+    level puts a bounded thinking budget on the wire.
     """
 
     async def cred(_uid, _provider=None):
@@ -592,8 +599,15 @@ async def test_a_row_written_before_the_level_existed_refuses_the_turn_instead_o
     """A stored doc with no `thinking` key is refused, not read as `off`.
 
     The refusal is the point. `off` is NOT 'the model does not think' — measured on
-    the founder's endpoint, pi with no level still received 2,170 reasoning tokens
-    with the flag off, because the serving engine's chat template decides. A row that
+    the founder's endpoint, a turn that asked for no level put no thinking field
+    on the wire at all and still spent its whole output on reasoning:
+    `finish_reason=length, output=2048, reasoning=2048` at a 2048-token ceiling,
+    because the serving engine's chat template decides (STAS-428's
+    `step0-measurement`, section 4). STAS-455's `review-measures-r1` reproduces the
+    same thesis at the shipped 8192 ceiling, where its control runs measured
+    reasoning equal to output with zero answer bytes. The 2170 this docstring used
+    to quote was Run B's median reasoning BYTES at a 1280-token ceiling, not a
+    token count, so nobody should re-import it from history as one. A row that
     lost its level would therefore resume thinking while the screen reported a bound,
     which is the failure this card exists to end. And a silent default here would also
     hide a migration that never ran, so the message names it.

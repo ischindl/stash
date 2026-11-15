@@ -36,9 +36,15 @@ everything before it is captured in git history (`git log`), not here.
   fixed `off` and never asked the model to think within a budget, so a curator turn on a box
   whose server reasons by default could spend its entire output on reasoning and answer with
   nothing — the failure that reads as "0 B answer, 27 kB of thinking". Choosing a level
-  bounds the thinking phase instead: measured on the founder's own vLLM box over ten
-  identical curator turns, the unbounded setting produced 4 empty answers out of 10 where
-  `low` produced none, and the median turn went from 44 s to 13 s. `off` keeps behaving
+  bounds the thinking phase instead, and the shape is part of the number: measured on the
+  founder's own vLLM box over ten identical curator turns run with tools off at an output
+  ceiling of 1280 tokens, the setting that asks for no level produced 4 empty answers out of
+  10 where `low` produced none, and the median turn went from 44.4 s to 13.1 s. That run
+  deliberately cut the ceiling to make the failure visible; the same record's ten-turn run
+  at the 8192 ceiling Stash ships today had both settings answering every turn, and there
+  the level-named arm was the slower one (median 76.2 s against 47.4 s), so a level is not
+  a speed setting: it is the bound that keeps a box which reasons by default from spending
+  a turn's output on reasoning. `off` keeps behaving
   exactly as it does today — for a box whose chat template reasons regardless, no level is
   what stops it; a level is what stops reasoning from eating the answer. The level is stored
   per box, so a fast laptop box and a rack box can be set differently, and a box whose
