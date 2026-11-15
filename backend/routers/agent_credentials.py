@@ -24,6 +24,10 @@ _PROVIDERS = {"anthropic", "openai", "openrouter", "local"}
 class ConnectRequest(BaseModel):
     provider: str
     api_key: str | None = None  # required for the three key providers; optional for local
+    # Local only, and required for local: the window the box was configured with. The
+    # validator gives it no default, because a key provider's connect never reads it and a
+    # local connect without it is refused with the validator's own words.
+    context_window: int | None = None
     base_url: str | None = (
         None  # local only: OpenAI-compatible endpoint your cloud computer can reach
     )
@@ -48,16 +52,26 @@ class ThinkingRequest(BaseModel):
     thinking: str  # one of the levels the reader reports; the server re-validates it
 
 
+class ContextWindowRequest(BaseModel):
+    # One field, re-validated server-side by the validator connect uses.
+    context_window: int
+
+
 class LocalTestRequest(BaseModel):
     base_url: str
     model: str
+    # Required like `model` is, and for the same reason: this route validates the doc it is
+    # about to dial, so it needs the number the form is claiming. Omitting a required field
+    # already answers 422 here today.
+    context_window: int
     api_key: str | None = None
 
 
 @router.get("")
 async def list_credentials(current_user: dict = Depends(get_current_user)):
     """Which providers this user has connected, the endpoint entries for the
-    Settings list (id, name, base URL, stored thinking level, models probed live —
+    Settings list (id, name, base URL, stored thinking level and context window, models
+    probed live —
     never a key), and the user's own local endpoint doc for the Settings form to
     show and prefill. The key providers' secrets are never returned.
 
@@ -84,7 +98,9 @@ async def connect(req: ConnectRequest, current_user: dict = Depends(get_current_
         # box — but only a live one: the probe runs before anything is stored,
         # so a typo'd URL never enters the list the user trusts.
         try:
-            doc = agent_auth.local_endpoint_doc(req.base_url or "", req.model or "", req.api_key)
+            doc = agent_auth.local_endpoint_doc(
+                req.base_url or "", req.model or "", req.context_window, req.api_key
+            )
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
         probe = await agent_auth.probe_local_endpoint(doc["base_url"], doc["api_key"])
@@ -96,7 +112,9 @@ async def connect(req: ConnectRequest, current_user: dict = Depends(get_current_
             current_user["id"],
             "local",
             "endpoint",
-            agent_auth.local_endpoint_secret(doc["base_url"], doc["model"], doc["api_key"]),
+            agent_auth.local_endpoint_secret(
+                doc["base_url"], doc["model"], doc["context_window"], doc["api_key"]
+            ),
             name=agent_auth.endpoint_name(doc["base_url"]),
         )
         return {
@@ -131,7 +149,9 @@ async def test_local_endpoint(
     would dial anyway.
     """
     try:
-        doc = agent_auth.local_endpoint_doc(req.base_url, req.model, req.api_key)
+        doc = agent_auth.local_endpoint_doc(
+            req.base_url, req.model, req.context_window, req.api_key
+        )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return await agent_auth.probe_local_endpoint(doc["base_url"], doc["api_key"])
@@ -248,6 +268,39 @@ async def put_endpoint_thinking(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return {"ok": True, "thinking": doc["thinking"]}
+
+
+@router.put("/endpoints/{credential_id}/context-window")
+async def put_endpoint_context_window(
+    credential_id: UUID,
+    req: ContextWindowRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    """Set the context window of exactly one stored endpoint; the next turn on that box
+    is sized from it and no other box is touched.
+
+    The body carries one field. The address, model, key and level are not accepted here
+    — they are copied from the stored doc inside `set_endpoint_context_window` — so the
+    control that resizes a box cannot be used to point the user's traffic at a different
+    server, and cannot store a size that the connect validator would refuse.
+
+    Refused (400) while a verbatim models.json override is stored for that endpoint: those
+    bytes, not the window, are what a turn writes, so accepting the pair would let the
+    Settings row report a size the request never carries. Resetting the override, or
+    putting contextWindow into that file, is the way out, and the detail says so.
+
+    An id addresses this user's local endpoints only: a foreign id or a key provider's
+    row reads as 404, never as a credential to edit.
+    """
+    try:
+        doc = await agent_auth.set_endpoint_context_window(
+            current_user["id"], credential_id, req.context_window
+        )
+    except LookupError:
+        raise HTTPException(status_code=404, detail="no such local endpoint")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"ok": True, "context_window": doc["context_window"]}
 
 
 @router.delete("/endpoints/{credential_id}")

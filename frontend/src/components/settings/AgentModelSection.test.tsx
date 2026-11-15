@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ApiError, PROBE_ONLY_MODEL, type ModelEndpointsStatus } from "@/lib/api";
 import { ConfirmDialogProvider } from "../ConfirmDialog";
-import AgentModelSection from "./AgentModelSection";
+import AgentModelSection, { parseWindow } from "./AgentModelSection";
 
 const listModelEndpoints = vi.fn();
 const probeLocalEndpoint = vi.fn();
@@ -12,6 +12,7 @@ const connectLocalEndpoint = vi.fn();
 const deleteLocalEndpoint = vi.fn();
 const disconnectAgentCredential = vi.fn();
 const setEndpointThinking = vi.fn();
+const setEndpointContextWindow = vi.fn();
 
 // Mocked at the module boundary on purpose: the two PROBE_ONLY_MODEL pins below
 // read the arguments that actually leave this component, which is the only place
@@ -28,14 +29,18 @@ vi.mock("@/lib/api", async (importOriginal) => {
     deleteLocalEndpoint: (...args: unknown[]) => deleteLocalEndpoint(...args),
     disconnectAgentCredential: (...args: unknown[]) => disconnectAgentCredential(...args),
     setEndpointThinking: (...args: unknown[]) => setEndpointThinking(...args),
+    setEndpointContextWindow: (...args: unknown[]) => setEndpointContextWindow(...args),
   };
 });
 
+// The two boxes deliberately disagree about size: one fixture number could not tell a
+// per-endpoint window apart from a constant the server happened to echo.
 const FIRST = {
   id: "cred-1",
   name: "box-one",
   base_url: "http://box-one:11434/v1",
   thinking: "off",
+  context_window: 32768,
   models: ["llama3.1:8b", "qwen2:7b"],
 };
 const SECOND = {
@@ -43,6 +48,7 @@ const SECOND = {
   name: "box-two",
   base_url: "http://box-two:11434/v1",
   thinking: "off",
+  context_window: 245760,
   models: ["gemma3:4b"],
 };
 // The server names only one endpoint's key — the one an unpinned run resolves to,
@@ -53,6 +59,7 @@ const DEFAULT_DOC = {
   model: "llama3.1:8b",
   api_key: "sk-local-42",
   thinking: "off",
+  context_window: FIRST.context_window,
 };
 
 function status(over: Partial<ModelEndpointsStatus> = {}): ModelEndpointsStatus {
@@ -78,11 +85,16 @@ async function removeFirstEndpoint() {
   return within(row!).getByRole("button", { name: "Remove" });
 }
 
-async function typeDraft(url: string, key?: string) {
+// Every add-flow test in this file types through here, and the window draft is part of
+// the helper rather than an extra step a test can forget: the field is required, so a
+// flow that never states a size cannot reach the button at all, and a test that skipped
+// it would be testing a form the product no longer has.
+async function typeDraft(url: string, key?: string, window = String(FIRST.context_window)) {
   fireEvent.change(screen.getByLabelText("Endpoint base URL"), { target: { value: url } });
   if (key !== undefined) {
     fireEvent.change(screen.getByLabelText("Endpoint key"), { target: { value: key } });
   }
+  fireEvent.change(screen.getByLabelText("Endpoint context window"), { target: { value: window } });
 }
 
 // A test result renders as one line: its leading span names the outcome, and on a
@@ -108,6 +120,7 @@ beforeEach(() => {
   connectLocalEndpoint.mockResolvedValue({ id: "cred-3", connected: ["local"] });
   deleteLocalEndpoint.mockResolvedValue({ ok: true, connected: ["local"] });
   disconnectAgentCredential.mockResolvedValue([]);
+  setEndpointContextWindow.mockResolvedValue({ ok: true, context_window: 24576 });
 });
 
 describe("AgentModelSection local endpoint list", () => {
@@ -161,6 +174,7 @@ describe("AgentModelSection local endpoint list", () => {
       expect(connectLocalEndpoint).toHaveBeenCalledWith(
         "http://box-three:11434/v1",
         "new-model:1",
+        FIRST.context_window,
         "sk-test",
       ),
     );
@@ -232,6 +246,7 @@ describe("AgentModelSection local endpoint list", () => {
 
     expect(probeLocalEndpoint).toHaveBeenCalledWith(
       "http://box-three:11434/v1",
+      FIRST.context_window,
       "sk-test",
       PROBE_ONLY_MODEL,
     );
@@ -299,11 +314,18 @@ describe("AgentModelSection local endpoint list", () => {
       ),
     );
     // The key stays absent — it is never held client-side — and a seed on its own
-    // cannot store: the address still has to answer a test before a model exists.
+    // cannot store: the address still has to answer a test before a model exists. The
+    // size is stated again here rather than carried across the removal, because the
+    // removal deleted the only record of what it was: a seeded number would be a
+    // default, and a default is the thing this card took out of the service layer.
     expect((screen.getByLabelText("Endpoint key") as HTMLInputElement).value).toBe("");
+    expect((screen.getByLabelText("Endpoint context window") as HTMLInputElement).value).toBe("");
     expect(screen.queryByRole("button", { name: "Add endpoint" })).toBeNull();
     expect(connectLocalEndpoint).not.toHaveBeenCalled();
 
+    fireEvent.change(screen.getByLabelText("Endpoint context window"), {
+      target: { value: String(FIRST.context_window) },
+    });
     fireEvent.click(screen.getByRole("button", { name: "Test connection" }));
     await screen.findByRole("button", { name: "Add endpoint" });
     expect(connectLocalEndpoint).not.toHaveBeenCalled();
@@ -813,5 +835,148 @@ describe("AgentModelSection per-endpoint reasoning level", () => {
     expect(within(row).getByRole("button", { name: "Save level" }).hasAttribute("disabled")).toBe(
       false
     );
+  });
+});
+
+// The context window is the size the box's owner stated for that one box, and it is the
+// number a turn's output ceiling is derived from. So these pin the three ways the claim
+// could be a lie on screen: a size shown that the server never reported, a size typed but
+// never sent, and a resize that looks saved but was never written.
+describe("AgentModelSection per-endpoint context window", () => {
+  function rowOf(name: string): HTMLElement {
+    return screen.getByText(name).closest("li") as HTMLElement;
+  }
+
+  function windowField(row: HTMLElement) {
+    return within(row).getByLabelText("Context window for this box") as HTMLInputElement;
+  }
+
+  it("shows the size the server reported for that box, not one this file computes", async () => {
+    renderSection();
+    await screen.findByText("box-one");
+
+    // Each row carries its own box's number. One shared figure here would be the shipped
+    // constant wearing a different hat: it would look per-endpoint and read as both boxes
+    // being the same size, which is the bug this card removes.
+    expect(windowField(rowOf("box-one")).value).toBe("32768");
+    expect(windowField(rowOf("box-two")).value).toBe("245760");
+    expect(within(rowOf("box-one")).getByText(/planned against 32768/)).toBeDefined();
+    expect(within(rowOf("box-two")).getByText(/planned against 245760/)).toBeDefined();
+  });
+
+  it("sends the typed size to the test and to the store, not a number it picked", async () => {
+    renderSection();
+    await screen.findByText("box-one");
+
+    await typeDraft("http://box-three:11434/v1", "sk-test", "4096");
+    fireEvent.click(screen.getByRole("button", { name: "Test connection" }));
+    await screen.findByRole("button", { name: "Add endpoint" });
+    fireEvent.click(screen.getByRole("button", { name: "Add endpoint" }));
+
+    await waitFor(() => expect(connectLocalEndpoint).toHaveBeenCalled());
+    expect(probeLocalEndpoint).toHaveBeenCalledWith(
+      "http://box-three:11434/v1",
+      4096,
+      "sk-test",
+      PROBE_ONLY_MODEL,
+    );
+    expect(connectLocalEndpoint).toHaveBeenCalledWith(
+      "http://box-three:11434/v1",
+      "new-model:1",
+      4096,
+      "sk-test",
+    );
+  });
+
+  it("will not dial a box whose size has not been stated as a whole number", async () => {
+    renderSection();
+    await screen.findByText("box-one");
+    const field = screen.getByLabelText("Endpoint context window") as HTMLInputElement;
+    const testButton = screen.getByRole("button", { name: "Test connection" });
+
+    fireEvent.change(screen.getByLabelText("Endpoint base URL"), {
+      target: { value: "http://box-three:11434/v1" },
+    });
+    // Blank, a fraction, a negative and text are not token counts, and no request leaves
+    // for any of them. The floor a real box may have is the server's claim to make, so
+    // this refuses only what could never be a size, and 32768 — a number below no
+    // server's floor but this one's — is accepted here and answered by the server.
+    for (const draft of ["", "12.5", "-4096", "32k"]) {
+      fireEvent.change(field, { target: { value: draft } });
+      expect(testButton.hasAttribute("disabled")).toBe(true);
+    }
+    expect(probeLocalEndpoint).not.toHaveBeenCalled();
+
+    fireEvent.change(field, { target: { value: "32768" } });
+    expect(testButton.hasAttribute("disabled")).toBe(false);
+  });
+
+  it("retires a test result as soon as the stated size changes", async () => {
+    renderSection();
+    await screen.findByText("box-one");
+
+    await typeDraft("http://box-three:11434/v1", "sk-test", "32768");
+    fireEvent.click(screen.getByRole("button", { name: "Test connection" }));
+    await screen.findByRole("button", { name: "Add endpoint" });
+
+    await typeDraft("http://box-three:11434/v1", "sk-test", "8192");
+
+    // A verdict about a 32768-token box cannot license storing an 8192-token claim, and
+    // the store sends the size the test was served with, never the one typed since.
+    expect(screen.queryByRole("button", { name: "Add endpoint" })).toBeNull();
+    expect(connectLocalEndpoint).not.toHaveBeenCalled();
+  });
+
+  it("writes a resize to one box only, then repeats the server's number back", async () => {
+    renderSection();
+    await screen.findByText("box-one");
+    const row = rowOf("box-one");
+
+    fireEvent.change(windowField(row), { target: { value: "24576" } });
+    expect(setEndpointContextWindow).not.toHaveBeenCalled();
+
+    fireEvent.click(within(row).getByRole("button", { name: "Save size" }));
+    await waitFor(() => expect(setEndpointContextWindow).toHaveBeenCalledWith("cred-1", 24576));
+    expect(setEndpointContextWindow.mock.calls.length).toBe(1);
+
+    // The row now states the number the server answered with, and the other box keeps
+    // its own: a resize is not a setting that spreads across endpoints.
+    await waitFor(() =>
+      expect(within(row).getByText(/planned against 24576/)).toBeDefined(),
+    );
+    expect(within(rowOf("box-two")).getByText(/planned against 245760/)).toBeDefined();
+  });
+
+  it("keeps showing the stored size and the server's own words when the resize is refused", async () => {
+    setEndpointContextWindow.mockRejectedValue(
+      new ApiError(400, '{"detail":"the context window cannot be changed while a models.json override is stored"}'),
+    );
+    renderSection();
+    await screen.findByText("box-one");
+    const row = rowOf("box-one");
+
+    fireEvent.change(windowField(row), { target: { value: "24576" } });
+    fireEvent.click(within(row).getByRole("button", { name: "Save size" }));
+
+    // The sentence beside the control keeps naming the size the server holds, the refusal
+    // arrives verbatim, and Save stays clickable: a failed write does not destroy the
+    // number that was typed, and the claim about the box is the sentence, not the field.
+    await waitFor(() => expect(within(row).getByText(/models.json override is stored/)).toBeDefined());
+    expect(within(row).getByText(/planned against 32768/)).toBeDefined();
+    expect(
+      within(row).getByRole("button", { name: "Save size" }).hasAttribute("disabled"),
+    ).toBe(false);
+  });
+
+  it("refuses every draft that is not a whole count of tokens, and only those", () => {
+    // The rule the form's disabled button is derived from, pinned directly so a change
+    // to what counts as a number is visible here rather than as a silent request.
+    expect(parseWindow("32768")).toBe(32768);
+    expect(parseWindow("  4096  ")).toBe(4096);
+    expect(parseWindow("")).toBeNull();
+    expect(parseWindow("12.5")).toBeNull();
+    expect(parseWindow("-4096")).toBeNull();
+    expect(parseWindow("32k")).toBeNull();
+    expect(parseWindow("1e32768")).toBeNull();
   });
 });

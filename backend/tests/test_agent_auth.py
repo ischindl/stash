@@ -10,6 +10,12 @@ from backend.config import settings
 from backend.services import agent_auth, billing_service, sprite_service
 from backend.services import harness as h
 
+# The context window these fixtures state for a box. Deliberately not the number this
+# service used to hand every endpoint: a fixture carrying that number would let a
+# reintroduced constant pass every test in this file. 32768 derives to the shipped 8192
+# ceiling, so stating it moves the window and nothing else.
+WINDOW = 32768
+
 
 @pytest.mark.asyncio
 async def test_local_mode_without_local_credential_raises_needs_auth(monkeypatch):
@@ -166,6 +172,7 @@ async def test_local_endpoint_with_key_runs_pi(monkeypatch):
                     "base_url": "http://tunnel.example/v1",
                     "model": "llama3.1:8b",
                     "api_key": "my-secret-key",
+                    "context_window": WINDOW,
                     "thinking": "off",
                 }
             ),
@@ -190,7 +197,106 @@ async def test_local_endpoint_with_key_runs_pi(monkeypatch):
     assert local["api"] == "openai-completions"
     assert local["baseUrl"] == "http://tunnel.example/v1"
     assert local["compat"] == {"supportsDeveloperRole": False, "supportsReasoningEffort": False}
-    assert local["models"] == [{"id": "llama3.1:8b", "contextWindow": 131072, "maxTokens": 8192}]
+    # The window is the fixture's own 32768 and the ceiling is derived from it: a box
+    # that size leaves the shipped 8192 ceiling intact, so this line states where both
+    # numbers come from rather than pinning one pair for every box.
+    assert local["models"] == [{"id": "llama3.1:8b", "contextWindow": 32768, "maxTokens": 8192}]
+
+
+# --- The window is the endpoint's own number, and the ceiling follows it ---
+#
+# One dial decides what a model box's window is: `pi` reads `contextWindow` as the
+# model's size and spends `maxTokens` as the request's output ceiling, which is what
+# bounds a turn's reasoning phase. A pair fixed in the code is therefore a wrong
+# request on any box that is not that size: an Ollama server configured for 4096
+# tokens was handed a giant's window and then asked for output it cannot serve.
+# What these assert is the pair `pi` RECEIVES, derived from the window the endpoint's
+# owner stated, so a different box yields a different pair and a reintroduced constant
+# cannot pass.
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("declared_window", "expected_max_tokens"),
+    [
+        # The ceiling is min(OUTPUT_CEILING_TOKENS, window - ANSWER_ROOM_TOKENS) at
+        # three different shapes of box: one smaller than the ceiling, which gets a
+        # ceiling it can actually serve; one larger, which keeps the shipped ceiling
+        # untouched; and the smallest window accepted at all, left with exactly one
+        # answer room.
+        (4096, 3072),
+        (150_000, 8192),
+        (2048, 1024),
+    ],
+)
+async def test_the_window_an_endpoint_states_becomes_the_pair_its_turn_carries(
+    monkeypatch, declared_window, expected_max_tokens
+):
+    """The provider file names the window its owner stated and a ceiling derived from
+    it, instead of one pair for every box that has ever existed."""
+    monkeypatch.setattr(settings, "AGENT_EXEC_MODE", "sprites")
+
+    async def cred(_uid, _provider=None):
+        return {
+            "provider": "local",
+            "kind": "endpoint",
+            "secret": json.dumps(
+                {
+                    "base_url": "http://host:11434/v1",
+                    "model": "qwen2:7b",
+                    "api_key": None,
+                    "thinking": "off",
+                    "context_window": declared_window,
+                }
+            ),
+        }
+
+    monkeypatch.setattr(agent_auth, "_get_credential", cred)
+    auth = await agent_auth.resolve(uuid.uuid4())
+    models = json.loads(auth.files["/home/sprite/.pi/agent/models.json"])
+
+    # Exact equality, because the shape IS the contract: a dropped key, an extra one,
+    # or the pair this file used to hardcode is a different request to the box.
+    assert models["providers"]["local"]["models"] == [
+        {
+            "id": "qwen2:7b",
+            "contextWindow": declared_window,
+            "maxTokens": expected_max_tokens,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_row_that_states_no_window_refuses_the_turn_instead_of_being_told_one(
+    monkeypatch,
+):
+    """A stored doc carrying its level but no window is refused, never handed one.
+
+    Deliberately not the same test as the missing-`thinking` refusal: this fixture HAS
+    its level, so the only thing absent is the window, and a reader that reported the
+    level's problem instead would certify nothing here. Inventing a window while reading
+    is the defect this replaces -- it puts a number nobody stated onto the wire and lets
+    a migration that never ran look like a configured box.
+    """
+    monkeypatch.setattr(settings, "AGENT_EXEC_MODE", "sprites")
+
+    async def cred(_uid, _provider=None):
+        return {
+            "provider": "local",
+            "kind": "endpoint",
+            "secret": json.dumps(
+                {
+                    "base_url": "http://host:11434/v1",
+                    "model": "qwen2:7b",
+                    "api_key": None,
+                    "thinking": "low",
+                }
+            ),
+        }
+
+    monkeypatch.setattr(agent_auth, "_get_credential", cred)
+    with pytest.raises(ValueError, match="missing context_window"):
+        await agent_auth.resolve(uuid.uuid4())
 
 
 # Non-default formatting on purpose: 4-space indent, reordered keys, a
@@ -229,6 +335,7 @@ async def test_local_override_written_verbatim(monkeypatch):
                     "base_url": "http://tunnel.example/v1",
                     "model": "llama3.1:8b",
                     "api_key": "my-secret-key",
+                    "context_window": WINDOW,
                     "thinking": "off",
                 }
             ),
@@ -262,7 +369,12 @@ async def test_local_override_keyless_no_key_env(monkeypatch):
             "provider": "local",
             "kind": "endpoint",
             "secret": json.dumps(
-                {"base_url": "http://host:11434/v1", "model": "qwen2:7b", "thinking": "off"}
+                {
+                    "base_url": "http://host:11434/v1",
+                    "model": "qwen2:7b",
+                    "context_window": WINDOW,
+                    "thinking": "off",
+                }
             ),
             "models_json": OVERRIDE_MODELS_JSON,
         }
@@ -283,7 +395,12 @@ async def test_local_endpoint_keyless_has_no_key_env(monkeypatch):
             "provider": "local",
             "kind": "endpoint",
             "secret": json.dumps(
-                {"base_url": "http://host:11434/v1", "model": "qwen2:7b", "thinking": "off"}
+                {
+                    "base_url": "http://host:11434/v1",
+                    "model": "qwen2:7b",
+                    "context_window": WINDOW,
+                    "thinking": "off",
+                }
             ),
         }
 
@@ -321,7 +438,14 @@ async def test_prefer_local_with_local_credential_runs_pi(monkeypatch):
         return {
             "provider": "local",
             "kind": "endpoint",
-            "secret": json.dumps({"base_url": "http://x/v1", "model": "m", "thinking": "off"}),
+            "secret": json.dumps(
+                {
+                    "base_url": "http://x/v1",
+                    "model": "m",
+                    "context_window": WINDOW,
+                    "thinking": "off",
+                }
+            ),
         }
 
     monkeypatch.setattr(agent_auth, "_get_credential", cred)
@@ -375,7 +499,12 @@ async def test_local_mode_local_credential_runs_pi(monkeypatch):
             "provider": "local",
             "kind": "endpoint",
             "secret": json.dumps(
-                {"base_url": "http://127.0.0.1:11434/v1", "model": "llama3.1:8b", "thinking": "off"}
+                {
+                    "base_url": "http://127.0.0.1:11434/v1",
+                    "model": "llama3.1:8b",
+                    "context_window": WINDOW,
+                    "thinking": "off",
+                }
             ),
         }
 
@@ -402,7 +531,12 @@ async def test_local_mode_override_writes_verbatim_to_box_home(monkeypatch):
             "provider": "local",
             "kind": "endpoint",
             "secret": json.dumps(
-                {"base_url": "http://127.0.0.1:11434/v1", "model": "llama3.1:8b", "thinking": "off"}
+                {
+                    "base_url": "http://127.0.0.1:11434/v1",
+                    "model": "llama3.1:8b",
+                    "context_window": WINDOW,
+                    "thinking": "off",
+                }
             ),
             "models_json": OVERRIDE_MODELS_JSON,
         }
@@ -422,7 +556,14 @@ async def test_local_mode_prefer_local_with_credential_runs_pi(monkeypatch):
         return {
             "provider": "local",
             "kind": "endpoint",
-            "secret": json.dumps({"base_url": "http://x/v1", "model": "m", "thinking": "off"}),
+            "secret": json.dumps(
+                {
+                    "base_url": "http://x/v1",
+                    "model": "m",
+                    "context_window": WINDOW,
+                    "thinking": "off",
+                }
+            ),
         }
 
     monkeypatch.setattr(agent_auth, "_get_credential", cred)
@@ -441,7 +582,14 @@ async def test_local_mode_other_pin_keeps_machine_login(monkeypatch):
         return {
             "provider": "local",
             "kind": "endpoint",
-            "secret": json.dumps({"base_url": "http://x/v1", "model": "m", "thinking": "off"}),
+            "secret": json.dumps(
+                {
+                    "base_url": "http://x/v1",
+                    "model": "m",
+                    "context_window": WINDOW,
+                    "thinking": "off",
+                }
+            ),
         }
 
     monkeypatch.setattr(agent_auth, "_get_credential", local_only)
@@ -459,7 +607,13 @@ async def test_local_credential_returns_the_stored_doc(monkeypatch):
             "provider": "local",
             "kind": "endpoint",
             "secret": json.dumps(
-                {"base_url": "http://x/v1", "model": "m", "api_key": "sk-local", "thinking": "off"}
+                {
+                    "base_url": "http://x/v1",
+                    "model": "m",
+                    "api_key": "sk-local",
+                    "context_window": WINDOW,
+                    "thinking": "off",
+                }
             ),
         }
 
@@ -468,6 +622,7 @@ async def test_local_credential_returns_the_stored_doc(monkeypatch):
         "base_url": "http://x/v1",
         "model": "m",
         "api_key": "sk-local",
+        "context_window": WINDOW,
         "thinking": "off",
     }
 
@@ -532,6 +687,7 @@ async def test_a_chosen_level_reaches_pi_as_a_level_and_a_bounded_budget(monkeyp
                     "base_url": "http://host:11434/v1",
                     "model": "qwen2:7b",
                     "api_key": "sk-local",
+                    "context_window": WINDOW,
                     "thinking": "low",
                 }
             ),
@@ -571,6 +727,7 @@ async def test_off_leaves_argv_and_provider_file_exactly_as_they_were(monkeypatc
                     "base_url": "http://host:11434/v1",
                     "model": "qwen2:7b",
                     "api_key": "sk-local",
+                    "context_window": WINDOW,
                     "thinking": "off",
                 }
             ),
@@ -587,6 +744,10 @@ async def test_off_leaves_argv_and_provider_file_exactly_as_they_were(monkeypatc
     # inherited, key for key, and a marker written as False would be a new field
     # for pi to interpret rather than the absence of one.
     assert "reasoning" not in provider["models"][0]
+    # The key set itself, not only the absent flags: which bytes a turn writes for an
+    # unbounded box is the promise, and a thinking field added back here would ride the
+    # wire for someone who never asked for a bound.
+    assert set(provider["models"][0]) == {"id", "contextWindow", "maxTokens"}
     assert "supportsThinkingTokenBudget" not in provider["compat"]
     assert "thinkingFormat" not in provider["compat"]
     assert provider["compat"] == {"supportsDeveloperRole": False, "supportsReasoningEffort": False}
@@ -644,6 +805,7 @@ async def test_a_level_paired_with_a_verbatim_override_is_refused_at_the_turn(mo
                     "base_url": "http://host:11434/v1",
                     "model": "qwen2:7b",
                     "api_key": "sk-local",
+                    "context_window": WINDOW,
                     "thinking": "high",
                 }
             ),

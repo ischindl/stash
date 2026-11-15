@@ -25,11 +25,21 @@ import os
 import subprocess
 import sys
 import uuid
+from importlib import import_module
 
 import asyncpg
 from cryptography.fernet import Fernet
 
-from backend.tests.migration_ids import down_revision_of_slug
+from backend.tests.migration_ids import down_revision_of_slug, module_for_slug
+
+# What `local_endpoint_context_window` stamps for a row whose owner never saved a models.json
+# override: the window Stash itself used to claim about every local box. Named through that
+# migration's own module, because a literal copied here would keep passing while the migration
+# that writes it changed.
+_WINDOW_BACKFILL_DEFAULT = getattr(
+    import_module(module_for_slug("local_endpoint_context_window")),
+    "DEFAULT_SYNTHESIZED_WINDOW_TOKENS",
+)
 
 _BASE_URL = os.environ.get(
     "TEST_DATABASE_URL",
@@ -162,9 +172,14 @@ async def _run():
             # the DATA, asserted below field by field, and what proves nothing else was
             # touched is the key provider's byte-identity.
             assert by_provider["anthropic"]["secret_enc"] == _LEGACY_KEY_SECRET
+            # 0275 (`local_endpoint_context_window`) lands on the same row later in the chain and
+            # adds one more key inside the same encrypted doc, so this exact-equality assertion is
+            # the check that notices it. The window is 0275's own number for a row with no override
+            # -- read from that migration rather than repeated here, so the two cannot drift.
             assert json.loads(_BOX_ONE.decrypt(bytes(by_provider["local"]["secret_enc"]))) == {
                 **_LEGACY_DOC,
                 "thinking": "off",
+                "context_window": _WINDOW_BACKFILL_DEFAULT,
             }
 
             # A second box is now storable.

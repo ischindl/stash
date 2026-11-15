@@ -40,6 +40,10 @@ INTERNAL = "internal"
 # The self-hosted box the founder curates against: a qwen endpoint his own
 # machine dials, with no backend API key anywhere on it.
 BOX = "http://rozvrh-box:11434/v1"
+# The window the boxes here state. Every local endpoint row now carries its own, so the
+# collateral has to name one: 32768 keeps the shipped 8192 ceiling, so it moves the window
+# and nothing else in these tests.
+WINDOW = 32768
 
 
 def _console(api_key: str, workspace: dict) -> dict:
@@ -70,7 +74,7 @@ async def _connected_box(client: AsyncClient, api_key: str, workspace: dict, mon
     monkeypatch.setattr(agent_auth, "probe_local_endpoint", answering_probe)
     r = await client.post(
         "/api/v1/me/developer/agent-credentials",
-        json={"base_url": BOX, "model": "qwen"},
+        json={"base_url": BOX, "model": "qwen", "context_window": WINDOW},
         headers=_console(api_key, workspace),
     )
     assert r.status_code == 200, r.text
@@ -769,14 +773,14 @@ async def test_folder_curator_pin_and_digest_round_trip(
         uid,
         "local",
         "endpoint",
-        agent_auth.local_endpoint_secret("http://box-a:11434/v1", "llama"),
+        agent_auth.local_endpoint_secret("http://box-a:11434/v1", "llama", WINDOW),
         name="box-a",
     )
     box_b = await agent_auth.store_credential(
         uid,
         "local",
         "endpoint",
-        agent_auth.local_endpoint_secret("http://box-b:11434/v1", "qwen"),
+        agent_auth.local_endpoint_secret("http://box-b:11434/v1", "qwen", WINDOW),
         name="box-b",
     )
 
@@ -830,7 +834,7 @@ async def test_folder_curator_refuses_dangling_and_foreign_pins(
         other_uid,
         "local",
         "endpoint",
-        agent_auth.local_endpoint_secret("http://not-yours:11434/v1", "llama"),
+        agent_auth.local_endpoint_secret("http://not-yours:11434/v1", "llama", WINDOW),
         name="not-yours",
     )
 
@@ -919,7 +923,7 @@ async def test_an_inherited_curator_resolves_byte_equal_to_the_workspace_curator
         uid,
         "local",
         "endpoint",
-        agent_auth.local_endpoint_secret("http://box-one:11434/v1", "llama"),
+        agent_auth.local_endpoint_secret("http://box-one:11434/v1", "llama", WINDOW),
         name="box-one",
     )
 
@@ -964,7 +968,7 @@ async def test_patching_every_selection_away_returns_a_curator_to_inheritance(
         uid,
         "local",
         "endpoint",
-        agent_auth.local_endpoint_secret("http://box-one:11434/v1", "llama"),
+        agent_auth.local_endpoint_secret("http://box-one:11434/v1", "llama", WINDOW),
         name="box-one",
     )
     rozvrh = await _folder(client, key, "Rozvrh")

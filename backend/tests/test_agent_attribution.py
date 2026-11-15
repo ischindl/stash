@@ -31,6 +31,11 @@ from backend.services import agent_auth, sprite_agent_service, sprite_service
 from .test_curator import _auth, _push_events, _register
 from .test_page_provenance import CURATOR_RUN  # the id shape a curator run really mints
 
+# The window the box below states. Every local endpoint row carries its own, so the
+# fixture has to name one: 32768 derives to the shipped 8192 output ceiling, so stating
+# it moves the window and nothing else in this file.
+WINDOW = 32768
+
 SESSION_HEADER = "X-Stash-Agent-Session"
 NAME_HEADER = "X-Stash-Agent-Name"
 AGENT_SESSION_ENV = "STASH_AGENT_SESSION"
@@ -294,7 +299,7 @@ async def test_a_pinned_provider_turn_carries_the_same_identity(
         uid,
         "local",
         "endpoint",
-        agent_auth.local_endpoint_secret("http://rozvrh-box:11434/v1", "qwen"),
+        agent_auth.local_endpoint_secret("http://rozvrh-box:11434/v1", "qwen", WINDOW),
         name="rozvrh-box",
     )
     session_id = "agent-curate-77777777-20261006120000"

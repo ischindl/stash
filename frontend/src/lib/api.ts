@@ -2530,12 +2530,19 @@ export async function connectAgentKey(provider: string, apiKey: string): Promise
  *  `thinking` is the reasoning level stored for this box, and `thinking_levels`
  *  (on the status payload) is the set this deployment's harness accepts. Both come
  *  from the server on purpose: how much a box reasons is a property of the box, and
- *  a level the harness cannot name would only be refused at the next turn. */
+ *  a level the harness cannot name would only be refused at the next turn.
+ *
+ *  `context_window` is the same kind of fact about the box: how many tokens its
+ *  server was configured for, stated by its owner when the row was added and stored
+ *  with it. It is listed per endpoint because two boxes can give different answers —
+ *  a rack card and an edge box are not the same size — and because what a turn asks
+ *  this box for is derived from it. Nothing here is computed from a model name. */
 export type ModelEndpoint = {
   id: string;
   name: string;
   base_url: string;
   thinking: string;
+  context_window: number;
   models: string[];
   probe_error?: string;
 };
@@ -2548,6 +2555,7 @@ export type LocalEndpointDoc = {
   model: string;
   api_key: string;
   thinking: string;
+  context_window: number;
 };
 
 export type ModelEndpointsStatus = {
@@ -2590,12 +2598,18 @@ export type LocalProbeResult = {
 /** Dial the box and report what it serves, touching nothing that is stored. */
 export async function probeLocalEndpoint(
   baseUrl: string,
+  contextWindow: number,
   apiKey?: string | null,
   model: typeof PROBE_ONLY_MODEL = PROBE_ONLY_MODEL,
 ): Promise<LocalProbeResult> {
   return apiFetch<LocalProbeResult>("/api/v1/me/agent-credentials/local/test", {
     method: "POST",
-    body: JSON.stringify({ base_url: baseUrl, model, api_key: apiKey ?? null }),
+    body: JSON.stringify({
+      base_url: baseUrl,
+      model,
+      context_window: contextWindow,
+      api_key: apiKey ?? null,
+    }),
   });
 }
 
@@ -2616,15 +2630,27 @@ export async function probeSavedEndpoint(credentialId: string): Promise<LocalPro
 /** Store one more local endpoint. The server probes before it saves and answers
  *  400 `endpoint probe failed: <detail>` when the box does not answer, so a stored
  *  row is always a live one. `model` is the model the user picked, and it is what
- *  runs by default on this endpoint afterwards. */
+ *  runs by default on this endpoint afterwards.
+ *
+ *  `contextWindow` is required and carries no default here or on the route. It is the
+ *  size the box's owner states for that one box, and a number guessed in a browser is
+ *  a number nobody claimed. A window the server will not take comes back as its 400
+ *  detail, which is the server's own sentence about the field. */
 export async function connectLocalEndpoint(
   baseUrl: string,
   model: string,
+  contextWindow: number,
   apiKey?: string | null,
 ): Promise<{ id: string; connected: string[] }> {
   return apiFetch("/api/v1/me/agent-credentials", {
     method: "POST",
-    body: JSON.stringify({ provider: "local", base_url: baseUrl, model, api_key: apiKey ?? null }),
+    body: JSON.stringify({
+      provider: "local",
+      base_url: baseUrl,
+      model,
+      context_window: contextWindow,
+      api_key: apiKey ?? null,
+    }),
   });
 }
 
@@ -2651,6 +2677,23 @@ export async function setEndpointThinking(
   return apiFetch(`/api/v1/me/agent-credentials/endpoints/${credentialId}/thinking`, {
     method: "PUT",
     body: JSON.stringify({ thinking }),
+  });
+}
+
+/** Resize one box's context window. The body carries the window and nothing else, for
+ *  the same reason the level control does: the server copies the address, model and
+ *  key out of the stored doc, so the control that resizes a box cannot move which box
+ *  is addressed. A window is not applied while an endpoint's models.json is stored
+ *  verbatim — that file, not this number, is what the next turn is written against —
+ *  so the route answers 400 naming the override and `apiFetch` surfaces the server's
+ *  own words rather than a phantom success. */
+export async function setEndpointContextWindow(
+  credentialId: string,
+  contextWindow: number,
+): Promise<{ ok: boolean; context_window: number }> {
+  return apiFetch(`/api/v1/me/agent-credentials/endpoints/${credentialId}/context-window`, {
+    method: "PUT",
+    body: JSON.stringify({ context_window: contextWindow }),
   });
 }
 

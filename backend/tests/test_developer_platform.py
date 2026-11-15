@@ -798,7 +798,10 @@ async def test_backfill_dispatches_full_history_without_touching_watermark(
             return {
                 "provider": "local",
                 "kind": "endpoint",
-                "secret": '{"base_url": "http://127.0.0.1:11434/v1", "model": "m", "thinking": "off"}',
+                "secret": (
+                    '{"base_url": "http://127.0.0.1:11434/v1", "model": "m", '
+                    '"context_window": 32768, "thinking": "off"}'
+                ),
             }
         return None
 

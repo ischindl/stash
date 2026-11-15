@@ -103,6 +103,17 @@ Before starting:
   your first login. With neither, every scheduled curator skips every tick — the
   backend logs `no runnable model` at WARNING and each curator row reads
   `No model connected` until a model exists.
+- A local model endpoint asks how large that server's context window is, and stores it
+  with the box. Nothing infers the size from a model name and nothing scrapes it off the
+  endpoint: the number is the operator's to state, because it is a fact about the other
+  machine's own configuration. Upgrading stamps every existing local endpoint row from what
+  that row already declared — migration `0275` reads a stored `models.json` override's own
+  `contextWindow` where there is one, and stamps the window this build used to claim about
+  every box where there is none — so an endpoint that worked before the upgrade is told the
+  same size it was told before it. A row whose override cannot be read, or whose window sits
+  below the 2048-token floor the service enforces, refuses `alembic upgrade head` naming that
+  row's id instead of being clamped to a guess: fix the file or the number and run the upgrade
+  again.
 - Leave `STRIPE_SECRET_KEY` unset and this installation evaluates no plan anywhere.
   Billing exists only while that key is set. Without it there is nothing to charge, so
   there is no plan to enforce: no cap on connected accounts, no monthly curator

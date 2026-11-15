@@ -27,6 +27,12 @@ from backend.services import agent_auth
 
 from .conftest import unique_name
 
+# The window the fixtures here state for a box, and the default the connect helper sends.
+# Deliberately not the number this service used to write into every synthesized
+# models.json: a fixture carrying the old constant would let it come back unnoticed. 32768
+# derives to the shipped 8192 ceiling, so stating it moves the window and no other number.
+WINDOW = 32768
+
 
 @pytest.fixture(autouse=True)
 def _fernet(monkeypatch):
@@ -72,7 +78,12 @@ async def test_connect_local_without_key(client: AsyncClient, _stub_probe):
     key = await _register(client)
     r = await client.post(
         "/api/v1/me/agent-credentials",
-        json={"provider": "local", "base_url": "http://my-host:11434/v1", "model": "llama3.1:8b"},
+        json={
+            "provider": "local",
+            "base_url": "http://my-host:11434/v1",
+            "model": "llama3.1:8b",
+            "context_window": WINDOW,
+        },
         headers=_auth(key),
     )
     assert r.status_code == 200, r.text
@@ -85,6 +96,9 @@ async def test_connect_local_without_key(client: AsyncClient, _stub_probe):
         "base_url": "http://my-host:11434/v1",
         "model": "llama3.1:8b",
         "api_key": None,
+        # The window the form stated is stored as stated: this is the number that box's next
+        # turn is sized from, and nothing else in Stash picks it.
+        "context_window": WINDOW,
         # Connecting names a box, not how much it thinks: the stored level is the
         # one that describes today's behaviour, and only the level control moves it.
         "thinking": "off",
@@ -100,6 +114,7 @@ async def test_connect_local_with_key_stores_it(client: AsyncClient, _stub_probe
             "provider": "local",
             "base_url": "https://tunnel.example/v1",
             "model": "qwen2:7b",
+            "context_window": WINDOW,
             "api_key": "my-local-secret",
         },
         headers=_auth(key),
@@ -120,6 +135,61 @@ async def test_connect_local_rejects_relative_or_bad_scheme_url(client: AsyncCli
         )
         assert r.status_code == 400, f"{bad_url!r} should be rejected: {r.text}"
         assert "base_url" in r.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_connect_local_refuses_a_box_whose_window_was_never_stated(client: AsyncClient):
+    """AC4: a connect body cannot leave the window out and let a number be picked later. It
+    answers 400 with the validator's own hint -- the sentence that says where to find the
+    number -- and stores nothing, so no row exists whose next turn would be sized by whatever
+    this build happens to ship."""
+    key = await _register(client)
+    r = await client.post(
+        "/api/v1/me/agent-credentials",
+        json={"provider": "local", "base_url": "http://host:11434/v1", "model": "qwen2:7b"},
+        headers=_auth(key),
+    )
+    assert r.status_code == 400, r.text
+    assert r.json()["detail"] == agent_auth.LOCAL_CONTEXT_WINDOW_HINT
+    stored = await client.get(LIST_URL, headers=_auth(key))
+    assert stored.json()["local"] is None
+    assert stored.json()["connected"] == []
+
+
+@pytest.mark.asyncio
+async def test_connect_local_refuses_a_window_below_the_floor(client: AsyncClient):
+    """A window smaller than one conversation is a mistyped field rather than a small box,
+    and the connect route refuses it with the service's own words."""
+    key = await _register(client)
+    r = await client.post(
+        "/api/v1/me/agent-credentials",
+        json={
+            "provider": "local",
+            "base_url": "http://host:11434/v1",
+            "model": "qwen2:7b",
+            "context_window": 512,
+        },
+        headers=_auth(key),
+    )
+    assert r.status_code == 400, r.text
+    assert r.json()["detail"] == agent_auth.LOCAL_CONTEXT_WINDOW_HINT
+    stored = await client.get(LIST_URL, headers=_auth(key))
+    assert stored.json()["local"] is None
+
+
+@pytest.mark.asyncio
+async def test_local_test_refuses_a_body_that_states_no_window(client: AsyncClient):
+    """The pre-save test dials with the number the form claimed, so the field is required the
+    way `model` already is. The address below is a closed port: had the route dialed, it would
+    have answered 200 with a connection failure -- so a 422 here also proves nothing was
+    dialed on the strength of a window nobody named."""
+    key = await _register(client)
+    r = await client.post(
+        TEST_URL,
+        json={"base_url": _refused_base_url(), "model": "mock-model-1"},
+        headers=_auth(key),
+    )
+    assert r.status_code == 422, r.text
 
 
 @pytest.mark.asyncio
@@ -188,7 +258,12 @@ async def test_disconnect_local_by_provider_name_is_refused(client: AsyncClient,
     key = await _register(client)
     await client.post(
         "/api/v1/me/agent-credentials",
-        json={"provider": "local", "base_url": "http://host:11434/v1", "model": "m"},
+        json={
+            "provider": "local",
+            "base_url": "http://host:11434/v1",
+            "model": "m",
+            "context_window": WINDOW,
+        },
         headers=_auth(key),
     )
     r = await client.delete("/api/v1/me/agent-credentials/local", headers=_auth(key))
@@ -220,10 +295,17 @@ async def _connect_local(
     base_url: str = "http://tunnel.example/v1",
     model: str = "llama3.1:8b",
     api_key: str | None = None,
+    context_window: int = WINDOW,
 ) -> None:
     r = await client.post(
         "/api/v1/me/agent-credentials",
-        json={"provider": "local", "base_url": base_url, "model": model, "api_key": api_key},
+        json={
+            "provider": "local",
+            "base_url": base_url,
+            "model": model,
+            "context_window": context_window,
+            "api_key": api_key,
+        },
         headers=_auth(key),
     )
     assert r.status_code == 200, r.text
@@ -263,7 +345,9 @@ async def test_get_local_models_json_default(client: AsyncClient, _stub_probe):
     assert local["api"] == "openai-completions"
     assert local["apiKey"] == "$STASH_LOCAL_KEY"
     assert local["compat"] == {"supportsDeveloperRole": False, "supportsReasoningEffort": False}
-    assert local["models"] == [{"id": "llama3.1:8b", "contextWindow": 131072, "maxTokens": 8192}]
+    # The window is the one connect was told and the ceiling is derived from it: a box that size
+    # leaves the shipped ceiling intact, which is the pair this line documents now.
+    assert local["models"] == [{"id": "llama3.1:8b", "contextWindow": 32768, "maxTokens": 8192}]
 
 
 @pytest.mark.asyncio
@@ -373,7 +457,9 @@ async def test_reset_returns_to_synthesized_default(client: AsyncClient, _stub_p
     assert g.json()["stored"] is False
     local = json.loads(g.json()["models_json"])["providers"]["local"]
     assert local["apiKey"] == "$STASH_LOCAL_KEY"
-    assert local["models"] == [{"id": "llama3.1:8b", "contextWindow": 131072, "maxTokens": 8192}]
+    # The window is the one connect was told and the ceiling is derived from it: a box that size
+    # leaves the shipped ceiling intact, which is the pair this line documents now.
+    assert local["models"] == [{"id": "llama3.1:8b", "contextWindow": 32768, "maxTokens": 8192}]
 
 
 @pytest.mark.asyncio
@@ -442,6 +528,7 @@ async def test_list_returns_local_doc_including_its_key(client: AsyncClient, _st
         "base_url": "http://tunnel.example/v1",
         "model": "llama3.1:8b",
         "api_key": "sk-local-abcdef",
+        "context_window": 32768,
         "thinking": "off",
     }
 
@@ -455,6 +542,7 @@ async def test_list_returns_local_doc_keyless(client: AsyncClient, _stub_probe):
         "base_url": "http://tunnel.example/v1",
         "model": "llama3.1:8b",
         "api_key": None,
+        "context_window": 32768,
         "thinking": "off",
     }
 
@@ -589,7 +677,12 @@ async def test_local_test_lists_models_and_sends_the_key(
     key = await _register(client)
     r = await client.post(
         TEST_URL,
-        json={"base_url": endpoint.base_url, "model": "mock-model-1", "api_key": "sk-local"},
+        json={
+            "base_url": endpoint.base_url,
+            "model": "mock-model-1",
+            "context_window": WINDOW,
+            "api_key": "sk-local",
+        },
         headers=_auth(key),
     )
     assert r.status_code == 200, r.text
@@ -609,7 +702,9 @@ async def test_local_test_omits_the_header_when_keyless(
     endpoint = probe_endpoints("ok")
     key = await _register(client)
     r = await client.post(
-        TEST_URL, json={"base_url": endpoint.base_url, "model": "mock-model-1"}, headers=_auth(key)
+        TEST_URL,
+        json={"base_url": endpoint.base_url, "model": "mock-model-1", "context_window": WINDOW},
+        headers=_auth(key),
     )
     assert r.json()["ok"] is True
     assert endpoint.requests == [("/v1/models", None)]
@@ -625,7 +720,12 @@ async def test_local_test_surfaces_the_provider_error_body(
     key = await _register(client)
     r = await client.post(
         TEST_URL,
-        json={"base_url": endpoint.base_url, "model": "mock-model-1", "api_key": "sk-wrong"},
+        json={
+            "base_url": endpoint.base_url,
+            "model": "mock-model-1",
+            "context_window": WINDOW,
+            "api_key": "sk-wrong",
+        },
         headers=_auth(key),
     )
     assert r.status_code == 200, r.text
@@ -642,7 +742,9 @@ async def test_local_test_flags_a_redirect_instead_of_following_it(
     endpoint = probe_endpoints("redirect")
     key = await _register(client)
     r = await client.post(
-        TEST_URL, json={"base_url": endpoint.base_url, "model": "mock-model-1"}, headers=_auth(key)
+        TEST_URL,
+        json={"base_url": endpoint.base_url, "model": "mock-model-1", "context_window": WINDOW},
+        headers=_auth(key),
     )
     body = r.json()
     assert body["ok"] is False
@@ -658,7 +760,9 @@ async def test_local_test_flags_a_success_that_is_not_a_model_list(
     endpoint = probe_endpoints("bad_shape")
     key = await _register(client)
     r = await client.post(
-        TEST_URL, json={"base_url": endpoint.base_url, "model": "mock-model-1"}, headers=_auth(key)
+        TEST_URL,
+        json={"base_url": endpoint.base_url, "model": "mock-model-1", "context_window": WINDOW},
+        headers=_auth(key),
     )
     body = r.json()
     assert body["ok"] is False
@@ -672,7 +776,7 @@ async def test_local_test_reports_connection_refused(client: AsyncClient):
     key = await _register(client)
     r = await client.post(
         TEST_URL,
-        json={"base_url": _refused_base_url(), "model": "mock-model-1"},
+        json={"base_url": _refused_base_url(), "model": "mock-model-1", "context_window": WINDOW},
         headers=_auth(key),
     )
     assert r.status_code == 200, r.text
@@ -692,7 +796,9 @@ async def test_local_test_reports_timeout(
     endpoint = probe_endpoints("slow")
     key = await _register(client)
     r = await client.post(
-        TEST_URL, json={"base_url": endpoint.base_url, "model": "mock-model-1"}, headers=_auth(key)
+        TEST_URL,
+        json={"base_url": endpoint.base_url, "model": "mock-model-1", "context_window": WINDOW},
+        headers=_auth(key),
     )
     body = r.json()
     assert body["ok"] is False
@@ -709,7 +815,9 @@ async def test_local_test_validates_before_dialing(
     endpoint = probe_endpoints("ok")
     key = await _register(client)
     r = await client.post(
-        TEST_URL, json={"base_url": "my-host:11434/v1", "model": "mock-model-1"}, headers=_auth(key)
+        TEST_URL,
+        json={"base_url": "my-host:11434/v1", "model": "mock-model-1", "context_window": WINDOW},
+        headers=_auth(key),
     )
     assert r.status_code == 400
     assert r.json()["detail"] == agent_auth.LOCAL_BASE_URL_HINT
@@ -720,7 +828,9 @@ async def test_local_test_validates_before_dialing(
 async def test_local_test_requires_model(client: AsyncClient):
     key = await _register(client)
     r = await client.post(
-        TEST_URL, json={"base_url": "http://127.0.0.1:9/v1", "model": "  "}, headers=_auth(key)
+        TEST_URL,
+        json={"base_url": "http://127.0.0.1:9/v1", "model": "  ", "context_window": WINDOW},
+        headers=_auth(key),
     )
     assert r.status_code == 400
     assert "model" in r.json()["detail"]
@@ -728,7 +838,9 @@ async def test_local_test_requires_model(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_local_test_requires_auth(client: AsyncClient):
-    r = await client.post(TEST_URL, json={"base_url": "http://127.0.0.1:9/v1", "model": "m"})
+    r = await client.post(
+        TEST_URL, json={"base_url": "http://127.0.0.1:9/v1", "model": "m", "context_window": WINDOW}
+    )
     assert r.status_code == 401
 
 
@@ -745,7 +857,12 @@ async def test_local_test_is_a_pure_probe(
     await _connect_local(client, key, stored.base_url, "stored-model", "stored-key")
     r = await client.post(
         TEST_URL,
-        json={"base_url": endpoint.base_url, "model": "mock-model-1", "api_key": "candidate"},
+        json={
+            "base_url": endpoint.base_url,
+            "model": "mock-model-1",
+            "context_window": WINDOW,
+            "api_key": "candidate",
+        },
         headers=_auth(key),
     )
     assert r.json()["ok"] is True
@@ -753,6 +870,7 @@ async def test_local_test_is_a_pure_probe(
         "base_url": stored.base_url,
         "model": "stored-model",
         "api_key": "stored-key",
+        "context_window": 32768,
         "thinking": "off",
     }
     # The candidate key knocked on the tested box; the stored box only ever

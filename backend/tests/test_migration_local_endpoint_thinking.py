@@ -28,11 +28,20 @@ import os
 import subprocess
 import sys
 import uuid
+from importlib import import_module
 
 import asyncpg
 from cryptography.fernet import Fernet
 
-from backend.tests.migration_ids import down_revision_of_slug
+from backend.tests.migration_ids import down_revision_of_slug, module_for_slug
+
+# What `local_endpoint_context_window` stamps for a row that never saved a models.json override.
+# Named through that migration's module: a literal copied in here would keep passing while the
+# migration writing it changed underneath.
+_WINDOW_BACKFILL_DEFAULT = getattr(
+    import_module(module_for_slug("local_endpoint_context_window")),
+    "DEFAULT_SYNTHESIZED_WINDOW_TOKENS",
+)
 
 _BASE_URL = os.environ.get(
     "TEST_DATABASE_URL",
@@ -171,7 +180,16 @@ async def _run():
                 ("box-two", _LEGACY_KEYED_DOC),
             ):
                 doc = json.loads(_BOX.decrypt(bytes(by_name[name]["secret_enc"])))
-                assert doc == {**seeded, "thinking": "off"}
+                # 0275 (`local_endpoint_context_window`) runs later in the same chain and adds one
+                # more key inside this same encrypted doc, so this exact-equality assertion is the
+                # check that notices a key added where a `.get()` would not. The level this
+                # migration stamped is still `off`, and the window is 0275's number for a row with
+                # no override -- read from that migration so the two cannot drift apart.
+                assert doc == {
+                    **seeded,
+                    "thinking": "off",
+                    "context_window": _WINDOW_BACKFILL_DEFAULT,
+                }
 
             # The ciphertext moved for the rows that gained a key (Fernet's random
             # IV means a re-encryption could never equal the original anyway, so
@@ -184,7 +202,9 @@ async def _run():
 
             # A level somebody chose is his, not the backfill's to reset.
             chosen = json.loads(_BOX.decrypt(bytes(by_name["box-three"]["secret_enc"])))
-            assert chosen == _LEVEL_SET_DOC
+            # The chosen level survives; the window 0275 adds to this row is the default it had no
+            # way to state for itself, which is the only thing that changed under it.
+            assert chosen == {**_LEVEL_SET_DOC, "context_window": _WINDOW_BACKFILL_DEFAULT}
         finally:
             await conn.close()
     finally:

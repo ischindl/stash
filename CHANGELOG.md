@@ -7,6 +7,27 @@ everything before it is captured in git history (`git log`), not here.
 
 ### Added
 
+- A local model box is now sized by the person who runs it. Adding an endpoint in
+  Settings — Cloud agent model asks one more question: how many tokens its server was
+  configured for. That number is stored with the box, shown on its row, and editable there
+  with a "Save size" control that writes the size and nothing else — the server copies the
+  address, model and key out of the stored credential, so resizing a box cannot move which
+  box your traffic goes to. Until now the size was not yours to give: every local model was
+  handed the same pair of numbers, a 128k-token window and an 8192-token output ceiling,
+  whatever the box actually was, so a phone-sized quant on a laptop was told it had a rack's
+  context and then asked for output it could not serve. `maxTokens` is no longer a second
+  constant either: what a turn asks for is the smaller of the shipped ceiling (8192) and your
+  stated window minus the room an answer is refused to reasoning (1024) — a box you say is
+  4096 tokens is asked for 3072, a box of 32768 still gets the full 8192. Two boxes can be
+  given two sizes, and no number is ever inferred from a model name or scraped off the box:
+  Stash cannot read another machine's server config, which is exactly why the field asks
+  rather than guesses. A box whose `models.json` you store verbatim refuses a size edit until
+  the override is reset, because those bytes and not this number are what its next turn is
+  written against, and a stored credential that carries no window refuses the turn naming the
+  migration that should have stamped it rather than defaulting. What a wrong ceiling costs is
+  on record in STAS-455's task document `step2-ceiling-decision`, cited here as that card's
+  evidence and not re-measured: this change's own evidence is the source tree and its tests.
+
 - A page now says who wrote it. Every write to a page records its writer, and a
   write that cannot name one no longer happens: the attempt fails where it is
   made, with the fix in the message, instead of quietly leaving a row that looked

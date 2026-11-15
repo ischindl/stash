@@ -132,6 +132,36 @@ LOCAL_BASE_URL_HINT = (
 # form that calls it must not learn two different messages for one mistake.
 LOCAL_THINKING_HINT = "thinking must be one of: " + ", ".join(model_provider.THINKING_LEVELS)
 
+# How big a box's window is, and how much of it a turn may spend.
+#
+# `pi` reads `contextWindow` as the model's size and spends `maxTokens` as the request's
+# output ceiling, which is what bounds a turn's reasoning phase. The window therefore has
+# one source: the number the endpoint's owner states, stored on that endpoint's row. The
+# ceiling is derived from it instead of being a second constant that can disagree with
+# the first. Each figure names where it came from, because a bare number in a comment
+# about measurements is a claim nobody owns:
+#   OUTPUT_CEILING_TOKENS -- the value Stash already shipped, held there on purpose.
+#     Raising it is refused by an empty feasible set on record (STAS-455 /
+#     `step2-ceiling-decision`, which measured that deployment's wall-feasible maximum
+#     below the smallest ceiling it considered workable) and stays the operator's call.
+#     Those are that record's figures, cited by card and document key, not this card's.
+#   ANSWER_ROOM_TOKENS -- the output a reasoning phase is not allowed to take. The same
+#     figure is pi's own `MIN_ANSWER_TOKENS` in the arithmetic STAS-455 /
+#     `step2-ceiling-decision` cites: corroboration by key, not a measurement taken here.
+#   MIN_CONTEXT_WINDOW_TOKENS -- arithmetic rather than a figure: two answer rooms, so
+#     the derived ceiling can never fall below one answer room.
+OUTPUT_CEILING_TOKENS = 8192
+ANSWER_ROOM_TOKENS = 1024
+MIN_CONTEXT_WINDOW_TOKENS = 2 * ANSWER_ROOM_TOKENS
+
+# Same reason as the two hints above: the routes that store a window and the form that
+# calls them must not learn two different messages for one mistake. The floor is named
+# through the constant so the words and the check cannot drift apart.
+LOCAL_CONTEXT_WINDOW_HINT = (
+    "context_window must be a whole number of tokens your model server was configured "
+    f"for, at least {MIN_CONTEXT_WINDOW_TOKENS} (e.g. 32768)"
+)
+
 # The local endpoint probe: one GET of the endpoint's own model listing proves
 # the server answers and, with a key attached, that the key is accepted. Both
 # probes — the sprite's turn-time preflight and the Settings pre-save test —
@@ -148,6 +178,7 @@ def local_probe_url(base_url: str) -> str:
 def local_endpoint_doc(
     base_url: str,
     model: str,
+    context_window: int,
     api_key: str | None = None,
     thinking: str = model_provider.THINKING_OFF,
 ) -> dict:
@@ -156,9 +187,16 @@ def local_endpoint_doc(
 
     One validation surface for every place that takes these values — the
     personal connect, the workspace connect, and the pre-save test — so all of
-    them refuse bad input with the same words, and every doc that can exist
-    carries all four keys. There is no doc shape without `thinking`: the reader
-    refuses one, so a writer that could produce it is a bug, not a legacy path.
+    them refuse bad input with the same words, and every doc that can exist carries
+    all five keys: base URL, model, window, key, level. There is no doc shape without
+    `thinking` or without `context_window`: the reader refuses one, so a writer that
+    could produce either is a bug, not a legacy path.
+
+    `context_window` is required and has no default, because it is a property of the box
+    that only its owner knows: a default here would be the invented number this setting
+    replaced, arriving on the wire as a request the server cannot serve. The floor is
+    checked HERE and nowhere else, so a sub-floor pair can never be stored and the reader
+    needs no second arithmetic gate to fall out of agreement with.
 
     `thinking` defaults to `off` only for the places that create an endpoint
     without being asked for a level (connect, and the pre-save test, which dials
@@ -175,11 +213,20 @@ def local_endpoint_doc(
         raise ValueError(LOCAL_BASE_URL_HINT)
     if not model:
         raise ValueError("model is required for the local endpoint")
+    # `bool` is an `int` in Python, so it is refused by name instead of being stored as
+    # a window of one token.
+    if (
+        isinstance(context_window, bool)
+        or not isinstance(context_window, int)
+        or context_window < MIN_CONTEXT_WINDOW_TOKENS
+    ):
+        raise ValueError(LOCAL_CONTEXT_WINDOW_HINT)
     if thinking not in model_provider.THINKING_LEVELS:
         raise ValueError(LOCAL_THINKING_HINT)
     return {
         "base_url": base_url,
         "model": model,
+        "context_window": context_window,
         "api_key": (api_key or "").strip() or None,  # keyless endpoints are common
         "thinking": thinking,
     }
@@ -188,6 +235,7 @@ def local_endpoint_doc(
 def local_endpoint_secret(
     base_url: str,
     model: str,
+    context_window: int,
     api_key: str | None = None,
     thinking: str = model_provider.THINKING_OFF,
 ) -> str:
@@ -195,7 +243,7 @@ def local_endpoint_secret(
     key. Shared by the personal and the workspace connect endpoints so both
     validate and store one shape.
     """
-    return json.dumps(local_endpoint_doc(base_url, model, api_key, thinking))
+    return json.dumps(local_endpoint_doc(base_url, model, context_window, api_key, thinking))
 
 
 def endpoint_name(base_url: str) -> str:
@@ -480,6 +528,9 @@ async def list_local_endpoints(user_id: UUID) -> list[dict]:
             # it belongs on the row that names the box — not on the agent that runs
             # on it, and not on the model id, which is an opaque string here.
             "thinking": doc["thinking"],
+            # The window its owner stated, reported on the row that names the box: it is
+            # the number that box's next turn is built from, and the only one he can fix.
+            "context_window": doc["context_window"],
             "models": [],
         }
         if probe["ok"]:
@@ -511,6 +562,7 @@ def _endpoint_summary(credential_id: UUID, name: str, secret_enc) -> dict:
         "name": name,
         "base_url": doc["base_url"],
         "thinking": doc["thinking"],
+        "context_window": doc["context_window"],
         "models": doc.get("models") or [doc["model"]],
     }
 
@@ -687,10 +739,13 @@ _SPRITE_HOME = "/home/sprite"
 def _local_credential_doc(cred: dict) -> dict:
     """The stored local endpoint doc, refused unless it is the one current shape.
 
-    Every key is required and none of them is ever invented here: a doc that
-    predates `thinking` is carried forward by migration 0272, so a doc arriving
-    without it means the migration did not run, and running a turn whose reasoning
-    level nobody named is the exact failure this setting exists to end.
+    Every key is required and none of them is ever invented here. A doc that predates
+    `thinking` is carried forward by migration 0272 and one that predates
+    `context_window` by migration 0275, so a doc missing either one means that migration
+    did not run. — running a turn whose reasoning level nobody named is the failure this
+    setting exists to end, and running one whose window nobody stated puts a made-up size
+    on the wire and asks the box for output it cannot serve. These two refusals are what
+    stop a half-migrated database running on numbers nobody chose.
     """
     doc = json.loads(cred["secret"])
     base_url = doc.get("base_url")
@@ -701,18 +756,38 @@ def _local_credential_doc(cred: dict) -> dict:
         raise ValueError("local credential is missing thinking (migration 0272 not applied?)")
     if doc["thinking"] not in model_provider.THINKING_LEVELS:
         raise ValueError(f"local credential thinking is not a level: {doc['thinking']!r}")
+    # The window's refusal sits AFTER the level's on purpose: a doc missing both is a
+    # pre-0272 row, and the test that means "the level was never stored" would otherwise
+    # report the window for the wrong reason. Presence and integer-ness are checked here,
+    # never the floor -- the floor belongs to `local_endpoint_doc`, and a sub-floor pair
+    # can never have been stored. `bool` is an `int` in Python, so it is refused by name.
+    if "context_window" not in doc:
+        raise ValueError(
+            f"local credential is missing context_window (migration 0275 not applied?); "
+            f"{LOCAL_CONTEXT_WINDOW_HINT}"
+        )
+    if isinstance(doc["context_window"], bool) or not isinstance(doc["context_window"], int):
+        raise ValueError(LOCAL_CONTEXT_WINDOW_HINT)
     return doc
 
 
-def _synthesized_models_json(base_url: str, model: str, key_ref: str, thinking: str) -> str:
+def _synthesized_models_json(
+    base_url: str, model: str, context_window: int, key_ref: str, thinking: str
+) -> str:
     """The default pi provider config for a connected local endpoint — the
     single synthesis path, used by every turn and by the Settings reader when
     the user has not stored their own models.json.
 
-    `thinking` is the endpoint's stored level, and `off` adds nothing at all: the
-    file is then byte-identical to the one Stash shipped before the level existed
-    (no `reasoning` on the model, no thinking flag in `compat`), which is what
-    lets an endpoint that never chose a level keep running exactly as it runs now.
+    The two numbers come from the endpoint's own record: `context_window` is the size its
+    owner stated for that box, and `maxTokens` is derived from it — the shipped ceiling
+    where the window leaves room for it, less the answer room where it does not (see
+    OUTPUT_CEILING_TOKENS and ANSWER_ROOM_TOKENS). Neither is a property of the model id
+    or of this file any more.
+
+    `thinking` is the endpoint's stored level, and `off` adds nothing beyond those two
+    numbers: the file is then identical in shape to the one Stash shipped before the level
+    existed (no `reasoning` on the model, no thinking flag in `compat`), which is what lets
+    an endpoint that never chose a level keep behaving exactly as it behaves now.
 
     Above `off`, two keys are what makes the level reach the wire at all, both
     measured off the wire rather than read off pi's schema: `pi` only computes a
@@ -721,7 +796,13 @@ def _synthesized_models_json(base_url: str, model: str, key_ref: str, thinking: 
     stays switched off by omission — no combination tried put it on the wire, and
     a vLLM box rejects it.
     """
-    model_entry: dict = {"id": model, "contextWindow": 131072, "maxTokens": 8192}
+    model_entry: dict = {
+        "id": model,
+        "contextWindow": context_window,
+        # Derived, never a second constant: the ceiling a box is asked for can never
+        # exceed what its own stated window leaves after the answer room.
+        "maxTokens": min(OUTPUT_CEILING_TOKENS, context_window - ANSWER_ROOM_TOKENS),
+    }
     compat: dict = {
         # Ollama-style servers reject OpenAI's developer role and
         # reasoning_effort; these flags keep pi off both.
@@ -797,7 +878,7 @@ def _local_auth(cred: dict, home: str = _SPRITE_HOME, model_override: str | None
     models_json = (
         override
         if override is not None
-        else _synthesized_models_json(base_url, model, key_ref, thinking)
+        else _synthesized_models_json(base_url, model, doc["context_window"], key_ref, thinking)
     )
     return RunAuth(
         harness=harness_mod.PI,
@@ -823,7 +904,9 @@ async def get_local_models_json(user_id: UUID) -> dict:
         "models_json": (
             stored
             if stored is not None
-            else _synthesized_models_json(doc["base_url"], doc["model"], key_ref, doc["thinking"])
+            else _synthesized_models_json(
+                doc["base_url"], doc["model"], doc["context_window"], key_ref, doc["thinking"]
+            )
         ),
         "stored": stored is not None,
     }
@@ -895,7 +978,55 @@ async def set_endpoint_thinking(user_id: UUID, credential_id: UUID, thinking: st
             "— put reasoning and the thinking-budget compat flag in that file, or reset "
             "the override first"
         )
-    new_doc = local_endpoint_doc(doc["base_url"], doc["model"], doc.get("api_key"), thinking)
+    new_doc = local_endpoint_doc(
+        doc["base_url"], doc["model"], doc["context_window"], doc.get("api_key"), thinking
+    )
+    await get_pool().execute(
+        "UPDATE user_agent_credentials SET secret_enc = $1 WHERE id = $2",
+        _encrypt(json.dumps(new_doc)),
+        cred["id"],
+    )
+    return new_doc
+
+
+async def set_endpoint_context_window(
+    user_id: UUID, credential_id: UUID, context_window: int
+) -> dict:
+    """Change one connected endpoint's context window, and nothing else about it.
+
+    The window is the number that decides what a turn asks this box for, so it has to be
+    correctable after connect: its owner fixes it here rather than editing a file, and the
+    row that names the box is the place it lives. Like the level's setter, this one
+    rewrites the doc through `local_endpoint_doc` so the value meets the same validator an
+    endpoint meets on connect, and it copies the address, model, key and level out of the
+    stored doc instead of accepting them — the control that resizes a box must not be able
+    to move which box the user is talking about.
+
+    Refused while a verbatim models.json override is stored, for the reason the level
+    control gives: those bytes are what a turn writes and they ignore the synthesized
+    file, so a window stored beside an override would be a number the wire never carries.
+    Resetting the override, or putting the window into that file, is the way out.
+
+    Raises LookupError for an id that is not this user's local endpoint (a key provider's
+    row included) and ValueError for a window the validator refuses.
+    """
+    cred = await _get_credential_by_id(user_id, credential_id)
+    if cred is None or cred["provider"] != model_provider.LOCAL.id:
+        raise LookupError("no such local endpoint")
+    doc = _local_credential_doc(cred)
+    if cred.get("models_json") is not None:
+        raise ValueError(
+            "the context window cannot be set while a stored models.json override is set "
+            "— put contextWindow in that file, or reset the override to use the "
+            "Settings window"
+        )
+    new_doc = local_endpoint_doc(
+        doc["base_url"],
+        doc["model"],
+        context_window,
+        doc.get("api_key"),
+        doc["thinking"],
+    )
     await get_pool().execute(
         "UPDATE user_agent_credentials SET secret_enc = $1 WHERE id = $2",
         _encrypt(json.dumps(new_doc)),

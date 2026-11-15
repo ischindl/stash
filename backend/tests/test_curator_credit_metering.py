@@ -127,7 +127,7 @@ async def _connect_box(client: AsyncClient, key: str, monkeypatch: pytest.Monkey
     monkeypatch.setattr(agent_auth, "probe_local_endpoint", live)
     r = await client.post(
         "/api/v1/me/agent-credentials",
-        json={"provider": "local", "base_url": BOX, "model": "llama"},
+        json={"provider": "local", "base_url": BOX, "model": "llama", "context_window": 32768},
         headers=_auth(key),
     )
     assert r.status_code == 200, r.text

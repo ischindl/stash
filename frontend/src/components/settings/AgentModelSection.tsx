@@ -14,6 +14,7 @@ import {
   probeLocalEndpoint,
   probeSavedEndpoint,
   PROBE_ONLY_MODEL,
+  setEndpointContextWindow,
   setEndpointThinking,
   startAgentOAuth,
   type LocalEndpointDoc,
@@ -388,6 +389,10 @@ function EndpointsPanel({
   const [baseUrl, setBaseUrl] = useState("");
   const [apiKey, setApiKey] = useState("");
   const [model, setModel] = useState("");
+  // The window is kept as typed text, so a half-typed number is visible as what it
+  // is rather than silently becoming someone else's default. `parseWindow` decides
+  // whether it is a number at all.
+  const [contextWindow, setContextWindow] = useState("");
   // A test result is only trustworthy while it describes exactly what is in the two
   // fields, so it is kept beside them and dropped whenever they change: the
   // endpoint cannot be stored on the strength of a test it was not served with, and
@@ -395,17 +400,23 @@ function EndpointsPanel({
   // came back, so there is no second path a stale answer can survive on. The box's
   // verdict is kept beside the fields it was served with, which is what makes
   // staleness checkable at all.
-  const [probed, setProbed] = useState<(ProbeVerdict & { baseUrl: string; apiKey: string }) | null>(
-    null,
-  );
+  const [probed, setProbed] = useState<
+    (ProbeVerdict & { baseUrl: string; apiKey: string; contextWindow: number }) | null
+  >(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const probeIsCurrent =
-    probed !== null && probed.baseUrl === baseUrl.trim() && probed.apiKey === apiKey.trim();
+  const windowTokens = parseWindow(contextWindow);
 
-  // Any edit to the address or the key retires the probe result: the model list
-  // and the save button both belong to the endpoint that was actually tested.
+  const probeIsCurrent =
+    probed !== null &&
+    probed.baseUrl === baseUrl.trim() &&
+    probed.apiKey === apiKey.trim() &&
+    probed.contextWindow === windowTokens;
+
+  // Any edit to the address, the key or the stated size retires the probe result: the
+  // model list and the save button both belong to the endpoint that was actually
+  // tested, and the size typed alongside that test is part of what it was tested with.
   function invalidateProbe() {
     setProbed(null);
     setModel("");
@@ -426,20 +437,21 @@ function EndpointsPanel({
   async function testConnection() {
     const url = baseUrl.trim();
     const key = apiKey.trim();
+    if (windowTokens === null) return;
     setBusy(true);
     setError(null);
     setProbed(null);
     setModel("");
     try {
       const verdict = probeVerdict(
-        await probeLocalEndpoint(url, key || null, PROBE_ONLY_MODEL),
+        await probeLocalEndpoint(url, windowTokens, key || null, PROBE_ONLY_MODEL),
       );
       if (verdict.verdict === "answered-no-models") {
         // Nothing here can act on a box that serves no models — there is no model to
         // pick and nothing to store — so it is not filed as a test result.
         setError(verdict.label);
       } else {
-        setProbed({ ...verdict, baseUrl: url, apiKey: key });
+        setProbed({ ...verdict, baseUrl: url, apiKey: key, contextWindow: windowTokens });
         if (verdict.verdict === "reachable") setModel(verdict.models[0]);
       }
     } catch (e) {
@@ -456,9 +468,10 @@ function EndpointsPanel({
     setBusy(true);
     setError(null);
     try {
-      await connectLocalEndpoint(probed.baseUrl, model, probed.apiKey || null);
+      await connectLocalEndpoint(probed.baseUrl, model, probed.contextWindow, probed.apiKey || null);
       setBaseUrl("");
       setApiKey("");
+      setContextWindow("");
       setModel("");
       setProbed(null);
       onChanged();
@@ -509,8 +522,11 @@ function EndpointsPanel({
 
       <div className="mt-4 space-y-2 border-t border-border pt-3">
         <p className="text-[12.5px] text-muted-foreground">
-          Tested before it is saved: add the address, test it, and pick a model from the ones it
-          answers with.
+          Tested before it is saved: add the address, say how large a context window that server
+          was configured for, test it, and pick a model from the ones it answers with. This page
+          cannot find the size out by dialing the box — only the config on the machine running
+          it knows that number — and the size we ask that box for on a turn is derived from
+          the number stated here.
         </p>
         <div className="flex flex-col gap-2 sm:flex-row">
           <input
@@ -535,10 +551,23 @@ function EndpointsPanel({
             aria-label="Endpoint key"
             className="flex-1 rounded-md border border-border bg-surface px-2.5 py-1.5 font-mono text-[12.5px] text-foreground"
           />
+          <input
+            type="number"
+            value={contextWindow}
+            min={1}
+            step={1}
+            onChange={(e) => {
+              setContextWindow(e.target.value);
+              invalidateProbe();
+            }}
+            placeholder="context window e.g. 32768"
+            aria-label="Endpoint context window"
+            className="w-40 rounded-md border border-border bg-surface px-2.5 py-1.5 font-mono text-[12.5px] text-foreground"
+          />
           <button
             type="button"
             onClick={testConnection}
-            disabled={busy || !baseUrl.trim()}
+            disabled={busy || !baseUrl.trim() || windowTokens === null}
             className="rounded-md border border-border px-3 py-1.5 text-[12.5px] text-foreground hover:bg-raised disabled:opacity-60"
           >
             Test connection
@@ -617,6 +646,12 @@ function EndpointRow({
   const [savedLevel, setSavedLevel] = useState<string | null>(null);
   const storedLevel = savedLevel ?? endpoint.thinking;
   const [draftLevel, setDraftLevel] = useState(endpoint.thinking);
+  // The window follows the level's rule exactly: the load's value is what is stored, a
+  // save replaces it with the server's own answer, and an unsaved draft is re-typed
+  // from the next load rather than left pointing at a size the row never had.
+  const [savedWindow, setSavedWindow] = useState<number | null>(null);
+  const storedWindow = savedWindow ?? endpoint.context_window;
+  const [draftWindow, setDraftWindow] = useState(String(endpoint.context_window));
 
   // The list load live-probes every box, so a reload is by definition the fresher
   // answer for this row: a verdict clicked against an earlier load retires the moment
@@ -627,6 +662,8 @@ function EndpointRow({
     setProbed(null);
     setSavedLevel(null);
     setDraftLevel(endpoint.thinking);
+    setSavedWindow(null);
+    setDraftWindow(String(endpoint.context_window));
   }, [endpoint]);
 
   // Save writes the level and nothing else, and the row answers with the server's
@@ -644,6 +681,25 @@ function EndpointRow({
       setSavedLevel(answer.thinking);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not change the reasoning level");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // Resize writes the window and nothing else, and the answer is the server's number,
+  // not the one typed. A refused write — the stored models.json override among them —
+  // leaves the draft as typed and puts the server's own sentence under the row, while
+  // the sentence beside the control keeps naming the size the server actually holds.
+  async function saveWindow() {
+    const tokens = parseWindow(draftWindow);
+    if (tokens === null) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const answer = await setEndpointContextWindow(endpoint.id, tokens);
+      setSavedWindow(answer.context_window);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not change the context window");
     } finally {
       setBusy(false);
     }
@@ -727,6 +783,13 @@ function EndpointRow({
             onDraftChange={setDraftLevel}
             onSave={saveLevel}
           />
+          <ContextWindowControl
+            storedWindow={storedWindow}
+            busy={busy}
+            draft={draftWindow}
+            onDraftChange={setDraftWindow}
+            onSave={saveWindow}
+          />
         </div>
         <div className="flex shrink-0 flex-wrap justify-end gap-2">
           {keyDoc && (
@@ -767,6 +830,19 @@ function EndpointRow({
       {error && <p className="mt-2 text-[12px] text-error">{error}</p>}
     </li>
   );
+}
+
+/** The window field's whole client-side rule: a counting number of tokens, or nothing.
+ *
+ *  Deliberately not a range. How small a box may be is the server's claim to make —
+ *  it refuses a number below its floor with its own sentence, and a browser that
+ *  repeated that floor would be a second copy able to disagree. What is refused here
+ *  is only what could never be a token count: a blank, a decimal, a negative, or text.
+ *  Everything else is sent and answered by the machine that stores it. */
+export function parseWindow(raw: string): number | null {
+  if (!/^\d+$/.test(raw.trim())) return null;
+  const tokens = Number(raw.trim());
+  return Number.isSafeInteger(tokens) ? tokens : null;
 }
 
 /** The reasoning level of one box: a draft selector plus an explicit Save, the same
@@ -818,6 +894,54 @@ function ThinkingLevelControl({
       </button>
       <span className="text-[11.5px] text-muted-foreground">
         how much this box may think before it answers; its next turn uses {storedLevel}
+      </span>
+    </div>
+  );
+}
+
+/** How large one box's context window is: a draft field plus an explicit Save, the same
+ *  two-step as the level, so nothing is written by a keystroke. What is stated beside it
+ *  is the size the server holds, never the number in the box, so an unwritten draft
+ *  cannot be read as a resize that happened. The size of a turn we then ask this box for
+ *  is computed server-side from this number and is not repeated here. */
+function ContextWindowControl({
+  storedWindow,
+  busy,
+  draft,
+  onDraftChange,
+  onSave,
+}: {
+  storedWindow: number;
+  busy: boolean;
+  draft: string;
+  onDraftChange: (raw: string) => void;
+  onSave: () => Promise<void>;
+}) {
+  const tokens = parseWindow(draft);
+  return (
+    <div className="mt-2 flex flex-wrap items-center gap-2">
+      <label className="flex items-center gap-2 text-[12px] text-muted-foreground">
+        Context window
+        <input
+          type="number"
+          value={draft}
+          min={1}
+          step={1}
+          onChange={(e) => onDraftChange(e.target.value)}
+          aria-label="Context window for this box"
+          className="w-28 rounded-md border border-border bg-surface px-2 py-1 font-mono text-[12px] text-foreground"
+        />
+      </label>
+      <button
+        type="button"
+        onClick={onSave}
+        disabled={busy || tokens === null || tokens === storedWindow}
+        className="rounded-md border border-border px-2.5 py-1 text-[12px] text-foreground hover:bg-raised disabled:opacity-60"
+      >
+        Save size
+      </button>
+      <span className="text-[11.5px] text-muted-foreground">
+        tokens this box was configured for; its next turn is planned against {storedWindow}
       </span>
     </div>
   );

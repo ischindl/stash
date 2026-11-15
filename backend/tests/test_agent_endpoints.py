@@ -36,6 +36,11 @@ from .test_permissions import _auth
 BOX_ONE = "http://box-one:11434/v1"
 BOX_TWO = "https://ollama.lan:11434/v1"
 SECRET = "sk-local-abcdef"
+# The window these tests state for a box, deliberately not the one this service used to
+# hand every endpoint: a fixture carrying the old number would let a reintroduced constant
+# pass every test in this file. 32768 derives to the shipped 8192 ceiling, so a state
+# change moves the window and nothing else.
+WINDOW = 32768
 
 
 @pytest.fixture(autouse=True)
@@ -61,14 +66,14 @@ async def test_connecting_a_second_box_appends(client: AsyncClient, _db_pool):
         uid,
         "local",
         "endpoint",
-        agent_auth.local_endpoint_secret(BOX_ONE, "llama"),
+        agent_auth.local_endpoint_secret(BOX_ONE, "llama", WINDOW),
         name=agent_auth.endpoint_name(BOX_ONE),
     )
     second = await agent_auth.store_credential(
         uid,
         "local",
         "endpoint",
-        agent_auth.local_endpoint_secret(BOX_TWO, "qwen", SECRET),
+        agent_auth.local_endpoint_secret(BOX_TWO, "qwen", WINDOW, SECRET),
         name=agent_auth.endpoint_name(BOX_TWO),
     )
     assert first != second
@@ -112,10 +117,18 @@ async def test_local_default_is_the_oldest_box(client: AsyncClient, _db_pool):
     and the resolution must follow the age."""
     _key, uid = await _register(client)
     one = await agent_auth.store_credential(
-        uid, "local", "endpoint", agent_auth.local_endpoint_secret(BOX_ONE, "llama"), name="box-one"
+        uid,
+        "local",
+        "endpoint",
+        agent_auth.local_endpoint_secret(BOX_ONE, "llama", WINDOW),
+        name="box-one",
     )
     two = await agent_auth.store_credential(
-        uid, "local", "endpoint", agent_auth.local_endpoint_secret(BOX_TWO, "qwen"), name="box-two"
+        uid,
+        "local",
+        "endpoint",
+        agent_auth.local_endpoint_secret(BOX_TWO, "qwen", WINDOW),
+        name="box-two",
     )
     cred = await agent_auth._get_credential(uid, "local")
     assert cred["id"] == one  # first connected is the default
@@ -145,10 +158,18 @@ async def test_resolve_pins_the_named_box_and_picks_the_model_within_it(
     monkeypatch.setattr(settings, "AGENT_EXEC_MODE", "sprites")
     _key, uid = await _register(client)
     await agent_auth.store_credential(
-        uid, "local", "endpoint", agent_auth.local_endpoint_secret(BOX_ONE, "llama"), name="box-one"
+        uid,
+        "local",
+        "endpoint",
+        agent_auth.local_endpoint_secret(BOX_ONE, "llama", WINDOW),
+        name="box-one",
     )
     pinned = await agent_auth.store_credential(
-        uid, "local", "endpoint", agent_auth.local_endpoint_secret(BOX_TWO, "qwen"), name="box-two"
+        uid,
+        "local",
+        "endpoint",
+        agent_auth.local_endpoint_secret(BOX_TWO, "qwen", WINDOW),
+        name="box-two",
     )
 
     auth = await agent_auth.resolve(uid, "local", credential_id=pinned, model_id="qwen3:32b")
@@ -174,7 +195,7 @@ async def test_resolve_fails_loud_on_a_pin_that_is_not_ones_own_box(
         other_uid,
         "local",
         "endpoint",
-        agent_auth.local_endpoint_secret(BOX_ONE, "llama"),
+        agent_auth.local_endpoint_secret(BOX_ONE, "llama", WINDOW),
         name="box-one",
     )
     with pytest.raises(RuntimeError, match="not a credential of this user"):
@@ -189,7 +210,11 @@ async def test_resolve_fails_loud_on_a_pin_that_is_not_ones_own_box(
 
     # A pin cannot be dressed as a different provider.
     pinned = await agent_auth.store_credential(
-        uid, "local", "endpoint", agent_auth.local_endpoint_secret(BOX_TWO, "qwen"), name="box-two"
+        uid,
+        "local",
+        "endpoint",
+        agent_auth.local_endpoint_secret(BOX_TWO, "qwen", WINDOW),
+        name="box-two",
     )
     with pytest.raises(ValueError, match="cannot run as anthropic"):
         await agent_auth.resolve(uid, "anthropic", credential_id=pinned)
@@ -205,7 +230,7 @@ async def test_list_connected_says_local_once(client: AsyncClient):
             uid,
             "local",
             "endpoint",
-            agent_auth.local_endpoint_secret(base_url, "llama"),
+            agent_auth.local_endpoint_secret(base_url, "llama", WINDOW),
             name=agent_auth.endpoint_name(base_url),
         )
     await agent_auth.store_credential(uid, "anthropic", "api_key", "sk-ant", name="anthropic")
@@ -218,7 +243,11 @@ async def test_disconnect_by_provider_name_refuses_local(client: AsyncClient, _d
     guessing the oldest would delete a box he did not point at."""
     _key, uid = await _register(client)
     pinned = await agent_auth.store_credential(
-        uid, "local", "endpoint", agent_auth.local_endpoint_secret(BOX_ONE, "llama"), name="box-one"
+        uid,
+        "local",
+        "endpoint",
+        agent_auth.local_endpoint_secret(BOX_ONE, "llama", WINDOW),
+        name="box-one",
     )
     with pytest.raises(ValueError, match="disconnected by id"):
         await agent_auth.delete_credential(uid, "local")
@@ -237,13 +266,17 @@ async def test_delete_endpoint_takes_exactly_one_box(client: AsyncClient, _db_po
     own secret; an id that names somebody else's row deletes nothing."""
     _key, uid = await _register(client)
     one = await agent_auth.store_credential(
-        uid, "local", "endpoint", agent_auth.local_endpoint_secret(BOX_ONE, "llama"), name="box-one"
+        uid,
+        "local",
+        "endpoint",
+        agent_auth.local_endpoint_secret(BOX_ONE, "llama", WINDOW),
+        name="box-one",
     )
     two = await agent_auth.store_credential(
         uid,
         "local",
         "endpoint",
-        agent_auth.local_endpoint_secret(BOX_TWO, "qwen", SECRET),
+        agent_auth.local_endpoint_secret(BOX_TWO, "qwen", WINDOW, SECRET),
         name="box-two",
     )
     await agent_auth.delete_endpoint(uid, one)
@@ -265,10 +298,18 @@ async def test_the_pin_covers_every_turn_of_a_run(client: AsyncClient, monkeypat
     monkeypatch.setattr(settings, "AGENT_EXEC_MODE", "sprites")
     _key, uid = await _register(client)
     await agent_auth.store_credential(
-        uid, "local", "endpoint", agent_auth.local_endpoint_secret(BOX_ONE, "llama"), name="box-one"
+        uid,
+        "local",
+        "endpoint",
+        agent_auth.local_endpoint_secret(BOX_ONE, "llama", WINDOW),
+        name="box-one",
     )
     pinned = await agent_auth.store_credential(
-        uid, "local", "endpoint", agent_auth.local_endpoint_secret(BOX_TWO, "qwen"), name="box-two"
+        uid,
+        "local",
+        "endpoint",
+        agent_auth.local_endpoint_secret(BOX_TWO, "qwen", WINDOW),
+        name="box-two",
     )
 
     writer = await agent_auth.resolve(uid, "local", credential_id=pinned, model_id="qwen3:32b")
@@ -285,10 +326,18 @@ async def test_local_exec_mode_honors_the_pin(client: AsyncClient, monkeypatch):
     monkeypatch.setattr(settings, "AGENT_EXEC_MODE", "local")
     _key, uid = await _register(client)
     await agent_auth.store_credential(
-        uid, "local", "endpoint", agent_auth.local_endpoint_secret(BOX_ONE, "llama"), name="box-one"
+        uid,
+        "local",
+        "endpoint",
+        agent_auth.local_endpoint_secret(BOX_ONE, "llama", WINDOW),
+        name="box-one",
     )
     pinned = await agent_auth.store_credential(
-        uid, "local", "endpoint", agent_auth.local_endpoint_secret(BOX_TWO, "qwen"), name="box-two"
+        uid,
+        "local",
+        "endpoint",
+        agent_auth.local_endpoint_secret(BOX_TWO, "qwen", WINDOW),
+        name="box-two",
     )
     auth = await agent_auth.resolve(uid, "local", credential_id=pinned)
     assert auth.endpoint == BOX_TWO
@@ -303,10 +352,18 @@ async def test_models_json_override_targets_the_default_box(client: AsyncClient,
     and a turn dialing a pinned box must never inherit another box's pi config."""
     _key, uid = await _register(client)
     one = await agent_auth.store_credential(
-        uid, "local", "endpoint", agent_auth.local_endpoint_secret(BOX_ONE, "llama"), name="box-one"
+        uid,
+        "local",
+        "endpoint",
+        agent_auth.local_endpoint_secret(BOX_ONE, "llama", WINDOW),
+        name="box-one",
     )
     two = await agent_auth.store_credential(
-        uid, "local", "endpoint", agent_auth.local_endpoint_secret(BOX_TWO, "qwen"), name="box-two"
+        uid,
+        "local",
+        "endpoint",
+        agent_auth.local_endpoint_secret(BOX_TWO, "qwen", WINDOW),
+        name="box-two",
     )
     models = json.dumps({"providers": {"local": {"id": "llama"}}})
     await agent_auth.save_local_models_json(uid, models)
@@ -347,7 +404,7 @@ async def test_endpoint_listing_never_carries_the_key(client: AsyncClient, monke
         uid,
         "local",
         "endpoint",
-        agent_auth.local_endpoint_secret(BOX_ONE, "llama", SECRET),
+        agent_auth.local_endpoint_secret(BOX_ONE, "llama", WINDOW, SECRET),
         name="box-one",
     )
 
@@ -362,6 +419,7 @@ async def test_endpoint_listing_never_carries_the_key(client: AsyncClient, monke
             "name": "box-one",
             "base_url": BOX_ONE,
             "thinking": "off",
+            "context_window": WINDOW,
             "models": ["llama", "llama:8b"],
         }
     ]
@@ -392,7 +450,7 @@ async def test_endpoint_listing_probes_all_boxes_at_once(client: AsyncClient, mo
             uid,
             "local",
             "endpoint",
-            agent_auth.local_endpoint_secret(f"{BOX_ONE}-{i}", "llama", SECRET),
+            agent_auth.local_endpoint_secret(f"{BOX_ONE}-{i}", "llama", WINDOW, SECRET),
             name=f"box-{i}",
         )
 
@@ -430,14 +488,14 @@ async def test_endpoint_listing_probes_a_live_and_a_dead_box_with_per_entry_erro
         uid,
         "local",
         "endpoint",
-        agent_auth.local_endpoint_secret(BOX_ONE, "llama", SECRET),
+        agent_auth.local_endpoint_secret(BOX_ONE, "llama", WINDOW, SECRET),
         name="box-one",
     )
     await agent_auth.store_credential(
         uid,
         "local",
         "endpoint",
-        agent_auth.local_endpoint_secret(BOX_TWO, "qwen", dead_key),
+        agent_auth.local_endpoint_secret(BOX_TWO, "qwen", WINDOW, dead_key),
         name="box-two",
     )
 
@@ -467,6 +525,7 @@ async def test_endpoint_listing_probes_a_live_and_a_dead_box_with_per_entry_erro
         "name": "box-one",
         "base_url": BOX_ONE,
         "thinking": "off",
+        "context_window": WINDOW,
         "models": ["llama", "llama:8b"],
     }
     assert "probe_error" not in entries[0]
@@ -502,12 +561,18 @@ async def test_http_connect_appends_and_lists_both_boxes(client: AsyncClient, mo
 
     one = await client.post(
         "/api/v1/me/agent-credentials",
-        json={"provider": "local", "base_url": BOX_ONE, "model": "llama"},
+        json={"provider": "local", "base_url": BOX_ONE, "model": "llama", "context_window": WINDOW},
         headers=_auth(key),
     )
     two = await client.post(
         "/api/v1/me/agent-credentials",
-        json={"provider": "local", "base_url": BOX_TWO, "model": "qwen", "api_key": SECRET},
+        json={
+            "provider": "local",
+            "base_url": BOX_TWO,
+            "model": "qwen",
+            "context_window": WINDOW,
+            "api_key": SECRET,
+        },
         headers=_auth(key),
     )
     assert one.status_code == 200 and two.status_code == 200, (one.text, two.text)
@@ -536,7 +601,7 @@ async def test_http_connect_probes_first_and_stores_nothing(client: AsyncClient,
     key, uid = await _register(client)
     r = await client.post(
         "/api/v1/me/agent-credentials",
-        json={"provider": "local", "base_url": BOX_ONE, "model": "llama"},
+        json={"provider": "local", "base_url": BOX_ONE, "model": "llama", "context_window": WINDOW},
         headers=_auth(key),
     )
     assert r.status_code == 400
@@ -565,7 +630,7 @@ async def test_http_delete_of_a_pinned_endpoint_409s_listing_its_agent(
     key, uid = await _register(client)
     r = await client.post(
         "/api/v1/me/agent-credentials",
-        json={"provider": "local", "base_url": BOX_ONE, "model": "llama"},
+        json={"provider": "local", "base_url": BOX_ONE, "model": "llama", "context_window": WINDOW},
         headers=_auth(key),
     )
     endpoint_id = r.json()["id"]
@@ -623,7 +688,7 @@ async def test_workspace_credentials_route_mirrors_the_endpoint_api(
 
     r = await client.post(
         "/api/v1/me/developer/agent-credentials",
-        json={"base_url": BOX_ONE, "model": "llama", "api_key": SECRET},
+        json={"base_url": BOX_ONE, "model": "llama", "context_window": WINDOW, "api_key": SECRET},
         headers=_scope_headers(api_key, scope),
     )
     assert r.status_code == 200, r.text
@@ -663,7 +728,7 @@ async def test_workspace_by_name_disconnect_is_refused_with_the_pointer(
     scope = workspace["scope_user_id"]
     await client.post(
         "/api/v1/me/developer/agent-credentials",
-        json={"base_url": BOX_ONE, "model": "llama"},
+        json={"base_url": BOX_ONE, "model": "llama", "context_window": WINDOW},
         headers=_scope_headers(api_key, scope),
     )
     r = await client.delete(
@@ -688,14 +753,14 @@ async def _two_boxes(uid: UUID) -> tuple[UUID, UUID]:
         uid,
         "local",
         "endpoint",
-        agent_auth.local_endpoint_secret(BOX_ONE, "llama", None),
+        agent_auth.local_endpoint_secret(BOX_ONE, "llama", WINDOW, None),
         name="box-one",
     )
     two = await agent_auth.store_credential(
         uid,
         "local",
         "endpoint",
-        agent_auth.local_endpoint_secret(BOX_TWO, "qwen", None),
+        agent_auth.local_endpoint_secret(BOX_TWO, "qwen", WINDOW, None),
         name="box-two",
     )
     return one, two
@@ -1118,6 +1183,253 @@ async def test_a_pinned_two_phase_curator_dials_one_box_for_both_turns(
 # --- The per-box reasoning level, over HTTP ---
 
 
+# @sensitive: writes a credential row
+# @why: this is the write path that decides what a turn asks each box for
+#
+# The founder's other ask, and the defect this card exists for: the context window is the
+# number that decides what a turn asks a box for, and it used to belong to the code @ one
+# number for every model server on earth. These pin that the number is stored per row, that
+# editing it reaches the file that box's next turn is built from while a neighbour keeps its
+# own pair, and that the refusals store nothing.
+
+
+def _effective_models_json(result: dict) -> dict:
+    """`get_local_models_json` answers {models_json: str, stored: bool}; the tests below
+    want the parsed document it reports for that one connected box."""
+    return json.loads(result["models_json"])
+
+
+WIDER = 24576  # a resized box: still above the shipped ceiling, so the ceiling holds
+
+
+@pytest.mark.asyncio
+async def test_one_code_path_gives_two_boxes_two_different_pairs(client: AsyncClient):
+    """AC2: the same synthesis called for two accounts, two boxes, two pairs. This is the
+    assertion a constant cannot pass @ it would need one number for both rows @ and it is
+    what the founder's sentence asks for: `llama3.1:8b` is not one model with one size, so
+    the pair a turn carries is read from each row's own record."""
+    # A credential row points at a real user, so both accounts are registered first.
+    _rack_key, uid_rack = await _register(client)
+    _edge_key, uid_edge = await _register(client)
+    await agent_auth.store_credential(
+        uid_rack,
+        "local",
+        "endpoint",
+        agent_auth.local_endpoint_secret(BOX_TWO, "qwen", 150000),
+        name="rack",
+    )
+    await agent_auth.store_credential(
+        uid_edge,
+        "local",
+        "endpoint",
+        agent_auth.local_endpoint_secret(BOX_ONE, "llama", 4096),
+        name="edge",
+    )
+
+    wide = _effective_models_json(await agent_auth.get_local_models_json(uid_rack))
+    small = _effective_models_json(await agent_auth.get_local_models_json(uid_edge))
+    assert wide["providers"]["local"]["models"] == [
+        {"id": "qwen", "contextWindow": 150000, "maxTokens": 8192}
+    ]
+    assert small["providers"]["local"]["models"] == [
+        {"id": "llama", "contextWindow": 4096, "maxTokens": 3072}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_http_context_window_change_resizes_one_box_and_its_next_turn(
+    client: AsyncClient, monkeypatch
+):
+    """AC7: two boxes are connected, one window is edited. The route answers with the number
+    it stored, the listing reports each row's own, and the synthesized file @ the bytes the
+    next turn is written from @ carries the resized box's number with a ceiling derived from
+    it. The neighbour's own pair is then read from the same call, once the resized box is
+    gone and this account's file answers for it: a row's number travels with that row."""
+    monkeypatch.setattr(agent_auth, "probe_local_endpoint", _probe_ok("llama"))
+    key, uid = await _register(client)
+    one = await client.post(
+        "/api/v1/me/agent-credentials",
+        json={"provider": "local", "base_url": BOX_ONE, "model": "llama", "context_window": WINDOW},
+        headers=_auth(key),
+    )
+    two = await client.post(
+        "/api/v1/me/agent-credentials",
+        json={"provider": "local", "base_url": BOX_TWO, "model": "qwen", "context_window": WINDOW},
+        headers=_auth(key),
+    )
+    # Both boxes have to exist for "the other one keeps its number" to mean anything.
+    assert one.status_code == 200 and two.status_code == 200, (one.text, two.text)
+
+    r = await client.put(
+        f"/api/v1/me/agent-credentials/endpoints/{one.json()['id']}/context-window",
+        json={"context_window": WIDER},
+        headers=_auth(key),
+    )
+    assert r.status_code == 200, r.text
+    assert r.json() == {"ok": True, "context_window": WIDER}
+
+    body = (await client.get("/api/v1/me/agent-credentials", headers=_auth(key))).json()
+    assert [(e["name"], e["context_window"]) for e in body["endpoints"]] == [
+        ("box-one", WIDER),
+        ("ollama.lan", WINDOW),
+    ]
+    local = _effective_models_json(await agent_auth.get_local_models_json(uid))["providers"][
+        "local"
+    ]
+    assert local["models"] == [{"id": "llama", "contextWindow": WIDER, "maxTokens": 8192}]
+
+    dropped = await client.delete(
+        f"/api/v1/me/agent-credentials/endpoints/{one.json()['id']}", headers=_auth(key)
+    )
+    assert dropped.status_code == 200, dropped.text
+    kept = _effective_models_json(await agent_auth.get_local_models_json(uid))["providers"]["local"]
+    assert kept["models"] == [{"id": "qwen", "contextWindow": WINDOW, "maxTokens": 8192}]
+
+
+@pytest.mark.asyncio
+async def test_http_context_window_change_stores_only_the_window(client: AsyncClient, monkeypatch):
+    """The write copies address, model, key and level out of the stored doc, so a body that
+    also claims a different server moves exactly one field. That is the security property
+    again: the control that resizes a box must not repoint the user's key and traffic."""
+    monkeypatch.setattr(agent_auth, "probe_local_endpoint", _probe_ok("llama"))
+    key, uid = await _register(client)
+    made = await client.post(
+        "/api/v1/me/agent-credentials",
+        json={
+            "provider": "local",
+            "base_url": BOX_ONE,
+            "model": "llama",
+            "context_window": WINDOW,
+            "api_key": SECRET,
+        },
+        headers=_auth(key),
+    )
+    before = json.loads(await _stored_secret(uid, made.json()["id"]))
+
+    r = await client.put(
+        f"/api/v1/me/agent-credentials/endpoints/{made.json()['id']}/context-window",
+        json={
+            "context_window": WIDER,
+            "base_url": "http://attacker.example/v1",
+            "model": "other",
+            "api_key": "stolen",
+            "thinking": "max",
+        },
+        headers=_auth(key),
+    )
+    assert r.status_code == 200, r.text
+    after = json.loads(await _stored_secret(uid, made.json()["id"]))
+    assert after == {**before, "context_window": WIDER}
+    assert after["base_url"] == BOX_ONE and after["api_key"] == SECRET
+    assert after["model"] == "llama" and after["thinking"] == "off"
+
+
+@pytest.mark.asyncio
+async def test_http_context_window_refused_while_a_verbatim_override_is_stored(
+    client: AsyncClient, monkeypatch
+):
+    """The same shape as the level's refusal, for the same reason: the override is what a
+    turn writes and the stored window is never read beside it, so accepting the pair would
+    leave a Settings row reporting a size the wire does not carry."""
+    monkeypatch.setattr(agent_auth, "probe_local_endpoint", _probe_ok("llama"))
+    key, uid = await _register(client)
+    made = await client.post(
+        "/api/v1/me/agent-credentials",
+        json={"provider": "local", "base_url": BOX_ONE, "model": "llama", "context_window": WINDOW},
+        headers=_auth(key),
+    )
+    endpoint_id = made.json()["id"]
+    saved = await client.put(
+        "/api/v1/me/agent-credentials/local/models-json",
+        json={"models_json": json.dumps({"providers": {"local": {"baseUrl": BOX_ONE}}})},
+        headers=_auth(key),
+    )
+    assert saved.status_code == 200, saved.text
+
+    r = await client.put(
+        f"/api/v1/me/agent-credentials/endpoints/{endpoint_id}/context-window",
+        json={"context_window": WIDER},
+        headers=_auth(key),
+    )
+    assert r.status_code == 400, r.text
+    assert "models.json" in r.json()["detail"]
+    assert json.loads(await _stored_secret(uid, endpoint_id))["context_window"] == WINDOW
+
+    reset = await client.delete(
+        "/api/v1/me/agent-credentials/local/models-json", headers=_auth(key)
+    )
+    assert reset.status_code == 200, reset.text
+    after_override_gone = await client.put(
+        f"/api/v1/me/agent-credentials/endpoints/{endpoint_id}/context-window",
+        json={"context_window": WIDER},
+        headers=_auth(key),
+    )
+    assert after_override_gone.status_code == 200, after_override_gone.text
+    assert json.loads(await _stored_secret(uid, endpoint_id))["context_window"] == WIDER
+
+
+@pytest.mark.asyncio
+async def test_http_context_window_refuses_a_number_that_is_not_one(
+    client: AsyncClient, monkeypatch
+):
+    """Sub-floor, fractional, and a non-number are all refused before anything is stored: the
+    first by the validator with its own hint, the other two at the request boundary. A box
+    whose window is a mistyped field would send every one of its turns out with a size that
+    cannot hold a conversation."""
+    monkeypatch.setattr(agent_auth, "probe_local_endpoint", _probe_ok("llama"))
+    key, uid = await _register(client)
+    made = await client.post(
+        "/api/v1/me/agent-credentials",
+        json={"provider": "local", "base_url": BOX_ONE, "model": "llama", "context_window": WINDOW},
+        headers=_auth(key),
+    )
+    url = f"/api/v1/me/agent-credentials/endpoints/{made.json()['id']}/context-window"
+    for bad in (1024, 0, 32768.5, "32k"):
+        r = await client.put(url, json={"context_window": bad}, headers=_auth(key))
+        assert r.status_code in (400, 422), f"{bad!r} accepted: {r.status_code} {r.text}"
+        stored = json.loads(await _stored_secret(uid, made.json()["id"]))
+        assert stored["context_window"] == WINDOW, f"{bad!r} was stored"
+
+
+@pytest.mark.asyncio
+async def test_http_context_window_addresses_only_this_users_local_boxes(
+    client: AsyncClient, monkeypatch
+):
+    """A foreign id, a random uuid and a key provider's row all read as 404 @ the same answer
+    a box the user cannot see gets, which leaks nothing about the row existing somewhere. The
+    key provider's row matters most: its window is the provider's own and no local control
+    may write it."""
+    monkeypatch.setattr(agent_auth, "probe_local_endpoint", _probe_ok("llama"))
+    key, _uid = await _register(client)
+    other_key, _other_uid = await _register(client)
+    mine = await client.post(
+        "/api/v1/me/agent-credentials",
+        json={"provider": "local", "base_url": BOX_ONE, "model": "llama", "context_window": WINDOW},
+        headers=_auth(key),
+    )
+    anthropic = await client.post(
+        "/api/v1/me/agent-credentials",
+        json={"provider": "anthropic", "api_key": "sk-ant-test123"},
+        headers=_auth(key),
+    )
+    assert anthropic.status_code == 200, anthropic.text
+    # The connect for a key provider answers without an id (one row per provider name), so
+    # the row's own id is read from the service: it is the id a local control must not write.
+    provider_row = await agent_auth._get_credential(_uid, "anthropic")
+
+    for attempt_key, target in (
+        (other_key, mine.json()["id"]),
+        (key, "00000000-0000-0000-0000-000000000000"),
+        (key, str(provider_row["id"])),
+    ):
+        r = await client.put(
+            f"/api/v1/me/agent-credentials/endpoints/{target}/context-window",
+            json={"context_window": WIDER},
+            headers=_auth(attempt_key),
+        )
+        assert r.status_code == 404, f"{target}: {r.status_code} {r.text}"
+
+
 async def _stored_secret(uid: UUID, credential_id: str) -> str:
     """One stored endpoint's decrypted doc. Assertions about what a write persisted
     read the row itself — an entry built from the same code path as the write would
@@ -1145,12 +1457,12 @@ async def test_http_thinking_level_changes_one_box_and_reports_it(client: AsyncC
     key, _uid = await _register(client)
     one = await client.post(
         "/api/v1/me/agent-credentials",
-        json={"provider": "local", "base_url": BOX_ONE, "model": "llama"},
+        json={"provider": "local", "base_url": BOX_ONE, "model": "llama", "context_window": WINDOW},
         headers=_auth(key),
     )
     two = await client.post(
         "/api/v1/me/agent-credentials",
-        json={"provider": "local", "base_url": BOX_TWO, "model": "qwen"},
+        json={"provider": "local", "base_url": BOX_TWO, "model": "qwen", "context_window": WINDOW},
         headers=_auth(key),
     )
     # Both boxes have to exist for "the other one is untouched" to mean anything.
@@ -1186,7 +1498,13 @@ async def test_http_thinking_level_keeps_the_endpoint_untouched_apart_from_the_l
     key, uid = await _register(client)
     made = await client.post(
         "/api/v1/me/agent-credentials",
-        json={"provider": "local", "base_url": BOX_ONE, "model": "llama", "api_key": SECRET},
+        json={
+            "provider": "local",
+            "base_url": BOX_ONE,
+            "model": "llama",
+            "context_window": WINDOW,
+            "api_key": SECRET,
+        },
         headers=_auth(key),
     )
     before = json.loads(await _stored_secret(uid, made.json()["id"]))
@@ -1200,6 +1518,11 @@ async def test_http_thinking_level_keeps_the_endpoint_untouched_apart_from_the_l
     after = json.loads(await _stored_secret(uid, made.json()["id"]))
     assert after == {**before, "thinking": "medium"}
     assert after["base_url"] == BOX_ONE and after["api_key"] == SECRET
+    # The window is copied out of the stored doc like the other three, so the control
+    # that changes how much a box thinks is never the thing that silently resizes it.
+    # Read off the row rather than off the response, and stated apart from the exact
+    # equality above so a dropped pass-through names itself as this line.
+    assert after["context_window"] == before["context_window"] == WINDOW
 
 
 @pytest.mark.asyncio
@@ -1213,7 +1536,7 @@ async def test_http_thinking_level_refuses_a_level_the_harness_does_not_know(
     key, uid = await _register(client)
     made = await client.post(
         "/api/v1/me/agent-credentials",
-        json={"provider": "local", "base_url": BOX_ONE, "model": "llama"},
+        json={"provider": "local", "base_url": BOX_ONE, "model": "llama", "context_window": WINDOW},
         headers=_auth(key),
     )
 
@@ -1240,7 +1563,7 @@ async def test_http_thinking_level_refused_while_a_verbatim_override_is_stored(
     key, uid = await _register(client)
     made = await client.post(
         "/api/v1/me/agent-credentials",
-        json={"provider": "local", "base_url": BOX_ONE, "model": "llama"},
+        json={"provider": "local", "base_url": BOX_ONE, "model": "llama", "context_window": WINDOW},
         headers=_auth(key),
     )
     endpoint_id = made.json()["id"]
@@ -1282,7 +1605,7 @@ async def test_http_thinking_level_addresses_only_this_users_local_boxes(
     other_key, _other_uid = await _register(client)
     mine = await client.post(
         "/api/v1/me/agent-credentials",
-        json={"provider": "local", "base_url": BOX_ONE, "model": "llama"},
+        json={"provider": "local", "base_url": BOX_ONE, "model": "llama", "context_window": WINDOW},
         headers=_auth(key),
     )
 
@@ -1318,12 +1641,12 @@ async def test_a_pinned_agent_turns_with_its_box_level_and_no_others(
     key, uid = await _register(client)
     one = await client.post(
         "/api/v1/me/agent-credentials",
-        json={"provider": "local", "base_url": BOX_ONE, "model": "llama"},
+        json={"provider": "local", "base_url": BOX_ONE, "model": "llama", "context_window": WINDOW},
         headers=_auth(key),
     )
     two = await client.post(
         "/api/v1/me/agent-credentials",
-        json={"provider": "local", "base_url": BOX_TWO, "model": "qwen"},
+        json={"provider": "local", "base_url": BOX_TWO, "model": "qwen", "context_window": WINDOW},
         headers=_auth(key),
     )
     for credential_id, level in ((one.json()["id"], "high"), (two.json()["id"], "low")):

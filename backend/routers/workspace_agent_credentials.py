@@ -32,6 +32,7 @@ router = APIRouter(
 class ConnectLocalRequest(BaseModel):
     base_url: str  # OpenAI-compatible endpoint your cloud computer can reach
     model: str  # the model id on that endpoint
+    context_window: int  # required here exactly as it is on the personal connect
     api_key: str | None = None  # keyless endpoints are common
 
 
@@ -53,7 +54,9 @@ async def connect_local(req: ConnectLocalRequest, scope_user_id: UUID = Depends(
     the list the console pins curators against."""
     await _require_active_workspace(scope_user_id)
     try:
-        doc = agent_auth.local_endpoint_doc(req.base_url, req.model, req.api_key)
+        doc = agent_auth.local_endpoint_doc(
+            req.base_url, req.model, req.context_window, req.api_key
+        )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     probe = await agent_auth.probe_local_endpoint(doc["base_url"], doc["api_key"])
@@ -65,7 +68,9 @@ async def connect_local(req: ConnectLocalRequest, scope_user_id: UUID = Depends(
         scope_user_id,
         "local",
         "endpoint",
-        agent_auth.local_endpoint_secret(doc["base_url"], doc["model"], doc["api_key"]),
+        agent_auth.local_endpoint_secret(
+            doc["base_url"], doc["model"], doc["context_window"], doc["api_key"]
+        ),
         name=agent_auth.endpoint_name(doc["base_url"]),
     )
     return {

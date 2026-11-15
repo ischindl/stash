@@ -27,6 +27,11 @@ from .conftest import unique_name
 from .test_developer_platform import _developer
 from .test_permissions import _auth, _register
 
+# The window the boxes here state. A workspace connect requires it exactly as the personal
+# connect does -- the two share one validator -- and 32768 keeps the shipped 8192 ceiling so
+# stating it changes the window and nothing else.
+WINDOW = 32768
+
 
 @pytest.fixture(autouse=True)
 def _fernet(monkeypatch):
@@ -63,10 +68,16 @@ async def _connect(
     model: str,
     base_url: str = "http://my-host:11434/v1",
     api_key_secret: str | None = None,
+    context_window: int = WINDOW,
 ):
     return await client.post(
         "/api/v1/me/developer/agent-credentials",
-        json={"base_url": base_url, "model": model, "api_key": api_key_secret},
+        json={
+            "base_url": base_url,
+            "model": model,
+            "context_window": context_window,
+            "api_key": api_key_secret,
+        },
         headers=_scope_headers(api_key, scope),
     )
 
@@ -109,6 +120,7 @@ async def test_connect_keyless_stores_endpoint_doc(client: AsyncClient, _stub_pr
         "base_url": "http://my-host:11434/v1",
         "model": "llama3.1:8b",
         "api_key": None,
+        "context_window": 32768,
         "thinking": "off",
     }
 
@@ -124,6 +136,7 @@ async def test_connect_with_key_round_trips(client: AsyncClient, _stub_probe):
         "base_url": "http://my-host:11434/v1",
         "model": "qwen2:7b",
         "api_key": "ws-local-secret",
+        "context_window": 32768,
         "thinking": "off",
     }
 
@@ -212,6 +225,7 @@ async def test_personal_and_workspace_credentials_stay_separate(client: AsyncCli
             "provider": "local",
             "base_url": "http://personal-host:11434/v1",
             "model": "personal-model",
+            "context_window": WINDOW,
         },
         headers=_auth(personal_key),
     )
@@ -235,6 +249,7 @@ async def test_personal_and_workspace_credentials_stay_separate(client: AsyncCli
         "base_url": "http://personal-host:11434/v1",
         "model": "personal-model",
         "api_key": None,
+        "context_window": 32768,
         "thinking": "off",
     }
     personal_body_json = (
@@ -293,7 +308,7 @@ async def test_inactive_scope_and_bare_personal_call_activate_first(client: Asyn
     assert "activate first" in r.json()["detail"]
     r = await client.post(
         "/api/v1/me/developer/agent-credentials",
-        json={"base_url": "http://my-host:11434/v1", "model": "m"},
+        json={"base_url": "http://my-host:11434/v1", "model": "m", "context_window": WINDOW},
         headers=_auth(api_key),
     )
     assert r.status_code == 400
@@ -328,4 +343,6 @@ async def test_workspace_credential_resolves_to_pi(client: AsyncClient, _stub_pr
     local = models["providers"]["local"]
     assert local["baseUrl"] == "http://my-host:11434/v1"
     assert local["api"] == "openai-completions"
-    assert local["models"] == [{"id": "llama3.1:8b", "contextWindow": 131072, "maxTokens": 8192}]
+    # The workspace box's own window, stated by the connect that created it, with the
+    # ceiling derived from it: the number is the row's, not this build's.
+    assert local["models"] == [{"id": "llama3.1:8b", "contextWindow": 32768, "maxTokens": 8192}]
