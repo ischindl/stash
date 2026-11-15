@@ -102,8 +102,20 @@ checkout that holds no branch at all.
   rc=0 for an FF or merge-commit lane, or patch-id equality for a squash or rebase lane (a
   squash finalization deletes the lane ref, so containment cannot run there); and adjacency
   to the owning card's `AI merge: landed <sha>, finalizing task row` entry in
-  `.fusion/tasks/STAS-<n>/agent-log.jsonl` (measured +1 s to +44 s after the reflog row). A
-  missing marker on an FF landing is not a failed landing. Commit author and committer
+  `.fusion/tasks/STAS-<n>/agent-log.jsonl`, measured +7 s to +38 s after the reflog row on
+  both landing paths, the marked `fusion landing:` CAS write and the unmarked fast-forward
+  alike, because that proof is path-independent. Time it only on `type:"status"` AND
+  `agent:"merger"` rows: the `type:"text"` merger rows crowded around a landing are reflowed
+  review markdown, some sitting before the reflog row entirely, and timing those manufactured
+  the false lower bound retired here. Read the reflog epoch with `--date=unix`, because the
+  epoch in raw `.git/logs/refs/heads/main` is already UTC, the trailing `+0100` is display
+  only, and subtracting it inflates every delta by 3600 s. Round a window outward and never
+  onto a measured extreme: that epoch is floored to a whole second, so each delta is an
+  upper estimate by up to 1 s. This window belongs to `finalizing task row` alone and states
+  nothing about the sibling `advanced main` and done rows. An ASCII `task -> done` probe
+  matches no merger telemetry row: the log writes that arrow as U+2192 and carries U+2014 in
+  the same file, so an ASCII read measures a phantom absence.
+  A missing marker on an FF landing is not a failed landing. Commit author and committer
   attribute nobody: this machine holds exactly one git identity, human and engine writes
   alike.
 - Never advance the trunk ref from a linked worktree by an unguarded write: no `git branch -f`,
