@@ -1,6 +1,7 @@
 """The daily Memory curator: provisioning, change feed, cost gate, prompt."""
 
 import asyncio
+import logging
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
@@ -1930,3 +1931,80 @@ async def test_only_a_reader_at_the_drains_own_position_is_sized_by_that_drain(c
             await agent_service.get_agent_by_id(UUID(folder_curator["id"]))
         )
     )
+
+
+def _turn_bracket(records, agent_id) -> list[str]:
+    """The two lines that bracket one curator turn, in the order they were logged.
+
+    Filtered by logger name and by the bracket's own words, never by position in the
+    record list: a passing curator run also logs its catch-up chain's decision, and the
+    meter line of the scoped lane starts with `curator pass=`.
+    """
+    return [
+        record.getMessage()
+        for record in records
+        if record.name == "backend.tasks.agent_schedules"
+        and f"curator {agent_id} turn " in record.getMessage()
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_curator_turn_is_bracketed_by_its_lane_at_both_ends(
+    client: AsyncClient, sprite_exec, _db_pool, monkeypatch, caplog
+):
+    """A curator run names its lane when it starts and its wall time when it ends.
+
+    Measured on a copy of production: a `run_curator_now` took 1437.8 s and the worker
+    wrote no application line for any of it. The reason is the lane, not a lost record
+    — the personal-wiki lane's own body has no INFO record at all, so a 24-minute
+    personal backfill and a stalled scoped backfill produced the same empty log. The
+    bracket is what separates them, and it is also the line that tells an operator
+    which of the two meters they should expect to see next.
+    """
+    from backend.services import scoped_curation_service, sprite_agent_service
+    from backend.tasks import agent_schedules
+    from backend.tasks.agent_schedules import _run_curator_now
+    from backend.tasks.session_titles import generate_session_title
+
+    monkeypatch.setattr(generate_session_title, "delay", lambda *a, **k: None)
+    key, uid = await _register(client)
+    curator = await agent_service.get_or_create_curator(uid)
+    cid = UUID(curator["id"])
+    await _push_one(client, key, "conv-bracket", datetime.now(UTC) - timedelta(hours=1))
+
+    with caplog.at_level(logging.INFO, logger="backend.tasks.agent_schedules"):
+        await _run_curator_now(cid, metered=False)
+        personal = _turn_bracket(caplog.records, cid)
+
+    assert len(personal) == 2, personal
+    started, finished = personal
+    assert "turn started lane=personal full_history=False metered=False" in started
+    assert "turn finished lane=personal wall=" in finished
+    assert float(finished.rsplit("wall=", 1)[1].removesuffix("s")) >= 0.0
+    # The two shapes the surrounding suite asserts on: `not moved` is the clamp's
+    # words at test_curator.py, and `curator pass=` is the scoped meter's prefix.
+    assert all("not moved" not in line for line in personal)
+    assert all(not line.startswith("curator pass=") for line in personal)
+
+    # The scoped lane: the same bracket, naming the lane that owes a meter line after
+    # it. The turn body and the workspace lookup are not this assertion, so both are
+    # stubbed; `workspace is not None` — the lane decision — runs for real.
+    caplog.clear()
+    # The chain stub exists so this test cannot dial a broker: whether the next pass
+    # is queued is `_queue_curator_catchup`'s business and is asserted in
+    # test_agent_schedule_alerts.py, not here.
+    monkeypatch.setattr(agent_schedules.run_curator_now, "apply_async", lambda **kw: None)
+
+    async def scoped_workspace(_agent):
+        return {"id": uuid4()}
+
+    monkeypatch.setattr(scoped_curation_service, "workspace_for_agent", scoped_workspace)
+    monkeypatch.setattr(sprite_agent_service, "run_scheduled", AsyncMock(return_value=None))
+
+    with caplog.at_level(logging.INFO, logger="backend.tasks.agent_schedules"):
+        await _run_curator_now(cid, full_history=True, metered=False)
+        scoped = _turn_bracket(caplog.records, cid)
+
+    assert len(scoped) == 2, scoped
+    assert "turn started lane=scoped full_history=True metered=False" in scoped[0]
+    assert "turn finished lane=scoped wall=" in scoped[1]

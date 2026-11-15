@@ -21,6 +21,7 @@ broker (CI provisions no Redis, so `FakeRedis`, as elsewhere in this suite) and
 the endpoint probe, which is an outbound dial and not a decision.
 """
 
+import logging
 import uuid
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
@@ -512,6 +513,102 @@ async def test_a_box_run_on_a_paused_curator_works_unmetered_and_a_platform_pass
     )
     await agent_schedules._run_curator_locked(agent, None, False, False, 0, False, True)
     assert (await _row(curator["id"]))["last_run_outcome"] is None
+
+
+# Every way a curator pass can be refused before it dials a turn, stated as the
+# answers each gate has to be handed so the pass stops on THAT gate and no earlier
+# one. `REACHED` is the pass that clears every gate; each case overrides only what
+# its own guard refuses, and `curator_off` is the one a non-catch-up pass can hit.
+# Which lane the pass runs on is not among them: the cost resolver answers for a
+# workspace-less lane too, so no guard names the workspace.
+_REACHES_EVERY_GATE = {
+    "guard": "",
+    "run_mode": "scheduled",
+    "catchup": False,
+    "is_pro": True,
+    "pending_input": True,
+    "claim_granted": True,
+}
+
+DECLINING = [
+    pytest.param({"guard": "curator_off", "run_mode": "chat", "catchup": False}, id="curator_off"),
+    pytest.param({"guard": "not_pro", "catchup": True, "is_pro": False}, id="not_pro"),
+    pytest.param(
+        {"guard": "no_pending_input", "catchup": True, "pending_input": False},
+        id="no_pending_input",
+    ),
+    pytest.param(
+        {"guard": "catchup_ceiling", "catchup": True, "claim_granted": False},
+        id="catchup_ceiling",
+    ),
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("decline", DECLINING)
+async def test_a_curator_pass_that_declines_names_the_guard_that_declined_it(
+    client: AsyncClient,
+    _db_pool,
+    monkeypatch: pytest.MonkeyPatch,
+    sprite_mode,
+    caplog: pytest.LogCaptureFixture,
+    decline: dict,
+):
+    """A dispatch that spends no turn says why, instead of reading as a crash.
+
+    Measured on a copy of production: two catch-up dispatches returned `None` in
+    0.083 s and 0.003 s with no application record at all, so the only trace was
+    celery's `succeeded in 0.08s: None` — indistinguishable from a run that died.
+    The guard that refused the pass is a decision the platform made, so it is
+    obliged to name itself. Each case starts from a pass that would clear every
+    gate and overrides only its own guard, which is what makes the asserted token
+    the load-bearing fact rather than whichever gate happened to be first.
+
+    The other half of the assertion is the row: declining is not an outcome, so a
+    refused pass still writes nothing — the same contract
+    `test_a_box_run_on_a_paused_curator_works_unmetered_and_a_platform_pass_does_not`
+    pins for the switched-off curator, unmodified.
+    """
+    case = _REACHES_EVERY_GATE | decline
+    guard = case["guard"]
+    key, uid = await _register(client)
+    await _connect_box(client, key, monkeypatch)
+    curator = await _curator_with_work(uid)
+    await get_pool().execute(
+        "UPDATE agents SET run_mode = $2 WHERE id = $1", curator["id"], case["run_mode"]
+    )
+    agent = await agent_service.get_agent_by_id(curator["id"])
+    before = await _row(curator["id"])
+
+    async def yes(*args, **kwargs):
+        return True
+
+    async def no(*args, **kwargs):
+        return False
+
+    from backend.services import billing_service, scoped_curation_service
+
+    workspace = {"id": uuid.uuid4()}
+    monkeypatch.setattr(scoped_curation_service, "require_run_auth", yes)
+    monkeypatch.setattr(billing_service, "is_pro", yes if case["is_pro"] else no)
+    monkeypatch.setattr(agent_schedules, "_pending_input", yes if case["pending_input"] else no)
+    monkeypatch.setattr(agent_service, "claim_catchup", yes if case["claim_granted"] else no)
+
+    with caplog.at_level(logging.INFO, logger="backend.tasks.agent_schedules"):
+        await agent_schedules._run_curator_locked(
+            agent, workspace, False, False, 0, case["catchup"], True
+        )
+
+    declined = [
+        record.getMessage()
+        for record in caplog.records
+        if record.name == "backend.tasks.agent_schedules"
+        and record.levelno == logging.INFO
+        and f"guard={guard}" in record.getMessage()
+    ]
+    assert declined, f"no INFO line naming guard={guard}: {caplog.text}"
+    assert str(agent["id"]) in declined[0]
+    assert await _row(curator["id"]) == before
 
 
 @pytest.mark.asyncio

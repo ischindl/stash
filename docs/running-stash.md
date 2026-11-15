@@ -154,6 +154,33 @@ Before starting:
   you nothing. Either way each worker lane names its mode at startup — WARNING
   when this installation sends no operational alerts — and `docker logs
   <worker-lane> | grep 'operational alerts'` shows it.
+- Every decision a curator dispatch makes about a turn is one line on the worker
+  lane that made it, and each begins `agent schedule:`. A turn names the lane it took
+  (`lane=scoped` or `lane=personal`) when it starts and the wall seconds it took when
+  it ends; the personal lane writes no INFO line of its own, so those two are the only
+  evidence that such a run happened at all. A pass that spends no turn names the guard
+  that refused it with a `guard=` token (`curator_off`, `not_pro`, `no_pending_input`,
+  `catchup_ceiling`), and a catch-up chain that stops mid-backlog names the condition
+  that ended it (`outcome_not_ran`, `no_progress`) — the cost decision is the one guard
+  that answers in both places, on the line that also carries `metered=`, `is_pro=` and
+  the verdict. Which lane a pass runs on is never a guard: what a chained pass costs is
+  the question, and a lane with no workspace simply answers it as an unmetered one. So
+  a decline, a chain that finished, and a crash are three different lines. The one
+  command that reads them:
+
+  ```bash
+  docker compose -f docker-compose.prod.yml logs heavy-worker | grep 'agent schedule:'
+  ```
+
+  All four celery programs — `worker`, `heavy-worker`, `sync-worker`, `beat` — install
+  the same stderr handler the API process installs, at boot, through one function in
+  `backend/logging_config.py`, so a record from a worker prints the same way one from
+  the API process does and names the module that emitted it:
+  `2026-11-15 09:00:00,000 INFO backend.tasks.agent_schedules: agent schedule: …`.
+  All four also run with `--loglevel=info`, so an empty window in that log is neither a
+  level problem nor a lost record: it means the run never reached a line worth
+  printing. The scoped lane additionally writes one `curator pass=` meter line per
+  committed pass, which is the line to watch while a backlog drains.
 
 ```bash
 docker compose -f docker-compose.prod.yml config --quiet

@@ -1094,6 +1094,162 @@ async def test_a_chain_started_under_a_raised_allowance_queues_the_wider_budget(
     ]
 
 
+# The catch-up chain that continues: switched on, its last run resolved `ran`, a
+# checkpoint on the row, the lane advanced past the watermark its dispatch carried,
+# a pass the platform is not paying for, and input still pending. Each case below
+# spoils exactly one of those facts, so the token it must print is the fact it spoiled.
+# A lost workspace is not among them: what admits a chained pass is what the pass COSTS
+# (`_chain_permitted`), and a lane with no workspace is simply an unmetered one.
+_CHAIN_CONTINUES = {
+    "guard": "",
+    "column": None,
+    "value": None,
+    "patch": None,
+    "carried_watermark": "stale",
+}
+
+_CHAIN_STOPS = [
+    pytest.param({"guard": "curator_off", "column": "run_mode", "value": "chat"}, id="curator_off"),
+    pytest.param(
+        {"guard": "outcome_not_ran", "column": "last_run_outcome", "value": "failed"},
+        id="outcome_not_ran",
+    ),
+    # A row with no checkpoint at all and a row whose checkpoint did not move are one
+    # stop for the chain — nothing was committed to chain onto — so both print `no_progress`.
+    pytest.param(
+        {"guard": "no_progress", "column": "curated_through", "value": None},
+        id="no_checkpoint",
+    ),
+    pytest.param({"guard": "no_progress", "carried_watermark": "current"}, id="no_progress"),
+    pytest.param({"guard": "not_pro", "patch": "not_pro"}, id="not_pro"),
+    pytest.param({"guard": "no_pending_input", "patch": "no_pending_input"}, id="no_pending_input"),
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stop", _CHAIN_STOPS)
+async def test_a_catch_up_chain_that_stops_names_the_condition_that_stopped_it(
+    client: AsyncClient,
+    pool,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    stop: dict,
+):
+    """A chain that halted mid-backlog must not read like a chain that finished.
+
+    Most of the exits from `_queue_curator_catchup` used to return without a word, so
+    the backlog that stopped advancing was indistinguishable from a lane that had
+    caught up — and the operator's remaining history was the thing left unspoken
+    about. The compound `or` became sequential checks in the same order, which is
+    behavior-identical (no `apply_async` on any of these paths) and buys exactly this
+    line. The cost answer is the exception: `_chain_permitted` already wrote its own
+    line, so it carries the `guard=` token rather than gaining a second one.
+    """
+    from backend.services import billing_service, scoped_curation_service
+
+    case = _CHAIN_CONTINUES | stop
+    user_id = await _register(client)
+    agent = await _make_curator(user_id, curated_hours_ago=72, last_run_error=None)
+    started = datetime.now(UTC)
+    await pool.execute(
+        "UPDATE agents SET curated_through=$2, run_mode='scheduled', last_run_outcome='ran'"
+        " WHERE id=$1",
+        agent["id"],
+        started,
+    )
+    if case["column"] is not None:
+        await pool.execute(
+            f"UPDATE agents SET {case['column']} = $2 WHERE id = $1",
+            agent["id"],
+            case["value"],
+        )
+    current = await agent_service.get_agent_by_id(agent["id"])
+    # `stale` is the normal case: the dispatch carries the watermark its own run
+    # read, and the lane advanced underneath it. `current` is a run that
+    # checkpointed nothing, which is the `no_progress` gate.
+    carried = current if case["carried_watermark"] == "current" else agent
+
+    async def yes(*args, **kwargs):
+        return True
+
+    async def no(*args, **kwargs):
+        return False
+
+    async def workspace(_agent):
+        return {"id": None}
+
+    monkeypatch.setattr(scoped_curation_service, "workspace_for_agent", workspace)
+    monkeypatch.setattr(billing_service, "is_pro", no if case["patch"] == "not_pro" else yes)
+    monkeypatch.setattr(
+        agent_schedules, "_pending_input", no if case["patch"] == "no_pending_input" else yes
+    )
+    # The cases that reach the cost gate ask it of a scoped lane, whose answer is only
+    # resolvable with the backend key that lane spends.
+    monkeypatch.setattr(settings, "ANTHROPIC_API_KEY", "sk-ant-test-key")
+    queued = []
+    monkeypatch.setattr(
+        agent_schedules.run_curator_now, "apply_async", lambda **kw: queued.append(kw)
+    )
+
+    with caplog.at_level(logging.INFO, logger="backend.tasks.agent_schedules"):
+        await agent_schedules._queue_curator_catchup(carried, started, 5)
+
+    assert queued == [], "a stopped chain must not queue another paid pass"
+    stopped = [
+        record.getMessage()
+        for record in caplog.records
+        if record.name == "backend.tasks.agent_schedules"
+        and f"guard={case['guard']}" in record.getMessage()
+    ]
+    assert stopped, f"no INFO line naming guard={case['guard']}: {caplog.text}"
+    assert str(agent["id"]) in stopped[0]
+
+
+@pytest.mark.asyncio
+async def test_a_chain_that_ran_out_of_passes_says_that_instead_of_a_guard(
+    client: AsyncClient, pool, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+):
+    """The exhausted bound is the one stop that was already loud, and it stays the
+    only one at WARNING: it is the case where input is still pending and nothing
+    will re-queue the lane until the next scheduled tick. Naming it with a `guard=`
+    token too would collapse the two readings this card exists to separate.
+    """
+    from backend.services import billing_service, scoped_curation_service
+
+    user_id = await _register(client)
+    agent = await _make_curator(user_id, curated_hours_ago=72, last_run_error=None)
+    started = datetime.now(UTC)
+    await pool.execute(
+        "UPDATE agents SET curated_through=$2, run_mode='scheduled', last_run_outcome='ran'"
+        " WHERE id=$1",
+        agent["id"],
+        started,
+    )
+
+    async def yes(*args, **kwargs):
+        return True
+
+    async def workspace(_agent):
+        return {"id": None}
+
+    monkeypatch.setattr(scoped_curation_service, "workspace_for_agent", workspace)
+    monkeypatch.setattr(billing_service, "is_pro", yes)
+    monkeypatch.setattr(agent_schedules, "_pending_input", yes)
+    # The lane reaches the cost gate, and a scoped lane's answer needs the key it spends.
+    monkeypatch.setattr(settings, "ANTHROPIC_API_KEY", "sk-ant-test-key")
+    queued = []
+    monkeypatch.setattr(
+        agent_schedules.run_curator_now, "apply_async", lambda **kw: queued.append(kw)
+    )
+
+    with caplog.at_level(logging.INFO, logger="backend.tasks.agent_schedules"):
+        await agent_schedules._queue_curator_catchup(agent, started, 0)
+
+    assert queued == []
+    assert "exhausted" in caplog.text
+    assert "guard=" not in caplog.text
+
+
 @pytest.mark.asyncio
 async def test_an_allowance_blocked_curator_is_reported_with_its_backlog(client, pool, monkeypatch):
     """A lane frozen by the monthly allowance used to be indistinguishable from

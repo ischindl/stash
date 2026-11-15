@@ -18,9 +18,37 @@ the same scheduled task multiple times.
 
 from celery import Celery
 from celery.schedules import crontab
+from celery.signals import setup_logging
 from kombu import Queue
 
 from .config import settings
+from .logging_config import configure_logging
+
+
+@setup_logging.connect
+def _configure_celery_logging(*_: object, **kwargs: object) -> None:
+    """Own this process\'s logging, so a worker prints application records the way
+    the API process does.
+
+    Celery sends `setup_logging` BEFORE it configures anything, and installs a root
+    handler of its own only when no receiver answers
+    (`Logging.setup_logging_subsystem`, `if not receivers:`). A receiver therefore
+    takes over the process\'s logging completely, which is the point: without one,
+    whether a curator\'s guard line is readable in a worker is a property of
+    celery\'s boot defaults, and a worker\'s silence would be indistinguishable from
+    a silent run. The level arrives through the signal, so `--loglevel` keeps
+    working and is not overridden by a hardcoded one.
+
+    Accepted side effect: celery\'s `Worker.on_start` calls `redirect_stdouts` only
+    when celery installed the logging itself, so a library `print()` now reaches the
+    container\'s stdout directly instead of being re-logged through
+    `celery.redirected` at `worker_redirect_stdouts_level`. Both sinks are the
+    container\'s log, so both stay visible.
+    """
+    # Direct index on purpose: celery always passes an int here, and a missing one is
+    # a bug worth a traceback rather than a silently wrong level.
+    configure_logging(kwargs["loglevel"])
+
 
 celery = Celery(
     "stash",

@@ -11,6 +11,7 @@ minutes and must not hold a default-queue slot. The agent's own turn lock
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import Coroutine
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -366,13 +367,31 @@ async def _run_curator_locked(
     # is unmetered for costing the platform nothing, turning a legitimate manual
     # run into a task that reports `started` and does nothing.
     if platform_initiated and agent["run_mode"] != "scheduled":
+        logger.info(
+            "agent schedule: curator %s declined its pass guard=curator_off run_mode=%s",
+            agent_id,
+            agent["run_mode"],
+        )
         return
     if catchup:
-        if not await _chain_permitted(agent, workspace) or not await _pending_input(
-            agent, workspace
-        ):
+        # `_chain_permitted` writes its own line for the cost question it answers, so the
+        # guards that remain here are the ones that would otherwise return in silence.
+        if not await _chain_permitted(agent, workspace):
             return
-        if not await agent_service.claim_catchup(agent_id, curator_catchup_pass_ceiling() - 1):
+        if not await _pending_input(agent, workspace):
+            logger.info(
+                "agent schedule: curator %s declined its catch-up pass guard=no_pending_input",
+                agent_id,
+            )
+            return
+        claimed_through = curator_catchup_pass_ceiling() - 1
+        if not await agent_service.claim_catchup(agent_id, claimed_through):
+            logger.info(
+                "agent schedule: curator %s declined its catch-up pass guard=catchup_ceiling"
+                " claimed_through=%s",
+                agent_id,
+                claimed_through,
+            )
             return
     # The compare-and-set anchor for the watermark is the stored position this run
     # actually loaded — captured BEFORE the drain pair below replaces what the run READS,
@@ -408,10 +427,25 @@ async def _run_curator_locked(
         }
     now = datetime.now(UTC)
     await agent_service.mark_run(agent_id, metered=metered)
+    # One line at each end of a turn. The personal-wiki lane's own body writes no INFO
+    # record at all, so a run on that lane produced nothing for its whole duration and
+    # a 24-minute backfill read as a stalled one. The lane is named because the two
+    # lanes owe different follow-up lines: only the scoped one emits the per-pass
+    # drain meter.
+    lane = "scoped" if workspace is not None else "personal"
+    logger.info(
+        "agent schedule: curator %s turn started lane=%s full_history=%s metered=%s",
+        agent_id,
+        lane,
+        full_history,
+        metered,
+    )
     try:
         # Seconds-resolution stamp so a manual run never shares a session with
         # the beat's minute-stamped run.
-        await _run_turn(agent, now.strftime("%Y%m%d%H%M%S"), workspace, read, draining)
+        stamp = now.strftime("%Y%m%d%H%M%S")
+        started = time.monotonic()
+        await _run_turn(agent, stamp, workspace, read, draining)
         if workspace is None:
             # The boundary is computed from the position the run ACTUALLY read from,
             # which a drain moved to its own pair: a backfill counts the whole corpus as
@@ -435,6 +469,12 @@ async def _run_curator_locked(
             else:
                 await agent_service.mark_curated(agent_id, read, through)
         await agent_service.mark_run_succeeded(agent_id)
+        logger.info(
+            "agent schedule: curator %s turn finished lane=%s wall=%.1fs",
+            agent_id,
+            lane,
+            time.monotonic() - started,
+        )
     except Exception as e:
         if workspace is not None and isinstance(e, sprite_agent_service.TurnInProgress):
             await _skip_busy_curator(agent_id, metered=metered)
@@ -493,9 +533,12 @@ async def _chain_permitted(agent: dict, workspace) -> bool:
     cannot run is not a lane that was declined for cost, and the two must not read alike.
 
     The line is AC (d)'s accounting record: both inputs and the decision, so a reader of
-    the log can tell a declined chain from a stalled one without the row. It is phrased to
-    collide with neither existing assertion on log prose (no `not moved`, and it does not
-    begin `curator pass=`).
+    the log can tell a declined chain from a stalled one without the row. A decline also
+    carries the `guard=` token every other silent exit of this module prints, so the one
+    guard that was never silent still reads alike; `not_pro` is the token for "the pass
+    spends platform tokens and its owner has no unlimited plan", which is exactly the
+    decline this predicate makes. The prose is phrased to collide with neither existing
+    assertion on log prose (no `not moved`, and it does not begin `curator pass=`).
     """
     from ..services import billing_service, scoped_curation_service
 
@@ -507,7 +550,11 @@ async def _chain_permitted(agent: dict, workspace) -> bool:
         agent["id"],
         metered,
         pro,
-        "chaining" if allowed else "declining, this pass would spend what the allowance rations",
+        (
+            "chaining"
+            if allowed
+            else "declining, this pass would spend what the allowance rations guard=not_pro"
+        ),
     )
     return allowed
 
@@ -587,16 +634,41 @@ async def _queue_curator_catchup(
                 and current.get("curation_cursor") == agent.get("curation_cursor")
             )
         )
-    if (
-        current["run_mode"] != "scheduled"
-        # A failure ends the chain, except the failure a ceiling causes: that one has
-        # completed passes behind it and unread material in front of it.
-        or (current["last_run_outcome"] != "ran" and not after_ceiling)
-        or not progressed
-        or not await _chain_permitted(current, workspace)
-    ):
+    # Sequential rather than one compound `or`, in the same order, so the condition that
+    # ended the chain is the condition the log names. A chain stopped by a lapsed Pro
+    # entitlement and a chain that finished must not read as the same line.
+    if current["run_mode"] != "scheduled":
+        logger.info(
+            "agent schedule: curator %s catch-up chain stopped guard=curator_off run_mode=%s",
+            agent["id"],
+            current["run_mode"],
+        )
+        return
+    # A failure ends the chain, except the failure a ceiling causes: that one has
+    # completed passes behind it and unread material in front of it.
+    if current["last_run_outcome"] != "ran" and not after_ceiling:
+        logger.info(
+            "agent schedule: curator %s catch-up chain stopped guard=outcome_not_ran outcome=%s",
+            agent["id"],
+            current["last_run_outcome"],
+        )
+        return
+    # A missing checkpoint is the run that committed no pass, so it is the same stop as a
+    # checkpoint that did not move: either way there is no progress to chain onto.
+    if not progressed:
+        logger.info(
+            "agent schedule: curator %s catch-up chain stopped guard=no_progress", agent["id"]
+        )
+        return
+    # What the next pass costs is `_chain_permitted`'s question, and it writes its own
+    # line carrying both answers and the decision it made from them.
+    if not await _chain_permitted(current, workspace):
         return
     if not await _pending_input(current, workspace):
+        logger.info(
+            "agent schedule: curator %s catch-up chain stopped guard=no_pending_input",
+            agent["id"],
+        )
         return
     if remaining <= 0:
         # Loud, because this is the one bound that silently stops a curator from ever

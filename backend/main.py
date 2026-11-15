@@ -1,5 +1,4 @@
 import logging
-import sys
 import traceback
 from contextlib import asynccontextmanager
 
@@ -16,6 +15,7 @@ from . import integrations as _integrations  # noqa: F401 — registers provider
 from .config import settings
 from .database import close_db, init_db
 from .integrations.router import router as integrations_router
+from .logging_config import configure_logging
 from .middleware import limiter
 from .routers import (
     admin,
@@ -68,26 +68,6 @@ from .services.row_validation import RowValidationError
 logger = logging.getLogger("stash")
 
 
-def _configure_logging() -> None:
-    """Make one stderr handler the authoritative sink for application records.
-
-    Root handlers are removed rather than skipped so this stays correct when
-    something else has already configured logging — the Alembic run inside
-    ``init_db`` installs its own console handler and raises the root level.
-    Removing and reinstalling is also what makes a repeated call idempotent.
-    """
-    for handler in list(logging.root.handlers):
-        logging.root.removeHandler(handler)
-    handler = logging.StreamHandler(sys.stderr)
-    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
-    logging.root.addHandler(handler)
-    logging.root.setLevel(logging.INFO)
-    # The Alembic run inside init_db() can also switch off the loggers that
-    # already existed when it configured logging; a handler alone would leave
-    # the application silent, so re-enable this process's logger here.
-    logger.disabled = False
-
-
 SECURITY_HEADERS = {
     "Strict-Transport-Security": "max-age=31536000; includeSubDomains",
     "X-Content-Type-Options": "nosniff",
@@ -104,7 +84,7 @@ async def lifespan(app: FastAPI):
     await init_db()
     # Must follow init_db(): the in-process Alembic run calls fileConfig(), which
     # replaces the root handlers, so a handler installed earlier would be discarded.
-    _configure_logging()
+    configure_logging()
     try:
         await demo_service.seed_demo()
     except Exception:

@@ -18,6 +18,7 @@ import pytest_asyncio
 
 from backend import database as db_module
 from backend import main as main_module
+from backend.logging_config import configure_logging
 
 SPRITE_LOGGER = "backend.services.sprite_agent_service"
 
@@ -123,8 +124,8 @@ def test_startup_enables_app_loggers_and_owns_the_root_handler(app_startup, monk
     foreign = logging.StreamHandler(io.StringIO())
     logging.root.addHandler(foreign)
 
-    main_module._configure_logging()
-    main_module._configure_logging()
+    configure_logging()
+    configure_logging()
 
     assert foreign not in logging.root.handlers
     assert len(_handlers_on(app_startup)) == 1
