@@ -3,6 +3,11 @@ overview must show every source as a directory (integrations included), and
 drilling into a path must collapse the backend's recursive prefix listing into
 one directory level — otherwise the output reads as a dump, not a filesystem."""
 
+import json
+
+import pytest
+import typer
+
 from cli import main
 
 SOURCES = [
@@ -159,3 +164,141 @@ def test_ls_drills_into_a_named_connection(monkeypatch, capsys):
 
     out = capsys.readouterr().out
     assert "api.md" in out
+
+
+# --- A provider that ran past the server's budget is named, not hidden -------
+#
+# The server bounds its own work and returns a tree whose straggler carries a
+# `listing_error` sentence. Two things are promised on this side of that wire:
+# the sentence reaches the human (stderr, beside a tree that says it is short),
+# and a short answer stays a successful answer — an agent that asked twice must
+# not pay two failed turns for one slow integration.
+
+STRAGGLER = "github: acme/plugin did not answer within the 10 s listing budget"
+
+
+def _gapped(**by_provider: str) -> list[dict]:
+    """The standard fixtures with named providers reporting what they missed."""
+    return [
+        {**s, "listing_error": by_provider[s["source"]]} if s["source"] in by_provider else s
+        for s in SOURCES
+    ]
+
+
+class GapClient(FakeClient):
+    def __init__(self, sources):
+        self.sources = sources
+
+    def sources_tree(self, depth=3):
+        return self.sources
+
+
+def _gap_setup(monkeypatch, sources):
+    _setup(monkeypatch)
+    monkeypatch.setattr(main, "_client", lambda: GapClient(sources))
+
+
+def test_ls_names_the_provider_that_did_not_answer(monkeypatch, capsys):
+    _gap_setup(monkeypatch, _gapped(github=STRAGGLER))
+
+    main.ls_cmd(path="", depth=2, as_json=False)
+
+    captured = capsys.readouterr()
+    assert STRAGGLER in captured.err
+    assert "listing incomplete" in captured.out
+    # The providers that answered are still rendered in full.
+    assert "api.md" in captured.out
+
+
+def test_an_incomplete_listing_is_still_a_successful_command(monkeypatch, capsys):
+    """Exit 2 twice is what ate the curator's wall. A listing that says what it
+    is missing is an answer, and it leaves 0 behind."""
+    _gap_setup(monkeypatch, _gapped(github=STRAGGLER))
+
+    try:
+        main.ls_cmd(path="", depth=2, as_json=False)
+    except typer.Exit as e:  # pragma: no cover - the failing path of this test
+        pytest.fail(f"a short listing must exit 0, got exit {e.exit_code}")
+
+
+def test_json_ls_carries_the_gap_on_stdout_and_the_warning_on_stderr(monkeypatch, capsys):
+    """An agent parsing `--json` gets the gap in the payload it parses, and the
+    same sentence on stderr where a human watching the turn also sees it."""
+    _gap_setup(monkeypatch, _gapped(github=STRAGGLER))
+
+    main.ls_cmd(path="", depth=2, as_json=True)
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    github = next(s for s in payload["sources"] if s["source"] == "github")
+    assert github["listing_error"] == STRAGGLER
+    assert STRAGGLER in captured.err
+
+
+def test_drilling_into_a_source_names_only_that_source(monkeypatch, capsys):
+    _gap_setup(monkeypatch, _gapped(github=STRAGGLER, gong="gong: Gong missed the budget"))
+
+    main.ls_cmd(path="github", depth=2, as_json=False)
+
+    captured = capsys.readouterr()
+    assert STRAGGLER in captured.err
+    assert "gong" not in captured.err
+    # The provider still answers for the part it can.
+    assert "docs/" in captured.out
+
+
+def test_a_source_that_answered_says_nothing_about_a_gap(monkeypatch, capsys):
+    _gap_setup(monkeypatch, SOURCES)
+
+    main.ls_cmd(path="", depth=2, as_json=False)
+
+    captured = capsys.readouterr()
+    assert "listing incomplete" not in captured.out
+    assert "did not answer" not in captured.err
+
+
+def test_a_connection_folder_that_missed_is_marked_where_it_sits(monkeypatch, capsys):
+    """In a provider with several connections the straggler is one folder, and
+    the marker belongs on that folder — `ls github` must not read as though the
+    whole integration failed."""
+
+    class MissedConnectionClient(GapClient):
+        def sources_tree(self, depth=3):
+            sources = super().sources_tree(depth)
+            # What the server actually sends for one missed connection: the
+            # sentence on the folder that missed and on its provider, so the
+            # tree localizes it and the warning names it once.
+            github = {**sources[0], "listing_error": STRAGGLER}
+            github["tree"] = [
+                {
+                    "name": "plugin",
+                    "kind": "folder",
+                    "source": "bbbb",
+                    "listing_error": STRAGGLER,
+                    "children": [],
+                },
+                {"name": "stash", "kind": "folder", "source": "aaaa", "children": []},
+            ]
+            return [github]
+
+    _setup(monkeypatch)
+    monkeypatch.setattr(main, "_client", lambda: MissedConnectionClient(_gapped()))
+
+    main.ls_cmd(path="", depth=2, as_json=False)
+
+    captured = capsys.readouterr()
+    assert "listing incomplete" in captured.out
+    assert STRAGGLER in captured.err
+
+
+def test_a_gap_sentence_is_printed_as_written(monkeypatch, capsys):
+    """Rich styles the tree, so server text that happens to contain brackets must
+    arrive as text and not as markup that silently eats characters."""
+    spiky = "github: acme/[bold]plugin[/bold] did not answer within the 10 s listing budget"
+
+    _gap_setup(monkeypatch, _gapped(github=spiky))
+
+    main.ls_cmd(path="", depth=2, as_json=False)
+
+    captured = capsys.readouterr()
+    assert "acme/[bold]plugin[/bold] did not answer" in captured.err

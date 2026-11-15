@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import mimetypes
 import os
+import sys
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -36,6 +37,12 @@ SOURCE_ENTRIES_PAGE = 1000
 # that run rather than to the owner of the key it carries. The spellings are the
 # ones in `backend/services/page_actor.py`; the CLI ships standalone, so they are
 # repeated here instead of imported.
+# Per-request wall time and response size on stderr, for any `stash` command.
+# The listing defect this instrument was built for is invisible in the command's
+# own exit: a 30 s route and a 300 ms route both look like "it took a while".
+# Written to stderr so a `--json` consumer's stdout stays parseable.
+TIMING_ENV = "STASH_TIMING"
+
 AGENT_SESSION_ENV = "STASH_AGENT_SESSION"
 AGENT_NAME_ENV = "STASH_AGENT_NAME"
 AGENT_SESSION_HEADER = "X-Stash-Agent-Session"
@@ -64,6 +71,27 @@ class StashClient:
         self._agent_session = os.environ.get(AGENT_SESSION_ENV, "")
         self._agent_name = os.environ.get(AGENT_NAME_ENV, "")
         self._http = httpx.Client(base_url=self._base_url, timeout=30)
+        self._time_requests = os.environ.get(TIMING_ENV) == "1"
+
+    def _report_timing(self, method: str, url: str, started: float, size: int | None) -> None:
+        if not self._time_requests:
+            return
+        elapsed = time.perf_counter() - started
+        bytes_part = f"{size} bytes" if size is not None else "no response"
+        print(
+            f"stash: {method} {url} {elapsed:.2f}s {bytes_part}",
+            file=sys.stderr,
+            flush=True,
+        )
+
+    @staticmethod
+    def _timed_url(path: str, kwargs: dict) -> str:
+        """The request URL with its query params. `/api/v1/me/sources/{id}/entries`
+        is one path for every source, so the params are what tell the legs apart."""
+        params = kwargs.get("params") or {}
+        if not params:
+            return path
+        return f"{path}?{'&'.join(f'{key}={params[key]}' for key in sorted(params))}"
 
     def close(self) -> None:
         self._http.close()
@@ -140,7 +168,16 @@ class StashClient:
     def _request(self, method: str, path: str, **kwargs) -> httpx.Response:
         headers = kwargs.pop("headers", {})
         headers.update(self._headers())
-        resp = self._http.request(method, path, headers=headers, **kwargs)
+        started = time.perf_counter()
+        timed_url = self._timed_url(path, kwargs)
+        try:
+            resp = self._http.request(method, path, headers=headers, **kwargs)
+        except httpx.HTTPError as e:
+            # The timing of a request that never answered is the number the
+            # instrument exists to capture, so it is reported before re-raising.
+            self._report_timing(method, timed_url, started, None)
+            raise e
+        self._report_timing(method, timed_url, started, len(resp.content))
         release.note_latest(resp.headers.get(release.LATEST_VERSION_HEADER, ""))
         if not resp.is_success:
             detail = ""

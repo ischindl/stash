@@ -286,11 +286,8 @@ class SkillAppVfsShell:
             blocks.append("\n".join(lines))
             hit = self.model.truncated_root_containing(path)
             if hit:
-                source_root, shown = hit
-                self._warn(
-                    f"ls: '{source_root}' was truncated at {shown} entries; this listing "
-                    "may be INCOMPLETE."
-                )
+                _, note = hit
+                self._warn(f"ls: {note}; this listing may be INCOMPLETE.")
         return "\n".join(block for block in blocks if block) + ("\n" if blocks else "")
 
     def _format_ls_entry(self, path: str, long: bool) -> str:
@@ -387,11 +384,9 @@ class SkillAppVfsShell:
             if newer_than is not None and node.updated_at <= newer_than:
                 continue
             rows.append(node_path)
-        for source_root, shown in self.model.truncated_roots_under(root):
+        for _, note in self.model.truncated_roots_under(root):
             self._warn(
-                f"find: '{source_root}' has more than {shown} entries; only the first "
-                f"{shown} were listed. This result is INCOMPLETE — do not treat it as the "
-                "full set."
+                f"find: {note}. This result is INCOMPLETE — do not treat it as the full set."
             )
         return "\n".join(rows) + ("\n" if rows else "")
 
@@ -425,11 +420,8 @@ class SkillAppVfsShell:
         lines.extend(
             self._tree_lines(root, prefix="", depth=1, max_depth=max_depth, dirs_only=dirs_only)
         )
-        for source_root, shown in self.model.truncated_roots_under(root):
-            self._warn(
-                f"tree: '{source_root}' has more than {shown} entries; only the first "
-                f"{shown} were listed. This tree is INCOMPLETE."
-            )
+        for _, note in self.model.truncated_roots_under(root):
+            self._warn(f"tree: {note}. This tree is INCOMPLETE.")
         return "\n".join(lines) + "\n"
 
     def _tree_lines(

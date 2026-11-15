@@ -28,6 +28,7 @@ import asyncio
 import hashlib
 import logging
 import re
+import time
 from datetime import UTC, datetime
 from urllib.parse import quote
 from uuid import UUID
@@ -2040,6 +2041,97 @@ async def source_entries(
 # keep the rendered tree honest about what's hidden.
 TREE_DOC_LIMIT = 5000
 
+# The tree route must answer inside the caller's budget or the caller dies naming
+# nothing: `cli/client.py` gives every request `timeout=30`. Two ceilings keep the
+# route under that default, and both must hold:
+#   TREE_MEMBER_BUDGET_SECONDS < TREE_ROUTE_BUDGET_SECONDS < 30   (10 < 18 < 30)
+#   TREE_READ_CONCURRENCY <= DB_POOL_MAX                          (8 <= 20)
+# The member budget is the slowest healthy listing measured (1.92 s) with room for
+# a cold cache; the route budget leaves transport inside the client's 30 s; the
+# read cap keeps the fan-out from trading a slow listing for a starved pool.
+TREE_ROUTE_BUDGET_SECONDS = 18.0
+TREE_MEMBER_BUDGET_SECONDS = 10.0
+TREE_READ_CONCURRENCY = 8
+
+
+def _listing_gap(
+    provider: str,
+    missed: list[str],
+    total: int,
+    budget: float,
+    elapsed: float,
+    why: str = "did not answer",
+) -> str:
+    """The one sentence saying a listing is short and who is responsible for it.
+    Names up to three connections, counts them (`k of n`) when there are more, and
+    says how long was waited for nothing."""
+    who = ", ".join(missed) if len(missed) <= 3 else f"{len(missed)} of {total} connections"
+    return (
+        f"{provider}: {who} {why} within the {budget:g} s listing budget "
+        f"({elapsed:.1f} s elapsed) — their documents are not in this listing"
+    )
+
+
+def _provider_shell(provider: str, members: list[dict]) -> dict:
+    """The provider folder with its identity and connection handles filled in and
+    no tree yet. A provider whose listing never answered is still this folder,
+    because a source that did not answer is a gap, not an absent integration."""
+    return {
+        "source": provider,
+        "type": "provider",
+        "provider": provider,
+        "display_name": provider,
+        # Connection handles, so a caller drilling into the tree knows which
+        # source to read each path against (the provider key is not a handle).
+        "members": [{"handle": m["id"], "display_name": m["display_name"]} for m in members],
+    }
+
+
+def _member_gap(provider: str, gap: tuple[str, float, float, str], total: int) -> str:
+    """The sentence for one connection that did not answer, in the provider's words."""
+    name, budget, elapsed, reason = gap
+    return _listing_gap(provider, [name], total, budget, elapsed, why=reason)
+
+
+async def _list_member_tree(
+    source: dict, depth: int, per_dir: int, provider: str, deadline: float, reads: asyncio.Semaphore
+) -> tuple[list[dict], tuple[str, float, float, str] | None]:
+    """The document tree for one connected source (one repo, one account), or the
+    gap saying why it has none — (display name, budget, elapsed, reason),
+    everything the one sentence needs and nothing more. A connection whose budget
+    is already gone is named, not awaited.
+
+    This is the single place the tree route spends time against a clock, so a
+    route costs its slowest member instead of the sum of all of them. The degraded
+    leg catches `Exception` and never `BaseException`: a cancelled route must still
+    cancel, and swallowing a `CancelledError` here would turn an abort into a
+    confident short answer.
+    """
+    loop = asyncio.get_running_loop()
+    budget = min(TREE_MEMBER_BUDGET_SECONDS, deadline - loop.time())
+    if budget <= 0:
+        return [], (source["display_name"], TREE_MEMBER_BUDGET_SECONDS, 0.0, "never started")
+    started = loop.time()
+    try:
+        async with reads:
+            entries = await asyncio.wait_for(
+                list_documents(source, limit=TREE_DOC_LIMIT),
+                timeout=min(budget, deadline - loop.time()),
+            )
+    except Exception as e:
+        elapsed = loop.time() - started
+        reason = "did not answer" if isinstance(e, TimeoutError) else "failed"
+        logger.warning(
+            "sources_tree provider=%s connection=%s listing degraded after %.1f s: %s: %s",
+            provider,
+            source["display_name"],
+            elapsed,
+            type(e).__name__,
+            e,
+        )
+        return [], (source["display_name"], budget, elapsed, reason)
+    return build_entry_tree(entries, depth, per_dir), None
+
 
 def build_entry_tree(entries: list[dict], depth: int, per_dir: int) -> list[dict]:
     """Nest flat path-keyed entries ({path, name, kind}) into a tree trimmed to
@@ -2095,6 +2187,12 @@ def _capped_flat_tree(entries: list[dict], per_dir: int) -> list[dict]:
     return nodes
 
 
+def _count_tree_nodes(nodes: list[dict]) -> int:
+    """Rendered nodes in a tree, so a log line can say how much a provider
+    answered with — an empty count is a gap, not a small source."""
+    return sum(1 + _count_tree_nodes(node.get("children") or []) for node in nodes)
+
+
 def _session_title(session: dict) -> str:
     """A human-readable session label: the first user message, one line."""
     title = " ".join((session.get("title_source") or "").split())
@@ -2103,44 +2201,97 @@ def _session_title(session: dict) -> str:
     return title or session.get("agent_name") or "session"
 
 
-async def _member_tree(source: dict, depth: int, per_dir: int) -> list[dict]:
-    """The document tree for one connected source (one repo, one account)."""
-    entries = await list_documents(source, limit=TREE_DOC_LIMIT)
-    return build_entry_tree(entries, depth, per_dir)
-
-
-async def _provider_tree_node(provider: str, members: list[dict], depth: int, per_dir: int) -> dict:
+async def _provider_tree_node(
+    provider: str,
+    members: list[dict],
+    depth: int,
+    per_dir: int,
+    deadline: float,
+    reads: asyncio.Semaphore,
+) -> dict:
     """One provider folder for the sources filesystem. A single connection
     collapses — its documents sit directly in the provider folder. Multiple
-    connections each become a subfolder named after the connection."""
+    connections each become a subfolder named after the connection.
+
+    The connections are listed at once, so the provider folder costs its slowest
+    connection rather than their sum. Whatever did not answer stays named on the
+    folder and on the connections that missed it."""
     members = sorted(members, key=lambda m: m["display_name"])
-    node = {
-        "source": provider,
-        "type": "provider",
-        "provider": provider,
-        "display_name": provider,
-        # Connection handles, so a caller drilling into the tree knows which
-        # source to read each path against (the provider key is not a handle).
-        "members": [{"handle": m["id"], "display_name": m["display_name"]} for m in members],
-    }
-    if len(members) == 1:
-        node["tree"] = await _member_tree(members[0], depth, per_dir)
-        node["sync_status"] = members[0]["sync_status"]
-        node["last_synced_at"] = members[0]["last_synced_at"]
+    node = _provider_shell(provider, members)
+    started = time.perf_counter()
+    try:
+        listings = await asyncio.gather(
+            *(
+                _list_member_tree(
+                    member,
+                    depth if len(members) == 1 else max(1, depth - 1),
+                    per_dir,
+                    provider,
+                    deadline,
+                    reads,
+                )
+                for member in members
+            )
+        )
+    except Exception as e:
+        elapsed = time.perf_counter() - started
+        logger.warning(
+            "sources_tree provider=%s listing failed after %.1f s: %s: %s",
+            provider,
+            elapsed,
+            type(e).__name__,
+            e,
+        )
+        node["tree"] = []
+        node["listing_error"] = _listing_gap(
+            provider,
+            [m["display_name"] for m in members],
+            len(members),
+            TREE_MEMBER_BUDGET_SECONDS,
+            elapsed,
+            why="failed",
+        )
         return node
 
+    gaps = [gap for _, gap in listings if gap is not None]
     children = []
-    for member in members:
-        children.append(
-            {
-                "name": member["display_name"],
-                "kind": "folder",
-                "source": member["id"],
-                "sync_status": member["sync_status"],
-                "children": await _member_tree(member, max(1, depth - 1), per_dir),
-            }
+    for member, (tree, gap) in zip(members, listings):
+        child = {
+            "name": member["display_name"],
+            "kind": "folder",
+            "source": member["id"],
+            "sync_status": member["sync_status"],
+        }
+        if gap is not None:
+            child["listing_error"] = _member_gap(provider, gap, len(members))
+        child["children"] = tree
+        children.append(child)
+
+    if len(members) == 1:
+        node["tree"] = children[0]["children"]
+        node["sync_status"] = members[0]["sync_status"]
+        node["last_synced_at"] = members[0]["last_synced_at"]
+    else:
+        node["tree"] = _capped_flat_tree(children, per_dir)
+
+    if gaps:
+        why = gaps[0][3] if all(gap[3] == gaps[0][3] for gap in gaps) else "did not answer"
+        node["listing_error"] = _listing_gap(
+            provider,
+            [gap[0] for gap in gaps],
+            len(members),
+            max(gap[1] for gap in gaps),
+            max(gap[2] for gap in gaps),
+            why=why,
         )
-    node["tree"] = _capped_flat_tree(children, per_dir)
+    logger.info(
+        "sources_tree provider=%s connections=%d entries=%d seconds=%.2f degraded=%s",
+        provider,
+        len(members),
+        _count_tree_nodes(node["tree"]),
+        time.perf_counter() - started,
+        bool(gaps),
+    )
     return node
 
 
@@ -2153,6 +2304,9 @@ async def sources_tree(
     from .memory_service import list_scope_sessions
 
     depth = max(1, min(depth, 10))
+    # The route's one clock, started before any of its work, so the caller that
+    # gave us 30 s never waits longer than the 18 s this route promised.
+    deadline = asyncio.get_running_loop().time() + TREE_ROUTE_BUDGET_SECONDS
     pages = await list_scope_pages(owner_user_id, user_id)
     sessions = await list_scope_sessions(owner_user_id, user_id)
     out = [
@@ -2191,8 +2345,19 @@ async def sources_tree(
         provider = SOURCE_TYPE_PROVIDER[source["source_type"]]
         by_provider.setdefault(provider, []).append(source)
 
-    for provider in sorted(by_provider):
-        out.append(await _provider_tree_node(provider, by_provider[provider], depth, per_dir))
+    # Providers are listed at once, ordered by provider key so the answer stays
+    # stable, under one semaphore that caps how many connections are read together.
+    reads = asyncio.Semaphore(TREE_READ_CONCURRENCY)
+    out.extend(
+        await asyncio.gather(
+            *(
+                _provider_tree_node(
+                    provider, by_provider[provider], depth, per_dir, deadline, reads
+                )
+                for provider in sorted(by_provider)
+            )
+        )
+    )
 
     await _audit_source_read(
         action="source.tree_listed",
@@ -2200,7 +2365,12 @@ async def sources_tree(
         user_id=user_id,
         source=None,
         connected=None,
-        metadata={"source_count": len(out)},
+        metadata={
+            "source_count": len(out),
+            # Which provider folders came back short, so the audit row says how
+            # much of this answer the caller could actually trust.
+            "degraded_providers": [node["source"] for node in out if "listing_error" in node],
+        },
     )
     return out
 

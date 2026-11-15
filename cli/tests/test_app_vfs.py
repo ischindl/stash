@@ -5,6 +5,7 @@ from datetime import datetime
 from cli.client import StashError
 from cli.tests.test_mount_vfs import FakeClient
 from stashvfs import StashVfsModel
+from stashvfs.client import VfsClientError
 from stashvfs.shell import SkillAppVfsShell, _ls_time
 
 
@@ -409,7 +410,7 @@ def test_continue_literal_after_option_separator_is_a_pattern():
 def test_grep_reports_truncated_source_listing_as_partial():
     shell, _client = _shell()
     shell.model.list_dir("/sources/gmail")
-    shell.model._truncated["/sources/gmail"] = 1
+    shell.model._truncated["/sources/gmail"] = "/sources/gmail: only its first 1 entry is mounted"
     result = shell.run("grep -r . /sources/gmail")
     assert result.exit_code == 2
     assert result.searches[0]["listing_complete"] is False
@@ -419,7 +420,7 @@ def test_grep_reports_truncated_source_listing_as_partial():
 def test_explicit_file_search_does_not_inherit_parent_listing_truncation():
     shell, _client = _shell()
     shell.model.list_dir("/sources/gmail")
-    shell.model._truncated["/sources/gmail"] = 1
+    shell.model._truncated["/sources/gmail"] = "/sources/gmail: only its first 1 entry is mounted"
     result = shell.run("grep . '/sources/gmail/Welcome email'")
     assert result.exit_code == 0
     assert result.searches[0]["listing_complete"] is True
@@ -429,7 +430,7 @@ def test_explicit_file_search_does_not_inherit_parent_listing_truncation():
 def test_wildcard_search_retains_listing_truncation():
     shell, _client = _shell()
     shell.model.list_dir("/sources/gmail")
-    shell.model._truncated["/sources/gmail"] = 1
+    shell.model._truncated["/sources/gmail"] = "/sources/gmail: only its first 1 entry is mounted"
     result = shell.run("grep . /sources/gmail/Welcome*")
     assert result.exit_code == 2
     assert result.searches[0]["listing_complete"] is False
@@ -644,3 +645,96 @@ def test_cat_resolves_raw_backend_refs_as_aliases():
 
     assert by_ref.exit_code == 0
     assert by_ref.stdout == by_display.stdout == "BODY of threads/msg-2"
+
+
+# --- A mount that could not read says so, in words ---------------------------
+#
+# The disclosure channel used to hold an entry count, and only for the one
+# shortfall the mount noticed by itself: a listing that raised was mounted as an
+# empty folder that looked exactly like an empty source, and a source that ran
+# out of cursor looked exactly like a complete one. Both are gaps now, and a gap
+# is something the mount says out loud.
+
+
+class UnansweringSourceClient(FakeClient):
+    """The backend lists the integration but its entry pages never answer — the
+    shape a straggling provider takes from the client's side."""
+
+    def list_source_entries_page(self, source, path="", after=""):
+        raise VfsClientError("504: entry listing did not answer")
+
+
+class UnansweringConnectionListClient(FakeClient):
+    """Even the flat connected-source list fails, so no integration can be named."""
+
+    def list_sources(self):
+        raise VfsClientError("504: connection list did not answer")
+
+
+def test_a_source_folder_names_the_call_that_emptied_it():
+    shell, _client = _shell(UnansweringSourceClient())
+
+    result = shell.run("ls /sources/gmail")
+
+    assert "504: entry listing did not answer" in result.stderr
+    assert "INCOMPLETE" in result.stderr
+
+
+def test_a_partial_listing_from_a_page_that_raised_is_marked_as_partial():
+    """The pages that did answer stay mounted, and the folder says they are only
+    part of the source — a partial listing presented as the whole thing is the
+    failure this mount used to commit."""
+
+    class HalfThenRaises(UnansweringSourceClient):
+        def __init__(self):
+            super().__init__()
+            self.pages = 0
+
+        def list_source_entries_page(self, source, path="", after=""):
+            self.pages += 1
+            if self.pages == 1:
+                return [
+                    {"path": "msg-01", "name": "Message 1", "kind": "message"},
+                    {"path": "msg-02", "name": "Message 2", "kind": "message"},
+                ], True
+            raise VfsClientError("504: entry listing did not answer")
+
+    shell, _client = _shell(HalfThenRaises())
+
+    result = shell.run("find /sources/gmail -type f")
+
+    assert "Message 1" in result.stdout
+    assert "only the 2 entries already read are mounted" in result.stderr
+    assert "INCOMPLETE" in result.stderr
+
+
+def test_a_connection_list_that_never_answers_is_a_folder_that_says_why():
+    """An account with no integrations has no sources folder. An account whose
+    connection list timed out has one, and it says what happened to it."""
+    shell, _client = _shell(UnansweringConnectionListClient())
+
+    listed = shell.run("ls /sources")
+
+    assert "504: connection list did not answer" in listed.stderr
+    assert "INCOMPLETE" in listed.stderr
+
+
+def test_a_source_that_had_nothing_to_list_says_nothing_at_all():
+    """The other half of the distinction: a source that answered with a normal
+    listing must not borrow the straggler's warning."""
+    shell, _client = _shell(FakeClient())
+
+    result = shell.run("ls /sources/gmail")
+
+    assert "Welcome email" in result.stdout
+    assert "INCOMPLETE" not in result.stderr
+
+
+def test_the_materialization_note_names_the_ceiling_it_hit(monkeypatch):
+    monkeypatch.setattr("stashvfs.model.SOURCE_ENTRIES_MAX", 4)
+    shell, _client = _shell(PagedSourceClient())
+
+    result = shell.run("ls /sources/gmail")
+
+    assert "only its first 4 entries" in result.stderr
+    assert "the cap is 4" in result.stderr

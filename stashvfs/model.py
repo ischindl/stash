@@ -25,6 +25,16 @@ BytesLoader = Callable[[], bytes]
 # ever-growing tree walk.
 SOURCE_ENTRIES_MAX = 10_000
 
+
+def _listing_gap_note(root: str, reason: str) -> str:
+    """The sentence a source root carries when its listing came back short.
+
+    One builder so every consumer says the same thing, and so the reason a
+    listing is short — a cap, a missing cursor, a call that never answered —
+    survives to the terminal instead of becoming an empty folder."""
+    return f"{root}: {reason}"
+
+
 # How many of a session's events `transcript.md` and `events.json` render.
 # A transcript has no natural size bound, so the rendered body takes a slice
 # and says loudly what it left out; `grep` still searches the whole thing (see
@@ -99,9 +109,11 @@ class StashVfsModel:
         # contents are materialized only when something first descends into it, so
         # listing source names stays cheap no matter how large the source is.
         self._expanders: dict[str, Callable[[], None]] = {}
-        # Source-root path -> entries shown, for sources the server truncated.
-        # Lets listing commands warn that the tree is incomplete.
-        self._truncated: dict[str, int] = {}
+        # Source-root path -> the sentence naming what this mount could not show:
+        # a listing that came back capped, or one that never answered at all.
+        # Written where the shortfall happens and read by every listing command,
+        # so "nothing here" and "nothing could be read" stay different answers.
+        self._truncated: dict[str, str] = {}
         # Transcript path -> (events rendered, events that exist). Written by
         # whichever transcript loader runs first; read by the shell so a cat or
         # a grep of a shortened transcript can say so.
@@ -564,7 +576,14 @@ class StashVfsModel:
         document bodies load lazily on read."""
         try:
             sources = self.client.list_sources()
-        except VfsClientError:
+        except VfsClientError as e:
+            # The one call that names every integration. A user with no
+            # connections has no /sources folder; a user whose connection list
+            # never answered has an empty one that says why.
+            self._truncated["/sources"] = _listing_gap_note(
+                "/sources", f"the connected-source listing did not answer ({e})"
+            )
+            self._add_dir("/sources")
             return
         connected = [s for s in sources if not str(s.get("type", "")).startswith("native_")]
         if not connected:
@@ -598,26 +617,45 @@ class StashVfsModel:
         while True:
             try:
                 page, truncated = self.client.list_source_entries_page(handle, "", after=after)
-            except VfsClientError:
+            except VfsClientError as e:
+                # A page that raised is not the end of the source. Whatever came
+                # before it is still mounted, and the folder now says it is short.
+                already = (
+                    f"; only the {len(entries)} entries already read are mounted" if entries else ""
+                )
+                self._truncated[source_root] = _listing_gap_note(
+                    source_root, f"its entry listing did not answer ({e}){already}"
+                )
                 break
             entries.extend(page)
             if not truncated:
                 break
             after = str(page[-1].get("path") or "")
-            if not after or len(entries) >= SOURCE_ENTRIES_MAX:
-                # No cursor to continue from (a listing that isn't path-keyed),
-                # or the source is beyond what we'll materialize in one tree.
-                self._truncated[source_root] = len(entries)
+            if not after:
+                # No cursor to continue from: a listing that isn't path-keyed.
+                self._truncated[source_root] = _listing_gap_note(
+                    source_root,
+                    f"its listing gave no cursor to continue from at {len(entries)} entries",
+                )
+                break
+            if len(entries) >= SOURCE_ENTRIES_MAX:
+                # The source is beyond what we'll materialize in one tree.
+                self._truncated[source_root] = _listing_gap_note(
+                    source_root,
+                    f"is larger than one tree materializes: only its first {len(entries)} entries "
+                    f"of it are mounted (the cap is {SOURCE_ENTRIES_MAX})",
+                )
                 break
         self._add_source_entries(source_root, handle, entries)
 
-    def truncated_roots_under(self, root: str) -> list[tuple[str, int]]:
+    def truncated_roots_under(self, root: str) -> list[tuple[str, str]]:
         """Truncated source roots overlapping `root` (root contains the source,
         or sits inside it). For subtree enumeration (find/tree): any overlap
-        means the enumeration is incomplete. Returns (source_root, shown) pairs."""
+        means the enumeration is incomplete. Returns (source_root, the sentence
+        naming what is missing) pairs."""
         return sorted(
-            (s, shown)
-            for s, shown in self._truncated.items()
+            (s, note)
+            for s, note in self._truncated.items()
             if s == root or s.startswith(root.rstrip("/") + "/") or root.startswith(s + "/")
         )
 
@@ -626,14 +664,15 @@ class StashVfsModel:
         the session, or None. Only known once one of its bodies has loaded."""
         return self._truncated_transcripts.get(path)
 
-    def truncated_root_containing(self, path: str) -> tuple[str, int] | None:
+    def truncated_root_containing(self, path: str) -> tuple[str, str] | None:
         """The truncated source root that CONTAINS `path` (path is at or below
-        it), or None. For single-directory listing (ls): an ancestor like
-        /sources — whose own children are complete — must not match, so this is
-        narrower than truncated_roots_under."""
-        for s, shown in self._truncated.items():
+        it) with the sentence naming what is missing, or None. For
+        single-directory listing (ls): an ancestor like /sources — whose own
+        children are complete — must not match, so this is narrower than
+        truncated_roots_under."""
+        for s, note in self._truncated.items():
             if path == s or path.startswith(s + "/"):
-                return s, shown
+                return s, note
         return None
 
     def _add_source_entries(self, source_root: str, handle: str, entries: list[dict]) -> None:

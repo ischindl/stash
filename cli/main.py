@@ -23,6 +23,7 @@ import questionary
 import typer
 import typer.main
 from rich.align import Align
+from rich.markup import escape as escape_markup
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
@@ -4159,7 +4160,26 @@ def _source_annotation(s: dict) -> str:
         note += "  [red]sync failed[/red]"
     elif s.get("sync_status") == "syncing":
         note += "  [yellow]syncing…[/yellow]"
+    if s.get("listing_error"):
+        # The server listed this provider and something inside it did not answer.
+        # The tree says so in passing; `_warn_incomplete_listings` says the whole
+        # sentence, and only that one names who and for how long.
+        note += "  [red]listing incomplete[/red]"
     return note
+
+
+def _warn_incomplete_listings(sources: list[dict]) -> None:
+    """Name, on stderr, every provider whose documents are not in this answer.
+
+    The server already wrote the sentence; this only carries it out. It rides on
+    stderr so `--json` on stdout stays parse-clean, and it is a warning rather
+    than a failure: an answer that says what it is missing is still an answer,
+    and `ls` exits 0 beside it.
+    """
+    for source in sources:
+        gap = source.get("listing_error")
+        if gap:
+            echo_stderr(f"  {escape_markup(str(gap))}")
 
 
 def _add_ls_branch(branch, nodes: list[dict]) -> None:
@@ -4167,7 +4187,8 @@ def _add_ls_branch(branch, nodes: list[dict]) -> None:
         if node["kind"] == "truncated":
             branch.add(f"[dim]… +{node['hidden']} more[/dim]")
         elif node.get("children") or node["kind"] == "folder":
-            child = branch.add(f"[bold]{node['name']}/[/bold]")
+            gap = "  [red]listing incomplete[/red]" if node.get("listing_error") else ""
+            child = branch.add(f"[bold]{node['name']}/[/bold]{gap}")
             _add_ls_branch(child, node.get("children") or [])
         else:
             branch.add(node["name"])
@@ -4200,6 +4221,7 @@ def ls_cmd(
 def _print_ls_overview(sources: list[dict], as_json: bool) -> None:
     if not sources:
         print_empty_state("sources")
+    _warn_incomplete_listings(sources)
     if _use_json(as_json):
         output_json({"sources": sources})
         return
@@ -4217,6 +4239,7 @@ def _print_ls_path(c: StashClient, sources: list[dict], path: str, as_json: bool
     source = _source_dir_names(sources).get(dir_name)
     if source is None:
         _exit_user_error(f"No source named '{dir_name}'. Run `stash ls` to see them.")
+    _warn_incomplete_listings([source])
 
     if source["type"] == "provider":
         _print_provider_path(c, source, rest, as_json)
