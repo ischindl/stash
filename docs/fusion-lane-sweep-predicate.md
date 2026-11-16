@@ -48,7 +48,7 @@ substitute invented at sweep time.
 At the census trunk, 5 of 46 lanes were eligible under the declared substitution (`stas-185`, `stas-186`,
 `stas-239`, `stas-246`, `stas-252`), 1 conditional, 40 not deletable.
 
-## Two states a sweep must not read as a deletable lane
+## Three states a sweep must not read as a deletable lane
 
 - **A lane ref can vanish without a sweep.** The engine's own finalization removes the ref of a lane it
   has landed — `fusion/stas-459` was gone as soon as its landing commit `1352e4084` became the trunk
@@ -60,12 +60,22 @@ At the census trunk, 5 of 46 lanes were eligible under the declared substitution
   tombstones. Such a card's lane is **not** deletable by a sweep: the ref is then the only holder of
   its commits and no agent can retry or close the card that owns them (measured on `stas-460`, 6
   lane-only commits). The restore lever is the dashboard-API unarchive route, which an operator runs.
+- **A lane with no task record at all is not a sweep candidate; it is an escalation.** Conjuncts 1
+  through 3 read `column`, `mergeDetails.mergeConfirmed` and `mergeDetails.commitSha` out of
+  `task.json`, so when `.fusion/tasks/<ID>/` does not exist the predicate has no operand, and a sweep
+  that resolves an unreadable record as `done` deletes content no card can ever re-deliver. Measured
+  on 2026-11-16 at trunk `d1a8f75a3`: `fusion/stas-046`, `fusion/stas-126` and `fusion/stas-151` held
+  1, 19 and 4 lane-only commits and no task directory. STAS-473's precondition for even discussing
+  deletion is a verified bundle stored outside the repository plus an annotated `preserve/<lane>-tip`
+  tag, both made before any verdict is written.
 
 ## Before any deletion, and before any count is written down
 
 Preserve first, then decide: `git bundle create <file> refs/heads/fusion/<lane>` plus an annotated tag
-(`git tag archive/fusion-stas-460 refs/heads/fusion/stas-460`) makes either verdict reversible. A thin
-bundle is only as durable as the repository that holds its prerequisite — verify with
-`git bundle verify` and read the reply. Every count quoted from a lane is void without the trunk SHA
-it was measured against: trunk moved four times inside a single hour on 2026-11-15 and a lane's
-`left-right` count changed from `2 6` to `4 6` with no lane-side action at all.
+(`git tag archive/fusion-stas-460 refs/heads/fusion/stas-460`) makes either verdict reversible.
+A bundle is a file, so its location is part of the act: it lives outside the repository directory (here
+under `/home/schindler/evidence/STAS-<id>/`), never as a commit, never as a file inside the tree, and
+never as a `.fusion/` file. A thin bundle is only as durable as the repository that holds its
+prerequisite — verify with `git bundle verify` and read the reply. Every count quoted from a lane is
+void without the trunk SHA it was measured against: trunk moved four times inside a single hour on
+2026-11-15 and a lane's `left-right` count changed from `2 6` to `4 6` with no lane-side action at all.
