@@ -909,6 +909,23 @@ async def _run_scheduled_locked(agent, stamp, workspace, metered: bool = True):
 
     agent_id = UUID(str(agent["id"]))
     if agent["run_mode"] != "scheduled":
+        # The beat charged and stamped this tick before it dispatched it, and a clean
+        # return out of here is exactly what `_run_guarded` reads as success: the row would
+        # keep `started`, its credit would stay spent, `last_run_error` would stay NULL and
+        # nothing would log — the only post-charge exit on this file with no owner for its
+        # row. So the tick resolves itself, on the same compare-and-set the escape guard
+        # uses (it cannot stamp a row another arm already resolved, and it refunds inside
+        # the same write, which is why the metered answer travels rather than being
+        # re-guessed). Deliberately NOT the body's `except Exception`: that one alerts, and
+        # an agent switched to manual mid-dispatch is not an outage.
+        cause = f"agent run resolved without running: run_mode={agent['run_mode']}"
+        flipped = await agent_service.resolve_started_runs([agent_id], cause, metered=metered)
+        if flipped:
+            logger.error(
+                "agent schedule: agent %s was dispatched after its run mode changed: %s",
+                agent_id,
+                cause,
+            )
         return
     user_id = UUID(str(agent["user_id"]))
     now = datetime.now(UTC)

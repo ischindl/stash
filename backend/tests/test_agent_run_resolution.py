@@ -868,3 +868,286 @@ async def test_clean_turn_records_no_failure_evidence(monkeypatch):
 
     # A clean turn must not collect any of the failure evidence above.
     assert state.error is None
+
+
+# --- the wall that could not name itself (STAS-457) ---
+
+
+async def test_a_cancellation_mid_pull_releases_the_generator_before_it_closes(lane_locks):
+    """A turn cut while its harness is mid-`anext` has to leave the frame first.
+
+    Red before the reap, with the intake's own string: closing an async generator
+    whose frame is still running is what CPython refuses, so the `finally` died
+    with `aclose(): asynchronous generator is already running`. That `RuntimeError`
+    arrives mid-unwind and REPLACES the cancellation, which is why a walled run
+    reported itself as a broken curator instead of a cut, and why this test fails
+    with the intake string rather than with a missing assertion.
+
+    Spelled as a plain task cancellation instead of a `wait_for` because this test
+    is about the one frame the wall lands in; the wall above it is the next test."""
+    entered = asyncio.Event()
+    released: list[str] = []
+
+    async def harness_stream():
+        try:
+            yield {"stream": "stdout", "data": b'{"type":"message_start"}\n'}
+            entered.set()
+            await asyncio.Event().wait()
+        finally:
+            released.append("generator released")
+
+    async def consume():
+        stream = sprite_agent_service._stoppable(harness_stream(), "mid-pull-session")
+        await stream.__anext__()
+        return await stream.__anext__()
+
+    consumer = asyncio.create_task(consume())
+    # The first event proves the generator is open; `entered` proves its frame is
+    # inside the second pull — the exact state in which `aclose()` is refused.
+    await entered.wait()
+    consumer.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await consumer
+
+    assert released == ["generator released"]
+    # The `finally` ran to its end: the reap, then the stop-key delete it precedes.
+    assert "agent-turn-stop:mid-pull-session" not in lane_locks.data
+
+
+async def _cut_personal_turn(
+    agent: dict, monkeypatch, *, draining: bool = False
+) -> tuple[str, list[str], object]:
+    """Run one personal-lane curator turn to its wall; return (cause, frames, read).
+
+    The wall is the pair the resolver reads: the deployment ceiling, and the reserve a
+    commit keeps back from it — two seconds to work, none reserved. Production polls the
+    stop flag every 2 s, which here would be the whole wall, so the poll is lowered with
+    it: a test that waits a poll per loop turn would be measuring its own polling
+    constant. The harness turn emits one frame and then hangs, which is the state a wall
+    is asked to end.
+
+    The embedder is stubbed for speed, not for correctness: this developer box loads a
+    local sentence-transformers model on the turn's first embed — measured 6.8 s — which
+    a 2 s wall would then fire in front of, cutting a phase that is not the one under
+    test. The measured entry into the exec seam with a fast embedder is 0.02 s.
+
+    `run_chat` and `run_scheduled` are deliberately NOT patched. Patching either puts a
+    mock between the wall and the frame it cuts, and a card whose premise is "a test that
+    would not have caught it" cannot repay that."""
+    from backend.services import curation_service, embeddings
+    from backend.services.embeddings import auto as embeddings_auto
+
+    class InstantEmbedder(embeddings.BaseEmbedder):
+        name = "instant"
+        dims = 4
+
+        async def embed_batch(self, texts: list[str]):
+            return [[0.0, 1.0, 0.0, 0.0] for _ in texts]
+
+    monkeypatch.setattr(embeddings_auto, "_embedder", InstantEmbedder())
+
+    released: list[str] = []
+
+    async def turn_that_never_ends(sprite, argv, *, env, cwd=None):
+        try:
+            yield {"stream": "stdout", "data": b'{"type":"message_start"}\n'}
+            await asyncio.Event().wait()
+        finally:
+            released.append("exec released")
+
+    monkeypatch.setattr(sprite_service, "exec_stream", turn_that_never_ends)
+    monkeypatch.setattr(agent_service.settings, "AGENT_TURN_TIMEOUT_SECONDS", 2)
+    monkeypatch.setattr(agent_service, "RUN_COMMIT_RESERVE_SECONDS", 0)
+    monkeypatch.setattr(sprite_agent_service, "_STOP_POLL_SECONDS", 0.05)
+
+    read = curation_service.position_of(agent)
+    with pytest.raises(sprite_agent_service.RunCeilingExceeded) as raised:
+        async with asyncio.timeout(8):
+            await sprite_agent_service.run_scheduled(agent, "202611140300", read, draining=draining)
+    return str(raised.value), released, read
+
+
+async def test_the_personal_lane_wall_cuts_the_turn_and_names_the_unread_feed(
+    pool, monkeypatch, sprite_exec
+):
+    """The founder's failure, reproduced on the lane that produced it.
+
+    The heavy worker's log names the personal lane: `sprite_agent_service.py:1144`
+    inside `run_chat`, raised out of `async for event in _stoppable(turn, ...)`. So
+    this is the personal lane, undiverted, with the real runner and the real wall.
+
+    Red before the fix this test dies with the intake's
+    `aclose(): asynchronous generator is already running`: the close error replaced
+    the cancellation, `run_chat` recorded it as a turn failure, and the
+    `except TimeoutError` that turns a cut into a ceiling never ran."""
+    from backend.services import scoped_curation_service
+
+    lane = await _lane()
+    agent = await agent_service.get_agent_by_id(lane["id"])
+    assert await scoped_curation_service.workspace_for_agent(agent) is None, (
+        "the scoped lane has its own wall; this is the one that died"
+    )
+    assert agent["digest_provider"] is None, "a digest phase would spend a turn before the wall"
+
+    message, released, read = await _cut_personal_turn(agent, monkeypatch)
+
+    assert "Curator curation exceeded its run time limit of 2s" in message
+    assert "unread" in message, "a cut has to say the feed was left unread"
+    assert str(read.at) in message, "the unread backlog has to be a location, not a guess"
+    assert released == ["exec released"], "a cut that ends no harness turn cut nothing"
+
+
+@pytest.mark.parametrize("freshly_seeded", [True, False])
+async def test_the_wall_of_a_draining_run_names_the_drain_it_left_unread(
+    pool, monkeypatch, sprite_exec, freshly_seeded
+):
+    """A cut drain names the pair it stopped on, not the watermark it may write.
+
+    `draining` is the dispatcher's fact — `full_history or drain is not None` — so a run
+    can be working a drain whose pair the row does not carry yet: `full_history` seeds one
+    inside the run spec, and a backfill of months of history is exactly that run. The
+    position its next pass resumes from is the drain pair, which sits BEHIND the watermark
+    by design, so a cause pointing at the watermark names a position the drain never read
+    from.
+
+    Measured on the founder copy 2026-11-16: the first cut of a seeded drain wrote
+    `last_run_error` as `... reading from watermark position at=None event=None`, while
+    the run had been handed the first drain slice of a 57,467-event corpus."""
+    from datetime import UTC, datetime
+
+    from backend.services import curation_service
+
+    lane = await _lane()
+    agent = await agent_service.get_agent_by_id(lane["id"])
+    assert agent["digest_provider"] is None, "a digest phase would spend a turn before the wall"
+
+    drain_at = None
+    if not freshly_seeded:
+        drain_at = datetime(2026, 11, 14, 3, 0, tzinfo=UTC)
+        await get_pool().execute(
+            "UPDATE agents SET drain_through = $2 WHERE id = $1", agent["id"], drain_at
+        )
+        # The run reads the pair off the row it was dispatched with, so the row has to be
+        # re-read: a test that handed over the pre-update dict would be testing the
+        # seeded arm twice.
+        agent = await agent_service.get_agent_by_id(agent["id"])
+        assert curation_service.drain_of(agent) is not None, (
+            "a committed pair is what a resumed drain resumes from"
+        )
+    else:
+        assert curation_service.drain_of(agent) is None, "a seeded drain has no pair to name"
+
+    message, released, _read = await _cut_personal_turn(agent, monkeypatch, draining=True)
+
+    assert "Curator curation exceeded its run time limit of 2s" in message
+    assert "unread" in message
+    assert "drain position" in message, "the unread source is the drain, not the watermark"
+    assert "watermark" not in message, "the watermark is the position this run may not write"
+    if freshly_seeded:
+        assert "drain position at=None" in message, (
+            "a seeded drain has read nothing: the feed's own start is its resume point"
+        )
+    else:
+        assert str(drain_at) in message, "the next pass has to resume from the pair named here"
+    assert released == ["exec released"], "a cut that ends no harness turn cut nothing"
+
+
+@pytest.mark.parametrize("metered", [True, False])
+def test_a_beat_tick_whose_agent_stopped_being_scheduled_resolves_its_own_row(
+    metered, monkeypatch, lane_locks, worker_loop
+):
+    """The one post-charge exit in the file with nobody holding its row.
+
+    The beat charges the tick and stamps `started` before it dispatches. When the
+    row's `run_mode` had changed since, the nightly body returned, and a clean
+    return is exactly what the task wrapper reads as success: the row stayed
+    `started`, the credit stayed spent, `last_run_error` stayed NULL and no line was
+    written — while `mark_run`'s own promise says every path after `started`
+    resolves. A curator switched off mid-dispatch thus read as "running" to every
+    reader until the five-minute sweep noticed, and the switched-off curator is
+    exactly the row nobody is watching.
+
+    Red before the fix: the row is still `started` and the counter never moves. This
+    is a pin of a fixed defect, not of the two escape arms below, which already had
+    an owner and had to keep one."""
+    lane = worker_loop.run_until_complete(_lane())
+    alerts = _capture_alerts(monkeypatch)
+    # The beat's side of the dispatch: charge the tick and stamp it `started`...
+    worker_loop.run_until_complete(agent_service.mark_run(lane["id"], metered=metered))
+    # ...then have the row switch off before the worker ever picks the tick up.
+    worker_loop.run_until_complete(
+        get_pool().execute("UPDATE agents SET run_mode = 'manual' WHERE id = $1", lane["id"])
+    )
+    assert worker_loop.run_until_complete(_row(lane["id"]))["last_run_outcome"] == "started"
+
+    agent_schedules.run_scheduled_agent.run(str(lane["id"]), "202611140300", metered=metered)
+
+    row = worker_loop.run_until_complete(_row(lane["id"]))
+    assert row["last_run_outcome"] == "failed"
+    assert "agent run resolved without running" in row["last_run_error"]
+    # The mode it FOUND is the fact the tick has to record, not the mode it expected.
+    assert "run_mode=manual" in row["last_run_error"]
+    # A metered tick gets its charge back; an unmetered one invented no charge to
+    # refund, and the resolver is told which of the two it is rather than guessing.
+    assert row["month_run_count"] == MONTH_COUNT
+    assert _held_lane_locks(lane_locks) == []
+    # A switched-off curator is a user's decision, not an outage: the handler that
+    # pages a human stays out of this exit.
+    assert alerts == []
+
+
+def test_an_escaped_cancellation_resolves_the_lane_under_its_own_prefix(
+    monkeypatch, lane_locks, worker_loop
+):
+    """PIN (not red first): the escape guard already owned this exit, and this
+    records the wording the operator reads. The guard's text is the only thing a
+    `last_run_error` reader has, and the prefix is what separates "the worker died
+    mid-run" from "the run itself failed" — the class name alone reads like a
+    provider error. `test_worker_shutdown_cancellation_resolves_the_lane` pins the
+    same escape's outcome; this one pins the sentence."""
+    lane = worker_loop.run_until_complete(_lane())
+
+    async def cancelled_turn(*args, **kwargs):
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr(sprite_agent_service, "run_scheduled", cancelled_turn)
+
+    with pytest.raises(asyncio.CancelledError):
+        agent_schedules.run_curator_now.run(str(lane["id"]))
+
+    row = worker_loop.run_until_complete(_row(lane["id"]))
+    assert row["last_run_outcome"] == "failed"
+    assert row["last_run_error"].startswith("agent run aborted before it resolved")
+    assert "CancelledError" in row["last_run_error"]
+    assert row["month_run_count"] == MONTH_COUNT
+    assert _held_lane_locks(lane_locks) == []
+
+
+def test_a_turn_that_fails_without_words_still_resolves_but_records_nothing(
+    monkeypatch, lane_locks, worker_loop
+):
+    """PIN (not red first): today's asymmetry, written down rather than fixed here.
+
+    The catchable path stores `str(e)`, so an exception that says nothing leaves an
+    empty `last_run_error` even though the outcome resolved correctly; the escape
+    guard above names the class for the same silence. Changing either string is
+    outside this card — this test exists so that if one of them is ever unified, it
+    is a decision and not a drift, and so nobody reads an empty error column as a
+    run that never happened."""
+    lane = worker_loop.run_until_complete(_lane())
+    _capture_alerts(monkeypatch)
+    # The beat's charge, so the refund below lands where the nightly path puts it.
+    worker_loop.run_until_complete(agent_service.mark_run(lane["id"]))
+
+    async def silent_turn(*args, **kwargs):
+        raise RuntimeError()
+
+    monkeypatch.setattr(sprite_agent_service, "run_scheduled", silent_turn)
+    agent_schedules.run_scheduled_agent.run(str(lane["id"]), "202611140300")
+
+    row = worker_loop.run_until_complete(_row(lane["id"]))
+    assert row["last_run_outcome"] == "failed"
+    assert row["last_run_error"] == ""
+    assert row["month_run_count"] == MONTH_COUNT
+    assert _held_lane_locks(lane_locks) == []

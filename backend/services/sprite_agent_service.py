@@ -410,6 +410,24 @@ async def request_stop(session_id: str) -> bool:
     return True
 
 
+async def _release_pending_pull(next_event: asyncio.Future | None) -> None:
+    """Stop a pull that is still inside the generator's frame, and wait for it.
+
+    CPython refuses to close an async generator whose own frame is running: a
+    cancellation that lands mid-`anext` and reaches `aclose()` first dies with
+    `aclose(): asynchronous generator is already running`, and that `RuntimeError`
+    replaces the cancellation mid-unwind. So the frame comes back out first, and
+    only then does anything close. A pull that already finished has no frame left
+    to release, and awaiting its result here would either return a value nobody
+    asked for or re-raise an error the caller is already unwinding.
+    """
+    if next_event is None or next_event.done():
+        return
+    next_event.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await next_event
+
+
 async def _stoppable(events: AsyncIterator[dict], session_id: str) -> AsyncIterator[dict]:
     """Yield turn events until the session's stop flag appears in redis.
 
@@ -421,15 +439,17 @@ async def _stoppable(events: AsyncIterator[dict], session_id: str) -> AsyncItera
     # A stop requested after the previous turn ended must not kill this one.
     await r.delete(key)
     iterator = aiter(events)
+    # Bound before the `try` so the `finally` can release the pull it may find in
+    # flight: whoever ends this loop — the stop flag, the wall above `run_chat`, or
+    # a consumer that stops iterating — leaves through that one exit.
+    next_event: asyncio.Future | None = None
     try:
         while True:
             next_event = asyncio.ensure_future(anext(iterator))
             while not next_event.done():
                 await asyncio.wait({next_event}, timeout=_STOP_POLL_SECONDS)
                 if not next_event.done() and await r.get(key) is not None:
-                    next_event.cancel()
-                    with contextlib.suppress(asyncio.CancelledError):
-                        await next_event
+                    await _release_pending_pull(next_event)
                     raise TurnStopped
             try:
                 event = next_event.result()
@@ -437,6 +457,7 @@ async def _stoppable(events: AsyncIterator[dict], session_id: str) -> AsyncItera
                 return
             yield event
     finally:
+        await _release_pending_pull(next_event)
         await r.delete(key)
         await iterator.aclose()
 
@@ -766,7 +787,7 @@ async def _run_scheduled_turn(
     `draining` says the run reads a history drain's position rather than the incremental
     feed, which is the dispatcher's fact to know and this lane's fact to pass: a drain
     whose pair is freshly seeded holds no position yet, so nothing in the row says it."""
-    from . import scoped_curation_service, user_service
+    from . import curation_service, scoped_curation_service, user_service
 
     user_id = UUID(str(agent["user_id"]))
 
@@ -843,8 +864,29 @@ async def _run_scheduled_turn(
             _scheduled_chat_turn(agent, user, owner_name, session_id, message), timeout=wall
         )
     except TimeoutError as exc:
+        # The row's `last_run_error` is the only witness a cut run leaves, and a cause that
+        # does not name itself is out of the next pass's reach: so this one states the wall
+        # it hit, the position the run was reading from, and that the feed is unread. Those
+        # are the three facts that decide whether the backlog goes to the next pass.
+        # `read_position` is the watermark this run may WRITE against; while a history drain
+        # owns the read, the pair it actually READ from is the drain's, and that is the
+        # unread position worth recording. `draining` is the dispatcher's fact, so the pair
+        # can be one this row does not carry yet: `full_history` seeds a drain inside the
+        # run spec, and a seeded drain's resume point is the feed's own start. Measured on
+        # the founder copy 2026-11-16, the cut of such a run named the watermark instead,
+        # which is a position a drain never reads from — its backlog sits behind it.
+        if draining:
+            pair = curation_service.drain_of(agent)
+            unread_from = (
+                f"drain position at={pair[0]} cursor={pair[1]}"
+                if pair is not None
+                else "drain position at=None cursor={} (freshly seeded: reads from the start)"
+            )
+        else:
+            unread_from = f"watermark position at={read_position.at} event={read_position.event_id}"
         raise RunCeilingExceeded(
-            f"Curator curation exceeded its run time limit of {wall}s"
+            f"Curator curation exceeded its run time limit of {wall}s and left the feed"
+            f" unread, reading from {unread_from}"
         ) from exc
 
 

@@ -269,6 +269,23 @@ everything before it is captured in git history (`git log`), not here.
 
 ### Fixed
 
+- A curator run the ceiling cuts off now ends as a cut. On a slow model box the personal-lane
+  curator's turn used to die with `RuntimeError: agent turn failed: aclose(): asynchronous
+  generator is already running` instead of reporting its run ceiling: the cut arrived while the
+  turn's reader was still inside the harness stream, and closing a generator whose own frame is
+  still running is what CPython refuses. That refusal replaced the cancellation on its way out, so
+  the ceiling was never seen as a ceiling — no `RunCeilingExceeded`, no hand-off of the unread
+  backlog to the next pass, and a row whose error named a generator instead of the wall that ended
+  the run. The cut now stops the in-flight read and waits for it to come back before anything
+  closes, so the harness's own teardown runs, and the failure names the three facts the next pass
+  needs: the wall in seconds, that the feed is unread, and the position the run was reading from
+  (a draining run names its drain's committed pair, or says the drain was freshly seeded and reads
+  from the feed's start). A charged beat tick dispatched for an agent that stopped being scheduled
+  also resolves itself now — `failed` with a cause naming the mode it found and its credit returned
+  once — instead of leaving the row `started`, its credit spent and nothing logged. The wall itself
+  is untouched: not raised, not lengthened, not disabled, and the lane that defers to a run already
+  in flight still writes no outcome, because that run owns it.
+
 - A history drain now shows its own progress. The curator console and the Settings
   curator rows take their "still to read" figure from whichever position is live on the
   lane, and while a backfill is running that position is the drain's own — so the number
