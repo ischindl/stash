@@ -392,6 +392,16 @@ STOPPED_NOTE = "⏹ Stopped by user."
 
 _STOP_POLL_SECONDS = 2
 
+# The margin kept on the personal-lane wall's outer `wait_for` rescue. The wall's
+# normal exit is cooperative: at `wall` the deadline sets the session's stop flag,
+# `_stoppable` notices within `_STOP_POLL_SECONDS` and raises `TurnStopped`, which
+# unwinds the generator chain in order and kills the harness subprocess on the box.
+# The rescue only fires for a turn that ignores the flag (a harness stuck in a
+# blocking call), so the margin just has to exceed the cooperative unwind, not the
+# turn. It keeps both walls load-bearing (the design's rule) while the cooperative
+# exit is the one that normally wins.
+_WALL_RESCUE_GRACE_SECONDS = 60
+
 
 def _stop_key(session_id: str) -> str:
     return f"agent-turn-stop:{session_id}"
@@ -787,7 +797,7 @@ async def _run_scheduled_turn(
     `draining` says the run reads a history drain's position rather than the incremental
     feed, which is the dispatcher's fact to know and this lane's fact to pass: a drain
     whose pair is freshly seeded holds no position yet, so nothing in the row says it."""
-    from . import curation_service, scoped_curation_service, user_service
+    from . import scoped_curation_service, user_service
 
     user_id = UUID(str(agent["user_id"]))
 
@@ -822,72 +832,132 @@ async def _run_scheduled_turn(
         return ""
     owner_name = user["display_name"] or user["name"]
 
-    extracts = None
-    if agent.get("is_curator") and agent.get("digest_provider") is not None:
-        digest_session, digest_prompt = await build_digest_turn(agent, run_stamp)
-        extracts = await run_chat(
-            user_id,
-            owner_name,
-            user_id,
-            digest_session,
-            digest_prompt,
-            model_provider=agent["digest_provider"],
-            model_id=agent.get("digest_model_id"),
-            # The row's pin names the LOCAL box; a digest configured on a key
-            # provider has no box to pin, and a pin would (rightly) fail loud
-            # as a provider mismatch. Only a local digest inherits the box.
-            credential_id=(
-                agent.get("credential_id") if agent["digest_provider"] == "local" else None
-            ),
-            persona=agent["system_prompt"],
-            agent_name=agent["name"],
-        )
-        if not extracts.strip():
-            raise RuntimeError("digest phase returned no extracts")
-
-    session_id, message = await build_scheduled_turn(agent, run_stamp, extracts)
+    # A non-curator sprite turn keeps today's behaviour: no wall of its own.
     if not agent["is_curator"]:
-        # A sprite's interactive turn has a different owner and a different budget
-        # than a curator's bounded batch, so it keeps today's behaviour: no wall of
-        # its own here.
+        session_id, message = await build_scheduled_turn(agent, run_stamp, None)
         return await _scheduled_chat_turn(agent, user, owner_name, session_id, message)
-    # A curator's personal-lane turn had no wall at all: nothing between it and
-    # Celery's `task_soft_time_limit`, and the founder lane measured the result on
-    # 2026-11-14 — the worker's raise lands outside this coroutine, so the lane was
-    # resolved by the run-escape guard as `aborted before it resolved`, its credit
-    # stayed spent, and no catch-up pass was queued. Raising RunCeilingExceeded
-    # instead hands the dispatch a cause it already understands: a cut run whose
-    # completed work is durable and whose backlog needs the next pass.
+
+    # A curator's personal-lane turn runs in two phases - an optional digest read,
+    # then the curator's own wiki write - and BOTH are bounded by one wall: `wall` is
+    # the whole-run budget (`run_wall_seconds` = min(own, worker) - commit reserve), not
+    # a per-phase allowance. Measured on the founder copy 2026-11-16, a wall that wrapped
+    # only the curator write let the UNWALLED digest eat 421-835 s before the write was
+    # even reached; one curator's digest alone outran the worker's soft limit and died as
+    # `SoftTimeLimitExceeded` from outside the coroutine (credit spent, no catch-up
+    # queued). `run_wall_seconds` was always the run's whole allowance, so it now wraps
+    # the whole run: the digest is inside the wall too.
+    #
+    # The cut is cooperative, not cancellation-first. At `wall` a deadline sets the
+    # in-flight session's stop flag - the same path a user's Stop takes - `_stoppable`
+    # reaps the in-flight pull and closes the generator in order, killing the harness
+    # subprocess on the box; the outer `wait_for` with a grace margin is only the rescue
+    # for a turn that ignores the flag. Both walls stay load-bearing; the cooperative one
+    # is the exit that normally wins. Either way an abandoned turn reaches no commit: it
+    # raises `RunCeilingExceeded`, which the dispatch reads as a cut, not a break - so
+    # neither dispatcher can commit a feed nobody finished reading.
     wall = agent_service.run_wall_seconds(agent)
+    in_flight: dict[str, str | None] = {"session_id": None}
+    cut = {"deadline": False}
+
+    async def _cooperative_deadline() -> None:
+        await asyncio.sleep(wall)
+        cut["deadline"] = True
+        active = in_flight["session_id"]
+        if active is not None:
+            await request_stop(active)
+
+    async def _curator_turn() -> str:
+        extracts = None
+        if agent.get("digest_provider") is not None:
+            digest_session, digest_prompt = await build_digest_turn(agent, run_stamp)
+            in_flight["session_id"] = digest_session
+            try:
+                extracts = await run_chat(
+                    user_id,
+                    owner_name,
+                    user_id,
+                    digest_session,
+                    digest_prompt,
+                    model_provider=agent["digest_provider"],
+                    model_id=agent.get("digest_model_id"),
+                    # The row's pin names the LOCAL box; a digest configured on a key
+                    # provider has no box to pin, and a pin would (rightly) fail loud
+                    # as a provider mismatch. Only a local digest inherits the box.
+                    credential_id=(
+                        agent.get("credential_id") if agent["digest_provider"] == "local" else None
+                    ),
+                    persona=agent["system_prompt"],
+                    agent_name=agent["name"],
+                )
+            finally:
+                in_flight["session_id"] = None
+            if extracts == STOPPED_NOTE:
+                # The deadline cut the digest; there are no extracts to write a wiki
+                # from, and the wall was already spent - do not start the write phase.
+                return STOPPED_NOTE
+            if not extracts.strip():
+                raise RuntimeError("digest phase returned no extracts")
+
+        session_id, message = await build_scheduled_turn(agent, run_stamp, extracts)
+        in_flight["session_id"] = session_id
+        try:
+            return await _scheduled_chat_turn(agent, user, owner_name, session_id, message)
+        finally:
+            in_flight["session_id"] = None
+
+    deadline = asyncio.create_task(_cooperative_deadline())
     try:
-        return await asyncio.wait_for(
-            _scheduled_chat_turn(agent, user, owner_name, session_id, message), timeout=wall
-        )
+        result = await asyncio.wait_for(_curator_turn(), timeout=wall + _WALL_RESCUE_GRACE_SECONDS)
     except TimeoutError as exc:
-        # The row's `last_run_error` is the only witness a cut run leaves, and a cause that
-        # does not name itself is out of the next pass's reach: so this one states the wall
-        # it hit, the position the run was reading from, and that the feed is unread. Those
-        # are the three facts that decide whether the backlog goes to the next pass.
-        # `read_position` is the watermark this run may WRITE against; while a history drain
-        # owns the read, the pair it actually READ from is the drain's, and that is the
-        # unread position worth recording. `draining` is the dispatcher's fact, so the pair
-        # can be one this row does not carry yet: `full_history` seeds a drain inside the
-        # run spec, and a seeded drain's resume point is the feed's own start. Measured on
-        # the founder copy 2026-11-16, the cut of such a run named the watermark instead,
-        # which is a position a drain never reads from — its backlog sits behind it.
-        if draining:
-            pair = curation_service.drain_of(agent)
-            unread_from = (
-                f"drain position at={pair[0]} cursor={pair[1]}"
-                if pair is not None
-                else "drain position at=None cursor={} (freshly seeded: reads from the start)"
-            )
-        else:
-            unread_from = f"watermark position at={read_position.at} event={read_position.event_id}"
-        raise RunCeilingExceeded(
-            f"Curator curation exceeded its run time limit of {wall}s and left the feed"
-            f" unread, reading from {unread_from}"
-        ) from exc
+        # The rescue: the turn ignored the cooperative flag, so it is cancelled here.
+        raise _ceiling_exceeded(wall, agent, draining, read_position) from exc
+    finally:
+        deadline.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await deadline
+    if result == STOPPED_NOTE:
+        # The cooperative exit (or a user's Stop - one codepath) came back with the
+        # stopped note: this run read a feed it never finished, so it commits nothing.
+        raise _ceiling_exceeded(wall, agent, draining, read_position, by_user=not cut["deadline"])
+    return result
+
+
+def _ceiling_exceeded(
+    wall: int,
+    agent: dict,
+    draining: bool,
+    read_position: Position,
+    *,
+    by_user: bool = False,
+) -> RunCeilingExceeded:
+    """Build the cause a cut personal-lane curator run leaves in `last_run_error`.
+
+    The row's error is the only witness a cut run leaves, and a cause that does not
+    name itself is out of the next pass's reach: so this states the wall it hit (or
+    that a user stopped it), the position the run was reading from, and that the feed is
+    unread. `read_position` is the watermark this run may WRITE against; while a history
+    drain owns the read, the pair it actually READ from is the drain's, and that is the
+    unread position worth recording. `draining` is the dispatcher's fact, so the pair can
+    be one this row does not carry yet: `full_history` seeds a drain inside the run spec,
+    and a seeded drain's resume point is the feed's own start.
+    """
+    from . import curation_service
+
+    if draining:
+        pair = curation_service.drain_of(agent)
+        unread_from = (
+            f"drain position at={pair[0]} cursor={pair[1]}"
+            if pair is not None
+            else "drain position at=None cursor={} (freshly seeded: reads from the start)"
+        )
+    else:
+        unread_from = f"watermark position at={read_position.at} event={read_position.event_id}"
+    head = (
+        "Curator turn was stopped before finishing its feed"
+        if by_user
+        else f"Curator curation exceeded its run time limit of {wall}s"
+    )
+    return RunCeilingExceeded(f"{head} and left the feed unread, reading from {unread_from}")
 
 
 async def _scheduled_chat_turn(

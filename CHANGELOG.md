@@ -269,6 +269,22 @@ everything before it is captured in git history (`git log`), not here.
 
 ### Fixed
 
+- A personal-lane curator run now ends inside its own wall and commits only what it finished.
+  The wall STAS-447 gave this lane bounded only the curator's write turn, so a two-phase run spent
+  its budget reading the wiki into digest extracts first — a digest alone outran the worker's cap on
+  the founder's local box, and `SoftTimeLimitExceeded` landed outside the coroutine, where no `except`
+  could resolve the lane, refund its credit, or hand the backlog on (the run lived the full 1500 s and
+  died from the outside). The wall now bounds the whole turn — digest and write together — and drives
+  the cut through the cooperative stop flag, with the outer timeout kept only as a rescue. Second, an
+  abandoned turn no longer reports success: a stopped turn used to fall through to the drain commit and
+  `mark_run_succeeded` on a feed nobody finished reading, so a Stop button pressed mid-pass left the
+  watermark advanced over an unread backlog. A turn that comes back stopped now raises the same ceiling
+  failure and commits nothing — the drain pair stays byte-identical and the row reports `failed`, naming
+  the feed it left unread. Third, the personal lane writes its own `curator pass=` line for each
+  committed drain pass, so progress that was previously readable only from the row is now legible on the
+  worker log — the reason a real local-box run that was committing passes looked, in the log, like one
+  that was committing none.
+
 - A curator run the ceiling cuts off now ends as a cut. On a slow model box the personal-lane
   curator's turn used to die with `RuntimeError: agent turn failed: aclose(): asynchronous
   generator is already running` instead of reporting its run ceiling: the cut arrived while the

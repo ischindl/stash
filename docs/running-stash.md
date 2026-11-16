@@ -192,8 +192,10 @@ Before starting:
 - Every decision a curator dispatch makes about a turn is one line on the worker
   lane that made it, and each begins `agent schedule:`. A turn names the lane it took
   (`lane=scoped` or `lane=personal`) when it starts and the wall seconds it took when
-  it ends; the personal lane writes no INFO line of its own, so those two are the only
-  evidence that such a run happened at all. A pass that spends no turn names the guard
+  it ends. A personal run that commits no pass (a cut, or a turn stopped before it
+  finished) still leaves only those two lines as evidence it happened; a personal run that
+  commits a drain pass also writes a `curator pass=` line (see below), so a drain that is
+  making progress is now visible on the log and not only in the row. A pass that spends no turn names the guard
   that refused it with a `guard=` token (`curator_off`, `not_pro`, `no_pending_input`,
   `catchup_ceiling`), and a catch-up chain that stops mid-backlog names the condition
   that ended it (`outcome_not_ran`, `no_progress`) — the cost decision is the one guard
@@ -214,11 +216,13 @@ Before starting:
   `2026-11-15 09:00:00,000 INFO backend.tasks.agent_schedules: agent schedule: …`.
   All four also run with `--loglevel=info`, so an empty window in that log is neither a
   level problem nor a lost record: it means the run never reached a line worth
-  printing. The scoped lane additionally writes one `curator pass=` meter line per
-  committed pass, which is the line to watch while a backlog drains: it carries the
-  granted `budget=`, the calibrated seconds-per-character, and what the pass's own
-  characters actually cost (`seconds_per_character=`), so calibration drift reads off
-  the worker log without dialing the model.
+  printing. Both curator lanes write one `curator pass=` meter line per committed pass,
+  which is the line to watch while a backlog drains. The scoped line carries the granted
+  `budget=`, the calibrated seconds-per-character, and what the pass's own characters
+  actually cost (`seconds_per_character=`), so calibration drift reads off the worker log
+  without dialing the model. The personal line names the agent, the instant it committed
+  through, and `lane=personal`; it carries no `budget=` or `seconds_per_character=` because
+  the personal lane is not sized or counted in characters the way the scoped batch is.
 
 ```bash
 docker compose -f docker-compose.prod.yml config --quiet

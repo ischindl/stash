@@ -345,6 +345,20 @@ async def _commit_personal_drain(agent, watermark_read, drain, through) -> None:
                 conn, agent_id, through.at, {}, watermark_read, through
             )
 
+    # The drain-rate meter, now on the personal lane too. `curator pass=` was scoped-only,
+    # so a personal-lane run that committed a pass left no per-pass line and its progress
+    # was only readable from the row (the reason AC (a) was unobservable on the copy, whose
+    # curator runs on this lane). One line per committed drain pass; the personal lane has
+    # one turn and so one commit, hence pass=1, and it reports only what this function
+    # actually knows - the boundary and the lane. No `characters=` or `scopes=`: this lane
+    # never counted them. The prefix `curator pass=` never contains `curator <id> turn `, so
+    # `_turn_bracket`'s record filter cannot pick it up.
+    logger.info(
+        "curator pass=1 agent=%s committed_through=%s lane=personal",
+        agent_id,
+        through.at.isoformat() if through.at is not None else None,
+    )
+
 
 async def _run_curator_locked(
     agent, workspace, full_history, metered, catchup_remaining, catchup, platform_initiated

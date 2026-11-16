@@ -2071,3 +2071,233 @@ async def test_a_curator_turn_is_bracketed_by_its_lane_at_both_ends(
     assert len(scoped) == 2, scoped
     assert "turn started lane=scoped full_history=True metered=False" in scoped[0]
     assert "turn finished lane=scoped wall=" in scoped[1]
+
+
+# ---------------------------------------------------------------------------
+# STAS-456: a personal-lane curator wall that cuts, cuts as a cut - and an
+# abandoned turn commits nothing. Both tests patch at the seam the wall wraps
+# (the harness stream generator / the turn), NOT at `run_scheduled`, because the
+# wall lives inside `run_scheduled`: patching that seam cannot fail a deleted wall.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_personal_wall_cut_arrives_as_a_cut_not_a_cleanup_error(
+    client: AsyncClient, sprite_exec, _db_pool, monkeypatch, caplog
+):
+    """A turn that outlives its wall ends in `RunCeilingExceeded`, not the harness error.
+
+    Measured on the founder copy: a curator run lived 1266 s and died with
+    `agent turn failed: aclose(): asynchronous generator is already running`. That was the
+    wall's own cleanup talking - the cancellation reached `aclose()` while the generator's
+    frame was still running in the un-cancelled in-flight `anext` task, and that RuntimeError
+    replaced the cancellation, so `run_chat` laundered it into a harness failure and the wall
+    never resolved as a cut. STAS-457 reaps the pull first; STAS-456 then drives the cut
+    through the cooperative stop flag (with the outer `wait_for` only as the rescue).
+
+    This test drives a turn that never finishes within a tiny wall and asserts the cut is
+    clean: a `RunCeilingExceeded` naming the unread feed, no message containing `aclose`,
+    the drain/watermark pair unmoved, and every redis key the run held gone rather than
+    left to its TTL.
+    """
+    from backend.services import agent_service, sprite_agent_service
+    from backend.tasks import agent_schedules
+    from backend.tasks.agent_schedules import _run_curator_now
+
+    monkeypatch.setattr(agent_schedules.run_curator_now, "apply_async", lambda **kw: None)
+
+    async def _no_chain(*a, **k):
+        return None
+
+    monkeypatch.setattr(agent_schedules, "_dispatch_curator_catchup", _no_chain)
+
+    # A turn that reads the harness stream and never finishes: the generator blocks on the
+    # box (the exec read never returns), exactly the state the aclose bug caught mid-flight.
+    async def blocking_exec_stream(sprite, argv, *, env, cwd=None):
+        await asyncio.sleep(10)
+        yield {"exit_code": 0}  # unreachable while the wall stands
+
+    from backend.services import sprite_service
+
+    monkeypatch.setattr(sprite_service, "exec_stream", blocking_exec_stream)
+    monkeypatch.setattr(sprite_agent_service, "_STOP_POLL_SECONDS", 0.02)
+    monkeypatch.setattr(sprite_agent_service, "_WALL_RESCUE_GRACE_SECONDS", 0.5)
+    monkeypatch.setattr(agent_service, "run_wall_seconds", lambda _agent: 0.5)
+
+    _key, uid = await _register(client)
+    curator = await agent_service.get_or_create_curator(uid)
+    cid = UUID(curator["id"])
+    await _db_pool.execute(
+        "INSERT INTO history_events (owner_user_id,created_by,agent_name,event_type,"
+        "session_id,content,created_at) "
+        "VALUES ($1,$1,'test','user_message','conv-wallcut','some work',"
+        "(now() - interval '1 hour'))",
+        uid,
+    )
+
+    before = await agent_service.get_agent_by_id(cid)
+    before_pair = curation_service.drain_of(before)
+    before_curated = before["curated_through"]
+
+    with caplog.at_level(logging.INFO):
+        with pytest.raises(sprite_agent_service.RunCeilingExceeded) as exc:
+            await _run_curator_now(cid, metered=False)
+
+    message = str(exc.value)
+    assert "aclose" not in message, message
+    assert "left the feed unread, reading from" in message, message
+    assert not any("aclose" in record.getMessage() for record in caplog.records)
+
+    # The second exit: force the rescue. With the cooperative stop disabled, the ONLY
+    # thing that ends the turn is the outer `wait_for` cancelling it, which lands in
+    # `_stoppable`'s `finally` with the frame still in the un-cancelled in-flight pull -
+    # the exact state that used to raise `aclose(): ... already running`. `_release_pending_pull`
+    # there reaps the pull before closing, so the ORIGINAL cancellation is what propagates
+    # and it still resolves as a clean `RunCeilingExceeded`. Removing that reap turns this
+    # same scenario back into the reported harness error.
+    async def _no_request_stop(_session_id):
+        return False
+
+    monkeypatch.setattr(sprite_agent_service, "request_stop", _no_request_stop)
+    caplog.clear()
+    with caplog.at_level(logging.INFO):
+        with pytest.raises(sprite_agent_service.RunCeilingExceeded) as exc2:
+            await _run_curator_now(cid, metered=False)
+    assert "aclose" not in str(exc2.value), str(exc2.value)
+    assert not any("aclose" in record.getMessage() for record in caplog.records)
+
+    after = await agent_service.get_agent_by_id(cid)
+    assert after["last_run_outcome"] == "failed", after["last_run_error"]
+    assert "aclose" not in (after["last_run_error"] or "")
+    assert curation_service.drain_of(after) == before_pair, "a cut run moved the drain pair"
+    assert after["curated_through"] == before_curated, "a cut run advanced the watermark"
+
+    # Every lock/flag the run held in redis is released, not left to expire.
+    live = set(sprite_exec.redis.data)
+    assert not any(k.startswith("agent-turn") for k in live), live
+    assert f"agent-run:{cid}" not in live, live
+
+
+@pytest.mark.asyncio
+async def test_a_stopped_personal_curator_turn_commits_nothing(
+    client: AsyncClient, sprite_exec, _db_pool, monkeypatch, caplog
+):
+    """A turn that comes back stopped advances no drain pair and does not report `ran`.
+
+    `run_chat` maps a stop to `STOPPED_NOTE` and returns normally, so before STAS-456 a
+    user pressing Stop on a personal-lane curator run fell through to the drain commit and
+    `mark_run_succeeded` on a feed nobody finished reading. The rule now lives where the
+    turn returns (in `_run_scheduled_turn`, shared by both dispatchers), so an abandoned
+    turn reaches none of `complete_through`'s commit, `_commit_personal_drain`,
+    `mark_curated`, or `mark_run_succeeded`.
+    """
+    from backend.services import sprite_agent_service
+    from backend.tasks import agent_schedules
+    from backend.tasks.agent_schedules import _run_curator_now
+
+    monkeypatch.setattr(agent_schedules.run_curator_now, "apply_async", lambda **kw: None)
+
+    async def _no_chain(*a, **k):
+        return None
+
+    monkeypatch.setattr(agent_schedules, "_dispatch_curator_catchup", _no_chain)
+
+    # The turn comes back with the stopped note - a user Stop, or the wall's cooperative
+    # flag; one codepath downstream either way.
+    monkeypatch.setattr(
+        sprite_agent_service,
+        "_scheduled_chat_turn",
+        AsyncMock(return_value=sprite_agent_service.STOPPED_NOTE),
+    )
+
+    _key, uid = await _register(client)
+    curator = await agent_service.get_or_create_curator(uid)
+    cid = UUID(curator["id"])
+    base = datetime(2026, 1, 1, tzinfo=UTC)
+    await _db_pool.executemany(
+        "INSERT INTO history_events (owner_user_id,created_by,agent_name,event_type,"
+        "session_id,content,created_at) "
+        "VALUES ($1,$1,'test','user_message',$2,$3,$4)",
+        [(uid, f"stopped-{i}", f"work {i}", base + timedelta(days=i)) for i in range(3)],
+    )
+    drain_at = base - timedelta(days=1)
+    await _db_pool.execute(
+        "UPDATE agents SET curated_through = NULL, drain_through = $2 WHERE id = $1",
+        cid,
+        drain_at,
+    )
+
+    with caplog.at_level(logging.INFO, logger="backend.tasks.agent_schedules"):
+        with pytest.raises(sprite_agent_service.RunCeilingExceeded) as exc:
+            await _run_curator_now(cid, full_history=True, metered=False)
+
+    assert "left the feed unread" in str(exc.value)
+    assert "aclose" not in str(exc.value)
+
+    row = await agent_service.get_agent_by_id(cid)
+    assert row["last_run_outcome"] == "failed", row["last_run_error"]
+    assert row["last_run_outcome"] != "ran"
+    # The drain pair is byte-identical to where the dispatch found it: nothing moved.
+    assert curation_service.drain_of(row) == (drain_at, {}), curation_service.drain_of(row)
+    assert row["curated_through"] is None, row["curated_through"]
+    # No pass meter for a pass that never committed.
+    assert not any(record.getMessage().startswith("curator pass=") for record in caplog.records), [
+        record.getMessage() for record in caplog.records
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_committed_personal_drain_pass_prints_the_meter(
+    client: AsyncClient, sprite_exec, _db_pool, monkeypatch, caplog
+):
+    """AC (a) observability: the personal lane now writes one `curator pass=` per commit.
+
+    `curator pass=` was scoped-only, so a personal-lane run that committed a pass left no
+    per-pass line and its progress was readable only from the row - the reason AC (a) was
+    unobservable on the copy, whose curator runs on this lane. This is the positive control
+    for the meter, and it keeps the line out of `_turn_bracket`'s record filter.
+    """
+    from backend.tasks import agent_schedules
+    from backend.tasks.agent_schedules import _run_curator_now
+
+    monkeypatch.setattr(agent_schedules.run_curator_now, "apply_async", lambda **kw: None)
+
+    async def _no_chain(*a, **k):
+        return None
+
+    monkeypatch.setattr(agent_schedules, "_dispatch_curator_catchup", _no_chain)
+
+    _key, uid = await _register(client)
+    curator = await agent_service.get_or_create_curator(uid)
+    cid = UUID(curator["id"])
+    base = datetime(2026, 1, 1, tzinfo=UTC)
+    await _db_pool.executemany(
+        "INSERT INTO history_events (owner_user_id,created_by,agent_name,event_type,"
+        "session_id,content,created_at) "
+        "VALUES ($1,$1,'test','user_message',$2,$3,$4)",
+        [(uid, f"meter-{i}", f"work {i}", base + timedelta(days=i)) for i in range(3)],
+    )
+    await _db_pool.execute(
+        "UPDATE agents SET curated_through = NULL, drain_through = $2 WHERE id = $1",
+        cid,
+        base - timedelta(days=1),
+    )
+
+    with caplog.at_level(logging.INFO, logger="backend.tasks.agent_schedules"):
+        await _run_curator_now(cid, full_history=True, metered=False)
+        meters = [
+            record.getMessage()
+            for record in caplog.records
+            if record.getMessage().startswith("curator pass=")
+        ]
+        bracket = _turn_bracket(caplog.records, cid)
+
+    assert len(meters) == 1, meters
+    assert f"agent={cid}" in meters[0]
+    assert "lane=personal" in meters[0] and "committed_through=" in meters[0]
+    # The meter must never collide with the turn-bracket filter.
+    assert all("curator pass=" not in line for line in bracket), bracket
+
+    row = await agent_service.get_agent_by_id(cid)
+    assert row["last_run_outcome"] == "ran", row["last_run_error"]
+    assert curation_service.drain_of(row) is None  # the drain finished and handed off

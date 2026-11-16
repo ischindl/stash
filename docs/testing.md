@@ -441,7 +441,19 @@ it failed and refunds its curator credit. Both curator lanes are now walled: the
 wrapped in the same wall and raises the same `RunCeilingExceeded` — which it can only say because the
 cut now releases the in-flight pull first: until STAS-457 the personal lane's wall died on closing a
 generator whose frame was still running, and the resulting `RuntimeError` was never a `TimeoutError`, so
-the ceiling this paragraph promises is what the reap, not the `wait_for`, delivers. A sprite's interactive turn keeps
+the ceiling this paragraph promises is what the reap, not the `wait_for`, delivers. Since STAS-456
+that personal wall bounds the *whole* two-phase turn rather than only its write: a digest-only run on
+the founder's local box used to spend the entire budget reading the wiki into extracts before the write
+phase ever began, and a slow digest alone blew past the worker's cap, so `SoftTimeLimitExceeded` landed
+outside the coroutine where no `except` could resolve the lane. The cut now arrives cooperatively through
+the stop flag (the `wait_for` kept only as a rescue), and a turn that comes back stopped — by the wall or
+by a user's Stop, one codepath — raises the same ceiling failure and commits nothing, leaving the drain
+pair byte-identical and the row reporting `failed` naming the feed it left unread, rather than advancing
+the watermark over a backlog nobody finished reading. Pinned by `test_curator.py`'s
+`test_a_personal_wall_cut_arrives_as_a_cut_not_a_cleanup_error` (both wall exits clean — the cooperative
+cut and the `wait_for` rescue — and removing the `finally` reap turns the rescue back into the reported
+`aclose()` error), `test_a_stopped_personal_curator_turn_commits_nothing`, and
+`test_a_committed_personal_drain_pass_prints_the_meter`. A sprite's interactive turn keeps
 no wall of its own: it has a different owner and a different budget than a curator's bounded batch.
 The lane answer
 is `scoped_curation_service.workspace_for_agent`, the same call the dispatcher makes, and it
