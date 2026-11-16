@@ -26,6 +26,16 @@ registration in `settings.json` and no restart ritual beyond starting pi again. 
 installer copies bytes and never symlinks, so it keeps working if the stash checkout
 or pipx env moves, and it never depends on this repo's location.
 
+Copying that file is necessary and not quite sufficient. `<agentDir>/settings.json`
+carries an `extensions` list of per-file `+`/`-` directives, and one
+`-extensions/stash.ts` entry stops pi loading our extension while the copied file
+sits there untouched. Measured on pi 1.5.2 with the file installed: with no such
+directive the hooks fire — `on_session_start`, `on_prompt`, `on_stop` and
+`on_session_end` on a turn that calls no tool — and with that one entry present not
+one of them fires, while the installed-check still reports the plugin present,
+because it tests the file and knows nothing about the directive. So when a pi
+session records nothing, read that `settings.json` before blaming the transport.
+
 Manual install, when you cannot run the CLI installer:
 
 ```bash
