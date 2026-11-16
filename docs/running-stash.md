@@ -166,11 +166,15 @@ Before starting:
   gives each one its own "Run ceiling" in seconds, which is what a lane running
   on a slow local model endpoint needs, and clearing it returns that curator to
   this setting. What one pass of that run is handed to read is sized from the wall that number
-  resolves to — not the raw ceiling — priced in model turns: turns-the-wall-affords times
-  characters-per-measured-turn, floored at the loader's 1,024-character smallest batch. Because the
+  resolves to — not the raw ceiling — priced in model turns: the turns the wall can still afford once
+  the checkpoint commit has taken its own reserve, times characters-per-measured-turn, floored at the
+  loader's 1,024-character smallest batch. Because the
   wall is the ceiling capped by the worker's own task ceiling, no slice is ever sized beyond what the
-  worker can let it walk. A ceiling too small to buy even the cheapest pass (~334 s at the shipped
-  price) fails the run loudly and names the price, rather than draining nothing forever. A curator's own number
+  worker can let it walk. A ceiling whose wall cannot pay for both the cheapest pass and its own
+  commit fails the run loudly and names both prices, rather than draining nothing forever — and the
+  number to dial is a CEILING, which is the reserve higher than the wall it becomes: the 1,024-character
+  floor costs 334.3 s of wall and the commit wants 30 s of its own, so the wall must reach 364.3 s and
+  the ceiling about 394 s at the shipped price. A curator's own number
   bounds both its run and the lock that
   keeps a second run of that curator from starting while the first is still
   going, so the two can never disagree: a lock keyed shorter than the wall would

@@ -288,8 +288,11 @@ def _reserve_nothing_for_the_commit(monkeypatch) -> None:
     room to commit — correct for a deployment, unusable for a test that has to wait
     its wall out. What those tests are about is which wall gives out, what a cut
     leaves durable, and what fence the lane is held with; the size of the reserve is
-    pinned where it lives, in `test_celery_visibility_timeout.py`. Zeroing it here
-    moves no ceiling, no wall ordering, and no assertion.
+    pinned where it lives, in `test_celery_visibility_timeout.py`. Since STAS-468
+    zeroing it moves `input_budget` too — the gate and the grant follow the wall, on
+    purpose, because a loop test's wall IS its ceiling — while what it never moves is
+    any assertion about the reserve's SIZE, which lives in the unpatched ladder
+    `test_every_granted_wall_affords_the_slice_it_grants`.
     """
     from backend.services import agent_service
 
@@ -320,6 +323,19 @@ async def test_separate_model_contexts_and_no_sprite_execution(
     agent = await _from_never(
         pool, await agent_service.get_or_create_curator(dataset.owner, wiki="external")
     )
+    # This test asks which model context each scope is handed, and its `all_started`
+    # rendezvous only works while all three scopes belong to ONE pass - so the ceiling is
+    # dialed to the wall that holds this fixture's whole feed in a single pass. STAS-468
+    # prices the commit inside the slice, which moves the 570 s default wall to a
+    # 1,455-character grant - one pass short of this feed; the 630 s ceiling below
+    # resolves to a 600 s wall and the 1,746-character grant these counts were written
+    # against.
+    await pool.execute(
+        "UPDATE agents SET turn_timeout_seconds=$2 WHERE id=$1",
+        UUID(str(agent["id"])),
+        630,
+    )
+    agent = await agent_service.get_agent_by_id(UUID(str(agent["id"])))
     await sprite_agent_service.run_scheduled(
         agent, "security-test", curation_service.position_of(agent)
     )
@@ -1033,10 +1049,17 @@ def test_a_wall_at_the_cheapest_pass_is_refused_naming_the_bound():
 
     `<=` is load-bearing, not a typo for `<`: the slice a wall of exactly the bound
     would be granted already costs that whole wall, which is the zero-drain symptom
-    inside the fixed code. The message must name the bound, both constants and
-    their units, because this refusal reaches an operator as a failed curator run.
+    inside the fixed code. STAS-468 widened what a wall has to pay for: the pass price
+    is not the whole bill, because the pass must also leave time to commit itself, so
+    the threshold is `_minimum_wall_seconds()` - read here, never restated - and the
+    message names the commit's reserve and the wall that buys both next to the numbers
+    an operator already got, because this refusal reaches them as a failed curator run.
     """
+    from backend.services import agent_service
+
     bound = curation._smallest_pass_seconds()
+    gate = curation._minimum_wall_seconds()
+    reserve = agent_service.RUN_COMMIT_RESERVE_SECONDS
     with pytest.raises(ValueError, match="cannot buy the cheapest pass") as refused:
         curation.input_budget(bound)
     message = str(refused.value)
@@ -1044,48 +1067,87 @@ def test_a_wall_at_the_cheapest_pass_is_refused_naming_the_bound():
     assert f"{curation._MODEL_TURN_SECONDS}s" in message
     assert f"{curation._INPUT_CHARS_PER_MODEL_TURN}-character" in message
     assert "1024 characters" in message
+    assert f"{reserve}s" in message
+    assert f"{gate:.1f}s" in message
 
 
 def test_every_granted_wall_affords_the_slice_it_grants():
-    """The ladder half of the relation, from half a turn to twice the founder ceiling.
+    """The ladder half of the relation: a wall is granted only what it can pay for.
 
-    Not an equality - the correction this card makes to its own first plan: the
-    guard refuses `{wall <= _smallest_pass_seconds()}` while the seeded loop
-    declines pass 1 at `{wall <= _MODEL_TURN_SECONDS}`, and the bound is by
-    construction at least one turn, so the guard's refuse-set is a SUPERSET: no
-    wall exists that licenses a pass and then declines it. Every wall at or below
-    the bound must raise; every wall above it must get a slice whose calibrated
-    cost `granted x T / C` fits inside the wall that granted it and that is at
-    least the loader's smallest batch. The turn-only guard this design replaced
-    granted wall 120 a 1,024-character slice costing more than the wall; that row
-    is in this ladder.
+    Two asserts judge a granted wall, and the second is what STAS-468 adds. The slice's
+    calibrated cost must be STRICTLY inside the wall - `granted x T / C < wall` - because
+    a slice priced exactly AT the wall leaves the pass no time to checkpoint itself, and
+    `<=` certified that symptom as correct for every wall whose price landed on it,
+    including the 570 s wall the deployment default resolves to. The leftover must then
+    be at least `RUN_COMMIT_RESERVE_SECONDS`, read from the shipped module and
+    deliberately NOT monkeypatched here: that is what makes this the ladder that judges
+    the reserve rather than one that restates it.
+
+    The headroom law this pins is `((wall - R) mod T) + R`, whose minimum over every
+    grantable wall is exactly R, reached at wall 600 - a 1,746-character slice costing
+    570.0 of a 600 s wall, all three values exactly representable. So the headroom
+    assert stays NON-STRICT: written as `>` it reddens for the right answer. Before the
+    commit was priced the law was `wall mod T`, whose minimum is 0.0 - which is the
+    defect. Threshold and grant are both read from `_minimum_wall_seconds()`, so neither
+    can drift from the other, and the exact gate is deliberately NOT a sample: gate is
+    `F + R`, and `(F + R) - R` need not return `F` under IEEE rounding, so the exact
+    boundary is a knife-edge of representation rather than a semantic case; `gate +/-
+    0.1` covers the decision. The nine witness walls below are the walls Step 0 measured
+    - 335/340/355/364 decided by the loader's floor (the band this card newly refuses,
+    335 having been the tightest wall admitted at 0.7045 s of headroom), and
+    475/570/571/950/1140 decided by turns. Wall 600 is in the range below. The turn-only
+    guard this design replaced granted wall 120 a 1,024-character slice costing more than
+    the wall; that row is still in this ladder.
     """
+    from backend.services import agent_service
+
     turn = curation._MODEL_TURN_SECONDS
     per_turn = curation._INPUT_CHARS_PER_MODEL_TURN
     minimum = curation.scoped_curation_inputs.MINIMUM_BATCH_CHARS
-    bound = curation._smallest_pass_seconds()
+    reserve = agent_service.RUN_COMMIT_RESERVE_SECONDS
+    gate = curation._minimum_wall_seconds()
+    witnesses = (335, 340, 355, 364, 475, 570, 571, 950, 1140)
     walls = (
         [turn * half for half in (0.5, 1.0, 2.0)]
-        + [bound - 0.1, bound, bound + 0.1]
+        + [gate - 0.1, gate + 0.1]
+        + list(witnesses)
         + list(range(350, 1201, 50))
     )
     for wall in walls:
         try:
             granted = curation.input_budget(wall)
         except ValueError:
-            assert wall <= bound, f"wall {wall}s refused although the bound is {bound:.1f}s"
+            assert wall < gate, f"wall {wall}s refused although the gate is {gate:.1f}s"
             continue
-        assert wall > bound, f"wall {wall}s granted although it does not exceed {bound:.1f}s"
+        assert wall >= gate, f"wall {wall}s granted although it does not reach {gate:.1f}s"
         assert wall > turn
         assert granted >= minimum
-        assert granted * turn / per_turn <= wall, (
+        cost = granted * turn / per_turn
+        assert cost < wall, (
             f"wall {wall}s was granted {granted} characters, whose calibrated cost "
-            f"{granted * turn / per_turn:.1f}s exceeds it"
+            f"{cost:.1f}s is not inside the wall that granted it"
         )
-    # Which term decided the founder's own wall - read off, not asserted blind.
-    founder = curation.input_budget(570)
-    deciding = "floor" if founder == minimum else "turns"
-    print(f"input_budget(570) = {founder} characters, decided by the {deciding} term")
+        assert wall - cost >= reserve, (
+            f"wall {wall}s was granted {granted} characters costing {cost:.1f}s, leaving "
+            f"{wall - cost:.1f}s - under the {reserve}s the pass needs to commit itself"
+        )
+    # The proof is a printed table, not a match: what each witness wall is granted, what
+    # that costs at the priced measure, and what headroom is left for its commit.
+    print()
+    print(f"witness walls at T={turn}s / C={per_turn} / commit reserve R={reserve}s")
+    for wall in witnesses:
+        try:
+            granted = curation.input_budget(wall)
+        except ValueError:
+            print(f"  wall {wall:4d}  REFUSED - buys neither the cheapest pass nor a commit")
+            continue
+        cost = granted * turn / per_turn
+        headroom = wall - cost
+        deciding = "floor" if granted == minimum else "turns"
+        print(
+            f"  wall {wall:4d}  grant={granted:5d} ({deciding:5s})  cost={cost:7.1f}  "
+            f"headroom={headroom:6.1f}"
+        )
 
 
 @pytest.mark.asyncio
@@ -1095,12 +1157,16 @@ async def test_a_wall_just_above_the_refusal_starts_a_pass_at_the_loader(
     """The grant side of the relation: every wall `input_budget` answers reaches
     `load_batch` at least once, so a granted run never declines its own first pass.
 
-    The wall is the row's own, dialed one second over the bound, and the fake
-    scope answers instantly - so neither the wall nor the feed ends this run by
-    design, and the only question left is whether the loader was reached at all.
-    The bound and the grant are read from the shipped pair, not restated here.
+    The CEILING is dialed here, and the assertion is about the wall it resolves to -
+    one second over `_minimum_wall_seconds()`, the number the guard refuses at. Ceiling
+    and wall are different numbers because `run_wall_seconds` subtracts the commit's own
+    reserve from the ceiling before `input_budget` ever sees it, and this test runs with
+    that reserve in force - a wall the shipped gate refuses is exactly what a real row
+    cannot start a pass on. The fake scope answers instantly - so neither the wall nor
+    the feed ends this run by design, and the only question left is whether the loader
+    was reached at all. The bound and the grant are read from the shipped pair, not
+    restated here.
     """
-    _reserve_nothing_for_the_commit(monkeypatch)
     from backend.services import agent_service, scoped_curation_inputs, sprite_agent_service
 
     async def completes(scope, instructions):
@@ -1119,7 +1185,7 @@ async def test_a_wall_just_above_the_refusal_starts_a_pass_at_the_loader(
     await pool.execute(
         "UPDATE agents SET turn_timeout_seconds=$2 WHERE id=$1",
         UUID(agent["id"]),
-        int(curation._smallest_pass_seconds()) + 1,
+        int(curation._minimum_wall_seconds()) + 1 + agent_service.RUN_COMMIT_RESERVE_SECONDS,
     )
     agent = await agent_service.get_agent_by_id(UUID(agent["id"]))
     summary = await sprite_agent_service.run_scheduled(
@@ -1147,9 +1213,23 @@ def test_the_granted_budget_fits_the_wall_measured_in_the_sample_its_own_rate():
     the drain never reached a checkpoint. If a future model moves the real rate
     above 4,558 characters per 570 s wall, this test reddens while the constants
     sit comfortably unread, which is the whole point of keeping the literal here.
+
+    What this literal is NOT: a headroom gate. Its rate - 0.12506 s per character - is
+    2.61 times more generous than the measure that prices a grant (95 / 291 = 0.32646),
+    so a slice can satisfy the assert above and still leave the pass no time to commit -
+    which is precisely what it did at the 570 s wall. The headroom judge is the second
+    assert below, written on the priced measure; this literal stays an empirical
+    tripwire against a real rate outrunning the calibration.
     """
+    from backend.services import agent_service
+
     granted = curation.input_budget(570)
     assert granted * MEASURED_SECONDS_PER_CHARACTER <= 570
+    priced = granted * curation._MODEL_TURN_SECONDS / curation._INPUT_CHARS_PER_MODEL_TURN
+    assert priced <= 570 - agent_service.RUN_COMMIT_RESERVE_SECONDS, (
+        f"the 570 s wall was granted {granted} characters costing {priced:.1f}s, leaving "
+        f"{570 - priced:.1f}s of a {agent_service.RUN_COMMIT_RESERVE_SECONDS}s commit"
+    )
 
 
 @pytest.mark.asyncio

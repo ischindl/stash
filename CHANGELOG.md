@@ -293,9 +293,14 @@ everything before it is captured in git history (`git log`), not here.
   A pass is now priced in model turns — turns-the-wall-affords × characters-per-measured-turn, from
   95 s per turn and 291 characters per turn measured on a real local box, floored at the loader's
   1,024-character smallest batch — and it is sized from the run wall rather than the raw ceiling, so
-  the worker's cap reaches the slice too. A ceiling that cannot buy even the cheapest pass (~334 s
-  at the shipped price) now fails the run loudly, naming the price and what to raise, instead of
-  pretending to work forever. The per-pass `curator pass=` log line prints the granted budget, the
+  the worker's cap reaches the slice too. A ceiling whose wall cannot pay for the cheapest pass *and*
+  the commit that pass makes (a ceiling of roughly 394 s at the shipped price: the 1,024-character
+  floor costs 334.3 s of wall, and the commit wants 30 s on top of it) now fails the run loudly,
+  naming both prices and what to raise, instead of
+  pretending to work forever. STAS-468 moved that commit's reserve into the price itself, so the turns
+  a wall affords are counted after the checkpoint has taken its share — at the deployment default that
+  takes a pass from 1,746 characters to 1,455, and what a run commits from nothing to a pass that
+  finished. The per-pass `curator pass=` log line prints the granted budget, the
   calibrated price per character, and what the pass's characters actually cost, side by side.
 
 - The folder share panel stays on screen on a narrow display, and with it the address you

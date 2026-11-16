@@ -13,25 +13,30 @@ was exactly what a number that wrong predicts: 42+ consecutive curator runs, eac
 each committing nothing, the watermark frozen since 2026-08-22. This card replaced the constant with a
 turn price. In one sentence, for the twins this card was cut beside: the pass is
 turns-the-wall-affords × characters-per-measured-turn, `input_budget` takes the loop's wall, refuses a
-wall that cannot buy the cheapest slice it would return, and no second budget formula is authored.
+wall that cannot buy the cheapest slice it would return (STAS-468 later put that pass's own commit on
+the same bill — see the last section), and no second budget formula is authored.
 
 **What changed.** `input_budget(wall_seconds)` now takes the wall the loop actually works to —
 `agent_service.run_wall_seconds(agent)`, the same number `sprite_agent_service` cuts the run at — and
-returns `int(wall // T) * C` floored at `MINIMUM_BATCH_CHARS`, where `T = 95.0` seconds per model turn
+returns `int((wall - R) // T) * C` floored at `MINIMUM_BATCH_CHARS`, where `T = 95.0` seconds per model turn
 and `C = 291` characters per turn are shipped constants measured on the founder's own vLLM box at the
 operator's OFF reasoning level (samples: 2,255 characters walked in 735.9 s across 21 tool-uses; the
 fewest-characters arm binds because it measured the slowest walk of a checkpoint). `turn_ceiling_seconds`
 is gone from the budget path entirely; the worker's cap now reaches the slice, because the wall it
-bounds does. A wall that cannot buy the cheapest slice `input_budget` would return — any wall at or
-below `max(T, MINIMUM_BATCH_CHARS × T / C)`, 334.3 s at the shipped pair — raises naming the bound, the
-turn price, the character unit and the loader's 1,024-character floor, which a curator operator reads
+bounds does. A wall that cannot buy the cheapest slice `input_budget` would return, and pay for the
+commit that slice exists to make — any wall at or
+below `_minimum_wall_seconds()`, `max(T, MINIMUM_BATCH_CHARS × T / C) + R`, 364.3 s of wall at the
+shipped pair (`R = RUN_COMMIT_RESERVE_SECONDS` = 30 s) — raises naming the pass price, the
+turn price, the character unit, the loader's 1,024-character floor and the wall that buys both, which a
+curator operator reads
 as a failed run that says what to dial. The loop also changed shape at its seam: `slowest_pass` seeds
 at the calibrated turn price instead of `0.0`, so the pre-pass check bounds the *first* pass with the
 same subtraction it already gave the second, and the guard's refuse-set is a superset of the loop's
 decline-set by construction (`MINIMUM_BATCH_CHARS ≥ C`) — no wall exists that licenses a pass and then
 declines it. It is a guard/refuse relation, not an equality, and the plan's original "same set" claim
-is corrected in the tests: `wall <= one turn` declines, but `wall <= smallest pass` refuses, and
-between 95 s and 334.3 s those sets differ deliberately, in the guard's favor.
+is corrected in the tests: `wall <= one turn` declines, but `wall <= smallest pass + commit reserve`
+refuses, and
+between 95 s and 364.3 s those sets differ deliberately, in the guard's favor.
 
 **What users see.** A lane that used to burn every dispatch and commit nothing now either drains or
 fails with a named price. The per-pass meter line keeps its six fields in order and gains four: the
@@ -73,3 +78,20 @@ the wall that granted it, and a loader spy proves every granted wall actually st
 future model moves the true rate above ~4,558 characters per 570 s wall, the measurement test reddens
 while the constants sit unread — which is the point of a test that cannot be satisfied by editing the
 constant.
+
+**What this file said about the bound, and what STAS-468 made true.** This file priced a pass and
+stopped there, so its guard asked a wall to pay for the slice and nothing else — and at the deployment
+default the 570 s wall bought 1,746 characters whose calibrated price is exactly 570.0 s, not the 569 s
+this file's own calibration note suggested. A pass priced at the whole wall leaves 0.0 s for the
+`_checkpoint_pass` that a drain exists to have, so the lane still committed nothing, only smaller.
+STAS-468 counts `RUN_COMMIT_RESERVE_SECONDS` inside the slice — the turns are counted out of
+`wall - R`, and the refusal threshold is `_minimum_wall_seconds()`, the pass price plus that same
+reserve read at call time — so the grant and the threshold cannot drift apart. Two numbers this file
+named are therefore no longer the same kind of thing: 334.3 s is what 1,024 characters *cost*, and
+364.3 s is the *wall* that pays for them and their commit; a row's ceiling has to reach about 394 s to
+resolve to that wall. The headroom a granted wall keeps is now `((wall - R) mod T) + R`, whose minimum
+over every grantable wall is exactly `R`, where the law before was `wall mod T` with a minimum of 0.0 —
+the ladder asserts the strict form and the reserve, and prints the table. The throughput cost is real
+and belongs here: at the default wall a pass is handed 1,455 characters instead of 1,746 (−16.7 %).
+What a run commits goes from zero to at least one finished pass, which is the number the drain is
+measured by.

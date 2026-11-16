@@ -51,20 +51,26 @@ _MAX_CONCURRENT_SCOPES = 4
 # sample bounds 1,030 and the operator's completed pass 759 - both more generous, so
 # neither is priced). The binding sample died mid-pass, so 291 is the most generous
 # figure its wall licenses, not a mean; a finished pass could only cost fewer
-# characters per turn. What the pair commits at the founder's own numbers: a 570 s
-# wall affords 6 turns x 291 = 1,746 characters, really costing 569 s at that
-# sample's 0.326 s/char - where 333 characters per ceiling-second offered 189,810,
-# one hundred and eight such walls, which is why that lane never reached a checkpoint.
+# characters per turn. Two measures come out of this sample and only one of them is a
+# price: the PRICED measure is the pair, 95 / 291 = 0.32646 s per character, and that
+# is what `input_budget` charges a slice with; the sample's rounded 0.326 s/char is an
+# AVERAGE over a pass that died mid-flight, and an average over an unfinished pass is
+# not what a character costs. Read the pair against the founder's own wall and it
+# prints the defect STAS-468 closes: 1,746 characters - 6 turns x 291 - cost 570.0 s
+# at the priced measure, not the 569 s the rounded average suggests. 570.0 s is the
+# whole wall, so a slice that size leaves 0.0 s for the checkpoint that pass exists to
+# make. Against the pre-fix 333 characters per ceiling-second that same 570 s wall
+# offered 189,810 characters, one hundred and eight such walls, which is why that lane
+# never reached a checkpoint.
 _MODEL_TURN_SECONDS = 95.0
 _INPUT_CHARS_PER_MODEL_TURN = 291
 
 
 # The wall-seconds of the cheapest slice this module would ever hand the loader: one
 # turn, or the loader's minimum fillable batch at the calibrated price, whichever
-# costs more. `input_budget` refuses every wall that does not strictly exceed it,
-# which is a superset of the walls the seeded loop declines - so no run ever
-# licenses a pass and then refuses to start it. Read at call time, like the seed,
-# so a test that patches the pair moves the guard with it.
+# costs more. This is the PRICE of 1,024 characters, and it is the number the refusal
+# quotes - never the wall a run needs, which is `_minimum_wall_seconds` below. Like
+# the seed, it is read at call time, so a test that patches the pair moves it.
 def _smallest_pass_seconds() -> float:
     return max(
         _MODEL_TURN_SECONDS,
@@ -72,6 +78,21 @@ def _smallest_pass_seconds() -> float:
         * _MODEL_TURN_SECONDS
         / _INPUT_CHARS_PER_MODEL_TURN,
     )
+
+
+# The smallest run wall `input_budget` will answer at all. A pass has to leave room to
+# checkpoint itself, so buying the cheapest slice is not enough: the wall has to pay
+# for that slice AND for `RUN_COMMIT_RESERVE_SECONDS` on top of it. Both directions of
+# the budget read this one helper - the guard refuses at or below it, and the grant is
+# priced out of `wall - reserve` - which is what keeps a threshold and a grant from
+# drifting apart. The reserve is read at call time from `agent_service`, exactly as the
+# pass price is read from the pair above: one source, no restated number. Note this is
+# the PER-PASS `_checkpoint_pass` reserve; `run_wall_seconds` already subtracts the
+# reserve for the run's final publish, which is a different commit.
+def _minimum_wall_seconds() -> float:
+    from . import agent_service
+
+    return _smallest_pass_seconds() + agent_service.RUN_COMMIT_RESERVE_SECONDS
 
 
 def input_budget(wall_seconds: int | float) -> int:
@@ -84,20 +105,37 @@ def input_budget(wall_seconds: int | float) -> int:
     carry over from STAS-438: the value bounds ONE batch, which every scoping of the
     pass reads a filtered slice of, so N scopes never multiply it; and the wall wraps
     the whole run, so one pass has to fit inside it.
+
+    The invariant, for every wall this answers: `grant x T / C <= wall - R`, where
+    `R = agent_service.RUN_COMMIT_RESERVE_SECONDS`. The commit is priced INSIDE the
+    slice rather than at a call site, because it is a fact about the pass and the two
+    callers must not each hold their own copy of it. So the turns are counted out of
+    `wall - R`, and a wall that cannot buy the cheapest slice plus the commit raises.
+    What that leaves a granted wall is headroom `((wall - R) mod T) + R`, whose
+    minimum over every grantable wall is exactly `R`; before the commit was priced the
+    law was `wall mod T`, whose minimum is 0.0, and a wall of 570 s bought a slice of
+    exactly 570.0 s - a pass with no time left to commit, which is the zero drain this
+    module exists to end.
     """
     if wall_seconds <= 0:
         raise ValueError(f"a curator run wall must be positive, got {wall_seconds}")
+    from . import agent_service
+
+    reserve = agent_service.RUN_COMMIT_RESERVE_SECONDS
     minimum = scoped_curation_inputs.MINIMUM_BATCH_CHARS
     bound = _smallest_pass_seconds()
-    if wall_seconds <= bound:
+    gate = _minimum_wall_seconds()
+    if wall_seconds <= gate:
         raise ValueError(
             f"a curator run wall of {wall_seconds}s cannot buy the cheapest pass: the "
             f"loader's smallest batch of {minimum} characters costs "
             f"{bound:.1f} wall-seconds at the calibrated "
             f"{_MODEL_TURN_SECONDS}s per {_INPUT_CHARS_PER_MODEL_TURN}-character model "
-            "turn: raise the curator's run ceiling"
+            f"turn, and the commit that pass must make needs {reserve}s of its own: a "
+            f"wall must reach {gate:.1f}s to pay for both, so raise the curator's run "
+            "ceiling"
         )
-    turns = int(wall_seconds // _MODEL_TURN_SECONDS)
+    turns = int((wall_seconds - reserve) // _MODEL_TURN_SECONDS)
     return max(turns * _INPUT_CHARS_PER_MODEL_TURN, minimum)
 
 

@@ -338,13 +338,22 @@ hardware cannot demonstrate the free-lane half of this rule from that workspace'
 **The input slice is sized from the run wall in model turns, and the price is measured on a real
 box, not carried over.** `input_budget` takes the wall the loop works to
 (`agent_service.run_wall_seconds` — the same number `sprite_agent_service` cuts the run at), returns
-`int(wall // T) * C` floored at the loader's `MINIMUM_BATCH_CHARS`, and `run` reads the wall once, so
-the slice one pass is handed cannot be widened without widening the wall that bounds it. T and C are
+`int((wall - R) // T) * C` floored at the loader's `MINIMUM_BATCH_CHARS`, where `R` is
+`RUN_COMMIT_RESERVE_SECONDS` — the checkpoint's own time — and `run` reads the wall once, so
+the slice one pass is handed cannot be widened without widening the wall that bounds it. STAS-468 put
+that subtraction inside the pricing rather than at a call site: a pass has to leave room to commit
+itself, and the two callers must not each hold a copy of that fact. T and C are
 shipped constants — 95.0 s per model turn, 291 characters per turn — measured on the founder's own
 vLLM box at reasoning level OFF, priced from the fewest-characters arm because it walked the
-checkpoint slowest; their provenance is written where they are defined. A wall that cannot buy the
-cheapest slice `input_budget` would return — anything at or below `max(T, MINIMUM_BATCH_CHARS × T / C)`,
-334.3 s at the shipped pair — raises naming the bound, both constants and their units, which is what a
+checkpoint slowest; their provenance is written where they are defined. What prices a grant is that
+pair, 95 / 291 = 0.32646 s per character; the sample's rounded 0.326 is an average over a pass that
+died mid-flight, and an average is not a price. A wall that cannot buy the
+cheapest slice `input_budget` would return *and* pay for the commit that slice exists to make —
+anything at or below `_minimum_wall_seconds()`, which is `max(T, MINIMUM_BATCH_CHARS × T / C) + R`,
+364.3 s of wall at the shipped pair — raises naming the pass price, both constants and their units,
+the reserve and the wall that buys both. Three numbers are in play and only one of them is a wall:
+334.3 s is what the loader's 1,024 characters cost, 364.3 s is the wall that pays for them plus the
+commit, and a row's *ceiling* has to reach 394.3 s to resolve to that wall. The guard is what a
 `_MODEL_TURN_SECONDS`-seeded pre-pass check also declines the first pass against: the guard's
 refuse-set is a SUPERSET of the loop's decline-set by construction (`MINIMUM_BATCH_CHARS ≥ C`), an
 inclusion the tests pin because the plan's original "same set" equality was disproved by its own
@@ -354,13 +363,20 @@ under observation instead of under assertion:
 `test_the_granted_budget_fits_the_wall_measured_in_the_sample_its_own_rate` judges the 570 s grant
 against `1277 / 10211` seconds-per-character — the founder lane's own completed pass, copied into the
 test from the measurement and derived from nothing it judges — so a real rate moving above what the
-constants imply reddens the test while the constants sit unread; and
+constants imply reddens the test while the constants sit unread. That literal is 2.61 times more
+generous than the priced measure, so it cannot be the headroom gate and is not posed as one: the same
+test carries a second assert on `T / C` for that; and
 `test_the_run_hands_the_loader_its_wall_sized_slice_not_its_ceiling` dials a row's ceiling to 10,000 s
 against the worker's cap and spies `load_batch`'s `max_chars` — the wall-sized number, not the
 ceiling-sized one; while the ladder `test_every_granted_wall_affords_the_slice_it_grants` from half a
-turn to 1,200 s asserts every refused wall sits at or below the bound, every granted slice is
-affordable by the wall that granted it, and — via
-`test_a_wall_just_above_the_refusal_starts_a_pass_at_the_loader` — every granted wall reaches the
+turn to 1,200 s reads its threshold from `_minimum_wall_seconds()` and asserts every refused wall sits
+below it, every granted slice costs strictly *inside* the wall that granted it, and what is left over
+is at least `R` — the headroom law `((wall - R) mod T) + R`, whose minimum over every grantable wall
+is exactly `R` at wall 600, which is why the assert is non-strict by measurement rather than by taste.
+The ladder prints grant, price and headroom for nine witness walls, so the proof is a table in the run
+output and not a match, and — via
+`test_a_wall_just_above_the_refusal_starts_a_pass_at_the_loader`, which dials a 395 s ceiling with the
+reserve in force — every granted wall reaches the
 loader at least once. The failure the wall raises says which of the two it was:
 `RunCeilingExceeded` is what `asyncio.wait_for` becoming a `TimeoutError` turns into, and it is the
 only failure that continues the catch-up chain — `_run_curator_locked` hands the backlog a cut run did
