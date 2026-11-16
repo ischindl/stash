@@ -35,7 +35,10 @@ _NEW_SET = """
 
 
 def _replace_check(allowed: str) -> None:
-    op.execute("ALTER TABLE agents DROP CONSTRAINT agents_last_run_outcome_check")
+    # IF EXISTS because a founder-lineage database may not carry this constraint
+    # at the position the stamp names; the add below makes the end state the same
+    # either way, so the drop guards nothing but its own crash (form of 0260).
+    op.execute("ALTER TABLE agents DROP CONSTRAINT IF EXISTS agents_last_run_outcome_check")
     op.execute(
         f"ALTER TABLE agents ADD CONSTRAINT agents_last_run_outcome_check "
         f"CHECK (last_run_outcome IN ({allowed}))"

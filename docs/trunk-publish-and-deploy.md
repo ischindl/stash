@@ -336,11 +336,15 @@ if semantic search is to stop seq-scanning `history_events`.
 - **The collision list is `0257`, `0261`, `0262`, `0263`, `0266`**, in that order, each dying
   with `column ... already exists` before the fix. All five are now re-runnable in their own
   file, one catalog read per node, and `backend/tests/test_migration_founder_lineage_reapply.py`
-  pins both lineages. `0258` was hit and survived: its `DROP CONSTRAINT` is unguarded, and it
-  stays unguarded because the `ADD` for that constraint sits in the same transaction, so the
-  object always exists at the start of a pass. That exemption is the transaction's pairing, not
-  a missing syntax — Postgres does have `DROP CONSTRAINT IF EXISTS`, and `0260` uses it on this
-  very constraint name two revisions later. `0260`, `0264`, `0265`, `0267`-`0273` needed nothing.
+  pins both lineages. `0258` was hit and survived here — but STAS-443's census measured why it
+  only *happened* to survive: `agents_last_run_outcome_check` is present on the island with
+  trunk's widened definition, so the unguarded `DROP CONSTRAINT` succeeded there, while the
+  statement can still meet an object it did not create on a lineage that never had it. It now
+  carries the house `DROP CONSTRAINT IF EXISTS` form at `0258:41`, the one `0260:49` uses on
+  this very constraint name two revisions later; the `ADD` sits in the same transaction, so one
+  codepath remains. (`0260`, `0264`, `0265`, `0267`-`0273` needed nothing, and the earlier
+  sentence here that defended leaving `0258` unguarded was written from that single surviving
+  pass rather than from the object's history.)
 - **The census is value-level, not row counts.** Row counts prove the copy is faithful; they
   cannot see an `UPDATE`. What this run actually wrote: `0268` and `0269` set `finished_at` on
   2 520 run sessions (NULL count 3 200 to 680, whole-table digest moved), and `0272` re-encrypted
@@ -349,13 +353,34 @@ if semantic search is to stop seq-scanning `history_events`.
   `instagram_saves` sources), and `0265` took its early return, so no archive, no wiki rebuild
   and no queue reset ran. Re-measure every one of those numbers on the copy you are about to
   converge; they are this dump's, not the island's today.
-- **Three effects are irreversible, and the operator owns all three.** `0223`'s `DELETE FROM
+- **The move was re-measured green against trunk's *live* head on 2026-11-15 (STAS-443), and
+  the last step was taken by the shipped boot.** `check_heads.py` printed `0274` when the
+  host-side `upgrade head` finished on a fresh single-writer restore of the retained dump;
+  `0275` landed on trunk the same evening, and booting the lane carrying STAS-443's guards
+  against that converged copy — `uvicorn --workers 2`, `init_db` as migrator, the founder
+  keyring supplied — printed exactly one `Running upgrade 0274 -> 0275` across two workers,
+  zero error lines, `/health` 200, stamp `0275`. The value census before-to-after that leg
+  moved exactly two lines: the `user_agent_credentials` digest (0275 re-encrypts local docs;
+  the decrypted doc shows the owner's name and every shared value unchanged, keys added
+  `thinking` and `context_window`) and the stamp line. The object diff against a golden built
+  to the same head names exactly one surviving miss — `idx_history_events_embedding` — plus
+  eleven CHECKs whose `pg_get_constraintdef` differs in cast spelling only, value sets equal.
+  Do not read `0275` as a fact: take the head from `check_heads.py` in the tree you run.
+- **Four effects are irreversible, and the operator owns all four.** `0223`'s `DELETE FROM
   user_integrations WHERE provider = 'x'` at `0223:27` and its disabling of the `x_saves` and
   `instagram_saves` sources at `0223:19-24`, whose `downgrade()` is a deliberate `pass` at
   `0223:30-33` so no rollback re-enables them either; `0265`'s archive and shared-wiki rebuild,
   whose `downgrade()` raises `NotImplementedError` by design at `0265:177-179`, so no alembic
-  rollback undoes it; and `0269`'s rewrite of `sessions.finished_at` at `0269:84`. Earlier text
-  here named two and understated the set.
+  rollback undoes it — the `0265` probe (`workspaces.curation_generation` present) says the
+  founder lineage takes the early return and does not fire it; `0269`'s rewrite of
+  `sessions.finished_at` at `0269:84`; and `0263`'s `_backfill_names()`, which before STAS-443
+  decrypted every credential row and overwrote `name` unconditionally — a rename the founder
+  had made on his endpoint rows would have been destroyed by the pass and could not be rolled
+  back, because the previous name was never stored. It now selects `WHERE name IS NULL`
+  (`0263:123`), which is pinned by `test_migration_fork_object_convergence.py` with an
+  owner-chosen name no backfill could invent; on the founder lineage measured 2026-11-15 both
+  rows were already named, so the guard selects zero rows and never decrypts. Earlier text here
+  named two, then three, and understated the set.
 
 **Executing it on the island remains the operator's decision**, and it stays unexecuted: this
 record came from a copy, the founder database was read with `SELECT`s and nothing else, and no
@@ -369,14 +394,119 @@ what the Prohibition exists to keep out of automated hands.
 Two decisions stay open after this measurement, and both are the operator's:
 
 1. **Whether to converge the island at all.** The move is green and reversible except for the
-   three effects above, and on this dump the irreversible set measured empty for `0223` (0
-   rows) while `0268`/`0269` wrote `finished_at` on 2 520 sessions. Re-measure both on the
-   copy you restore, because the island grows (`history_events` read 4 906 620 on 2026-11-14
-   against the dump's 4 905 837).
+   four effects above, and on this dump the irreversible set measured empty for `0223` (0
+   rows) and for `0263` (both credential names already set) while `0268`/`0269` wrote
+   `finished_at` on 2 520 sessions. Re-measure both on the copy you restore, because the island
+   grows (`history_events` read 4 906 620 on 2026-11-14 against the dump's 4 905 837).
 2. **What to do about the one object a converged island still lacks.** `idx_history_events_embedding`
    is spelled only by `0001`, so no revision above the base will ever create it and the
    converge leaves it missing: semantic search keeps seq-scanning `history_events` until someone
    creates it by hand, in the same maintenance window as the converge, or accepts the scan.
+
+### The census that replaced "at least 12" (STAS-443, 2026-11-15)
+
+The intake counted collisions by text-scanning revision files, landed on 12, and explained the
+boot-killing collision it had missed by calling that DDL "composed dynamically". Both halves
+are falsified on the tree: `0257`'s `share_wiki` add was a plain `op.add_column` — the exact
+shape the scan was said to be blind to — and the real coverage gap is that `0256..0273` carry
+41 `op.execute(` lines against one `add_column` line, which no grep can enumerate objects
+through. The instrument is a diff of two resulting catalogs: one inventory query keyed by
+kind with a definition digest (`md5(indexdef)`, `md5(pg_get_constraintdef(oid))`), run against
+ databases built from empty by the chain's own words (`0213`, `0225`, head) and against a
+fresh restore of the founder dump. Measured on the `rm_*` retirement trunk and re-measured at
+`0275`:
+
+- **The additive hole is 558 objects at `0225`, not 408 and not 38.** The intake's two totals
+  were both wrong: 29 tables + 312 columns + 68 indexes + 149 constraints, because the 29
+  `rm_*` tables carry 529 dependent objects with them. Q1 settles with it: the hole is the
+  consequence of a stamp that names the wrong position, and replaying from the measured base
+  creates all 556 `0214..0225` objects with zero collisions — intersection of that replay
+  segment with the island measured empty, divergence zero.
+- **`COLLIDE` against head is 30 objects and `DIVERGENT` is zero.** Every island-held member
+  of the `0226..head` delta matches trunk's definition digest byte-identically — including
+  `one_curator_per_scope`, whose drop-and-rebuild in `0261` is therefore a content-preserving
+  re-validation on this lineage, not a rewrite. The exists-but-divergent class the plan
+  reserved stays named (a future lineage can still carry it, and the rebuild and the
+  convergence test are its instruments), but this island has no member of it.
+- **The FKs that ride colliding columns are present on the island too** —
+  `agents_curator_folder_id_fkey`, `session_folders_wiki_folder_id_fkey`,
+  `agents_credential_id_fkey`, all identical to trunk's — so the class plan review named
+  "column present, trunk's inline FK absent" has no measured member here either, and the
+  post-run catalog-minus-golden diff is the mechanical gate that proves no guard silently
+  dropped one.
+- **Of the intake's twelve, four were never collisions at all** (`drive_documents.extraction_task_id`,
+  `user_sources.sync_task_id`, `users.developer_platform_only`, `workspaces.curation_generation`
+  are created at-or-below the island's own numbering position, not by `0226..head`), six were
+  already guarded on trunk, and the census found what its list had missed: `share_wiki`,
+  `agents.model_id`, `agents.digest_model_id`, `user_agent_credentials.name`, and the eight
+  `K:`/`I:` objects enumerated in the card's `census` document. Every one is now guarded or
+  measured to a no-op.
+- **`0263`'s primary-key drop is skipped by catalog read on the island** (`_primary_key_is_id()`
+  is true there), `0267`'s widening is a legal no-op retype, `0271`/`0274`'s unguarded adds
+  cannot meet a foreign object on this lineage (their columns are absent), and eleven CHECKs
+  differ from the golden only in cast spelling — `((... )::character varying)::text` versus
+  `(... )::text[]` — with equal value sets, which is what
+  `backend/tests/test_migration_fork_object_convergence.py` asserts as semantic equality.
+
+Full member lists, the per-object decision table, and the already-guarded adjudication are
+the `census` and `decision-table` documents on STAS-443.
+
+### The boot-time migrator repeats; it does not interleave (STAS-443, 2026-11-15)
+
+The intake recorded `Running upgrade 0234 -> 0235` printed seven times while the stamp sat at
+`0225` and suspected the boot migrator of re-entrancy under `--workers 2`. Measurement licenses
+the opposite verdict, and no change shipped to `backend/database.py`, `backend/entrypoint.sh`,
+or a new `backend/migrate.py`:
+
+- Real pending work with the shipped boot: two `Context impl PostgresqlImpl` lines, **one**
+  `Running upgrade` line, the stamp moved once. `pg_advisory_lock(715551)` at
+  `backend/database.py:62` serializes; the losing worker finds head reached and migrates
+  nothing.
+- A deterministically failing migration booted with one uvicorn parent printed the intake's
+  shape twenty times — `Running upgrade`, traceback, rollback, stamp unmoved — with exactly
+  one writer. The repetition is the supervisor restarting an *atomic* run, not two
+  interleaving ones. (This one was a mistake first — an empty encryption key — and was kept
+  as the measurement once its shape was recognized.)
+- The one shape no retry alone was supposed to produce — a stamp *below* DDL that only later
+  revisions create — also needs no second writer once you are above `0256`: `0256`'s
+  `autocommit_block()` commits everything through `0255`, and a failure above that point
+  leaves `0257`'s column visible with the stamp reading `0255`. Measured directly on the
+  card's first replay attempt (stamp `0255`, `share_wiki` present, `rm_scoring_runs` present,
+  `turn_timeout_seconds` absent — the standing copy's exact silhouette). Below the commit
+  point the second-writer fingerprint stands: a `0235` column under a `0225` stamp cannot
+  come from this chain, and the intake itself names two agents restoring one database.
+
+### The copy harness on this machine, in facts a future card cannot re-derive (STAS-443, 2026-11-15)
+
+- `/` reads 98% (21 G free at this reading — 97% at intake, and it moves) and docker's
+  data-root is on `/`, so restoring a 20+ GB `PGDATA` into a named volume fails with `could
+  not extend file`. Dumps and `PGDATA` bind under `/data`. Freeing space on `/` by pruning
+  other projects' images or volumes is operator rollback territory — do not do it.
+- `docker network create` fails here ("all predefined address pools have been fully
+  subnetted"); the working copy project passes an explicit `172.25.77.0/24`, because the
+  default pools `172.17-31` are exhausted on this machine.
+- **One restore and one migrator at a time, proven before any measurement runs**: the
+  duplicate-primary-key probe `select count(*) from (select conrelid from pg_constraint
+  where contype='p' group by conrelid having count(*) > 1) d` reads zero and
+  `pg_stat_activity` shows zero other backends on the database. Two `pg_restore`s into one
+  database produce `multiple primary keys` and void every number taken from it — observed
+  twice in one week, two agents and two compose projects against one target.
+- The founder keyring is the named volume mounted at `/app/.secrets` inside
+  `stash-backend-1` (read the name from `docker inspect`; at this reading
+  `stash_backend_secrets`, file `integrations_encryption_key`). It decrypts the island's
+  credential rows — probed, reported as `OK` only. Any copy run crossing `0263`, `0272` or
+  `0275` needs `INTEGRATIONS_ENCRYPTION_KEY` in its environment; without it the boot fails
+  loudly, rolls back atomically, and prints the repetition pattern the intake misread.
+- Boot probes: `/health` 200 is the gate. A `GET /login` against the backend answers 404 and
+  that is the correct backend shape — `/login` is a product-frontend page; the backend route
+  is the POST on the users router. Do not chase that 404.
+- The intake-era standing copy (compose project `stash3995`: hand-applied additive DDL plus a
+  chain stopped at `0255`) is a hybrid and is not a proof — as an empty census baseline it
+  would also *pass falsely*, because its missing set is already filled. A proof starts from a
+  fresh restore of the retained dump. And `founder-repair-39cb4595.sql` is not a mechanism:
+  the replay route above is green with zero collisions, so the chain creates the `rm_*` family
+  itself; the `.sql` was never committed, and keeping an untracked hand-written copy of DDL
+  the chain owns would be a second schema source, which the Prohibitions below already refuse.
 
 ### The `.founder-11e0644a-pin.yml` claim was never measured, and it is false
 
@@ -421,9 +551,14 @@ it does not land a coherent schema at this distance:
   `rm_scoring_runs` is created by trunk's `0214`, which a boot that starts at `0225` never
   applies. This is the ambiguous-id trap, not a bug in the candidate.
 
-So no forward move exists that both satisfies the prohibition and works, and the rescue stays the
-operator's decision. Nothing above re-stamped anything by hand, the founder database was not
-touched (it still reads `0225` with its lanes on `main-11e0644a-pi`), and
+So for the boot-only path no forward move exists that both satisfies the prohibition and
+works, and the founder database's migration is not the boot's to make. What changed on
+2026-11-15 (STAS-443) is the other half of that sentence: the rescue above is now green end
+to end on a fresh copy of the founder's own data against trunk's live head — including its
+last step taken by the shipped two-worker boot itself — so the operator's decision is now
+informed by a full value census and a named object remainder, not by an unmeasured hope. It
+remains the operator's decision. Nothing above re-stamped anything by hand, the founder
+database was not touched (it still reads `0225` with its lanes on `main-11e0644a-pi`), and
 `docker-compose.founder.yml` was left naming `11e0644a`, because the pin is a claim about the
 stack and the container readings still measure that older pair.
 
