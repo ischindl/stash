@@ -31,6 +31,11 @@ class StashError(VfsClientError):
 # `after` cursor until a page comes back non-full.
 SOURCE_ENTRIES_PAGE = 1000
 
+# Wall time every request gets when a command names no per-route timeout of its
+# own. The tree route's two budget ceilings are asserted against this number in
+# backend/tests/test_sources_tree.py, so it is exported rather than spelled inline.
+REQUEST_TIMEOUT_SECONDS = 30
+
 # Which dispatched run this CLI invocation is running inside, injected by the
 # server into the harness environment (`sprite_agent_service._attribution_env`)
 # and echoed back as request headers, so a page this CLI writes is credited to
@@ -70,7 +75,7 @@ class StashClient:
         # injected it. Both halves arrive together, or neither is sent.
         self._agent_session = os.environ.get(AGENT_SESSION_ENV, "")
         self._agent_name = os.environ.get(AGENT_NAME_ENV, "")
-        self._http = httpx.Client(base_url=self._base_url, timeout=30)
+        self._http = httpx.Client(base_url=self._base_url, timeout=REQUEST_TIMEOUT_SECONDS)
         self._time_requests = os.environ.get(TIMING_ENV) == "1"
 
     def _report_timing(self, method: str, url: str, started: float, size: int | None) -> None:
@@ -753,7 +758,7 @@ class StashClient:
             path,
             json=payload,
             headers=self._headers(),
-            timeout=httpx.Timeout(30, read=None),
+            timeout=httpx.Timeout(REQUEST_TIMEOUT_SECONDS, read=None),
         ) as resp:
             if not resp.is_success:
                 resp.read()

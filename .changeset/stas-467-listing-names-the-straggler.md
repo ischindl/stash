@@ -44,7 +44,7 @@ names all five stragglers, e.g. `google: 11 of 12 connections did not answer wit
 listing budget (1.6 s elapsed) — their documents are not in this listing`. `stash vfs ls
 sources` answers every provider in 0.36 s.
 
-**What did not change:** `cli/client.py`'s shared `timeout=30`, byte for byte, and every
+**What did not change:** `cli/client.py`'s shared request timeout, which stays 30 s, and every
 per-route exception beside it; `depth`/`limit` parameters, `source_tree_builder.sanitize`,
 `TREE_DOC_LIMIT`, the provider-root fold, and the tree's JSON shape — this card adds one
 optional key to it; exit codes, so `ls` stays 0 for a partial listing (`--json` stdout stays
@@ -60,8 +60,10 @@ at once` against the old code — the sum, measured in the test itself; another 
 straggler's raise used to escape `sources_tree` as `RuntimeError`; the CLI pair proves a
 provider with a gap used to render a full document tree with an empty stderr; the VFS pair
 proves an entry listing that raised used to mount an empty folder at exit 0, and that a failed
-connection list made `/sources` indistinguishable from an account with no integrations. Two
-tests assert the inequalities against `timeout=30` read off the client and the pool bound read
-off `config.py`, so a future constant that breaks the ladder is caught by the number it breaks
-rather than by prose. Four further tests are guards, not proofs, and are labelled in the task
-document as passing before the fix too.
+connection list made `/sources` indistinguishable from an account with no integrations. The
+ladder and the pool bound are asserted against `REQUEST_TIMEOUT_SECONDS` imported from
+`cli/client.py` and `DB_POOL_MAX` reached through `settings` imported from
+`backend/config.py`, and one further test, added when the constant was named, pins the
+client's own number, so a future constant that breaks the ladder is caught by the number it
+breaks rather than by prose. Four further tests are guards, not proofs, and are labelled in
+the task document as passing before the fix too.

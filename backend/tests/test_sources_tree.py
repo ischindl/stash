@@ -17,6 +17,7 @@ import pytest
 from backend.config import settings
 from backend.services import source_service
 from backend.services.source_service import build_entry_tree
+from cli.client import REQUEST_TIMEOUT_SECONDS
 
 
 def test_build_entry_tree_nests_paths_into_folders():
@@ -427,6 +428,22 @@ async def test_a_cancelled_route_still_cancels(monkeypatch):
 
 def test_the_budgets_sit_under_the_budget_the_caller_already_has():
     """The route's ceiling is only a promise while it stays under the client's:
-    cli/client.py gives every request 30 s and this card does not raise it."""
-    assert source_service.TREE_MEMBER_BUDGET_SECONDS < source_service.TREE_ROUTE_BUDGET_SECONDS < 30
+    cli/client.py gives every request `REQUEST_TIMEOUT_SECONDS`, and this card
+    does not raise it."""
+    assert (
+        source_service.TREE_MEMBER_BUDGET_SECONDS
+        < source_service.TREE_ROUTE_BUDGET_SECONDS
+        < REQUEST_TIMEOUT_SECONDS
+    )
     assert source_service.TREE_READ_CONCURRENCY <= settings.DB_POOL_MAX
+
+
+def test_the_client_request_timeout_the_ladder_is_measured_against_has_not_moved():
+    """The ladder above is a ceiling only while the client's budget is the one measured.
+
+    The two server budgets were cut against this wall clock and the release note
+    names it, so both directions of a change carry prose consequences: raising it
+    makes the ceilings slack, lowering it makes the ladder a lie. This assertion is
+    what forces that decision into a diff instead of a silent edit.
+    """
+    assert REQUEST_TIMEOUT_SECONDS == 30
