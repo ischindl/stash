@@ -263,7 +263,14 @@ async def get_changes(
     `event_backlog` is how much of this wiki's feed is still unread from `since`,
     counted as distinct events over exactly the rows this feed may read — so it
     reaches 0 exactly when the feed comes back empty. It counts history events
-    only, not changed pages, new files, source documents, or saves."""
+    only, not changed pages, new files, source documents, or saves.
+
+    This endpoint is deliberately caller-relative rather than pinned to a row's
+    stored pair: `drain_pass_budget` recognises a drain pass by comparing the request's
+    position to that pair, so a route that shifted `since` onto the live position would
+    both stop recognising that pass and report a backlog for rows the caller was never
+    shown. The readout routes answer from the live position; this one answers from
+    yours."""
     from datetime import datetime
 
     if wiki not in curation_service.WIKI_VALUES:
@@ -335,8 +342,13 @@ async def recompute_memory(
         )
     user_id = current_user["id"]
     curator = await agent_service.get_or_create_curator(user_id)
+    # The same question the run itself asks, asked the same way: this gate refuses only
+    # when `_pending_input` would also decline. Counting from the watermark instead 409d
+    # the one lane that had work — a curator mid-history-drain keeps its whole unread
+    # backlog behind the watermark by design, so the button said "nothing new" at a lane
+    # starving for exactly the material the drain is reading.
     if not await curation_service.has_changes_since(
-        user_id, user_id, curation_service.position_of(curator), curator["curator_wiki"]
+        user_id, user_id, curation_service.readout_position_of(curator), curator["curator_wiki"]
     ):
         raise HTTPException(status_code=409, detail="Nothing new to curate since the last run.")
     # Resolve the credential BEFORE the allowance gate: the gate may only bind a
@@ -430,11 +442,8 @@ async def list_scope_curators(
             name, wiki_folder_id = folders.get(folder_id, (None, None))
             entry["folder_name"] = name
             entry["wiki_folder_id"] = wiki_folder_id
-            entry["event_backlog"] = await curation_service.curator_event_backlog(
-                scope_user_id,
-                c["curator_wiki"],
-                curation_service.position_of(c),
-                UUID(folder_id),
+            entry["event_backlog"] = await curation_service.curator_readout(
+                scope_user_id, c, folder_id=UUID(folder_id)
             )
         out.append(entry)
     return {"curators": out, "free_runs_per_month": free_runs_per_month}

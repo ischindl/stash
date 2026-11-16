@@ -54,7 +54,15 @@ function curatorData(
     prompt: "Read the feed.",
     backfill_prompt: "Read the whole history.",
     instructions: null,
-    event_backlog: { distinct_events: 3, raw_rows: 4, distinct_sessions: 2 },
+    event_backlog: {
+    distinct_events: 3,
+    raw_rows: 4,
+    distinct_sessions: 2,
+    // The closed-drain default: the readout counted from the same instant the row's
+    // watermark names, because with no drain open there is only one position.
+    read_from: "2026-01-01T00:00:00Z",
+    draining: false,
+  },
     feeding: [],
     opted_out: [],
     runs: [],
@@ -151,5 +159,119 @@ describe("Curator page allowance line", () => {
     // A curator on the customer's own endpoint is never metered, so "0 of 10 used"
     // would imply a metering that never happened.
     expect(screen.queryByText(/free runs used this month/)).toBeNull();
+  });
+});
+
+/** Which instant the console is reading from is not a detail of wording: a history
+ *  drain can run for a month, keeping its unread backlog BEHIND the nightly watermark,
+ *  and the watermark does not move until the drain finishes. A page that shows the
+ *  watermark beside that backlog tells the operator the lane has stopped making progress
+ *  while its committed passes advance invisibly. The readout names the position it
+ *  counted from, and the console shows that one.
+ */
+describe("Curator page readout position", () => {
+  function factLabeled(label: string): HTMLElement {
+    const card = screen.getByText(label).parentElement;
+    if (!card) throw new Error(`no fact card for ${label}`);
+    return card;
+  }
+
+  // The same formatter the page uses, so the assertion compares rendered instants
+  // rather than a date format this runtime may not produce.
+  function instantText(iso: string): string {
+    return new Date(iso).toLocaleString(undefined, {
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+    });
+  }
+
+  const WATERMARK = "2026-08-01T00:00:00Z";
+  const DRAIN = "2026-01-05T03:00:00Z";
+
+  it("names the drain as the position, and says the watermark waits for it", async () => {
+    vi.mocked(getCurator).mockResolvedValue(
+      curatorData(
+        { curated_through: WATERMARK },
+        {
+          event_backlog: {
+            distinct_events: 3,
+            raw_rows: 4,
+            distinct_sessions: 2,
+            read_from: DRAIN,
+            draining: true,
+          },
+        },
+      ),
+    );
+
+    render(<CuratorRoute />);
+    await screen.findByText("When does the curator run?");
+
+    const card = factLabeled("Draining through");
+    // The two instants are months apart on purpose: showing the watermark here would
+    // be the bug, and a card that could show either one would not fail this.
+    expect(card.textContent).toContain(instantText(DRAIN));
+    expect(card.textContent).not.toContain(instantText(WATERMARK));
+    expect(card.textContent).toMatch(/history drain is in flight/i);
+    expect(card.textContent).toMatch(/watermark is unchanged until the drain retires/i);
+    // The unread figure and the position it was counted from must not disagree.
+    expect(screen.getByText(/^3 still to read/)).toBeDefined();
+  });
+
+  it("keeps the watermark sentence whole when no drain is open", async () => {
+    vi.mocked(getCurator).mockResolvedValue(
+      curatorData(
+        { curated_through: WATERMARK },
+        {
+          event_backlog: {
+            distinct_events: 3,
+            raw_rows: 4,
+            distinct_sessions: 2,
+            read_from: WATERMARK,
+            draining: false,
+          },
+        },
+      ),
+    );
+
+    render(<CuratorRoute />);
+    await screen.findByText("When does the curator run?");
+
+    const card = factLabeled("Reading since");
+    expect(card.textContent).toContain(instantText(WATERMARK));
+    expect(card.textContent).toBe(
+      `Reading since${instantText(WATERMARK)}The point the last run finished reading; the next run starts here.`,
+    );
+    expect(screen.queryByText(/drain/i)).toBeNull();
+  });
+
+  it("renders no instant of its own for a lane that has read nothing yet", async () => {
+    vi.mocked(getCurator).mockResolvedValue(
+      curatorData(
+        { curated_through: WATERMARK },
+        {
+          event_backlog: {
+            distinct_events: 3,
+            raw_rows: 4,
+            distinct_sessions: 2,
+            read_from: null,
+            draining: false,
+          },
+        },
+      ),
+    );
+
+    render(<CuratorRoute />);
+    await screen.findByText("When does the curator run?");
+
+    // `read_from` is the instant the count was taken from, and a lane that has never
+    // read anything has none. Falling back to `curated_through` here would put a second
+    // position on the page for a client to choose between, so the card shows the
+    // absence instead of a numeral it was never given.
+    const card = factLabeled("Reading since");
+    expect(card.textContent).not.toContain(instantText(WATERMARK));
+    expect(card.textContent).toContain("—");
   });
 });

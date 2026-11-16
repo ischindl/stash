@@ -84,6 +84,7 @@ TEST_DATABASE_URL=postgresql://stash:stash@localhost:5432/stash_test \
 | `test_webhooks.py` | SSRF URL validation, secret hashing, delivery logic |
 | `test_curator.py` | Curator provisioning, schedule, gate, feed, page writes, and the watermark: an advance is compare-and-set on the pair the run read, so a moved-under run fails loud instead of swallowing an ingest rewind; monotonic within a match on the encoded pair, a refused clamp is logged, `full_history` never clears the stored position, one run per agent at a time; the fence holds the agent row until its commit lands and a failure after the fence publishes neither the marker nor the window; the stored pair is CHECK-constrained — an event half with no instant is rejected at the database; and a requeued beat dispatch that finds the lane's run lock held writes nothing — the run in flight keeps its `started` outcome and its single harness turn through the contention and resolves its own verdict afterwards, so a copy that arrives mid-run can neither report a skip that never happened nor mute the watchdog that pages on an unresolved run |
 | `test_curator_watermark_position.py` | The pair itself: the `ahead` truth table in both directions (a whole instant is ahead of any position inside it), and the CAS on the pair — a mid-tie advance is refused under a whole-instant watermark, an advance to the next event at the same instant lands, an advance must read the position it started from, a tie larger than the feed cap drains to zero, and an ingest rewind clears the event half |
+| `test_curator_readout_position.py` | Which position a *readout* answers from, and that exactly one function gets to answer it: both pairs are seeded on one row months apart, so the drain half and the watermark half each reddens this file on its own — the open drain's instant is what a readout names and what its backlog counts from; with no drain pair the figures equal `curator_event_backlog` taken at the watermark exactly; a drain whose event half stayed NULL reports the whole instant it stands in rather than crediting the rest of that tie as read; the figure strictly falls across two committed passes while `curated_through` is byte-identical and the drain pair is the only thing that moved; a spy on the predicate fails if any readout call path grows its own position choice; and the shape test holds `curator_event_backlog` to its three keys while `curator_readout` adds exactly `read_from` and `draining`, so a key that leaks into the wrong helper reddens a named test instead of a route's whole-dict assertion |
 | `test_curator_feed_scoping.py` | Which events each wiki may read — the internal wiki everything, the external wiki only sessions of end users who share — and the gate agreeing with that feed |
 | `test_curator_event_identity.py` | One event, however often its session was re-pushed: the identity the feed, the gate, the watermark boundary, and the backlog share — with a discriminating test per identity part, so removing any one reddens a named test (`session_id`: two sessions saying the same words at one instant; `event_type`: a `tool_use` and its `tool_result` sharing one instant and payload; `created_at`: a re-asked turn; `md5(content)`: three contents under one batch timestamp), and `agent_name` pinned OUT of it so a re-import relabelled by another client stays one event; distinct-vs-raw backlog; the honest zero (a leftover of only the curator's own transcripts is not work); drain equality; an instant holding more events than the feed cap draining over consecutive runs instead of plateauing; and both endpoints publishing the honest number, `since`+`since_event` honoured by feed and backlog alike (a malformed or orphan event half is a 400), plus the render pins for the feed command the prompt hands the curator — it carries `--since-event` exactly when the lane stands inside an instant and is byte-identical otherwise |
 | `test_session_list_filters.py` | The Sessions list's server-side prefilters (`folder_id`, `agent`, `q`, paging `has_more` with an offset that partitions the (last_event_at DESC) order), the unconditional exclusion of the curator's own `agent-curate-` run transcripts — no parameter asks for them back, they survive paging, and they stay resolvable through the detail route (hidden, not deleted) — and the byte-identity guard that pins the shared clause builder's rendering and `_CURATOR_FEED_ELIGIBILITY` so the list can adopt the feed's classification without moving the feed's SQL by one byte |
@@ -276,6 +277,30 @@ another run, forever at the end of every feed. Both lanes are pinned on that ret
 `test_a_personal_drain_that_reaches_the_end_retires_its_pair_and_hands_off` asserts the pair is gone
 and the watermark holds the ground, because a run that merely "succeeded" would also have been true
 with the pair still pending.
+
+**The pair is also the position a readout reports, not only the one a run reads.**
+`curation_service.readout_position_of` is the single place that answers "which position is
+live on this row, as a `Position`", and four readers ask it: the developer console's curator
+readout, the folder curator's readout on `GET /me/curators`, the `POST /me/memory/recompute`
+gate, and the credits-spent clause of the stale-curators alert. Before this, all four counted
+from `curated_through` while the run path already read from the drain, so a drain that has been
+committing for a month showed one frozen "still to read" figure — and the recompute button
+answered "nothing new to curate" at the one lane that had work, because its whole unread backlog
+sits *behind* the watermark by design. `curation_service.curator_readout` is the one readout
+that counts from the answer and publishes `read_from` and `draining` beside the figures, which is
+what lets both clients name the instant they measured from instead of choosing between two stored
+instants — a second counter, and the reason no arithmetic for it exists in TypeScript. Two bounds
+travel with the predicate. A drain pair has no event half (no `drain_through_event_id` column
+exists), so during a drain the readout is the whole instant and a lane parked inside a saturated
+instant is reported as reading from before that instant: the conservative direction, because the
+alternative is a backlog reading zero while a tie's tail is still unread. And a drain is seeded by
+its absence, so between a dispatch and its first committed pass there is nothing stored to
+distinguish a seeded drain from no drain, and the readout names the watermark for both — a marker
+column to tell them apart would be the second position counter. `GET /me/changes` deliberately
+stays caller-relative, and that is what keeps the wall paragraph below true: its sentence about
+keeping the drain budget off every reader that is not a drain pass survives only while that route
+answers from the position its caller named, because `drain_pass_budget` recognises a drain pass by
+comparing the request's position to the row's stored pair.
 
 **A run's wall is one number, and it both bounds the work a run starts and decides when the run
 stops.** `agent_service.run_wall_seconds` is where a row becomes a wall on *both* lanes: the worker's

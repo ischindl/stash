@@ -731,6 +731,67 @@ async def test_recompute_409_when_nothing_changed(client: AsyncClient, _db_pool)
 
 
 @pytest.mark.asyncio
+async def test_recompute_dispatches_a_lane_whose_drain_is_starving(
+    client: AsyncClient, sprite_exec, _db_pool
+):
+    """The recompute gate must refuse only when the run would also decline.
+
+    The gate asked `has_changes_since(..., position_of(curator), ...)`, so a lane
+    whose entire unread backlog sits behind the watermark got a 409 while its drain
+    had work: the button answered "nothing new" at the one lane that had something
+    to read, and the run's own decline path — which already honours the drain — was
+    never reached. `sprite_exec` is what supplies the credential the route resolves
+    (measured: without it, this same request answers 402 NeedsAuth for BOTH lanes,
+    so it cannot be the thing this test is about), and the assertion is the 202 plus
+    the recorded dispatch rather than "not 409", which that 402 would also satisfy.
+    """
+    from backend.services import memory_service
+    from backend.tasks.agent_schedules import run_curator_now
+
+    key, uid = await _register(client)
+    curator = await agent_service.get_or_create_curator(uid)
+    base = datetime(2026, 1, 1, 12, tzinfo=UTC)
+    # Pushed through the service rather than the batch route: that route dispatches a
+    # title task whenever a key is configured, and the key `sprite_exec` installs has no
+    # broker behind it — which is a fixture fact about this file, not this gate.
+    for i in range(2):
+        await memory_service.push_event(
+            uid,
+            "heavi-chat",
+            "user_message",
+            f"unread turn {i}",
+            uid,
+            f"conv-recompute-{i}",
+            created_at=base + timedelta(minutes=i),
+        )
+    drain_at = base - timedelta(days=30)
+    await _db_pool.execute(
+        "UPDATE agents SET curated_through = $2, curated_through_event_id = NULL,"
+        " drain_through = $3, drain_cursor = '{}'::jsonb WHERE id = $1",
+        UUID(curator["id"]),
+        base + timedelta(hours=1),
+        drain_at,
+    )
+    # The discriminating half: at the watermark this lane really has nothing new,
+    # which is exactly why today's gate 409s it.
+    stored = await agent_service.get_curator_by_id(UUID(curator["id"]))
+    assert not await curation_service.has_changes_since(
+        uid, uid, curation_service.position_of(stored), stored["curator_wiki"]
+    )
+
+    await client.patch(
+        f"/api/v1/me/agents/{curator['id']}", json={"run_mode": "chat"}, headers=_auth(key)
+    )
+    started: list = []
+    run_curator_now.delay = lambda agent_id, **kwargs: started.append(agent_id)
+
+    r = await client.post("/api/v1/me/memory/recompute", headers=_auth(key))
+
+    assert r.status_code == 202, r.text
+    assert started == [curator["id"]]
+
+
+@pytest.mark.asyncio
 async def test_recompute_metered_like_the_scheduler(
     client: AsyncClient, _db_pool, monkeypatch, billing_on
 ):

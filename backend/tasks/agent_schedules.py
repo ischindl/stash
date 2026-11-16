@@ -291,16 +291,11 @@ async def _pending_input(agent: dict, workspace) -> bool:
     if workspace is not None:
         return await scoped_curation_inputs.has_pending(agent, workspace)
     owner = UUID(str(agent["user_id"]))
-    drain = curation_service.drain_of(agent)
     # A drain in flight owns the answer: its backlog is what is pending, and the watermark
     # says nothing about how much of it is left. No drain pair means no drain, and the
     # question stays the one it always was — the release-0 check on a curator that has
     # never run answers through this same unmodified path.
-    position = (
-        curation_service.Position(drain[0])
-        if drain is not None
-        else curation_service.position_of(agent)
-    )
+    position = curation_service.readout_position_of(agent)
     return await curation_service.has_changes_since(owner, owner, position, agent["curator_wiki"])
 
 
@@ -1114,22 +1109,25 @@ async def _alert_stale_curators() -> int:
             # writes the outcome and nothing else, so the error column still holds
             # whatever an unrelated earlier run left in it. The CEO decision this
             # line exists to trigger needs the size of what is frozen beside the
-            # number of runs spent, read for this lane's own wiki and folder.
+            # number of runs spent, read for this lane's own wiki and folder and at the
+            # position the lane is actually live on — a drain that has been committing
+            # for a month has a different remainder than the watermark advertises.
             from ..config import settings
             from ..services import agent_service, curation_service
 
-            backlog = await curation_service.curator_event_backlog(
+            backlog = await curation_service.curator_readout(
                 UUID(str(row["user_id"])),
-                row["curator_wiki"],
-                curation_service.position_of(dict(row)),
-                row["curator_folder_id"],
+                dict(row),
+                folder_id=row["curator_folder_id"],
             )
             detail = (
                 f"curator credits spent: monthly allowance exhausted, "
                 f"{agent_service.month_runs_used(dict(row))} of "
                 f"{settings.FREE_CURATOR_RUNS_PER_MONTH} runs used; "
                 f"{backlog['distinct_events']} distinct events pending "
-                f"({backlog['raw_rows']} raw rows) — dispatch cannot resume until the "
+                f"({backlog['raw_rows']} raw rows) counted from {backlog['read_from']}"
+                f"{', a history drain rather than the watermark' if backlog['draining'] else ''}"
+                f" — dispatch cannot resume until the "
                 f"allowance is raised or the account goes Pro"
             )
         else:

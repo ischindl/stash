@@ -184,14 +184,53 @@ def read_position_of(agent: dict) -> tuple[datetime | None, dict]:
     Two positions live on an agent row and exactly one of them is live at a time. While a
     history drain is in flight it owns the read — its backlog sits BEHIND the watermark,
     so a reader that consulted the watermark would skip everything the drain had not
-    reached and call the lane caught up. Every reader asks here — a run's first pass, the
-    next dispatch, and the pending-input check that decides whether a lane is worth
-    waking — so the three cannot disagree about what a curator has left to read.
+    reached and call the lane caught up. Every RUN asks here — a run's first pass and the
+    next dispatch that resumes it — so the passes of one lane cannot disagree about what
+    it has left to read.
+
+    Readers that want the live instant alone, rather than the pair a pass fences on, ask
+    `readout_position_of`: the console readout, the recompute gate, the credits-spent
+    alert, and the pending-input check that decides whether a lane is worth waking. Both
+    functions answer the same question in the one shape their callers can use, which is
+    why neither of them may be re-implemented at a call site.
     """
     drain = drain_of(agent)
     if drain is not None:
         return drain
     return agent.get("curated_through"), agent.get("curation_cursor") or {}
+
+
+def readout_position_of(agent: dict) -> Position:
+    """Which position is live for this row, as the pair every counting helper already takes.
+
+    The readout sibling of `read_position_of`, for the readers that report a number or
+    gate a dispatch instead of running a pass: that one hands back `(instant, cursor)`,
+    because a run must fence on its event half, while a readout is a scalar instant — the
+    shape `has_changes_since` and `curator_event_backlog` and the HTTP payloads take.
+
+    That asymmetry is a bound, not a rounding. A drain pair carries NO event half, so
+    during a drain the answer here is the whole instant: a lane parked inside a saturated
+    instant is read from BEFORE that instant rather than reported as though the tie it
+    stands in had already been consumed. The conservative direction is the point — the
+    alternative is a backlog that reads zero while a tie tail is still unread.
+
+    A drain that has committed nothing is seeded by its absence: it carries no pair, so
+    between its dispatch and its first committed pass this still names the watermark.
+    Nothing stored separates that window from "no drain", and a marker column to separate
+    them would be a second position counter — exactly what these two functions exist to
+    make impossible.
+
+    Askers, so that a fifth cannot join silently: `curator_readout` (the developer
+    console and the Settings rows), the `POST /me/memory/recompute` gate, the
+    credits-spent clause of the stale-curators alert, and `_pending_input`. A run asks
+    `read_position_of` instead, and `GET /me/changes` stays caller-relative on purpose —
+    `drain_pass_budget` recognises a drain pass by comparing the request's position to a
+    row's stored pair, so a route that shifted it would stop recognising that pass.
+    """
+    drain = drain_of(agent)
+    if drain is not None:
+        return Position(drain[0])
+    return position_of(agent)
 
 
 def _budget_kept(events: list[dict], max_event_chars: int | None) -> int | None:
@@ -974,7 +1013,8 @@ async def curator_event_backlog(
     The figure counts history events in the curator's feed — the material a run
     is permitted to read. It deliberately excludes changed pages, new files,
     connected-source documents, and saves, so it must not be read as "all pending
-    work"; it is the part of the backlog that moves the watermark.
+    work"; it is the part of the backlog a run may read, which is the half that
+    moves whichever position the lane is currently working from.
 
     Its WHERE clause is `_feed_conditions` — the feed's own scope clauses, not a
     hand-copied approximation of them — with the cursor taken as `instant_bound` and
@@ -1022,8 +1062,12 @@ async def curator_event_backlog(
     `sum` answers NULL over a window holding no groups while `count` answers 0, so
     the sum is coalesced: a drained backlog reads as the same shape as a full one.
 
-    `position` is the curator's current position; `NEVER` means it has never run, so
-    the whole corpus is still ahead (same reading as `has_changes_since`)."""
+    `position` is the instant the caller chose to count from, and the figures are
+    relative to it and to nothing else. A readout asks at the position its lane is
+    live on — the drain's own while a drain runs, via `readout_position_of` — while
+    the feed route asks at the position the request named. `NEVER` means nothing has
+    been read, so the whole corpus is still ahead (same reading as
+    `has_changes_since`)."""
     pool = get_pool()
     args: list = [owner_user_id]
     where = _feed_conditions(wiki, position, None, args, folder_id, cursor_bound=instant_bound)
@@ -1047,6 +1091,28 @@ async def curator_event_backlog(
         "raw_rows": row["raw_rows"],
         "distinct_sessions": row["distinct_sessions"],
     }
+
+
+async def curator_readout(
+    owner_user_id: UUID, agent: dict, *, folder_id: UUID | None = None
+) -> dict:
+    """What one curator still has to read, counted from the position that is live on it.
+
+    `curator_event_backlog` untouched, plus the two keys that make its answer readable
+    rather than merely numeric. `read_from` is the instant the count was taken from and
+    `draining` says whether that instant belongs to a history drain rather than to the
+    nightly watermark. They exist because the backlog alone cannot say WHICH instant it
+    was measured from: a page rendering it beside `curated_through` would be showing a
+    number from one position next to an instant from the other, and a client left to pick
+    between the two columns would be the second counter this file refuses to have.
+
+    `read_from` is the datetime itself, so FastAPI serialises it the way it already
+    serialises `curated_through` in the same payload; the two keys are added to an
+    existing route rather than publishing a second numeral to be reconciled.
+    """
+    position = readout_position_of(agent)
+    backlog = await curator_event_backlog(owner_user_id, agent["curator_wiki"], position, folder_id)
+    return {**backlog, "read_from": position.at, "draining": drain_of(agent) is not None}
 
 
 async def complete_through(

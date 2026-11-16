@@ -1348,3 +1348,59 @@ async def test_ingest_rewind_stays_inside_its_wiki(client: AsyncClient, pool, ca
     rewinds = [r.getMessage() for r in caplog.records if "rewound" in r.getMessage()]
     assert any("internal" in m for m in rewinds)
     assert not any("external" in m for m in rewinds)
+
+
+@pytest.mark.asyncio
+async def test_the_curator_console_names_the_drain_it_is_reading(client: AsyncClient, pool):
+    """The console's backlog and its prompt both move onto the drain's position.
+
+    `GET /me/developer/curator` fed both the prompt preview and the backlog from one
+    `position` local, and that local was the watermark. So a workspace mid-backfill
+    saw a "still to read" figure that could not change for the whole month of the
+    drain, beside a prompt preview promising a window the run would not read. The
+    seed keeps the two counters disagreeing — events between the drain and the
+    watermark — and the prompt is asserted because `end_user_service
+    .external_curator_prompt` renders `changes since {since}` from that same local.
+    """
+    from datetime import UTC, datetime, timedelta
+
+    from backend.services import agent_service, curation_service
+
+    api_key, _, workspace = await _developer(client)
+    scope = {**_auth(api_key), "X-Stash-Scope": workspace["scope_user_id"]}
+    scope_user_id = uuid.UUID(workspace["scope_user_id"])
+    machine_key = await _mint_workspace_key(client, api_key, workspace)
+
+    drain_at = datetime(2026, 1, 1, 12, tzinfo=UTC)
+    watermark = drain_at + timedelta(days=60)
+    await _push(
+        client, machine_key, [_event(f"sess-drain-{i}", user_id="org_acme") for i in range(2)]
+    )
+    await _push(client, machine_key, [_event("sess-drain-other", user_id="org_choate")])
+    # Both wikis' events sit inside the window the drain has not reached: the
+    # watermark-relative count is zero and the drain-relative count is not.
+    await pool.execute(
+        "UPDATE history_events SET created_at = $2 WHERE owner_user_id = $1",
+        scope_user_id,
+        drain_at + timedelta(hours=1),
+    )
+    curator = await agent_service.get_or_create_curator(scope_user_id, wiki="external")
+    await pool.execute(
+        "UPDATE agents SET curated_through = $2, curated_through_event_id = NULL,"
+        " drain_through = $3, drain_cursor = '{}'::jsonb WHERE id = $1",
+        uuid.UUID(curator["id"]),
+        watermark,
+        drain_at,
+    )
+
+    body = (await client.get("/api/v1/me/developer/curator", headers=scope)).json()
+
+    assert body["event_backlog"]["draining"] is True
+    assert datetime.fromisoformat(body["event_backlog"]["read_from"]) == drain_at
+    assert body["event_backlog"]["distinct_events"] == 3
+    assert drain_at.isoformat() in body["prompt"]
+
+    # What this route answered before, counting the same rows from the watermark.
+    assert await curation_service.curator_event_backlog(
+        scope_user_id, "external", curation_service.position_of(curator)
+    ) == {"distinct_events": 0, "raw_rows": 0, "distinct_sessions": 0}

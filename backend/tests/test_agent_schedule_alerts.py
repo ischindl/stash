@@ -1286,6 +1286,61 @@ async def test_an_allowance_blocked_curator_is_reported_with_its_backlog(client,
 
 
 @pytest.mark.asyncio
+async def test_an_allowance_blocked_curator_with_an_open_drain_reports_the_drain_backlog(
+    client, pool, monkeypatch
+):
+    """A lane frozen mid-backfill must be reported at the size of what it has left.
+
+    The selection SQL finds this row on its stale watermark and `_pending_input`
+    already honours the drain, so the lane reaches `stale` today — and today the
+    line that follows prints the watermark's zero, because the backlog was counted
+    from the watermark too. An operator reading `0 distinct events pending` beside
+    a lane that has not moved in three days cannot tell a drained account from a
+    wedged drain, and the decision this line triggers is about an account.
+    """
+    from datetime import date
+
+    user_id = await _register(client)
+    agent = await _make_curator(user_id, curated_hours_ago=72, last_run_error="opencode error")
+    # Two events BEHIND the watermark and AHEAD of the drain: the only seed shape
+    # where the watermark-relative and drain-relative figures disagree. They are
+    # pushed first, because an ingest arriving behind the watermark rewinds that
+    # watermark to just before itself — setting `curated_through` afterwards is what
+    # puts the events back behind it, which is the shape a real month has.
+    behind = datetime.now(UTC) - timedelta(hours=96)
+    for _ in range(2):
+        await memory_service.push_event(
+            user_id,
+            "test",
+            "user_message",
+            "curate me",
+            user_id,
+            f"sess-{uuid.uuid4()}",
+            created_at=behind,
+        )
+    drain_at = datetime.now(UTC) - timedelta(hours=120)
+    await pool.execute(
+        "UPDATE agents SET last_run_outcome='skipped_credits', month_run_count=10, "
+        "month_run_anchor=$2, curated_through=$3, curated_through_event_id = NULL,"
+        " drain_through=$4, drain_cursor='{}'::jsonb WHERE id=$1",
+        agent["id"],
+        date.today(),
+        datetime.now(UTC) - timedelta(hours=72),
+        drain_at,
+    )
+    sent = _capture_alerts(monkeypatch)
+
+    assert await agent_schedules._alert_stale_curators() == 1
+    assert len(sent) == 1
+    assert "2 distinct events pending" in sent[0]
+    # The line says which instant it counted from, because "2 pending" beside a
+    # `last curated` date two days ago is only readable if the reader knows the
+    # backlog was never measured against that date.
+    assert str(drain_at) in sent[0]
+    assert "0 distinct events pending" not in sent[0]
+
+
+@pytest.mark.asyncio
 async def test_a_curator_that_found_nothing_to_do_still_stays_quiet(client, pool, monkeypatch):
     """The widened predicate must not turn every designed skip into a page. A
     lane that resolved as `skipped_no_changes` had a run and found nothing; it is

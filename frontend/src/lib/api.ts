@@ -447,13 +447,21 @@ export async function getCurator(): Promise<{
   prompt: string;
   backfill_prompt: string;
   instructions: string | null;
-  /** History events still unread in this curator's feed, from its watermark.
-   * `distinct_events` counts an event once however often its session was
-   * re-uploaded; `raw_rows` is the rows behind them, so the gap is visible. */
+  /** History events still unread in this curator's feed, counted from the position
+   * that is live on it — the history drain's own while a backfill runs, the nightly
+   * watermark otherwise. `distinct_events` counts an event once however often its
+   * session was re-uploaded; `raw_rows` is the rows behind them, so the gap is
+   * visible. `read_from` is the instant those figures were counted from and `draining`
+   * says which of the two positions it was: the numbers are unreadable next to an
+   * instant that does not agree with them, which `curated_through` alone fails to be
+   * for the whole month a drain runs. Both are required because a client must never
+   * guess, and a missing instant renders as the absence it is — never a numeral. */
   event_backlog: {
     distinct_events: number;
     raw_rows: number;
     distinct_sessions: number;
+    read_from: string | null;
+    draining: boolean;
   };
   feeding: EndUserRef[];
   opted_out: EndUserRef[];
@@ -2775,7 +2783,15 @@ export type Curator = {
   month_run_anchor: string | null;
   folder_name?: string | null;
   wiki_folder_id?: string | null;
-  event_backlog?: { distinct_events: number; raw_rows: number; distinct_sessions: number } | null;
+  event_backlog?: {
+    distinct_events: number;
+    raw_rows: number;
+    distinct_sessions: number;
+    /** Counted from this instant; `draining` names which of the two positions it was.
+     *  Required alongside the count for the same reason: no client gets to guess. */
+    read_from: string | null;
+    draining: boolean;
+  } | null;
 };
 
 /** What `GET /me/curators` answers. The envelope comes back whole rather than

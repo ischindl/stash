@@ -101,7 +101,15 @@ const ATLAS = folderCurator({
   credential_id: "cred-1",
   model_id: "llama3.1:8b",
   schedule_cron: "0 4 * * *",
-  event_backlog: { distinct_events: 7, raw_rows: 9, distinct_sessions: 2 },
+  event_backlog: {
+    distinct_events: 7,
+    raw_rows: 9,
+    distinct_sessions: 2,
+    // A closed drain: the readout counted from the lane's one live position, so the
+    // row needs no clause about a drain.
+    read_from: "2026-08-01T03:00:00+00:00",
+    draining: false,
+  },
 });
 // Beanie keeps a stored ceiling from before its lane stopped resolving one: the row
 // must not render it, because that number is not what bounds this curator's run.
@@ -181,6 +189,52 @@ describe("CuratorsSection rows", () => {
     renderSection();
 
     expect(await screen.findByText("Curator of a deleted project")).toBeDefined();
+  });
+
+  it("says when the unread figure belongs to a history drain, not to the watermark", async () => {
+    // One count, two positions. While a history drain is in flight its backlog sits
+    // BEHIND the nightly watermark and the watermark does not move until the drain
+    // retires, so the same number means something else depending on which position it
+    // was counted from, and the row has to say which it was. A lane with no position
+    // named at all claims only its count.
+    listCurators.mockResolvedValue(
+      listResponse([
+        folderCurator({
+          id: "cur-draining",
+          name: "Curator: Project Atlas",
+          curator_folder_id: "f-atlas",
+          folder_name: "Project Atlas",
+          event_backlog: {
+            distinct_events: 7,
+            raw_rows: 9,
+            distinct_sessions: 2,
+            read_from: "2026-01-05T03:00:00+00:00",
+            draining: true,
+          },
+        }),
+        folderCurator({
+          id: "cur-unread",
+          name: "Curator: Beanie",
+          curator_folder_id: "f-beanie",
+          folder_name: "Beanie",
+          event_backlog: {
+            distinct_events: 7,
+            raw_rows: 9,
+            distinct_sessions: 2,
+            read_from: null,
+            draining: false,
+          },
+        }),
+      ]),
+    );
+
+    renderSection();
+
+    const draining = await rowNamed("Project Atlas");
+    expect(within(draining).getByText("7 unread events during a history drain")).toBeDefined();
+
+    const neverRead = await rowNamed("Beanie");
+    expect(within(neverRead).getByText("7 unread events")).toBeDefined();
   });
 
   it("shows the backlog the server counted and the schedule state it reports", async () => {

@@ -303,7 +303,11 @@ async def get_curator(
     # Every user, for the overview columns; the prompt names only those with
     # material since the watermark, which is all a run can write for.
     end_users = await end_user_service.list_end_users(workspace["id"])
-    position = curation_service.position_of(curator)
+    # The position this lane is actually live on, which while a history drain is in
+    # flight is the drain's own and not the watermark. The prompt below is rendered from
+    # it on purpose: what this page previews must be the window the next run reads, and a
+    # draining run reads from its drain pair.
+    position = curation_service.readout_position_of(curator)
     since = position.at
     prompt = await end_user_service.external_curator_prompt(workspace, since)
 
@@ -328,10 +332,11 @@ async def get_curator(
         # How much of the shared wiki's feed is still unread, counted as distinct
         # events rather than rows: a transcript re-uploaded eight times is one
         # event, so this is the figure a drain estimate can be built from. The
-        # raw row count travels with it so the gap explains itself.
-        "event_backlog": await curation_service.curator_event_backlog(
-            scope_user_id, curator["curator_wiki"], position
-        ),
+        # raw row count travels with it so the gap explains itself. The figures are
+        # measured from `read_from` — the drain's own instant while a backfill runs,
+        # the watermark otherwise — and `draining` names which of the two it was,
+        # because the number is unreadable beside `curated_through` without it.
+        "event_backlog": await curation_service.curator_readout(scope_user_id, curator),
         "feeding": [
             {"id": str(u["id"]), "name": u["name"], "external_id": u["external_id"]}
             for u in end_users

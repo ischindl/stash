@@ -269,6 +269,21 @@ everything before it is captured in git history (`git log`), not here.
 
 ### Fixed
 
+- A history drain now shows its own progress. The curator console and the Settings
+  curator rows take their "still to read" figure from whichever position is live on the
+  lane, and while a backfill is running that position is the drain's own — so the number
+  falls as each pass commits, instead of holding one value for the months a long drain
+  can take while the drain works unseen. The console says which position it is showing:
+  the card that read "Reading since" reads "Draining through" during a backfill, gives
+  the instant its unread figure was counted from, and states that the nightly watermark
+  stays where it is until the drain retires — and with no drain open, that card is word
+  for word what it was. The same position now settles two decisions it always should have
+  owned: "Curate now" no longer answers "Nothing new to curate since the last run." at a
+  lane whose whole unread backlog sits behind the watermark waiting on its drain, and a
+  curator frozen by a spent monthly allowance is reported with the remainder its drain
+  still owes. No new page, number or setting: one lane answers the question, so no client
+  is left choosing between two dates.
+
 - Curator runs on slow model boxes drain instead of spinning. One pass used to be sized by
   multiplying the run ceiling by 333 characters per second — a rate whose denominator was how fast
   an old run died, not how fast the model reads — and on a box like the founder's own vLLM server

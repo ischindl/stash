@@ -35,6 +35,18 @@ function decodePin(value: string): { credentialId: string | null; modelId: strin
   return { credentialId: credentialId || null, modelId: modelId || null };
 }
 
+// The unread figure cannot say which position it was counted from, and while a history
+// drain is in flight that is the whole story: the drain's backlog sits BEHIND the nightly
+// watermark and the watermark does not move until the drain retires, so a bare number
+// reads as a lane that stopped making progress while its passes advance unseen. The
+// readout says which position it measured from, so the row says it too.
+function describeBacklog(backlog: Curator["event_backlog"]): string | null {
+  if (!backlog) return null;
+  const count = `${backlog.distinct_events} unread events`;
+  if (backlog.draining) return `${count} during a history drain`;
+  return count;
+}
+
 export default function CuratorsSection() {
   const [curators, setCurators] = useState<Curator[]>([]);
   // The account's monthly ceiling, read off the list envelope. `null` is the
@@ -139,7 +151,7 @@ function CuratorRow({
   // at the start of the next calendar month, which is what the row has to say so
   // the wait is not read as a fault to fix.
   const creditsSpent = !isIdle && curator.last_run_outcome === "skipped_credits";
-  const backlog = curator.event_backlog;
+  const backlog = describeBacklog(curator.event_backlog);
   // The account's ceiling beside this row's own worked-run count, or null when
   // there is nothing to state — an uncapped account, or a lane that has charged
   // nothing at all.
@@ -246,9 +258,7 @@ function CuratorRow({
             </p>
           )}
           {isFolderCurator && backlog && (
-            <p className="mt-0.5 text-[12.5px] text-muted-foreground">
-              {backlog.distinct_events} unread events
-            </p>
+            <p className="mt-0.5 text-[12.5px] text-muted-foreground">{backlog}</p>
           )}
           {allowance && (
             <p className="mt-0.5 text-[12.5px] text-muted-foreground">{allowance}</p>

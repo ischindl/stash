@@ -567,8 +567,9 @@ async def test_the_changes_endpoint_publishes_distinct_and_raw(client: AsyncClie
 
 @pytest.mark.asyncio
 async def test_the_curator_status_endpoint_publishes_the_shared_backlog(client: AsyncClient, pool):
-    """The founder's console reads the shared wiki's backlog from the
-    curator's own watermark — collapsed, and scoped the same way its feed is."""
+    """The founder's console reads the shared wiki's backlog from the position
+    that is live on that curator — the watermark while no history drain is open —
+    collapsed, and scoped the same way its feed is."""
     ahead = datetime.now(UTC) + timedelta(days=1)
     api_key, _, workspace = await _developer(client)
     machine_key = await _mint_workspace_key(client, api_key, workspace)

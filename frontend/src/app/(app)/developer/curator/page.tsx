@@ -68,9 +68,13 @@ function Curator() {
         />
         <Fact label="Last run" value={formatWhen(data.curator.last_run_at)} />
         <Fact
-          label="Reading since"
-          value={formatWhen(data.curator.curated_through)}
-          detail="The point the last run finished reading; the next run starts here."
+          label={data.event_backlog.draining ? "Draining through" : "Reading since"}
+          value={formatWhen(data.event_backlog.read_from)}
+          detail={
+            data.event_backlog.draining
+              ? "A history drain is in flight; this is where its last committed pass stopped, and the unread figure beside it counts from here. The nightly watermark is unchanged until the drain retires."
+              : "The point the last run finished reading; the next run starts here."
+          }
         />
         <Fact
           label="Uncurated events"

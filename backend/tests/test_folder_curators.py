@@ -1392,3 +1392,54 @@ async def test_an_account_without_an_external_wiki_resolves_no_ceiling(
     after = await agent_service.get_curator_by_id(UUID(curator["id"]))
     assert after["turn_timeout_seconds"] is None
     assert after["effective_turn_timeout_seconds"] is None
+
+
+@pytest.mark.asyncio
+async def test_a_folder_curator_mid_drain_reports_where_its_drain_stands(client, pool):
+    """The founder's backfill is one folder at a time, and the row must show it.
+
+    A folder curator with a month of history behind it is the lane this card was
+    opened on: `GET /me/curators` counted from `curated_through`, an instant that
+    cannot move until `finish_drain` adopts the drain at the very end, so day 1 and
+    day 30 of the same backfill rendered the same number. The seed is the
+    discriminating one — watermark past the events, drain behind them — and folder
+    scoping is asserted in the same breath, because a readout that widened the
+    scope would look like progress and be a lie.
+    """
+    key, uid = await _register(client)
+    rozvrh = await _folder(client, key, "Rozvrh")
+    other = await _folder(client, key, "Other")
+    await _file_session(client, key, uid, pool, "conv-drain", rozvrh, "seminars on tuesday")
+    await _file_session(client, key, uid, pool, "conv-outside", other, "not this project")
+
+    r = await client.post(
+        "/api/v1/me/curators",
+        json={"folder_id": rozvrh, "model_provider": "local", "model_id": "qwen"},
+        headers=_auth(key),
+    )
+    assert r.status_code == 201, r.text
+    curator_id = UUID(r.json()["curator"]["id"])
+
+    drain_at = BASE - timedelta(days=30)
+    await pool.execute(
+        "UPDATE agents SET curated_through = $2, curated_through_event_id = NULL,"
+        " drain_through = $3, drain_cursor = '{}'::jsonb WHERE id = $1",
+        curator_id,
+        BASE + timedelta(days=1),
+        drain_at,
+    )
+
+    r = await client.get("/api/v1/me/curators", headers=_auth(key))
+    assert r.status_code == 200
+    entry = {c["id"]: c for c in r.json()["curators"]}[str(curator_id)]
+
+    assert entry["event_backlog"]["draining"] is True
+    assert datetime.fromisoformat(entry["event_backlog"]["read_from"]) == drain_at
+    # Only this folder's event, though the other folder holds one at the same instant.
+    assert entry["event_backlog"]["distinct_events"] == 1
+
+    # The figure the route used to publish, on these same rows and the same folder.
+    stored = await agent_service.get_curator_by_id(curator_id)
+    assert await curation_service.curator_event_backlog(
+        uid, INTERNAL, position_of(stored), curator_id
+    ) == {"distinct_events": 0, "raw_rows": 0, "distinct_sessions": 0}
