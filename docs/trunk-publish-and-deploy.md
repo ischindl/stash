@@ -382,9 +382,12 @@ if semantic search is to stop seq-scanning `history_events`.
   rows were already named, so the guard selects zero rows and never decrypts. Earlier text here
   named two, then three, and understated the set.
 
-**Executing it on the island remains the operator's decision**, and it stays unexecuted: this
-record came from a copy, the founder database was read with `SELECT`s and nothing else, and no
-cutover happened as a side effect of measuring it. Read the recipe honestly: it begins with a
+**Executing it on the island remains the operator's decision**, and it stayed unexecuted as far
+as this record knows: this record came from a copy, the founder database was read with `SELECT`s
+and nothing else, and no cutover happened as a side effect of measuring it. *(Superseded as to
+fact on 2026-11-16 by STAS-441's execution, recorded near the end of this file; not superseded
+as to rule — that move went because the operator authorized it by name, and it is no precedent
+for an un-authorized stamp.)* Read the recipe honestly: it begins with a
 hand `stamp`, and this section does not relax the Prohibition below that refuses a hand
 re-stamp — that Prohibition is precisely why the move is no agent's to run. On the copy a stamp
 is the instrument that sets the starting line, which is where it stays run; on the island the
@@ -552,15 +555,18 @@ it does not land a coherent schema at this distance:
   applies. This is the ambiguous-id trap, not a bug in the candidate.
 
 So for the boot-only path no forward move exists that both satisfies the prohibition and
-works, and the founder database's migration is not the boot's to make. What changed on
-2026-11-15 (STAS-443) is the other half of that sentence: the rescue above is now green end
-to end on a fresh copy of the founder's own data against trunk's live head — including its
-last step taken by the shipped two-worker boot itself — so the operator's decision is now
-informed by a full value census and a named object remainder, not by an unmeasured hope. It
-remains the operator's decision. Nothing above re-stamped anything by hand, the founder
-database was not touched (it still reads `0225` with its lanes on `main-11e0644a-pi`), and
-`docker-compose.founder.yml` was left naming `11e0644a`, because the pin is a claim about the
-stack and the container readings still measure that older pair.
+works, and the founder database's migration is not the boot's to make. **That is the state of
+knowledge on 2026-11-15, and it is where this file's reasoning still stands; what changed on
+2026-11-16 is that the *other* path was taken.** STAS-441 converged the founder database onto
+trunk's chain and cut the stack over to the pair built from `5f44d522`, inside a maintenance
+window the operator authorized by name, and the section
+"The island is converged and the founder stack runs one commit" near the end of this file is
+that execution's record, with every reading it took. That record supersedes three factual
+claims made in the paragraphs above — that the move stays unexecuted, that the founder
+database still reads `0225`, and that the pin still names `11e0644a`. It supersedes none of the
+reasoning: the boot-only path is still closed, a hand `stamp` is still what the Prohibition
+below exists to keep out of automated hands, and the only reason the move was executable at all
+is that a human authorized this card to run it.
 
 ### The deployable band's frontend does not build, measured 2026-11-12
 
@@ -591,6 +597,209 @@ text. It is the operator's rescue decision above, after which the target is a re
 `main` commit: `docker build` of `frontend/` at `0b980f533a223187ed5b57c9d36c5854bb8c4c1d`
 succeeds with zero type errors and the resulting image serves `/login` with 200 when
 booted on a spare port.
+
+## The island is converged and the founder stack runs one commit (STAS-441, 2026-11-16)
+
+Everything above this heading is measurement of a move not yet taken. This section is the move,
+taken. It was authorized in writing by the operator at `2026-11-16T14:50:12.836Z` — three gates
+yes: rehearse on a faithful copy, run the leg on the island, take the downtime window — plus the
+manual `idx_history_events_embedding` create inside that same window. It rehearsed green first, at
+every gate, on a copy of the founder's own data (`STAS-441`'s Step 2/3 record is on the card).
+
+### One commit, and the refs that say so
+
+```
+deployed pair        stash-backend:main-5f44d522-pi  +  stash-frontend:main-5f44d522
+both built from      5f44d522e07d91bd1dbb15897daecdcfd7407638  (candidate8 5f44d522), a tree
+                     detached at exactly that commit; -base 4.12 GB, -pi 4.55 GB, frontend 167 MB,
+                     each build exit 0
+migration head       0275 (check_heads.py in that tree)   |   pyproject version 0.1.491
+refs/heads/deploy/main  before 11e0644ad9fedc88bcd97409559e7a8cb8559960
+                        after  5f44d522e07d91bd1dbb15897daecdcfd7407638   (deploy-ancestor=0)
+X-Stash-Cli-Latest      0.1.369 before the cutover  ->  0.1.491 after, equal to the version at
+                        refs/heads/deploy/main read from the ref itself
+founder downtime        18:43:36Z (four writer lanes stopped) -> 18:58:10Z (five lanes up) =
+                        14 min 34 s
+```
+
+### The window, in the order it ran, with the readings
+
+1. `18:43:36Z` — `docker compose … stop backend worker heavy-worker beat`, by name, `frontend`,
+   `stash-postgres-1` and Redis left up. rc=0, four containers `Exited (0)`.
+2. `18:43:53Z` — the rollback dump **first**: `pg_dump -Fd -j4` into a new dated directory,
+   `/data/stas441/dump-island-20261116T184353Z/founder`, rc=0 in 491 s, 4.5 GB, `pg_restore
+   --list` rc=0 over 583 TOC entries. That listing is also how the dump was proved to carry the
+   embedding index's data and `history_events`.
+3. Read-only census on the island before anything wrote: identical to the copy's before-census,
+   plus the base-containment inventory re-measured on the island at the moment of proof. Direction
+   one (`golden@0213` has, island lacks) held exactly one object, `one_curator_per_user_per_wiki`,
+   the fork's own drop that `0261`'s `DROP INDEX` targets; direction two held exactly
+   `rm_reward_models_trace_ids_check`, which `0215` drops by name inside its own `upgrade()`. **The
+   measured base is `0213`**, and the island's copy of the hand index means the runbook's
+   two-object remainder reads as one object here.
+4. Single-writer proof: 0 other client backends on the founder database.
+5. `18:52:50Z` — **leg 1, `stamp 0213`**, one throwaway container from the deployed image with the
+   founder keyring volume mounted where its own entrypoint reads it (no key character crosses a
+   shell): rc=0, account after `0213`, 2 s.
+6. `18:52:58Z` — **leg 2, `upgrade head`**, same instrument: rc=0, **60** `Running upgrade` lines,
+   first `0213 -> 0214`, last `0274 -> 0275`, 0 error lines, account after `0275`, 29 s. The walk
+   is byte-identical to the copy's, line by line. That 60, not 62, is arithmetic the chain itself
+   explains: `0237` and `0238` do not exist in trunk's history, so the band `0213…0274` steps 60
+   times. No third alembic command was issued.
+7. The authorized index statement, `CREATE INDEX IF NOT EXISTS idx_history_events_embedding …`:
+   rc=0 in 0 s, `NOTICE: relation … already exists, skipping`. **Already present, not built
+   here** — the island's index is valid, 8,480 MB, and its `indexdef` is `0001`'s spelling
+   verbatim. Reporting a build would have been false.
+8. Census and inventory re-run before any container restart (both captured on the card).
+9. `18:58:02Z` — the cutover, `up -d --no-deps backend worker heavy-worker beat frontend`, rc=0.
+
+### The value census, both sides measured rather than one side remembered
+
+The before column is not the in-window `SELECT` list alone: the rollback dump was restored into a
+scratch database and read there, so the comparison is against the bytes the rollback would
+actually return. The after column is the live island, read after the legs and before the restart.
+
+| measure | before | after |
+|---|---|---|
+| `alembic_version` | `0225` | **`0275`** |
+| public tables | 78 | **144** |
+| `sessions` with `finished_at IS NULL` | 3,234 | **689** |
+| `0269`'s own predicates as a `SELECT` | 2,545 | **0** |
+| `0268`'s close-event predicate as a `SELECT` | 0 | 0 |
+| `history_events` | 4,929,702 | 4,929,702 |
+| `security_audit_events` | 141,753 | 141,753 |
+| `page_edits` | 6,650 | 6,650 |
+| `sessions` | 3,237 | 3,237 |
+| `pages` | 206 | 206 |
+| `agents` | 33 | 33 |
+| `users` | 28 | 28 |
+| `user_integrations` where `provider='x'` | 0 | 0 |
+| `user_sources` `x_saves`/`instagram_saves` (and of those `sync_enabled`) | 0 (0) | 0 (0) |
+| `user_agent_credentials` rows and their `name`s | 2, `192.168.12.40`, `10.1.9.34` | unchanged |
+| `workspaces.curation_generation` present (`0265`'s probe) | 1 | 1 |
+| `idx_history_events_embedding` | 1 valid | 1 valid |
+
+Exactly four lines moved, and the `NULL` count moved by 2,545 — the predicate's own count, which
+then re-reads 0. Nothing else in the census is different, and `history_events` not moving across
+the window means no ingestion traffic confounds the comparison.
+
+### The four irreversible effects, each with its measured count
+
+- **`0223`** deleted `user_integrations` rows for the retired X provider and disabled the
+  `x_saves`/`instagram_saves` sources, with a `downgrade()` that is a deliberate `pass`. Both sides
+  read **0 rows and 0 sources**, so there was nothing here for it to destroy and nothing to re-enable.
+- **`0265`**'s archive-and-shared-wiki rebuild, whose `downgrade()` raises `NotImplementedError`,
+  took its documented **early return**: the probe column `workspaces.curation_generation` is
+  present in the pre-leg restore (read 1), so the irreversible branch never fired. `shared_wiki_*`
+  appears post-leg because `0254` creates those tables and both read 0 rows — schema growth, not
+  a rebuild.
+- **`0269`** (with `0268` beside it) rewrote `sessions.finished_at`: **2,545 rows** closed, the
+  `NULL` count falling 3,234 → 689. This is the effect the operator accepted losing, and it is the
+  one a `downgrade` could not undo.
+- **`0263`**'s guarded credential-name backfill selected **0 rows**: both endpoint rows already
+  carried owner-chosen names, so no name was overwritten and, per the guard added in STAS-443, the
+  pass never decrypted.
+
+And the credential rows themselves, measured through the deployed image's own decrypt path with the
+founder keyring mounted — the question the operator actually asked, whether the stored credential
+survives without being re-issued:
+
+```
+before  doc-keys=api_key,base_url,model                  md5-all=3cefbb7642352beb1e9208187eef586a
+                                                       md5-all=a36a88ae41206d49b15b15ccbca13fd0
+after   doc-keys=api_key,base_url,context_window,model,thinking
+                                            md5-all=e1c565788f871726fd016034303b2184
+                                            md5-all=372cd7c86ac8f04d483e74bac6a5bcee
+after, digest over only the three pre-existing keys: md5-shared=3cefbb764235… / a36a88ae4120…
+```
+
+The last line is the proof: the after-state digest over the keys that existed before equals the
+before-state digest over the whole document, byte for byte. Every value the owner typed — including
+the stored API key — is unchanged and un-rotated, only `thinking` and `context_window` were added,
+and both documents decrypt on the deployed image with the founder keyring. Ciphertext digests are
+not a comparison here: Fernet writes a fresh IV and timestamp per encryption, so equal documents
+encrypt to different bytes by construction.
+
+### Object convergence, measured with the stricter inventory
+
+The runbook's query keyed constraints by name. Re-run with each index's full `indexdef` and each
+constraint's full `pg_get_constraintdef` text, the converged island and a golden built from empty to
+trunk's head in the same cluster are **identical: 2,704 lines each, zero differences in either
+direction**. The converged copy reached the same state once its hand index landed. So the "one
+surviving miss plus eleven cast-spelling CHECKs" remainder that STAS-443 named is closed on this
+pair of databases, and the residual risk that a converged island is a different schema from a
+freshly migrated one is measured away rather than assumed away.
+
+### The cutover's effective compose list, and why the paths are not the runbook's
+
+The stack now runs exactly the four documented files — `docker-compose.prod.yml`,
+`.local.yml`, `.dogfood.yml`, `.founder.yml` — and the untracked `.stas270-cutover-override.yml`
+and `.founder-11e0644a-pin.yml` are retired, which is what the Prohibition against untracked pin
+files asks for. `com.docker.compose.project.config_files` on all five containers names those four
+paths **under a detached worktree at the pinned commit**, not under the primary checkout, because
+`docker-compose.prod.yml` declares a service-level `env_file` that compose resolves against
+`--project-directory`: a detached tree has no `.env`, so the run passes `--project-directory` at
+the checkout that owns it and points `-f` at the pinned tree. That substitution was measured, not
+assumed: the render from the detached tree and the render in the documented form are **301 lines
+each and differ in exactly the six intended `image:` lines, zero other lines** — no volume, bind,
+network, name, port or environment line moves. `sync-worker` stayed unstarted by name, and the
+primary checkout stayed clean throughout (`git status --porcelain` empty, still holding
+`refs/heads/main`).
+
+### Verification, before the ref moved
+
+```
+docker inspect on all five containers: image names equal the pin, byte for byte
+config_files: exactly the four files, on all five
+X-Stash-Cli-Latest = 0.1.491 = version at refs/heads/deploy/main
+GET  :3456/login  -> 404  (the correct backend shape; the frontend owns /login)
+GET  :3457/login -> 200
+/health -> {"status":"ok"}
+error-class lines in the last 10 minutes: 0 on backend, worker, heavy-worker, beat, frontend
+"Running upgrade" lines in the deployed boot: 0, account 0275 before and after the restart
+index: present, indisvalid=true, indexdef = 0001's spelling, 8,480 MB
+scripts/publish-trunk.sh -> status=0, main and deploy/main both mirrored to the fork and read back
+github run list: newest run unchanged (a scheduled Dependency audit from 2026-10-14), publish.yml's newest
+                 still 2026-10-03 — the mirror triggered no release; docker-publish.yml does not
+                 exist on the fork's default branch, so it cannot have run
+```
+
+### Rollback, from here
+
+`downgrade` is not a path: `0223`'s is a `pass`, `0265`'s raises `NotImplementedError`, and `0269`
+has nothing to undo but has already written 2,545 values. Rollback is **restore from
+`/data/stas441/dump-island-20261116T184353Z/founder`** — the dump this window took after the lanes
+were stopped and before anything wrote — plus re-pointing `refs/heads/deploy/main` at
+`11e0644ad…` and the pin at the old pair. Budget for what that restore costs: this dump's schema and
+all of its data loaded in about 35 minutes at default settings, of which the `hnsw` build on
+`history_events` was still unfinished when it was terminated. The same index built to completion on
+the same data took **1,417 s (23 min 37 s) at `maintenance_work_mem=16 GB` with zero parallel
+workers**, spilling nothing, and at the container default of 64 MB it had not finished its tuple
+scan after 41 minutes. A restore of this dump is therefore an hours-scale operation whose long pole
+is one index, and `maintenance_work_mem` is the knob.
+
+### What the tracked pin says now
+
+`docker-compose.founder.yml` names `5f44d522` on all five backend lanes and on the frontend, its
+`BASE_IMAGE` example names the same commit, and the `NOT CUT OVER AS OF 2026-11-12` paragraph is
+deleted because the cutover landed and the container readings agree — which is what that paragraph
+instructed. Its guard, `backend/tests/test_founder_deploy_pin.py`, passes 6/6 against a scratch
+pgvector container at the new pin. The pin commit (`420f1041f`) is one commit directly over the
+candidate on the card's lane; **it is not on `refs/heads/main`**, because that ref is held by the
+primary checkout's worktree and moving it is the engine's or the operator's leg, not this one's.
+
+### What this section does not claim
+
+- It does not retire the `0225`-era analysis above: the ambiguous-id trap that made the boot path
+  red is still exactly what it was, which is why the leg began by naming a base and proving it.
+- It does not license a hand `stamp`. The Prohibition below is untouched and still true for every
+  future card; this move went because one named operator authorized one named card for one named
+  window, and the base-containment inventory taken at the moment of proof is what made the claimed
+  schema position checkable instead of assumed.
+- It does not claim the founder stack was migrated by a boot. The boot printed zero upgrade lines:
+  the legs converged the database, then the deployed image booted onto a chain already at head.
+- It does not claim the two untracked override files were ever load-bearing; the file above
+  (`The .founder-11e0644a-pin.yml` section) already records that the claim was never measured.
 
 ## Prohibitions
 
