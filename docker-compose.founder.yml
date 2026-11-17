@@ -25,32 +25,32 @@
 # nothing builds: docker-compose.dogfood.yml declares it as a required interpolation
 # with no default, and compose resolves it for every command, `config` and `up`
 # included. Set it to the same commit's pi overlay, e.g.
-#   BASE_IMAGE=stash-backend:main-5f44d522-pi docker compose -p stash ... config --quiet
+#   BASE_IMAGE=stash-backend:main-8dd09c7b-pi docker compose -p stash ... config --quiet
 #
-# PINNED 2026-11-16 to `5f44d522`, which replaces the NOT CUT OVER paragraph this file
-# told whoever landed the cutover to delete. Both hexes name that one commit, built from
-# a tree detached at exactly it by the runbook, and the founder database was converged
-# onto trunk's migration chain in the operator-authorized maintenance window that
-# precedes this pin. A pin is a claim about the stack: `docker inspect` on the five
-# started containers, `X-Stash-Cli-Latest` and `/login` are the readings that measure it,
-# and the rehearsal, the value census, the rollback dump and the rollback truth are
-# recorded in docs/trunk-publish-and-deploy.md beside the claim.
+# PINNED 2026-11-17 UTC to `8dd09c7b`. Both hexes name that one commit, built from a tree
+# detached at exactly it by the runbook. The founder database was converged onto trunk's
+# migration chain in the operator-authorized window of 2026-11-16 (STAS-441) and reads
+# `0275`, which is this tree's single head, so this pin's boot migrates nothing. A pin is
+# a claim about the stack: `docker inspect` on the five started containers,
+# `X-Stash-Cli-Latest` and `/login` are the readings that measure it, and the rehearsal,
+# the value census, the rollback dump and the rollback truth are recorded in
+# docs/trunk-publish-and-deploy.md beside the claim.
 
 services:
   backend:
-    image: stash-backend:main-5f44d522-pi
+    image: stash-backend:main-8dd09c7b-pi
 
   worker:
-    image: stash-backend:main-5f44d522-pi
+    image: stash-backend:main-8dd09c7b-pi
 
   heavy-worker:
-    image: stash-backend:main-5f44d522-pi
+    image: stash-backend:main-8dd09c7b-pi
 
   sync-worker:
-    image: stash-backend:main-5f44d522-pi
+    image: stash-backend:main-8dd09c7b-pi
 
   beat:
-    image: stash-backend:main-5f44d522-pi
+    image: stash-backend:main-8dd09c7b-pi
 
   frontend:
-    image: stash-frontend:main-5f44d522
+    image: stash-frontend:main-8dd09c7b
