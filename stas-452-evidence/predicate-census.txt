@@ -1,0 +1,150 @@
+STEP 3 -- PREDICATE CENSUS, taken BEFORE any code change
+========================================================
+Engine checkout: .engine/stas-452-engine, detached at refs/heads/main = 81c576a865791bffa61bf8dcfd2c3a7433b921ec
+(the delivery base). Command used for every row, engine src = packages/engine/src:
+
+  grep -rI "<symbol>" packages/engine/src --include='*.ts' | wc -l
+  grep -rI "<symbol>" packages/engine/src --include='*.ts' | grep -v '__tests__/' | wc -l
+
+Symbol census (rc=0 for every row; the zero rows are the ones that matter)
+--------------------------------------------------------------------------
+symbol                                          src+tests   src-only
+REGENERABLE_IGNORED_DIR_NAMES                        2          2
+isRegenerableScratchDirectory                        5          2
+isRegenerableIgnoredPorcelainEntry                   2          2
+provenScratchRootEntries                            12          7
+"regenerable-ignored"                               14          6
+"ignored-only"                                      57         25
+POST_LANDING_PROOF_REASONS                           2          2
+postLandingProof                                    19         11
+taskWorktreeCheckoutIsClean                          9          9
+worktree:removal-preserved                          14          4
+worktree:removal-discarded-regenerable-content       5          2
+worktree:post-landing-ignored-content-discarded      3          2
+worktree:removal-discarded-occupancy                 0          0   <-- rc=1, absent
+
+removeWorktree call sites in src excluding tests and the definition: 25
+(the intake's "~100 sites" reads a number this checkout does not produce.)
+
+Why `worktree:removal-preserved` prints 0 in THIS card and 5 in the predecessor card
+------------------------------------------------------------------------------------
+The predecessor card grepped for a name its own delivery had introduced, so 0 was the
+baseline it expected. Here the same 0 with rc=1 is the defect: the audit event that would
+record an occupancy-based discard does not exist yet. It is this card's reason to exist, not
+a missing surface.
+
+FIVE claims the predecessor left in its mirror -- each checked against the LIVE base
+------------------------------------------------------------------------------------
+1. "the tip-already-merged sweep's reason is in DEFENSIVE_REMOVAL_REASONS"
+   CONFIRMED. worktree-backend.ts:1191-1204 lists ten members; `SelfHealingBranchConflict`
+   is one of them (mirror said nine -- AcquisitionRefused arrived with RUFU-373).
+
+2. "POST_LANDING_PROOF_REASONS holds exactly one member, and it is not the sweep's"
+   CONFIRMED. worktree-backend.ts:1205-1207: `CompletionLandedCleanup` only. The sweep's
+   `SelfHealingBranchConflict` is therefore barred from landing proof by construction.
+
+3. "no defensive reason appears in ALLOWED_FORCE_REASONS, and removeWorktree passes
+   force:false on every defensive call whatever the caller asked for"
+   CONFIRMED twice. ALLOWED_FORCE_REASONS (1182-1190) holds HardCancel, ExecutorDispose,
+   ExecutorTransientRetry, ExecutorStuckKilled, WorkspaceAcquireRollback, TaskDeletion --
+   no defensive member; and worktree-backend.ts:1871 sends `force: requiresCleanWorktree ?
+   false : input.force` to git.
+
+4. "both throw sites print one identical sentence naming the path"
+   CONFIRMED. `WorktreeContentPreservationError` (1262) reproduces
+   `preserving ${path}: uncommitted or ignored content present` for both the `deliverable`
+   throw (1697) and the `ignored-only` throw (1782), which is why the refusal the board
+   shows cannot tell the two classes apart.
+
+5. "the preserve record's metadata names no path"
+   CONFIRMED. `worktree:removal-preserved` metadata is
+   { taskId, reason, source, classification, hasPostLandingProof } (1750-1762) and the docs
+   state path names stay out of the row by design.
+
+The two claims the mirror got WRONG (both printed, both stale)
+--------------------------------------------------------------
+a) "executor/overlap-acquisition-park.ts is absent". FALSE at this base -- the file is
+   PRESENT. Mirror drift, not a live finding.
+b) "executor/worktree-create-conflict.ts, worktree-doc-accuracy.test.ts, and the
+   defensive-removal-preservation suite are absent; the card says present". FALSE -- all
+   three are PRESENT. The intake's own path `worktree/worktree-create-conflict.ts` is the
+   absent one; the real file lives under `executor/`.
+   Net: worktree-doc-accuracy.test.ts joins the pin list this card must keep green.
+
+Where tip containment and occupancy are decided (AC3 -- two authorities, kept apart)
+------------------------------------------------------------------------------------
+Tip ancestry: execution/branch-conflicts.ts:1457 and :1604 produce
+`kind: "tip-already-merged"`, decided by the `git merge-base --is-ancestor` helper at :390.
+Occupancy: probeWorktreeRemovalContent / classifyWorktreeRemovalContent in
+worktree/worktree-backend.ts. Nothing in the ancestry read consults the tree; nothing in the
+occupancy read consults the ref. This change moves the second authority's verdict, so the
+first stays exactly where it is.
+
+`taskWorktreeCheckoutIsClean` and its four callers
+-------------------------------------------------
+branch-conflicts.ts:1537 is the definition: `git status --porcelain` with no --ignored flag,
+returning false on any doubt. Callers, all of which keep their current meaning:
+  - self-healing.ts:6620                (the same tip-already-merged sweep's dirty-checkout hold)
+  - auto-recovery-handlers/branch-worktree.ts:547
+  - executor/worktree-branch-conflict-handle.ts:198
+  - executor/worktree-create-conflict.ts:405
+None of them is the release gate, so none is changed by this fix.
+
+The checkout-emptiness pair, which the capacity gate consumes
+------------------------------------------------------------
+worktree/checkout-emptiness.ts:457 runs the BARE `git status --porcelain` and :462/:476 run
+`git rev-list --count`. Ignored files are invisible to both, and the docs at :425-426 say so
+deliberately ("an untracked file IS work"). Under the post-fix contract: the *shape of the
+verdict* is what changes at the release gate (the occupancy classes), while these two reads
+keep their shape and their bare-ness -- they answer a different question for a different
+consumer (capacity), and they are the reason the wedged lanes cost no admission slots.
+
+The allowlist machinery the predicate fix retires (all deleted)
+--------------------------------------------------------------
+- REGENERABLE_IGNORED_DIR_NAMES (worktree-backend.ts:1289-1298) -- the basename set that
+  must not be the union of the two engine-side `.gitignore` shapes. It lacks every
+  `*-info/`/`*-egg/` shape, which is what strands a Python lane: `stashai.egg-info/` is
+  ignored, matches no allowlist name, so a tree of `.venv/` plus `stashai.egg-info/`
+  classifies `ignored-only` and refuses forever.
+- isRegenerableScratchDirectory + provenScratchRootEntries (1304-1322, 1412-1423) -- the
+  `.fusion` scratch probe, which existed only to feed the allowlist.
+- isRegenerableIgnoredPorcelainEntry (1313) -- the per-entry allowlist test, including its
+  fail-closed refusal of quoted paths. Under an occupancy predicate a quoted path is just
+  another ignored entry: still quoted, still ignored, still not occupancy.
+- the `regenerable-ignored` classification (1261, 1252) and with it
+  worktree:removal-discarded-regenerable-content (run-audit.ts:198), whose only emitter is
+  the allowlist branch: an event type declared but never emitted is dead code.
+- `git reset --hard && git clean -fd` stays exactly as it is (self-healing.ts:6693). It is
+  what clears captured deliverable content; it never removed ignored files and must not
+  start, or the fix would destroy the very output it is meant to be indifferent to.
+
+Invariants that must survive, quoted from the docs this change updates
+---------------------------------------------------------------------
+AGENTS.md:410 and docs/architecture.md:903, :1151 currently state the allowlist rule and
+name `worktree:removal-discarded-regenerable-content`. Both are updated in the same commit
+that deletes the machinery, and the quoted invariants are preserved in the new wording:
+  - "Defensive removal refuses the project root checkout before this classification can
+    authorize deletion" -- kept: the root refusal at :1675 still runs first.
+  - "unreadable status probes ... always remain fail-closed" -- kept: a probe that failed is
+    an unknown tree, which is occupancy by ignorance and still refuses (`unverifiable`).
+  - "Modified tracked files, untracked non-ignored files ... always remain fail-closed" --
+    kept: occupancy is precisely those three readings plus the staged one.
+  - "a probe that guesses is RETURNED as status probe-failed ... never a verdict" -- kept.
+  - the doc-accuracy guard's rot scan -- kept: no doc's `## Pinned by` cites any deleted
+    symbol (measured: REGENERABLE_IGNORED_DIR_NAMES 0, isRegenerableScratchDirectory 0,
+    POST_LANDING_PROOF_REASONS 0 in docs/AGENTS.md/CONCEPTS.md; probeWorktreeRemovalContent
+    3 and assertCleanForDefensiveRemoval 5 are names that SURVIVE the change).
+
+Capacity chain read end to end (AC6 instrument A -- see capacity-verdict.txt for the verdict)
+--------------------------------------------------------------------------------------------
+settingsStore.projects.worktreeLimitEnabled -> resolveWorktreeCapacityLimit
+(core/src/workflows/workflow-capacity.ts) -> resolveEffectiveConcurrency
+(concurrency.ts) -> persistedWorktreeHolderTaskIdsFromStore (concurrency.ts:783) ->
+scheduler.ts:1013-1021 builds `maxWorktreesGate` from `params.activeWorktrees` ->
+buildConcurrencyCapacityNotice prints `maxWorktrees used=/limit=`.
+The holder predicate (core/src/agents/worktree-capacity-holder.ts:36) early-exits on
+terminal/paused/userPaused/failed and otherwise asks `taskHoldsUnmergedCheckout`
+(core/src/tasks/file-scope-lease.ts:71), which the CheckoutEmptinessProver downgrades from the
+BARE porcelain read plus `rev-list --count`. Consequence recorded now, argued in the verdict
+file: a wedged lane's tree is invisible to this chain, because the chain never looks at a
+directory -- it looks at cards.

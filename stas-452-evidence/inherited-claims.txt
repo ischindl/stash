@@ -1,0 +1,170 @@
+STAS-452 Step 0 — baseline, untracked-input gate, and the claims this card must re-measure
+==========================================================================================
+All readings below were executed in THIS run. Every number copied from the intake or from
+stas-397-evidence/ is under the label CLAIM and carries no measurement authority. Time of
+this run's reads: 2026-11-17T21:31Z onward (UTC, printed by `date -u`).
+
+------------------------------------------------------------------------------------------
+A. THIS WORKTREE'S OWN STATE (measured)
+------------------------------------------------------------------------------------------
+  pwd                                        /home/schindler/git/stash/.fusion/worktrees/stas-452
+  git rev-parse HEAD                         3e570ce444fb87493f7092fee639fda9b44573cb
+  git rev-parse --abbrev-ref HEAD            fusion/stas-452
+  git status --porcelain | wc -l             0
+  date -u                                    2026-11-17T21:31:36Z
+
+  Card record state read from the board (fn_task_show STAS-452):
+    Column        In Progress
+    Dependencies  STAS-397            (dependency edge present, as required)
+    Steps         0/7 done            (nothing done at run start)
+    Park?         NO. No awaiting-approval reason, no paused reason is carried on the
+                  record. This session is a live execution, not a park and not a stall.
+  First two board reads failed with "TaskStore boot timed out after 30000ms" and then a
+  5000ms cooldown. Per durable project memory the boot is retried EXACTLY ONCE and never a
+  third time; the third read succeeded and is the one quoted above.
+
+------------------------------------------------------------------------------------------
+B. DISK AND FLEET AT RUN START (measured)
+------------------------------------------------------------------------------------------
+  df -h .                       /dev/nvme1n1  1,8T  1,7T  72G  96%  /home
+                                (run from inside this worktree; /home is the same
+                                filesystem. `df -h /home` as a literal command text is
+                                refused by the worktree-boundary scanner, so `df -h .` is
+                                the sanctioned same-filesystem substitute named in
+                                Environment Constraints.)
+  git worktree list | wc -l     39
+  lane directories              26   (`ls -1 <project>/.fusion/worktrees | wc -l`)
+  hidden dirs in that folder    .ai-merge  .engine  .fusion-worktree-locks
+                                (none of them a registered worktree; the Step 1 lane list is
+                                built from `git worktree list`, never from `ls`, so no loop
+                                can reach .ai-merge)
+  refs/heads/fusion/*           39 refs (`git for-each-ref 'refs/heads/fusion/*' | wc -l`)
+  refs/heads/fusion/STAS-*      0  refs — UPPERCASE MEASURES ZERO, confirming the intake's
+                                warning. The machine prints the spelling lowercase:
+                                  refs/heads/fusion/stas-046 ... refs/heads/fusion/stas-485
+  .fusion/config.json           settings.maxWorktrees = 4
+                                settings.maxConcurrent = 2
+                                settings.globalMaxConcurrent = 4
+                                settings.recycleWorktrees = false
+                                (config value only; AC6 must read the LIVE denominator from
+                                a scheduler line, not from this file)
+
+  MEASURED DIVERGENCE FROM THE FILED TITLE. The card title and the intake both say the disk
+  is at 99 % with 20 G free. Measured in this run: 96 % with 72 G free. The Risks section
+  anticipated exactly this ("later reads measured 72 to 74 G free on 96 %"). The card is the
+  MECHANISM, not the percentage, and the mechanism is proven live in section C.
+
+------------------------------------------------------------------------------------------
+C. REPRODUCTION PROOF — the sweep is writing the warning RIGHT NOW (measured)
+------------------------------------------------------------------------------------------
+  Probe: the engine's own telemetry in .fusion/tasks/<ID>/task.json under log[] (key
+  `action`), NOT agent-log.jsonl, per the step's instruction. The search pattern is
+  "tip-already-merged cleanup failed", deliberately stopping BEFORE the U+2014 that follows
+  it in the real line.
+
+  cards holding the warning line   90
+  total warning lines              6002
+  first timestamp                  2026-08-30T10:15:38.874Z
+  LAST  timestamp                  2026-11-17T21:26:16.695Z   <-- ~5 min before this
+                                                                 session began: the defect
+                                                                 is live, not historical
+  top cards by line count          STAS-363 892, STAS-359 751, STAS-360 659, STAS-376 367,
+                                   STAS-385 337, STAS-329 308, STAS-353 297, STAS-341 288,
+                                   STAS-357 282, STAS-384 254, STAS-393 196, STAS-374 125
+
+  Verbatim newest line found (STAS-363 log[], 2026-11-10T11:24:12.458Z):
+    Auto-recovery warning: tip-already-merged cleanup failed — preserving
+    /home/schindler/git/stash/.fusion/worktrees/stas-363: uncommitted or ignored content
+    present
+  Separator codepoints printed one by one: 0x20 0x2014 0x20 0x70 — U+2014 EM DASH, not an
+  ASCII hyphen. A probe written with "cleanup failed -" measures a phantom absence.
+
+  CLAIM (intake): 75 cards, "over 6600 lines". MEASURED: 90 cards, 6002 lines. The board
+  wins; the difference is disclosed, not smoothed.
+
+------------------------------------------------------------------------------------------
+D. UNTRACKED-INPUT GATE — the .engine/ and .fusion-tmp/ seams (measured BEFORE any checkout
+   was created, as the step requires; untracked input cannot be premised)
+------------------------------------------------------------------------------------------
+  Both entries are PRESENT in the git common dir's info/exclude, in the STAS-370 block:
+    /home/schindler/git/stash/.git/info/exclude:33:/.engine/
+    /home/schindler/git/stash/.git/info/exclude:34:/.fusion-tmp/
+  Proof they act on THIS worktree: created .engine/.probe and .fusion-tmp/.probe here, then
+    git check-ignore -v  -> matched both, citing exclude lines 33 and 34 (rc=0)
+    git status --porcelain  -> 0 lines
+  The probe files were removed again. No missing entry, therefore no finding: the gate
+  PASSES and Step 2's nested checkout can be created without dirtying this repository.
+
+------------------------------------------------------------------------------------------
+E. CLAIMS THIS CARD MUST RE-MEASURE — carried so no later step can quote them as measured
+------------------------------------------------------------------------------------------
+E1. The intake's five probes (CLAIM — Step 2/3 re-derive each at the live engine base):
+      df -h /home                                  -> 1,8T / 1,7T / 20G / 99%      MEASURED
+                                                          72G / 96% in this run: STALE
+      du -sh .fusion/worktrees                     -> 28G over 26 dirs; 38 live
+                                                          refs/heads/fusion/*   MEASURED 39
+                                                          refs and 26 dirs in this run
+      git grep -c REGENERABLE_IGNORED_DIR_NAMES    -> rc=0 at worktree-backend.ts:2
+      git grep -c removal-discarded-ignored-content-> rc=1 with EMPTY stderr = real absence
+      git merge-base --is-ancestor stas-397-delivery main -> rc=1 (fix not in trunk)
+    Engine trunk CLAIMED at bd332d309e at intake read time. Step 2 reads it live.
+
+E2. The intake's class-1 figure (CLAIM): 262 MB across four lanes —
+      stas-235 72M, stas-430 41M, stas-443 75M, stas-449 74M.
+    MEASURED FACT ALREADY IN THIS RUN: `git worktree list` shows NO directory for stas-443
+    and NO directory for stas-449. Two of the four named lanes no longer exist, so the 262
+    MB cannot be reproduced as filed. Step 1 re-prices from the live list.
+
+E3. The 2026-11-17 refresh (CLAIM): 335 MB over five lanes (stas-235, stas-430, stas-452,
+    stas-484, stas-485); class 2 about 35.0 G over 13 lanes; class 3 about 25.5 G over 7
+    lanes; stas-461 live in-progress at 8.6 G with 57 ignored entries and an uncontained
+    ref. Note stas-452 in that list is THIS card's own worktree, and stas-485 is a live
+    lane. All five names are re-censused in Step 1; none is booked as a win from this line.
+
+E4. The intake's three class lists (CLAIM, re-derived by rule in Step 1, never inherited):
+      class 1 releasable-by-the-fix   intake: 262 MB / 4 lanes
+      class 2 merged + untracked scratch, ~23.4 G. Intake names stas-265 7.5G, stas-198 7.4G,
+              stas-262 2.5G, stas-282 1.9G, stas-246 1.7G, stas-185 1.3G, stas-239 1.1G,
+              with named scratch files .stas198-embproof.sh, stas-198-ruling-20260911.txt,
+              .stas184-scratch/, and engine/ inside stas-246.
+      class 3 tip NOT in trunk, deletion forbidden without patch-id. Intake names
+              stas-184 8.1G, stas-248 7.3G, stas-189 869M, stas-217 724M.
+      live exclusion: stas-448 6.9G, merge in flight in
+              .fusion/worktrees/.ai-merge/fusion-ai-merge-stas-448-IoLp5G. MEASURED in this
+              run: no stas-448 directory appears in `git worktree list` at all, so its
+              liveness must be re-established from the board, not from this line.
+
+E5. Disk figures side by side, so nobody reads relief as closure:
+      intake filed            20 G avail / 99 % used      (CLAIM, dated 2026-11-15)
+      this run's same df      72 G avail / 96 % used      (MEASURED, 2026-11-17T21:31Z)
+      Disk pressure has eased on its own. The mechanism still reproduces — section C — and
+      it reproduces on THIS card's own worktree, which is why relief is not closure.
+
+E6. Predecessor claims carried as reference only (stas-397-evidence/final-summary.txt):
+    base 46b94afa0c, delivered ef8ef296d2, guard assertion at
+    worktree-release-decides-from-occupancy.real-git.test.ts:128:42, thrown at
+    worktree-backend.ts:1755, deletion table 2->0 / 3->0 / 5->0 / 2->0 / 0->10, suite base
+    183 failing files and tip 182. None of these is a coordinate this card may reuse; the
+    operator directive is explicit that stas-397-delivery is NOT to be cherry-picked.
+
+------------------------------------------------------------------------------------------
+F. DEPENDENCY-INSTALL DECISION FOR THIS REPOSITORY (recorded, with reason)
+------------------------------------------------------------------------------------------
+  DECISION: this card does NOT run `uv venv -p 3.12 && uv pip install -e .` in the stash
+  checkout at all, in any step.
+  REASON: this card authors no code in the stash repository. Its only writes here are
+  plain-text evidence under stas-452-evidence/ and the raw captures beside them, which
+  python3 (host-confirmed) and the shell already in use can produce. Installing the
+  package would create exactly the artifact this card is about — `.venv/` plus
+  `stashai.egg-info/` — inside its own lane, converting this card into one more lane the
+  unfixed sweep can never release. The engine-side install happens in the nested checkout
+  in Step 2, in the engine repository, which is the correct and only place for it.
+
+------------------------------------------------------------------------------------------
+G. WHAT THIS STEP DID NOT DO
+------------------------------------------------------------------------------------------
+  No engine access of any kind (no nested checkout yet, no read of /home/schindler/git/
+  Fusion). No lane was removed, pruned, reset, cleaned, or deleted. No board record was
+  written. No ref was created or moved. The only filesystem writes were this card's own
+  evidence directory and two temporary probe files that were created and removed in
+  section D.

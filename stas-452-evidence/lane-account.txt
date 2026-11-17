@@ -1,0 +1,55 @@
+du -sm -c over 28 lane directories: TOTAL 22746 MB (one pass, so an inode shared by two lanes is counted once)
+sum of the per-directory lines of that same pass: 22760 MB (delta 14 MB = hardlinked content reported in more than one lane)
+
+class                        lanes      MB
+1-releasable-by-this-fix         3     101
+2-merged-with-occupancy         14   11359
+3-tip-not-in-trunk               7   11255
+residual-not-a-task-lane         3       4
+residual-released-by-both-gates     1      41
+RECONCILED                      28   22760
+
+=== 1-releasable-by-this-fix ===
+     34 MB  stas-484               STAS-484  todo         contained=True  base refuser: !! stashai.egg-info/
+     34 MB  stas-485               STAS-485  todo         contained=True  base refuser: !! stashai.egg-info/
+     33 MB  stas-235               STAS-235  todo         contained=True  base refuser: !! .ruff_cache/
+
+=== 2-merged-with-occupancy ===
+   3829 MB  stas-198               STAS-198  done         contained=True  occupiers=4
+   1660 MB  stas-246               STAS-246  done         contained=True  occupiers=1
+   1432 MB  stas-262               STAS-262  done         contained=True  occupiers=1
+   1210 MB  stas-265               STAS-265  done         contained=True  occupiers=1
+   1050 MB  stas-239               STAS-239  done         contained=True  occupiers=1
+    676 MB  stas-282               STAS-282  done         contained=True  occupiers=1
+    594 MB  stas-185               STAS-185  done         contained=True  occupiers=1
+    560 MB  stas-273               STAS-273  done         contained=True  occupiers=2
+     94 MB  stas-190               STAS-190  done         contained=True  occupiers=149
+     70 MB  stas-252               STAS-252  done         contained=True  occupiers=1
+     64 MB  stas-186               STAS-186  done         contained=True  occupiers=1
+     44 MB  stas-405               STAS-405  todo         contained=True  occupiers=1
+     42 MB  stas-215               STAS-215  <no row>     contained=True  occupiers=1
+     34 MB  stas-271               STAS-271  done         contained=True  occupiers=33
+
+=== 3-tip-not-in-trunk ===
+   8081 MB  stas-184               STAS-184  done         contained=False  branch=fusion/stas-184
+   1021 MB  stas-248               STAS-248  done         contained=False  branch=fusion/stas-248
+    830 MB  stas-189               STAS-189  done         contained=False  branch=fusion/stas-189
+    684 MB  stas-217               STAS-217  done         contained=False  branch=fusion/stas-217
+    542 MB  stas-452               STAS-452  in-progress  contained=False  branch=fusion/stas-452
+     51 MB  stas-232               STAS-232  done         contained=False  branch=fusion/stas-232
+     46 MB  stas-278               STAS-278  done         contained=False  branch=fusion/stas-278
+
+=== residual-not-a-task-lane ===
+      2 MB  .fusion-worktree-locks None      None         contained=None  branch=None
+      1 MB  .ai-merge              None      None         contained=None  branch=None
+      1 MB  .engine                None      None         contained=None  branch=None
+
+=== residual-released-by-both-gates ===
+     41 MB  stas-430               STAS-430  todo         contained=True  branch=fusion/stas-430
+
+=== the ignored names that the base allowlist could not answer for, per lane ===
+  2 lanes  stashai.egg-info/
+  1 lanes  .ruff_cache/
+
+note: `.venv` IS on the base allowlist (worktree-backend.ts:1288). The intake named it as the
+unnamed artifact; measured here, the names that actually refused are the ones listed above.

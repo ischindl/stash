@@ -1,0 +1,8 @@
+releases a lane holding only ignored build output the retired allowlist never named 152ms
+refuses to release a lane holding 'an untracked file', because that is occupancy 113ms
+refuses to release a lane holding 'a tracked modification', because that is occupancy 185ms
+refuses to release a lane holding 'a staged entry', because that is occupancy 164ms
+names the lane and the path on the record a refusal leaves behind 145ms
+refuses the project root checkout before occupancy can authorize anything 90ms
+releases a lane whose ignored path git quotes, because quoting is not occupancy 191ms
+discards a lane's ignored local credential file, because the ignore rule is the declaration 163ms

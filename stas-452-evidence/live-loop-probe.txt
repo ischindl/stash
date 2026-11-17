@@ -1,0 +1,82 @@
+warning lines scanned: 6004
+lines naming a checkout: 5994   distinct checkouts: 87
+cards involved: 88
+
+refusals   cards  newest                      owns the refusal
+      892       1  2026-11-10T11:24:12.458Z    stas-363: path already gone
+      751       1  2026-11-01T19:33:52.196Z    stas-359: path already gone
+      659       1  2026-11-05T17:14:16.924Z    stas-360: path already gone
+      367       1  2026-11-12T00:51:41.928Z    stas-376: path already gone
+      337       1  2026-11-12T08:21:57.125Z    stas-385: path already gone
+      308       1  2026-10-15T07:46:39.248Z    stas-329: path already gone
+      297       1  2026-10-31T21:18:22.252Z    stas-353: path already gone
+      288       1  2026-10-16T02:27:02.811Z    stas-341: path already gone
+      282       1  2026-11-10T23:10:38.707Z    stas-357: path already gone
+      254       1  2026-11-11T10:41:10.450Z    stas-384: path already gone
+      196       1  2026-11-10T23:11:07.414Z    stas-393: path already gone
+      125       1  2026-11-09T14:54:39.302Z    stas-374: path already gone
+      119       1  2026-11-17T21:26:11.416Z    stas-452: OCCUPANCY (6 entries) - both gates refuse
+      117       1  2026-11-16T12:22:38.859Z    stas-456: path already gone
+       90       1  2026-11-17T21:53:04.906Z    stas-484: IGNORED-NAME gate only: !! stashai.egg-info/
+       81       1  2026-11-15T13:56:36.711Z    stas-443: path already gone
+       73       1  2026-11-17T21:53:11.027Z    stas-485: IGNORED-NAME gate only: !! stashai.egg-info/
+       62       1  2026-11-15T14:44:20.390Z    stas-449: path already gone
+       55       1  2026-11-12T13:47:07.303Z    stas-411: path already gone
+       48       1  2026-09-17T06:09:00.820Z    stas-209: path already gone
+       46       2  2026-11-12T15:39:56.690Z    stas-413: path already gone
+       45       1  2026-11-12T13:47:22.245Z    stas-416: path already gone
+       44       1  2026-10-04T20:35:55.382Z    stas-270: path already gone
+       44       1  2026-11-12T13:47:17.158Z    stas-415: path already gone
+       34       1  2026-11-16T00:25:18.283Z    stas-464: path already gone
+       26       1  2026-08-31T14:15:35.690Z    stas-158: path already gone
+       26       1  2026-11-13T19:40:05.057Z    stas-433: path already gone
+       23       1  2026-09-24T08:38:02.301Z    stas-258: path already gone
+       22       1  2026-11-13T06:01:56.674Z    stas-432: path already gone
+       21       1  2026-08-31T07:07:18.214Z    stas-156: path already gone
+       20       1  2026-11-15T19:50:59.499Z    stas-463: path already gone
+       18       1  2026-11-04T00:53:48.766Z    stas-362: path already gone
+       16       1  2026-11-12T08:22:19.706Z    stas-417: path already gone
+       14       1  2026-11-12T16:01:05.920Z    stas-422: path already gone
+       14       1  2026-11-12T16:01:08.989Z    stas-423: path already gone
+       13       1  2026-09-22T13:57:07.249Z    stas-237: path already gone
+       12       1  2026-09-23T18:57:49.849Z    stas-261: path already gone
+       10       1  2026-11-13T00:49:47.399Z    stas-412: path already gone
+       10       1  2026-11-12T08:22:24.066Z    stas-418: path already gone
+       10       1  2026-11-15T23:50:26.176Z    stas-469: path already gone
+        7       1  2026-11-11T04:31:55.756Z    stas-405: OCCUPANCY (1 entries) - both gates refuse
+        6       1  2026-09-04T14:14:53.794Z    stas-184: OCCUPANCY (1 entries) - both gates refuse
+        6       1  2026-11-10T23:11:17.967Z    stas-403: path already gone
+        6       1  2026-11-14T00:47:14.538Z    stas-438: path already gone
+        6       1  2026-11-14T23:00:05.611Z    stas-445: path already gone
+        6       1  2026-11-16T23:22:42.047Z    stas-480: path already gone
+        5       1  2026-09-05T10:10:00.133Z    stas-185: OCCUPANCY (1 entries) - both gates refuse
+        5       1  2026-11-12T20:08:43.161Z    stas-427: path already gone
+        4       1  2026-11-09T19:24:18.343Z    stas-377: path already gone
+        4       1  2026-11-11T18:01:18.787Z    stas-409: path already gone
+        4       1  2026-11-14T18:35:13.912Z    stas-442: path already gone
+        4       1  2026-11-15T20:22:15.945Z    stas-467: path already gone
+        4       1  2026-11-15T23:50:35.221Z    stas-471: path already gone
+        4       1  2026-11-16T18:49:57.152Z    stas-477: path already gone
+        3       1  2026-08-31T10:06:56.133Z    stas-157: path already gone
+        3       1  2026-09-17T13:19:38.455Z    stas-222: path already gone
+        3       1  2026-09-17T17:16:46.326Z    stas-225: path already gone
+        3       1  2026-09-25T21:21:22.750Z    stas-262: OCCUPANCY (1 entries) - both gates refuse
+        3       1  2026-11-14T15:18:08.949Z    stas-440: path already gone
+        3       1  2026-11-16T20:05:23.208Z    stas-479: path already gone
+
+=== rollup by refusal line (the unit the loop is measured in) ===
+  5689 lines  path
+   163 lines  IGNORED-NAME
+   142 lines  OCCUPANCY
+  5994 of 6004 scanned lines carried a checkout path
+
+=== verdicts still live on disk (a path exists right now) ===
+   119  stas-452         OCCUPANCY (6 entries) - both gates refuse
+    90  stas-484         IGNORED-NAME gate only: !! stashai.egg-info/
+    73  stas-485         IGNORED-NAME gate only: !! stashai.egg-info/
+     7  stas-405         OCCUPANCY (1 entries) - both gates refuse
+     6  stas-184         OCCUPANCY (1 entries) - both gates refuse
+     5  stas-185         OCCUPANCY (1 entries) - both gates refuse
+     3  stas-262         OCCUPANCY (1 entries) - both gates refuse
+     1  stas-232         OCCUPANCY (1 entries) - both gates refuse
+     1  stas-246         OCCUPANCY (1 entries) - both gates refuse
