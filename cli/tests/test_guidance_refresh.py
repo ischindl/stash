@@ -29,6 +29,8 @@ from cli.main import (
     _guidance_body,
     _guidance_dest,
     _guidance_targets,
+    _install_guidance,
+    _pi_agent_dir,
     _refresh_installed_guidance,
     _upsert_agents_md,
 )
@@ -55,6 +57,11 @@ def _write(path, text: str):
 def _fake_home(monkeypatch, tmp_path: Path) -> Path:
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    # pi's agent dir — and so pi's guidance destination — resolves from this env var
+    # before it resolves from home. Left inherited, a developer's or an agent's own
+    # override would point product writes outside the scratch tree while every
+    # assertion below still passed on the scratch tree.
+    monkeypatch.delenv("PI_CODING_AGENT_DIR", raising=False)
     return tmp_path
 
 
@@ -71,7 +78,7 @@ def _run_installer(agent: str, monkeypatch) -> None:
 
 
 def test_missing_file_is_created_with_the_managed_block(tmp_path):
-    target = tmp_path / ".pi" / "AGENTS.md"
+    target = tmp_path / ".pi" / "agent" / "AGENTS.md"
 
     assert _upsert_agents_md(target, BODY) == "refreshed"
 
@@ -203,6 +210,49 @@ def test_marker_detection_ignores_attributes_on_the_begin_line(tmp_path):
 
 def test_target_table_owns_exactly_the_product_guidance_files():
     assert [agent for agent, _ in _guidance_targets()] == TABLE_AGENTS
+
+
+def test_no_guidance_destination_escapes_the_fake_home(monkeypatch, tmp_path):
+    # Every destination is asserted to sit under the scratch tree, because a table
+    # row that resolved elsewhere would be written for real by the tests that write
+    # through it. This is the guard for `PI_CODING_AGENT_DIR`, which now feeds pi's
+    # row: an inherited override sends the write to the operator's machine.
+    home = _fake_home(monkeypatch, tmp_path)
+
+    escapes = [dest for _, dest in _guidance_targets() if home not in dest.parents]
+
+    assert escapes == []
+
+
+def test_pi_guidance_destination_is_the_agent_dir_file(monkeypatch, tmp_path):
+    # pi reads exactly one global context file, `<agentDir>/AGENTS.md`
+    # (pi 1.5.2, `dist/core/resource-loader.js`: candidates
+    # `[AGENTS.override.md, AGENTS.md, …]` resolved against its agent dir). A
+    # destination one directory level higher is a file pi never opens, so the
+    # assertion names the path twice — against the resolver and as the literal — and
+    # never asks `_guidance_targets()` where it writes. A table that audits itself
+    # against itself is how a wrong row stayed green.
+    home = _fake_home(monkeypatch, tmp_path)
+
+    assert _guidance_dest("pi") == _pi_agent_dir() / "AGENTS.md"
+    assert _guidance_dest("pi") == home / ".pi" / "agent" / "AGENTS.md"
+
+
+def test_pi_guidance_destination_follows_the_agent_dir_override(monkeypatch, tmp_path):
+    # The same rule under an override: pi resolves its agent dir from
+    # PI_CODING_AGENT_DIR before home, so the write must travel with it — and the
+    # retired location must not be produced alongside it, which would be the dual
+    # path this card exists to delete.
+    home = _fake_home(monkeypatch, tmp_path)
+    override = home / "custom" / "pi-agent"
+    monkeypatch.setenv("PI_CODING_AGENT_DIR", str(override))
+
+    _install_guidance("pi")
+
+    assert (override / "AGENTS.md").is_file()
+    # Stronger than "the retired path was not created": nowhere else in the scratch
+    # home does a guidance file exist, so no second write path can hide in it.
+    assert list(home.rglob("AGENTS.md")) == [override / "AGENTS.md"]
 
 
 @pytest.mark.parametrize("agent", TABLE_AGENTS)

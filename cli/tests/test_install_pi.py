@@ -30,8 +30,10 @@ from cli.main import (
     _INSTALLERS,
     PLUGIN_DATA_DIRS,
     __version__,
+    _guidance_dest,
     _install_all_hooks,
     _install_pi,
+    _migrate_pi_guidance,
     _plugin_installed,
     app,
 )
@@ -47,6 +49,10 @@ SHIPPED_PI_TREES = [
 
 EXTENSION_RELPATH = Path("extensions/stash.ts")
 
+# A managed block carrying an older version stamp. The migration keys on the bare
+# markers, so a block written by an older build has the same shape as this one.
+BLOCK = "<!-- stash-plugin:begin guidance_version=0.0.1 -->\n{body}\n<!-- stash-plugin:end -->\n"
+
 # pi event -> the handler its extension feeds, and so the `on_*.py` that must ship.
 FORWARDED_EVENTS = {
     "session_start": "on_session_start",
@@ -57,6 +63,19 @@ FORWARDED_EVENTS = {
 }
 
 runner = CliRunner()
+
+
+@pytest.fixture(autouse=True)
+def _no_ambient_pi_agent_dir(monkeypatch):
+    """Blank out an inherited `PI_CODING_AGENT_DIR`, for every test in this file.
+
+    pi's agent dir — where its guidance and its extension both land — is read from
+    that variable before home is consulted. A machine with pi configured through it
+    would otherwise aim every install at the developer's real directory while the
+    assertions here keep looking at the scratch tree, so the suite would both pass
+    for the wrong reason and write outside the tree.
+    """
+    monkeypatch.delenv("PI_CODING_AGENT_DIR", raising=False)
 
 
 @pytest.fixture
@@ -81,6 +100,17 @@ def _installed_extension(home: Path) -> Path:
     return home / ".pi" / "agent" / "extensions" / "stash.ts"
 
 
+def _retired_guidance(home: Path) -> Path:
+    """pi's guidance at the location this card retires: one level above its agent dir.
+
+    Spelled with ``joinpath`` on purpose. Every test here names its live destination
+    as ``home / ".pi" / "agent" / "AGENTS.md"``, so a grep for a guidance file written
+    straight under ``.pi`` is the check that nothing still treats the retired path as
+    a destination — and this helper would trip it while only describing the past.
+    """
+    return home.joinpath(".pi", "AGENTS.md")
+
+
 def test_fresh_install_writes_the_extension_and_guidance(pi_home: Path, monkeypatch) -> None:
     assets = _make_assets(pi_home)
     monkeypatch.setattr("cli.main._assets_dir", lambda agent: assets)
@@ -93,9 +123,12 @@ def test_fresh_install_writes_the_extension_and_guidance(pi_home: Path, monkeypa
     assert not installed.is_symlink(), "the install must be a real copy, not a repo symlink"
     assert installed.read_text() == (assets / "extensions" / "stash.ts").read_text()
 
-    agents_md = pi_home / ".pi" / "AGENTS.md"
+    agents_md = pi_home / ".pi" / "agent" / "AGENTS.md"
     assert "stash-plugin:begin" in agents_md.read_text()
     assert "stash-plugin:end" in agents_md.read_text()
+    # "Nothing was written one level up" is an assertion, not an absence of evidence:
+    # that retired location is exactly where pi's loader does not look.
+    assert list((pi_home / ".pi").glob("AGENTS.md")) == []
 
     # The dead generation must not come back: nothing under ~/.pi besides the
     # extension, its dir, and the guidance file.
@@ -104,7 +137,7 @@ def test_fresh_install_writes_the_extension_and_guidance(pi_home: Path, monkeypa
         for p in (pi_home / ".pi").rglob("*")
         if p.is_file()
     }
-    assert stray == {"agent/extensions/stash.ts", "AGENTS.md"}, stray
+    assert stray == {"agent/AGENTS.md", "agent/extensions/stash.ts"}, stray
 
 
 def test_second_run_is_skipped(pi_home: Path, monkeypatch) -> None:
@@ -159,6 +192,10 @@ def test_pi_coding_agent_dir_override_is_honored(pi_home: Path, monkeypatch) -> 
 
     assert status == "installed"
     assert (pi_home / "custom" / "pi-agent" / "extensions" / "stash.ts").is_file()
+    # pi reads its one global context file out of the same overridden directory, so
+    # the guidance has to land there too — an extension that follows the override
+    # while the guidance file follows nothing is exactly how this defect shipped.
+    assert (pi_home / "custom" / "pi-agent" / "AGENTS.md").is_file()
     assert not (pi_home / ".pi" / "agent").exists()
 
 
@@ -176,7 +213,7 @@ def test_upsert_agents_md_preserves_user_content(pi_home: Path, monkeypatch) -> 
     assets = _make_assets(pi_home)
     monkeypatch.setattr("cli.main._assets_dir", lambda agent: assets)
 
-    pi = pi_home / ".pi"
+    pi = pi_home / ".pi" / "agent"
     pi.mkdir(parents=True)
     (pi / "AGENTS.md").write_text("my personal notes\n")
 
@@ -187,6 +224,174 @@ def test_upsert_agents_md_preserves_user_content(pi_home: Path, monkeypatch) -> 
 
     _install_pi(False)
     assert (pi / "AGENTS.md").read_text().count("stash-plugin:begin") == 1
+
+
+def test_a_retired_block_is_relocated_by_the_installer(pi_home: Path, monkeypatch) -> None:
+    assets = _make_assets(pi_home)
+    monkeypatch.setattr("cli.main._assets_dir", lambda agent: assets)
+    legacy = _retired_guidance(pi_home)
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text(BLOCK.format(body="Old frozen skill model."))
+
+    status, detail = _install_pi(False)
+
+    assert status == "installed"
+    dest = pi_home / ".pi" / "agent" / "AGENTS.md"
+    assert dest.is_file(), "the destination is written before the retired file is touched"
+    assert f"guidance_version={__version__}" in dest.read_text()
+    assert not legacy.exists(), "a block pi cannot read must not stay behind"
+    assert str(legacy) in detail
+
+
+def test_the_refresh_alone_relocates_a_retired_block(pi_home: Path) -> None:
+    # The second driver, and the one that reaches a machine without anyone re-running
+    # `stash connect`: pi reports `unchanged` because the migration already produced
+    # this build's text, not `absent` for a file it has just created.
+    legacy = _retired_guidance(pi_home)
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text(BLOCK.format(body="Old frozen skill model."))
+
+    result = runner.invoke(app, ["guidance", "refresh"])
+
+    assert result.exit_code == 0
+    assert not legacy.exists()
+    dest = pi_home / ".pi" / "agent" / "AGENTS.md"
+    assert f"guidance_version={__version__}" in dest.read_text()
+    assert "pi: unchanged" in result.stdout
+
+
+def test_a_retired_file_with_prose_of_its_own_is_kept_and_named(pi_home: Path) -> None:
+    """Operator notes are not this code's to delete, so the file survives untouched
+    and the report names both the file it kept and the destination to move into."""
+    legacy = _retired_guidance(pi_home)
+    legacy.parent.mkdir(parents=True)
+    kept = f"# my own rules\n\n{BLOCK.format(body='Old.')}\nkeep me\n"
+    legacy.write_text(kept)
+
+    notice = _migrate_pi_guidance()
+
+    assert legacy.read_text() == kept
+    dest = pi_home / ".pi" / "agent" / "AGENTS.md"
+    assert dest.is_file(), "pi still receives its guidance; the prose only blocks deletion"
+    assert str(legacy) in notice and str(dest) in notice
+
+
+def test_a_retired_file_that_is_not_there_leaves_nothing_to_do(pi_home: Path) -> None:
+    assert _migrate_pi_guidance() is None
+    assert not _guidance_dest("pi").exists(), "a machine that never connected pi stays absent"
+
+
+def test_a_second_migration_run_writes_nothing(pi_home: Path, monkeypatch) -> None:
+    assets = _make_assets(pi_home)
+    monkeypatch.setattr("cli.main._assets_dir", lambda agent: assets)
+    legacy = _retired_guidance(pi_home)
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text(BLOCK.format(body="Old frozen skill model."))
+
+    assert _migrate_pi_guidance() is not None
+    dest = _guidance_dest("pi")
+    mtime_after_first = dest.stat().st_mtime_ns
+
+    assert _migrate_pi_guidance() is None
+    assert dest.stat().st_mtime_ns == mtime_after_first, "a second run must not rewrite the file"
+
+
+# --- pi's candidate precedence: reported, never written into -------------------
+#
+# pi takes the first context file it finds in its agent dir and AGENTS.override.md
+# sits ahead of AGENTS.md, so on such a machine our file is correct and unread.
+# Silence is the failure being designed out, so the notice is asserted on the
+# channel a human actually sees it on.
+
+
+def _override(pi_home: Path) -> Path:
+    """A machine where a human owns pi's precedence slot."""
+    override = pi_home / ".pi" / "agent" / "AGENTS.override.md"
+    override.parent.mkdir(parents=True, exist_ok=True)
+    override.write_text("# my own pi rules\n")
+    return override
+
+
+def test_an_override_is_named_and_our_file_is_still_written(pi_home: Path, monkeypatch, capsys):
+    monkeypatch.setenv("COLUMNS", "200")
+    assets = _make_assets(pi_home)
+    monkeypatch.setattr("cli.main._assets_dir", lambda agent: assets)
+    override = _override(pi_home)
+
+    _install_pi(False)
+
+    err = capsys.readouterr().err
+    dest = pi_home / ".pi" / "agent" / "AGENTS.md"
+    assert "AGENTS.override.md" in err, "pi would read the override and never see our block"
+    assert str(dest) in err, "the report has to name which file is being shadowed"
+    assert dest.is_file(), "being shadowed is a reason to report, not to skip the write"
+    assert override.read_text() == "# my own pi rules\n", "the override is not ours to edit"
+
+
+def test_the_override_notice_reaches_a_skipped_install(pi_home: Path, monkeypatch, capsys):
+    # The steady state, and the case a detail-only carrier loses: `_install_all_hooks`
+    # prints a detail string for an installed or failed hook and drops it for a
+    # skipped one, so a notice that only rode `detail` would be silent on exactly the
+    # machines that have had pi installed longest.
+    monkeypatch.setenv("COLUMNS", "200")
+    assets = _make_assets(pi_home)
+    monkeypatch.setattr("cli.main._assets_dir", lambda agent: assets)
+    monkeypatch.setattr("cli.main._detected_agents", lambda: ["pi"])
+    _override(pi_home)
+    _install_pi(False)
+    capsys.readouterr()
+
+    _install_all_hooks(["pi"])
+
+    captured = capsys.readouterr()
+    assert "Pi hook up to date" in captured.out, "this install copies nothing"
+    assert "AGENTS.override.md" in captured.err
+    assert "AGENTS.override.md" not in captured.out, "the status line is not what carries it"
+
+
+def test_no_override_produces_no_notice(pi_home: Path, monkeypatch, capsys) -> None:
+    monkeypatch.setenv("COLUMNS", "200")
+    assets = _make_assets(pi_home)
+    monkeypatch.setattr("cli.main._assets_dir", lambda agent: assets)
+
+    _install_pi(False)
+    capsys.readouterr()
+    _install_pi(False)
+
+    assert capsys.readouterr().err == "", "a warning with nothing to warn about is noise"
+
+
+def test_a_file_that_cannot_outrank_us_is_not_reported(pi_home: Path, monkeypatch, capsys) -> None:
+    # AGENTS.MD, CLAUDE.md and CLAUDE.MD follow AGENTS.md in pi's candidate list, so
+    # they cannot silence our block. Warning about them would train the reader to
+    # ignore the warning that matters.
+    monkeypatch.setenv("COLUMNS", "200")
+    assets = _make_assets(pi_home)
+    monkeypatch.setattr("cli.main._assets_dir", lambda agent: assets)
+    (pi_home / ".pi" / "agent").mkdir(parents=True)
+    (pi_home / ".pi" / "agent" / "CLAUDE.md").write_text("# not a shadow\n")
+
+    _install_pi(False)
+
+    assert capsys.readouterr().err == ""
+
+
+def test_the_refresh_reports_an_override_and_still_exits_zero(pi_home: Path, monkeypatch) -> None:
+    # Exit 0 means "every installed guidance file carries this build's text", which a
+    # file the user owns does not make false. A non-zero exit would turn their file
+    # into our error and poison `upgrade --json`.
+    monkeypatch.setenv("COLUMNS", "200")
+    dest = pi_home / ".pi" / "agent" / "AGENTS.md"
+    dest.parent.mkdir(parents=True)
+    dest.write_text(BLOCK.format(body="Old. "))
+    override = _override(pi_home)
+
+    result = runner.invoke(app, ["guidance", "refresh"])
+
+    assert result.exit_code == 0
+    assert "AGENTS.override.md" in result.stderr
+    assert override.read_text() == "# my own pi rules\n"
+    assert f"guidance_version={__version__}" in dest.read_text()
 
 
 def test_plugin_installed_true_after_install(pi_home: Path, monkeypatch) -> None:
@@ -316,7 +521,7 @@ def test_setup_path_installs_pi(pi_home: Path, monkeypatch, capsys) -> None:
 
     assert "\u2713 Pi hook installed" in capsys.readouterr().out
     assert _installed_extension(pi_home).is_file()
-    assert (pi_home / ".pi" / "AGENTS.md").is_file()
+    assert (pi_home / ".pi" / "agent" / "AGENTS.md").is_file()
     assert _plugin_installed("pi") is True
 
 
@@ -336,7 +541,7 @@ def test_a_dead_deployed_generation_upgrades_without_force(pi_home: Path, monkey
     dead_extension.write_text(
         "import { stashTelemetry } from './stash-legacy-telemetry';\n\nstashTelemetry(pi);\n"
     )
-    (pi_home / ".pi" / "AGENTS.md").write_text(
+    (pi_home / ".pi" / "agent" / "AGENTS.md").write_text(
         "# my own rules\n\n"
         "<!-- stash-plugin:begin -->\nOld frozen skill model.\n<!-- stash-plugin:end -->\n"
         "\nkeep me\n"
@@ -347,7 +552,7 @@ def test_a_dead_deployed_generation_upgrades_without_force(pi_home: Path, monkey
     assert status == "installed"
     assert dead_extension.read_text() == (assets / "extensions" / "stash.ts").read_text()
 
-    guidance = (pi_home / ".pi" / "AGENTS.md").read_text()
+    guidance = (pi_home / ".pi" / "agent" / "AGENTS.md").read_text()
     assert "Old frozen skill model." not in guidance
     assert f"guidance_version={__version__}" in guidance
     assert "# my own rules" in guidance and "keep me" in guidance

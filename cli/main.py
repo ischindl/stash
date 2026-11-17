@@ -740,12 +740,16 @@ def _guidance_targets() -> list[tuple[str, Path]]:
 
     This table is the single source of truth shared by both write paths — the
     per-agent `connect` installer and the convergence refresh — so the set of
-    files can never drift between them. Hermes is absent on purpose: its guidance
-    is the `# stash-plugin` block inside `~/.hermes/config.yaml`, which Hermes
-    itself owns and rewrites, not a product-owned file.
+    files can never drift between them. A destination is wherever that agent's
+    loader actually reads, which is not one rule for all five: pi resolves its
+    agent dir from `PI_CODING_AGENT_DIR` before it looks at home, so pi's row
+    derives from `_pi_agent_dir()` and not from `Path.home()`, and an override
+    carries our write along with pi's read. Hermes is absent on purpose: its
+    guidance is the `# stash-plugin` block inside `~/.hermes/config.yaml`, which
+    Hermes itself owns and rewrites, not a product-owned file.
     """
     return [
-        ("pi", Path.home() / ".pi" / "AGENTS.md"),
+        ("pi", _pi_agent_dir() / "AGENTS.md"),
         ("codex", Path.home() / ".codex" / "AGENTS.md"),
         ("opencode", Path.home() / ".config" / "opencode" / "AGENTS.md"),
         ("gemini", Path.home() / ".gemini" / "GEMINI.md"),
@@ -792,14 +796,110 @@ def _install_guidance(agent: str) -> None:
     _upsert_agents_md(_guidance_dest(agent), _guidance_body(agent))
 
 
+def _migrate_pi_guidance() -> str | None:
+    """Relocate pi's guidance off the path this product retired; report, never guess.
+
+    pi's loader reads `<agentDir>/AGENTS.md`, so the file this product used to write
+    one level above it — the path named below, the only place this file names it — is
+    maintained by every refresh and read by nobody. Its presence is also the proof
+    that pi was connected on this machine, because only this product's installer ever
+    wrote it; that is what lets a refresh create pi's real destination instead of
+    reporting it `absent`.
+
+    The destination is written before the retired file is touched, so no reachable
+    ordering leaves pi with neither file. Deleting the retired file is safe only when
+    it holds nothing but our block: an installed guidance file is operator data and
+    only the block is product-owned, so any other content stays byte-identical and is
+    named by absolute path together with the destination to move it into. The retired
+    file is only ever unlinked, never rewritten or stripped — editing a location this
+    product is leaving would be a second write path.
+
+    `Path.home()` resolves here rather than in a module-level constant so a test that
+    redirects HOME retires its own scratch file and not the operator's. Returns None
+    when there is nothing to do, else one sentence for the report.
+    """
+    dest = _guidance_dest("pi")
+    legacy = Path.home() / ".pi" / "AGENTS.md"  # retired: pi reads `<agentDir>/AGENTS.md`
+    if legacy == dest:
+        # A PI_CODING_AGENT_DIR of `~/.pi` makes them the same file, and this function
+        # must not delete what the write above has just produced.
+        return None
+    if not legacy.is_file():
+        return None
+
+    _install_guidance("pi")
+
+    try:
+        text = legacy.read_text()
+    except OSError as e:
+        return f"{legacy} could not be read ({e}), so it was left alone and {dest} carries this build's guidance."
+
+    begins = _marker_positions(text, _AGENTS_MD_BEGIN_MARK)
+    ends = _marker_positions(text, _AGENTS_MD_END_MARK)
+    close = text.find("-->", ends[0]) if len(ends) == 1 else -1
+    if len(begins) != 1 or len(ends) != 1 or ends[0] < begins[0] or close == -1:
+        return f"{legacy} does not hold exactly one Stash block, so it was left alone and {dest} carries this build's guidance."
+
+    # The writer's own whole-marker-line arithmetic, so the two functions cannot
+    # disagree about what "our block" spans: cut from the start of the begin line to
+    # the end of the end line.
+    block_start = text.rfind("\n", 0, begins[0]) + 1
+    block_end = text.find("\n", close)
+    if block_end == -1:
+        remainder = text[:block_start]
+    else:
+        remainder = text[:block_start] + text[block_end + 1 :]
+    if remainder.strip():
+        return f"{legacy} holds text of its own besides the Stash block, so it was left alone: move what you want to keep into {dest} and delete the old file."
+
+    legacy.unlink()
+    return f"Removed {legacy}, the path pi does not read; pi's guidance now lives at {dest}."
+
+
+def _pi_guidance_shadow() -> Path | None:
+    """The file that outranks pi's guidance destination, or None when nothing does.
+
+    pi takes the first candidate it finds in its agent dir, and `AGENTS.override.md`
+    sits before `AGENTS.md` in that list, so on a machine where someone owns that
+    override our file is correct and unread. The three candidates after `AGENTS.md`
+    are deliberately not warnings: a file that cannot outrank us would only train the
+    warning away.
+    """
+    shadow = _pi_agent_dir() / "AGENTS.override.md"
+    return shadow if shadow.is_file() else None
+
+
+def _pi_guidance_shadow_notice() -> str | None:
+    """One sentence naming pi's shadowing override, or None when there is nothing to say.
+
+    Reported rather than fatal, and on stderr rather than in a status field: the
+    guidance this build ships is still written, `guidance refresh`'s exit 0 still
+    means "every installed guidance file carries this build's text", and a non-zero
+    exit would turn the user's own file into our error and poison `upgrade --json`.
+    It says nothing on a machine that never connected pi, because there the override
+    shadows no guidance of ours at all.
+    """
+    dest = _guidance_dest("pi")
+    shadow = _pi_guidance_shadow() if dest.exists() else None
+    if shadow is None:
+        return None
+    return (
+        f"{shadow} outranks {dest}, so pi reads that file and not the guidance "
+        "written here. It was left alone because it is yours: edit it, or remove it."
+    )
+
+
 def _refresh_installed_guidance() -> dict[str, str]:
     """Rewrite every installed guidance file from the shipped text; per-agent status.
 
     A destination that does not exist is reported `absent` and left that way:
     the product creates an agent's guidance file when it installs that agent, and
     a refresh that manufactured files would claim convergence for an agent nobody
-    connected. A block the writer cannot identify uniquely propagates its
-    ValueError — repairing it is a human decision, not a guess.
+    connected. pi is the one stated exception: the `guidance refresh` command runs
+    `_migrate_pi_guidance()` first, and only that function creates pi's destination,
+    because a file at pi's retired path is the proof — nothing else ever wrote it —
+    that pi was connected here. A block the writer cannot identify uniquely
+    propagates its ValueError — repairing it is a human decision, not a guess.
     """
     statuses: dict[str, str] = {}
     for agent, dest in _guidance_targets():
@@ -830,6 +930,12 @@ def guidance_refresh(
     """
     use_json = _use_json(as_json)
     try:
+        retired = _migrate_pi_guidance()
+        if retired:
+            echo_stderr(retired)
+        shadowed = _pi_guidance_shadow_notice()
+        if shadowed:
+            echo_stderr(shadowed)
         statuses = _refresh_installed_guidance()
     except ValueError as e:
         _exit_user_error(str(e))
@@ -1261,9 +1367,19 @@ def _install_pi(force: bool, use_json: bool = False) -> tuple[str, str]:
 
     _install_guidance("pi")
 
+    # The retired location is cleared from the write seam itself, after the
+    # destination above already exists. The notice goes out on stderr rather than
+    # only riding `detail`, because `_install_all_hooks` prints a detail string for
+    # an installed or failed hook and drops it for a skipped one — and a machine that
+    # already has pi current is the common one.
+    notices = [n for n in (_migrate_pi_guidance(), _pi_guidance_shadow_notice()) if n]
+    for notice in notices:
+        echo_stderr(notice)
+    note = "".join(f"  {notice}" for notice in notices)
+
     if not changed:
-        return ("skipped", f"{dest} already up to date + {agents_dest}")
-    return ("installed", f"copied pi extension {src} -> {dest} + {agents_dest}")
+        return ("skipped", f"{dest} already up to date + {agents_dest}{note}")
+    return ("installed", f"copied pi extension {src} -> {dest} + {agents_dest}{note}")
 
 
 _INSTALLERS = {

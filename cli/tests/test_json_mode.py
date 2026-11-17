@@ -276,6 +276,9 @@ def _patch_home(monkeypatch, tmp_path: Path) -> Path:
     """Point every product-owned guidance destination at `tmp_path`."""
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    # pi's guidance destination derives from this var before home, so an ambient
+    # override would send one of the assertions below's writes outside tmp_path.
+    monkeypatch.delenv("PI_CODING_AGENT_DIR", raising=False)
     return tmp_path
 
 
@@ -355,8 +358,8 @@ def test_upgrade_default_runs_the_guidance_refresh_without_json(monkeypatch):
 
 def test_guidance_refresh_json_emits_the_contract_document(monkeypatch, tmp_path):
     _patch_home(monkeypatch, tmp_path)
-    (tmp_path / ".pi").mkdir()
-    (tmp_path / ".pi" / "AGENTS.md").write_text("# stash\n")
+    (tmp_path / ".pi" / "agent").mkdir(parents=True)
+    (tmp_path / ".pi" / "agent" / "AGENTS.md").write_text("# stash\n")
 
     result = runner.invoke(main.app, ["guidance", "refresh", "--json"])
 

@@ -20,11 +20,15 @@ with the CLI rather than being something you install beside it.
 `stash settings` flow) copies `extensions/stash.ts` from the shipped assets under
 `stashai/plugin/assets/pi/` into pi's agent dir — `$PI_CODING_AGENT_DIR` or
 `~/.pi/agent`, call it `<agentDir>` — as `<agentDir>/extensions/stash.ts`, and
-writes the Stash block into `~/.pi/AGENTS.md`. That single file is the whole
-install: pi picks up every `*.ts` in `<agentDir>/extensions/` at startup, with no
-registration in `settings.json` and no restart ritual beyond starting pi again. The
-installer copies bytes and never symlinks, so it keeps working if the stash checkout
-or pipx env moves, and it never depends on this repo's location.
+writes the Stash block into `<agentDir>/AGENTS.md`, the file pi actually loads. That
+single file is the whole install: pi picks up every `*.ts` in `<agentDir>/extensions/`
+at startup, with no registration in `settings.json` and no restart ritual beyond
+starting pi again. The installer copies bytes and never symlinks, so it keeps working
+if the stash checkout or pipx env moves, and it never depends on this repo's location.
+
+One precedence rule can still silence that file: `AGENTS.override.md` sits ahead of
+`AGENTS.md` in pi's candidate list, so if you own one in `<agentDir>` pi reads it and
+not our block — the CLI says so on stderr and never edits the override itself.
 
 Copying that file is necessary and not quite sufficient. `<agentDir>/settings.json`
 carries an `extensions` list of per-file `+`/`-` directives, and one
@@ -44,7 +48,7 @@ mkdir -p ~/.pi/agent/extensions
 cp extensions/stash.ts ~/.pi/agent/extensions/stash.ts
 
 # Agent context — tells Pi it has the stash CLI available
-cat AGENTS.md >> ~/.pi/AGENTS.md
+cat AGENTS.md >> ~/.pi/agent/AGENTS.md   # not ~/.pi/AGENTS.md: pi does not read that
 ```
 
 ## How it works

@@ -269,6 +269,24 @@ everything before it is captured in git history (`git log`), not here.
 
 ### Fixed
 
+- Pi finally receives the guidance it was never given. `stash connect pi` wrote the Stash
+  block to `~/.pi/AGENTS.md`, while pi reads exactly one global context file,
+  `<agentDir>/AGENTS.md` (`$PI_CODING_AGENT_DIR`, else `~/.pi/agent`) — one directory
+  level below where we wrote. So on every machine that ever connected pi, the product
+  instructions pi was supposed to read were zero bytes, and nothing said so: the
+  installer reported the write, the refresh maintained that unread file on every upgrade,
+  and the test suite stayed green because it asserted the same wrong path the installer
+  wrote. The block now goes where pi looks and follows a `PI_CODING_AGENT_DIR` override,
+  the way pi's extension already did. What the old path held moves with it: a file
+  carrying nothing but the Stash block is removed by `stash connect pi` or by
+  `stash guidance refresh` alone, with no re-run of `connect`, while a file that also
+  carries your own prose is left byte-for-byte as it was and named by absolute path
+  together with the destination to move it into — your notes are not ours to delete. One
+  precedence rule can still silence us, and now says so: `AGENTS.override.md` outranks
+  `AGENTS.md` in pi's own candidate list, so a machine whose owner wrote that file gets a
+  line on stderr naming it and the file it shadows, while our block is still written and
+  the override is never touched.
+
 - A personal-lane curator run now ends inside its own wall and commits only what it finished.
   The wall STAS-447 gave this lane bounded only the curator's write turn, so a two-phase run spent
   its budget reading the wiki into digest extracts first — a digest alone outran the worker's cap on
