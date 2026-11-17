@@ -228,6 +228,13 @@ async def get_changes(
         "at `since`, which is how a lane parked inside a saturated instant names where the "
         "last run stopped. Requires `since`; without it there is no window to sit inside.",
     ),
+    until: str | None = Query(
+        None,
+        description="The closing edge of a read window, ISO like `since`: the feed and "
+        "`event_backlog` then read only rows created AT OR BEFORE it — the reading of one "
+        "part of a history drain, unable to earn a boundary outside its window. Requires "
+        "`since`: a closed top with no bottom is not a window. Must be after `since`.",
+    ),
     wiki: str = Query(
         curation_service.WIKI_INTERNAL,
         description="Which curator wiki the feed is scoped for: 'internal' (the owner's own "
@@ -294,6 +301,23 @@ async def get_changes(
             status_code=400,
             detail="since_event names a position inside an instant: it needs `since` with it",
         )
+    if until and since_dt is None:
+        raise HTTPException(
+            status_code=400,
+            detail="until names the closing edge of a window: it needs `since` with it",
+        )
+    until_dt = None
+    if until:
+        try:
+            until_dt = datetime.fromisoformat(until)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="until must be an ISO timestamp")
+        if since_dt is not None and until_dt <= since_dt:
+            raise HTTPException(
+                status_code=400,
+                detail="until must be after since: a window that closes at or before it "
+                "opened admits no time to read",
+            )
     try:
         event_id = UUID(since_event) if since_event else None
     except ValueError:
@@ -310,12 +334,13 @@ async def get_changes(
         position,
         wiki,
         folder,
+        until_dt,
         max_event_chars=await curation_service.drain_pass_budget(
-            scope_user_id, position, wiki, folder
+            scope_user_id, position, wiki, folder, until_dt
         ),
     )
     feed["event_backlog"] = await curation_service.curator_event_backlog(
-        scope_user_id, wiki, position, folder
+        scope_user_id, wiki, position, folder, until_dt
     )
     return feed
 

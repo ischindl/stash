@@ -1443,3 +1443,76 @@ async def test_a_folder_curator_mid_drain_reports_where_its_drain_stands(client,
     assert await curation_service.curator_event_backlog(
         uid, INTERNAL, position_of(stored), curator_id
     ) == {"distinct_events": 0, "raw_rows": 0, "distinct_sessions": 0}
+
+
+SEAM = BASE + timedelta(minutes=20)
+
+
+@pytest.mark.asyncio
+async def test_changes_endpoint_closes_a_window_at_its_upper_edge(
+    client: AsyncClient, _db_pool, pool
+):
+    """`--until` arrives here as the part's closing edge: the feed and the
+    backlog exclude exactly the rows past it (and admit the row sitting on it —
+    `<=`); a bound with no `since` is refused the way `since_event` is, a bound
+    at or before `since` describes no window, and a malformed one is a 400 the
+    way no malformed input has ever been a 500 on a route an agent drives."""
+    key, uid = await _register(client)
+    await _push_events(
+        client,
+        key,
+        [
+            {
+                "agent_name": "heavi-chat",
+                "event_type": "user_message",
+                "content": f"w{i}",
+                "session_id": "conv-window",
+                "created_at": (BASE + timedelta(minutes=10 * i)).isoformat(),
+            }
+            for i in range(4)
+        ],
+    )
+
+    r = await client.get(
+        "/api/v1/me/changes",
+        params={"wiki": "internal", "since": OLD.isoformat(), "until": SEAM.isoformat()},
+        headers=_auth(key),
+    )
+    assert r.status_code == 200
+    feed = r.json()
+    assert feed["counts"]["history"] == 3  # the row on the edge is inside: `<=`
+    assert feed["event_backlog"]["distinct_events"] == 3
+
+    # No bound, no change: the open-ended read serves all four.
+    r = await client.get(
+        "/api/v1/me/changes",
+        params={"wiki": "internal", "since": OLD.isoformat()},
+        headers=_auth(key),
+    )
+    assert r.status_code == 200
+    assert r.json()["counts"]["history"] == 4
+    assert r.json()["event_backlog"]["distinct_events"] == 4
+
+    r = await client.get(
+        "/api/v1/me/changes",
+        params={"wiki": "internal", "until": SEAM.isoformat()},
+        headers=_auth(key),
+    )
+    assert r.status_code == 400
+    assert "since" in r.json()["detail"]
+
+    r = await client.get(
+        "/api/v1/me/changes",
+        params={"wiki": "internal", "since": SEAM.isoformat(), "until": BASE.isoformat()},
+        headers=_auth(key),
+    )
+    assert r.status_code == 400
+    assert "after" in r.json()["detail"]
+
+    r = await client.get(
+        "/api/v1/me/changes",
+        params={"wiki": "internal", "since": OLD.isoformat(), "until": "last-tuesday"},
+        headers=_auth(key),
+    )
+    assert r.status_code == 400
+    assert "ISO" in r.json()["detail"]

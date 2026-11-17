@@ -76,7 +76,9 @@ def _is_due(cron: str, last_run: datetime | None, now: datetime) -> bool:
     return nxt <= now
 
 
-def _run_guarded(agent_uuid: UUID, metered: bool, run: Coroutine[Any, Any, None]) -> None:
+def _run_guarded(
+    agent_uuid: UUID, metered: bool, run: Coroutine[Any, Any, None], part_id: str | None = None
+) -> None:
     """Run one of the two harness-run bodies, resolving the lane if the body
     escapes it.
 
@@ -112,11 +114,13 @@ def _run_guarded(agent_uuid: UUID, metered: bool, run: Coroutine[Any, Any, None]
     try:
         run_async(run)
     except BaseException as exc:
-        _resolve_escaped_run(agent_uuid, exc, metered=metered)
+        _resolve_escaped_run(agent_uuid, exc, metered=metered, part_id=part_id)
         raise
 
 
-def _resolve_escaped_run(agent_uuid: UUID, exc: BaseException, *, metered: bool) -> None:
+def _resolve_escaped_run(
+    agent_uuid: UUID, exc: BaseException, *, metered: bool, part_id: str | None = None
+) -> None:
     """Record and unlock a run that is never going to resolve its own lane.
 
     The write is the shared compare-and-set (`agent_service.resolve_started_runs`)
@@ -145,7 +149,7 @@ def _resolve_escaped_run(agent_uuid: UUID, exc: BaseException, *, metered: bool)
         )
         return
     try:
-        run_async(sprite_agent_service.drop_agent_run_lock(agent_uuid))
+        run_async(sprite_agent_service.drop_agent_run_lock(agent_uuid, part_id))
     except BaseException:
         logger.exception("escaped agent run: could not release lane %s's lock", agent_uuid)
     if flipped:
@@ -189,6 +193,30 @@ def run_curator_now(
             catchup,
             platform_initiated,
         ),
+    )
+
+
+@celery.task(name="backend.tasks.agent_schedules.run_curator_part")
+def run_curator_part(agent_id: str, part_id: str, metered: bool = True) -> None:
+    """One part of a planned history drain: the digest phase over one window, and
+    nothing else.
+
+    Parts are dispatched by the coordinator (the curator run that planned the
+    drain and each part's own completion), never by beat: beat dispatches
+    `run_curator_now`, and Step 5's fan-out turns that dispatch into the plan. The
+    id is a string for the same reason `run_curator_now` takes one — the Celery
+    broker carries JSON, and a UUID is not JSON.
+
+    Routed to `heavy` beside `run_curator_now`, and wrapped by the same
+    `_run_guarded` with its `part_id`, so a worker timeout that escapes this body
+    drops the PART's lane key and resolves the lane — the agent-wide compose key is
+    untouched, because the part's guard can only speak for the part (Step 4)."""
+    agent_uuid = UUID(agent_id)
+    _run_guarded(
+        agent_uuid,
+        metered,
+        _run_curator_part(agent_uuid, part_id, metered),
+        part_id=part_id,
     )
 
 
@@ -249,10 +277,15 @@ async def _run_curator_now(
         logger.info("agent schedule: curator %s is busy; skipping", agent_id)
 
 
-def _run_lock(agent: dict, workspace):
+def _run_lock(agent: dict, workspace, part_id: str | None = None):
     from ..services import agent_service, sprite_agent_service
 
     if workspace is not None:
+        if part_id is not None:
+            raise RuntimeError(
+                f"curator {agent['id']}: the scoped lane has no parts — planning is the "
+                "personal lane's job and the scoped fence is the upstream `scoped-curator-<id>` key"
+            )
         # The developer-platform lane: this key is the fence its commit re-enters
         # under `scoped_lock_held`, so the name is upstream's and stays upstream's.
         # The TTL is that lane's own ceiling — the same number its `wait_for` wall
@@ -271,8 +304,11 @@ def _run_lock(agent: dict, workspace):
     # harness turn being spent on material the run in flight already read.
     # Upstream's body reads as if a fence were here (`curator is busy; skipping`);
     # this lock is that fence. Its TTL is the longest any task may legally take, so
-    # it is never released while its own run is still executing.
-    return sprite_agent_service.agent_run_lock(agent["id"], REAP_STRIKE_AGE_SECONDS)
+    # it is never released while its own run is still executing. A named part gets
+    # its own subject (`agent-run:<id>:part:<part_id>`), which is what lets two
+    # parts of one curator run at once; the un-parted key means exactly what it
+    # meant before parts existed.
+    return sprite_agent_service.agent_run_lock(agent["id"], REAP_STRIKE_AGE_SECONDS, part_id)
 
 
 async def _run_turn(agent, stamp, workspace, read, draining: bool = False):
@@ -423,6 +459,40 @@ async def _run_curator_locked(
             agent_id,
             drain[0],
         )
+    # STAS-461 fan-out: a planned drain is executed by PARTS, and a bare
+    # full-history seed becomes planned the moment it is cut. This dispatch spends no
+    # model turn of its own either way — it plans (only a fresh seed needs that),
+    # cuts within the planning gate, and hands free open parts to
+    # `run_curator_part`; each part's completion re-enters the same coordinator. The
+    # drain therefore advances without beat past this one entry, which is what Step
+    # 5's "a hand-off inside an already-planned set" means: neither
+    # `_chain_permitted` nor the catch-up chain (STAS-450's) is consulted or touched.
+    # A legacy cursor with no plan — the pair a raw seed puts on the row — stays on
+    # the serial path below, byte for byte: no plan, no parts, no fan-out.
+    if workspace is None and (
+        curation_service.drain_is_planned(agent)
+        or (full_history and drain is None and not (agent.get("drain_cursor") or {}))
+    ):
+        await agent_service.mark_run(agent_id, metered=metered)
+        try:
+            if not curation_service.drain_is_planned(agent):
+                await _plan_new_drain(agent)
+            # Compose before coordinating: this run holds `agent-run:<agent_id>`, the
+            # un-partitioned key, which is what makes it the one run allowed to write the
+            # shared wiki while parts hold only their own keys. Folding what is ready first
+            # also frees the planning gate's room for the cut that follows, so one entry
+            # advances the drain at both ends — and the fold repeats while reports remain,
+            # because a compose pass prunes a PREFIX and the next prefix only exists once
+            # the first one is gone.
+            current = await agent_service.get_agent_by_id(agent_id)
+            while await _compose_drain_parts(current):
+                current = await agent_service.get_agent_by_id(agent_id)
+            await _coordinate_drain_parts(current, compose_here=True)
+        except Exception as exc:
+            await agent_service.mark_run_failed(agent_id, str(exc), metered=metered)
+            raise
+        await agent_service.mark_run_succeeded(agent_id)
+        return
     draining = full_history or drain is not None
     if draining:
         # The pair this run reads and commits. A seeded drain has none yet, and "none yet"
@@ -507,6 +577,725 @@ async def _run_curator_locked(
     await _dispatch_curator_catchup(
         agent, now, catchup_remaining, workspace=workspace, drained=draining
     )
+
+
+async def _run_curator_part(agent_id: UUID, part_id: str, metered: bool) -> None:
+    """The body of one part: lock, claim, empty-check, gauge, one digest turn over
+    the window, commit, report, hand-off — and not one page of the shared wiki.
+
+    Every refusal prints `drain part=<id> agent=<id> declined guard=<name>` before
+    any spend and returns without marking the row: `claim_held` (a live dispatch owns
+    the slot), `endpoint_pressure` (the endpoint's gauge is full), `needs_auth` (the
+    lane cannot dial), `lane_lock_held` (this part was dispatched twice). None of
+    them is the `is busy; skipping` line — that sentence belongs to the un-parted
+    curator dispatch and AC (a) is precisely that a part dispatch never lands there.
+    """
+    from ..services import (
+        agent_service,
+        curation_service,
+        scoped_curation_service,
+        sprite_agent_service,
+    )
+
+    agent = await agent_service.get_agent_by_id(agent_id)
+    workspace = await scoped_curation_service.workspace_for_agent(agent)
+    if workspace is not None:
+        raise RuntimeError(
+            f"curator {agent_id} belongs to the scoped lane, which has no parts: planning "
+            "is the personal lane's job"
+        )
+    pair = curation_service.drain_slot_position(agent, part_id)
+    if pair is None:
+        logger.info("drain part=%s agent=%s declined guard=slot_absent_or_done", part_id, agent_id)
+        return
+    read_position, slot_to = pair
+    try:
+        async with _run_lock(agent, None, part_id=part_id):
+            await _run_drain_part(agent, part_id, read_position, slot_to, metered)
+    except sprite_agent_service.TurnInProgress:
+        logger.info("drain part=%s agent=%s declined guard=lane_lock_held", part_id, agent_id)
+
+
+async def _run_drain_part(agent: dict, part_id: str, read_position, slot_to, metered: bool) -> None:
+    """The part's own turn, held inside its own lane lock.
+
+    The slot installs itself into the row's read fields the way the single-pair drain
+    installs itself today (`_run_curator_locked`'s override), so the prompt builders
+    and the CLI feed see one window's position and never learn what a part is; the
+    wall is the row's own `run_wall_seconds`, the same clean exit STAS-477 prices, and
+    a cut part leaves its slot open at the committed position with a claim that ages
+    out — the next coordinator dispatch resumes it there.
+    """
+    from ..config import settings
+    from ..database import get_pool
+    from ..services import (
+        agent_service,
+        curation_service,
+        sprite_agent_service,
+        user_service,
+    )
+
+    agent_id = UUID(str(agent["id"]))
+    owner = UUID(str(agent["user_id"]))
+    now = datetime.now(UTC)
+    async with get_pool().acquire() as conn, conn.transaction():
+        claimed = await agent_service.claim_drain_part(
+            conn, agent_id, part_id, now=now, claim_seconds=REAP_STRIKE_AGE_SECONDS
+        )
+    if not claimed:
+        logger.info("drain part=%s agent=%s declined guard=claim_held", part_id, agent_id)
+        return
+    user = await user_service.get_user_by_id(owner)
+    if user is None:
+        logger.info("drain part=%s agent=%s declined guard=user_gone", part_id, agent_id)
+        return
+    owner_name = user["display_name"] or user["name"]
+
+    # The window's emptiness is checked before anything is spent, because a planned
+    # drain's first windows can sit in history before the first event and a paid turn
+    # on a window with no rows is the duplicate spend this whole card refuses.
+    window_has_rows = await curation_service.has_changes_since(
+        owner,
+        owner,
+        read_position,
+        agent["curator_wiki"],
+        agent.get("curator_folder_id"),
+        until=slot_to,
+    )
+    report: str | None = None
+    started = time.monotonic()
+    gauge_member: tuple[str, UUID, str] | None = None
+    charged = False
+    if window_has_rows:
+        identity = await _part_endpoint_identity(agent)
+        if identity is None:
+            logger.info(
+                "drain part=%s agent=%s declined guard=needs_auth pinned=%s",
+                part_id,
+                agent_id,
+                agent.get("credential_id") or "unpinned",
+            )
+            await _release_part_claim(agent_id, part_id)
+            return
+        admitted, gauge_size = await _part_gauge_admit(identity, agent_id, part_id)
+        if not admitted:
+            logger.info(
+                "drain part=%s agent=%s declined guard=endpoint_pressure gauge=%s limit=%s "
+                "pinned=%s",
+                part_id,
+                agent_id,
+                gauge_size,
+                settings.CURATOR_DRAIN_MAX_CONCURRENT_TURNS,
+                agent.get("credential_id") or "unpinned",
+            )
+            # The claim came back with the refusal: a part that spent nothing owns no slot,
+            # and holding one to the end of its horizon would turn one full gauge into a
+            # stall, which is the opposite of what a bound on pressure is for.
+            await _release_part_claim(agent_id, part_id)
+            return
+        gauge_member = (identity, agent_id, part_id)
+        logger.info(
+            "drain part=%s agent=%s dialing endpoint=%s pinned=%s",
+            part_id,
+            agent_id,
+            identity,
+            agent.get("credential_id") or "unpinned",
+        )
+    # `mark_run` promises every path after `started` resolves the outcome, and this
+    # body keeps that promise the same way the un-parted run does: the charge, the
+    # turn, the commit, and the no-forward guard all live inside one try, so a cut
+    # part, a refused commit, and a crashed report each resolve the row as `failed`
+    # before they re-raise. The part that never charged (declined before the gauge,
+    # or an empty window needing no turn) leaves the row's triple untouched.
+    try:
+        if window_has_rows:
+            # The metering stamp; its return is the month's worked count, which no
+            # part-path gate reads (the allowance question was answered before
+            # dispatch). The row's fields are read from the pre-charge snapshot this
+            # body was handed — `mark_run` moves only the run-count trio.
+            await agent_service.mark_run(agent_id, metered=metered)
+            charged = True
+            row = {
+                **agent,
+                "curated_through": read_position.at,
+                "curated_through_event_id": None,
+                "curation_cursor": (agent["drain_cursor"]["parts"][part_id].get("cursor") or {}),
+            }
+            wall = agent_service.run_wall_seconds(row)
+            try:
+                report = await _part_digest_turn(row, owner_name, part_id, slot_to, wall)
+            except sprite_agent_service.RunCeilingExceeded as exc:
+                # The cut arrived as the cause the un-parted run already speaks: name
+                # the part and its fate, because the slot is what a reader must find.
+                raise sprite_agent_service.RunCeilingExceeded(
+                    f"drain part {part_id} was cut inside the row's run wall of {wall}s ({exc}); "
+                    "the slot stays open at its committed position for the next dispatch"
+                ) from exc
+            through = await curation_service.complete_through(
+                owner,
+                curation_service.position_of(row),
+                slot_to,
+                agent["curator_wiki"],
+                agent.get("curator_folder_id"),
+                max_event_chars=curation_service.drain_budget_of(row),
+            )
+        else:
+            # An empty window earns its edge without a model turn: the rows are not
+            # there, so the boundary the pass would have read to is the window's own `to`.
+            through = curation_service.Position(at=slot_to)
+        if through.at is None or (read_position.at is not None and through.at <= read_position.at):
+            raise RuntimeError(
+                f"curator {agent_id} drain part {part_id} committed no forward position: the "
+                "window "
+                f"({read_position.at}, {slot_to}] offered the pass no boundary to advance to, "
+                "and a slot that cannot move is not a slot that finished"
+            )
+        async with get_pool().acquire() as conn, conn.transaction():
+            await agent_service.advance_drain(
+                conn,
+                agent_id,
+                read_position.at,
+                (agent["drain_cursor"]["parts"][part_id].get("cursor") or {}),
+                through.at,
+                {},
+                part_id=part_id,
+            )
+    except Exception as exc:
+        if charged:
+            await agent_service.mark_run_failed(agent_id, str(exc), metered=metered)
+        raise
+    finally:
+        if gauge_member is not None:
+            await _part_gauge_release(*gauge_member)
+    if charged:
+        # The part resolves its own stamp — each part spends its own paid turn, and
+        # `mark_run`'s promise runs through here: `last_run_*` ends naming THIS
+        # dispatch, the most recently resolved one (a known limit, not a silent one).
+        await agent_service.mark_run_succeeded(agent_id)
+    logger.info(
+        "drain part=%s agent=%s committed_through=%s characters=%s wall=%.1fs",
+        part_id,
+        agent_id,
+        through.at.isoformat(),
+        len(report) if report is not None else 0,
+        time.monotonic() - started,
+    )
+    if through.at >= slot_to:
+        await _write_part_report_page(
+            owner, part_id, report if report is not None else "No events in this window."
+        )
+        async with get_pool().acquire() as conn, conn.transaction():
+            await agent_service.mark_drain_part_done(conn, agent_id, part_id)
+    await _coordinate_drain_parts(await agent_service.get_agent_by_id(agent_id))
+
+
+async def _part_digest_turn(
+    row: dict, owner_name: str, part_id: str, slot_to: datetime, wall: int
+) -> str:
+    """The part's one model turn: the digest phase over its closed window under the
+    row's wall, on the cooperative pattern STAS-456 landed for the personal run — the
+    part's run is one turn, so that turn carries the whole wall. A cut raises
+    `RunCeilingExceeded`: a part that never finished reading reaches no commit.
+
+    A part emits no `turn started` / `turn finished` bracket — those lines are the
+    un-parted run's shape, and `_turn_bracket` counts them. The `run_stamp` slot of
+    the digest session id is filled with the part id, which is what keeps two parts of
+    one curator in two sessions instead of pulling each other's session apart."""
+    from ..services import sprite_agent_service
+
+    return await sprite_agent_service.run_digest_turn_under_wall(
+        row, part_id, owner_name, slot_to.isoformat(), wall
+    )
+
+
+async def _part_endpoint_identity(agent: dict) -> str | None:
+    """The endpoint the part's digest turn will dial, as the gauge's identity.
+
+    `RunAuth.endpoint` is written only by `_local_auth`, so an endpoint names one
+    customer-funded box and its absence means a harness the platform funds — the
+    same bijection the metered answer rests on. For the funded case the harness name
+    is the identity, because that is what shares the rate limit. None means the lane
+    cannot dial at all (needs-auth), which the caller declines without spending.
+    """
+    from ..services import agent_auth
+
+    prefer = agent.get("digest_provider")
+    credential_id = agent.get("credential_id") if prefer == "local" else None
+    try:
+        auth = await agent_auth.resolve(
+            UUID(str(agent["user_id"])),
+            prefer_provider=prefer,
+            credential_id=credential_id,
+            model_id=agent.get("digest_model_id"),
+        )
+    except (agent_auth.NeedsAuth, agent_auth.ProviderNotConfigured):
+        return None
+    if auth.endpoint is not None:
+        return auth.endpoint
+    return f"harness:{getattr(auth.harness, 'name', auth.harness)}"
+
+
+async def _part_gauge_admit(identity: str, agent_id: UUID, part_id: str) -> tuple[bool, int]:
+    """Add this part to the endpoint's live-turn gauge if there is room, answering
+    (admitted, size at the check).
+
+    The gauge is a Redis sorted set whose members are `agent:part` keyed by the epoch
+    their claim ages out at — the same `REAP_STRIKE_AGE_SECONDS` the lane TTL and the
+    slot's `claim_expires_at` carry — so a dead worker's member ages out with its
+    claim and the gauge needs no sweeper of its own (and on a copy without beat,
+    could not have one). The size is read AFTER pruning expired members, before any
+    model turn starts, so a full gauge declines a part while it is still free of
+    charge. The count is drain part turns and compose turns on that endpoint, not
+    every turn the platform spends there — the bound's honest limit.
+    """
+    from ..config import settings
+    from ..services import sprite_agent_service
+
+    limit = settings.CURATOR_DRAIN_MAX_CONCURRENT_TURNS
+    redis = sprite_agent_service._get_redis()
+    key = f"drain-turns:{identity}"
+    horizon = time.time() + REAP_STRIKE_AGE_SECONDS
+    await redis.zremrangebyscore(key, 0, time.time())
+    size = int(await redis.zcard(key))
+    if size >= limit:
+        return False, size
+    await redis.zadd(key, {f"{agent_id}:{part_id}": horizon})
+    return True, size + 1
+
+
+async def _release_part_claim(agent_id: UUID, part_id: str) -> None:
+    """Hand back the slot claim this dispatch took and will not spend."""
+    from ..database import get_pool
+    from ..services import agent_service
+
+    async with get_pool().acquire() as conn, conn.transaction():
+        await agent_service.release_drain_part_claim(conn, agent_id, part_id)
+
+
+async def _part_gauge_release(identity: str, agent_id: UUID, part_id: str) -> None:
+    from ..services import sprite_agent_service
+
+    await sprite_agent_service._get_redis().zrem(f"drain-turns:{identity}", f"{agent_id}:{part_id}")
+
+
+# The compose pass shares the endpoint gauge with the parts, under a member no part id
+# can collide with — the bound is on turns dialling one endpoint, and a compose pass
+# dials it exactly as a part does.
+_COMPOSE_GAUGE_MEMBER = "compose"
+
+
+def _part_report_name(part_id: str) -> str:
+    """The one page name a part's report lives on, derived in code from the part id."""
+    return f"drain-report-{part_id}"
+
+
+async def _read_part_report(owner: UUID, part_id: str) -> str | None:
+    """Read back one part's report by its exact page name, or None while it has none.
+
+    The page is the compose pass's only source for a part's work: the slot says `done`
+    and the page holds the report, which is why the write happens BEFORE the slot is
+    marked done. Looking the page up by name rather than by id is what makes a report
+    findable without a second index — and `deleted_at IS NULL` means a page the user
+    cleared out reads as absent, which the compose pass refuses loudly rather than folding
+    an empty window into the wiki as if it had been reported.
+    """
+    from ..database import get_pool
+    from ..services import files_tree_service
+
+    folder = await files_tree_service.get_or_create_memory_folder(owner, owner)
+    row = await get_pool().fetchval(
+        "SELECT content_markdown FROM pages "
+        "WHERE owner_user_id = $1 AND folder_id = $2 AND name = $3 AND deleted_at IS NULL",
+        owner,
+        folder["id"],
+        _part_report_name(part_id),
+    )
+    return row
+
+
+async def _compose_drain_parts(agent: dict) -> bool:
+    """Fold the composable prefix of a planned drain's reports into the shared wiki.
+
+    This is the drain's only shared-wiki writer, and the lock proves it: the pass runs
+    inside `_run_curator_locked`'s planned branch, which holds `agent-run:<agent_id>` —
+    the un-partitioned key — while every part holds only its `:drain-part:<id>` key and
+    writes no shared page at all. Composing here rather than in a pass of its own is what
+    stops two compose passes existing: `part:` and `compose:` are different lock names for
+    one writer only if the writer is the run whose lock already excludes the writers.
+
+    The reports are read back by their exact page names in ascending `part_id` order — the
+    order that makes the wiki's content a function of the report set plus part order
+    instead of of who finished first — and handed to the run's existing writer turn, which
+    is the SAME turn a two-phase personal run writes from, so the compose pass inherits its
+    wall, its prompt, and its wiki rules rather than restating them.
+
+    Returns whether anything was composed; a pass that composes nothing must prune nothing.
+    """
+    from ..config import settings
+    from ..database import get_pool
+    from ..services import curation_service, sprite_agent_service
+
+    agent_id = UUID(str(agent["id"]))
+    owner = UUID(str(agent["user_id"]))
+    cursor = agent.get("drain_cursor") or {}
+    parts = cursor.get("parts") or {}
+    ready = curation_service.drain_composable_parts(cursor)
+    if not ready:
+        return False
+
+    reports = []
+    for part_id in ready:
+        report = await _read_part_report(owner, part_id)
+        if report is None:
+            raise RuntimeError(
+                f"curator {agent_id} drain part {part_id} is `done` with no report page to "
+                "fold. A slot is marked done only after its page is written, so this pair of "
+                "facts contradicts and the window cannot be composed from nothing."
+            )
+        reports.append((part_id, report))
+    # The composed span the writer is told about: the oldest part's `from` and the newest
+    # composed `through`. The prompt's window words and the CLI command are built from these
+    # two, so the writer can open raw material only inside the span it is folding.
+    span_start = curation_service.slot_instant(parts[ready[0]], "from")
+    edge = curation_service.slot_instant(parts[ready[-1]], "through")
+    assembled = "\n\n".join(
+        [f"{len(reports)} drain part report(s), oldest window first."]
+        + [f"### Part {part_id}\n\n{report}" for part_id, report in reports]
+    )
+
+    identity = await _part_endpoint_identity(agent)
+    if identity is None:
+        logger.info(
+            "drain compose agent=%s declined parts=%s guard=needs_auth", agent_id, len(ready)
+        )
+        return False
+    admitted, gauge_size = await _part_gauge_admit(identity, agent_id, _COMPOSE_GAUGE_MEMBER)
+    if not admitted:
+        logger.info(
+            "drain compose agent=%s declined parts=%s guard=endpoint_pressure gauge=%s limit=%s "
+            "pinned=%s",
+            agent_id,
+            len(ready),
+            gauge_size,
+            settings.CURATOR_DRAIN_MAX_CONCURRENT_TURNS,
+            agent.get("credential_id") or "unpinned",
+        )
+        return False
+
+    # The row the writer turn sees: its `since` is the composed span's opening and its
+    # cursor is empty, because the reports — not the feed — are its work set. This pass
+    # writes no position of its own: the prune below is the only forward move, and it
+    # fences on the drain pair as the row holds it when the prune runs, not on this read.
+    row = {
+        **agent,
+        "curated_through": span_start,
+        "curated_through_event_id": None,
+        "curation_cursor": {},
+    }
+    stamp = datetime.now(UTC).strftime("%Y%m%d%H%M%S")
+    started = time.monotonic()
+    try:
+        await sprite_agent_service.run_scheduled(
+            row,
+            stamp,
+            curation_service.Position(at=span_start),
+            draining=True,
+            until=edge.isoformat(),
+            reports=assembled,
+        )
+    finally:
+        await _part_gauge_release(identity, agent_id, _COMPOSE_GAUGE_MEMBER)
+    logger.info(
+        "drain compose agent=%s parts=%s..%s folded=%s through=%s wall=%.1fs",
+        agent_id,
+        ready[0],
+        ready[-1],
+        len(ready),
+        edge.isoformat(),
+        time.monotonic() - started,
+    )
+    async with get_pool().acquire() as conn, conn.transaction():
+        composed = {
+            part_id: curation_service.slot_instant(parts[part_id], "through") for part_id in ready
+        }
+        retired = await _commit_composition(conn, agent, composed)
+    if retired:
+        logger.info("drain compose agent=%s retired through=%s", agent_id, edge.isoformat())
+    return True
+
+
+async def _commit_composition(conn, agent: dict, composed: dict[str, datetime]) -> bool:
+    """Prune the composed slots, and retire the drain if it has now nothing to drain.
+
+    One transaction, because the pruned slots and the instant the row now shows are one
+    fact: `drain_through` is DERIVED from what is un-composed, so writing the prune in one
+    statement and the derived instant in another would leave a window where the column
+    still names a pruned slot's position — the NULL-shaped gap AC (a) is about, in a
+    different dress.
+
+    The row is locked here and each composed slot is re-checked before it is pruned, because
+    a compose pass reads its reports while parts keep committing: the pass composed the
+    edges it was handed, and a slot that no longer carries `done` at that edge describes a
+    window the report does not. That raises rather than pruning the wrong window; a slot
+    that moved is a different slot's business, and the pass that owns it commits it.
+
+    Retirement is the drain's own condition, asked at the newest composed edge rather than
+    at the column: no slot left un-composed, the edge at or past the plan's target, and
+    nothing pending AT that edge. Rows that arrived past the target are not a reason to
+    retire and not a reason to stop — the coordinator cuts one more part for them.
+    """
+    from ..services import agent_service, curation_service
+
+    agent_id = UUID(str(agent["id"]))
+    stored_row = await conn.fetchrow(
+        "SELECT drain_through, drain_cursor FROM agents WHERE id = $1 FOR UPDATE", agent_id
+    )
+    stored_cursor = stored_row["drain_cursor"] or {}
+    for part_id, composed_edge in composed.items():
+        slot = (stored_cursor.get("parts") or {}).get(part_id) or {}
+        if (
+            slot.get("state") != "done"
+            or curation_service.slot_instant(slot, "through") != composed_edge
+        ):
+            raise RuntimeError(
+                f"curator {agent_id} drain part {part_id} moved out from under the pass that "
+                f"composed its report (state={slot.get('state')!r}, "
+                f"edge={curation_service.slot_instant(slot, 'through')}): a report folded must "
+                "describe the window its slot names"
+            )
+    edge = max(composed.values())
+    derived, new_cursor = await agent_service.compose_drain(
+        conn, agent_id, sorted(composed), stored_row["drain_through"], stored_cursor
+    )
+    if curation_service.drain_parts_of(
+        {**agent, "drain_through": derived, "drain_cursor": new_cursor}
+    ):
+        # Slots still stand un-composed — open, or `done` behind an open one. The drain is
+        # not finished and the column now names the oldest of them, which is the truth.
+        return False
+    # A plan carries its instants as text exactly as a slot does, so one parser serves both.
+    target = curation_service.slot_instant(new_cursor.get("plan") or {}, "target")
+    if target is None or edge < target:
+        return False
+    # Asked of the row AS THE EDGE, not as the column: a row stored at the oldest
+    # un-composed slot answers "pending" about material this very pass already folded.
+    at_edge = {**agent, "drain_through": edge, "drain_cursor": {}}
+    if await _pending_input(at_edge, None):
+        return False
+    stored = await conn.fetchrow(
+        "SELECT curated_through, curated_through_event_id FROM agents WHERE id = $1", agent_id
+    )
+    await agent_service.finish_drain(
+        conn,
+        agent_id,
+        derived,
+        new_cursor,
+        curation_service.position_of(stored),
+        curation_service.Position(at=edge),
+    )
+    return True
+
+
+async def _coordinate_drain_parts(agent: dict, *, compose_here: bool = False) -> None:
+    """The coordinator's turn: cut the windows the planning gate allows, dispatch the
+    open parts whose lock is free, and never let beat own the pipeline.
+
+    The cut runs through `cut_drain_windows`, which re-runs the pure cut against the
+    locked row and stages it in the same transaction, because dispatching ids no row
+    carries would be a queue believing in work the drain never promised. The gate is
+    `2 x CURATOR_DRAIN_MAX_CONCURRENT_TURNS` open parts — claims exist only where a
+    worker could soon run them — and cutting chases the last seam at or before `now`,
+    because rows keep arriving past a plan's seed-time target and retirement re-asks at
+    the live edge.
+
+    Part whose slot carries a live claim is NOT dispatched: the live claim is the
+    row's own answer to "does a dispatch own this part", and consulting a second
+    Redis key for the same question would keep two oracles in sync by hope. A racing
+    second dispatch onto a free-looking slot is fenced anyway by the body's lane lock
+    and its claim, which refuse it with `guard=claim_held`. A coordinator that
+    dispatches nothing while parts stand claimed is the pipeline waiting on workers,
+    which is normal; a coordinator that finds no open part at all has reports waiting to
+    be folded, and dispatches the ordinary run that folds them — see this function's tail.
+    """
+    from ..config import settings
+    from ..database import get_pool
+    from ..services import agent_service, curation_service
+
+    agent_id = UUID(str(agent["id"]))
+    cursor = agent.get("drain_cursor") or {}
+    if not curation_service.drain_is_planned(agent):
+        # No plan, no parts to coordinate. The cleared pair a retired drain leaves is not an
+        # invitation to cut a fresh plan out of the watermark — that would drain again the
+        # past the compose pass has just handed to the watermark.
+        return
+    part_hours = (cursor.get("plan") or {}).get("part_hours") or settings.CURATOR_DRAIN_PART_HOURS
+    # The plan chases the last SEAM at or before now, never the clock itself: a window is
+    # never clamped to a live instant, because the next pass would open its window FROM
+    # that mid-second seam and reach for a part id the slot beside it already spent.
+    # The anchor comes from the row this pass loaded rather than from the locked one, and
+    # that can only move the floor earlier — cutting fewer windows, never one that
+    # overlaps a slot the drain already committed.
+    anchor = curation_service.drain_frontier(cursor, agent.get("drain_through"))
+    target = curation_service.drain_seam_target(anchor, part_hours, datetime.now(UTC))
+    async with get_pool().acquire() as conn, conn.transaction():
+        await agent_service.cut_drain_windows(
+            conn,
+            agent_id,
+            part_hours=part_hours,
+            target=target,
+            max_open=2 * settings.CURATOR_DRAIN_MAX_CONCURRENT_TURNS,
+        )
+    current = await agent_service.get_agent_by_id(agent_id)
+    parts = curation_service.drain_parts_of(current) or {}
+    now = datetime.now(UTC)
+    open_ids = [part_id for part_id, slot in sorted(parts.items()) if slot.get("state") == "open"]
+    dispatched = 0
+    for part_id in open_ids:
+        expires = parts[part_id].get("claim_expires_at")
+        if expires is not None:
+            deadline = datetime.fromisoformat(expires) if isinstance(expires, str) else expires
+            if deadline > now:
+                continue
+        run_curator_part.apply_async(args=[str(agent_id), part_id], kwargs={"metered": False})
+        dispatched += 1
+    # The fold is asked about the map as it stands NOW, independent of whether parts are
+    # still running: reports waiting now are history the wiki does not have yet, and the
+    # compose pass and a part do not contend for one lock — the fold takes the
+    # un-partitioned key, a part takes only its own. Making the fold wait for the last part
+    # would hold every composed-but-unfolded window open across the whole drain.
+    composable = curation_service.drain_composable_parts(current.get("drain_cursor") or {})
+    if composable and not compose_here:
+        # A compose pass IS an ordinary curator run with no part id, which is what gets
+        # dispatched here. An ordinary run is the one dispatch that takes
+        # `agent-run:<agent_id>`, the lock that excludes every other writer of the shared
+        # wiki; routing this work through `run_curator_part` would put a wiki writer behind
+        # a part key and let a second part run beside it. The ordinary run's own branch
+        # composes, then re-enters this coordinator.
+        run_curator_now.apply_async(args=[str(agent_id)], kwargs={"metered": False})
+        logger.info(
+            "drain coordinator agent=%s compose_dispatched=%s..%s open=%s dispatched=%s",
+            agent_id,
+            composable[0],
+            composable[-1],
+            len(open_ids),
+            dispatched,
+        )
+    elif composable:
+        # The caller IS the ordinary run holding the un-partitioned lock, and it folded
+        # what it could a moment ago: a report waiting now waits on an endpoint that was
+        # full or undialable, not on a missing dispatch. A second ordinary run would only
+        # decline on this same lock.
+        logger.info(
+            "drain coordinator agent=%s guard=compose_declined parts=%s..%s open=%s dispatched=%s",
+            agent_id,
+            composable[0],
+            composable[-1],
+            len(open_ids),
+            dispatched,
+        )
+    elif not open_ids:
+        # A plan standing over an empty parts map with nothing to fold: every report is
+        # folded and every slot pruned, so what remains is the retirement ask, which the
+        # pass that pruned makes inside its own transaction. Nothing here may cut or
+        # dispatch against it.
+        logger.info(
+            "drain coordinator agent=%s guard=awaiting_retirement open=0 parts=%s dispatched=%s",
+            agent_id,
+            len(parts),
+            dispatched,
+        )
+
+
+async def _plan_new_drain(agent: dict) -> None:
+    """Cut the FIRST window of a fresh full-history drain, ending it at the corpus's
+    first event rather than at one window's width from `DRAIN_BEGINNING`.
+
+    A part's width is a granularity, and a granularity measured in hours is honest
+    for recorded history; year one is not recorded history. Cutting the first window
+    `part_hours` from the sentinel would open windows through empty millennia — up to
+    the planning gate's worth of them, every one claiming a dispatch to find no rows
+    — before the drain's first real row. The first event's instant is what makes the
+    first window mean something, and one indexed `min(created_at)` is how the
+    coordinator learns it: the plan's forward generation stays a pure function.
+    """
+    from ..config import settings
+    from ..database import get_pool
+    from ..services import agent_service
+    from ..services.curation_service import DRAIN_BEGINNING
+
+    agent_id = UUID(str(agent["id"]))
+    owner = UUID(str(agent["user_id"]))
+    first_event = await get_pool().fetchval(
+        "SELECT min(created_at) FROM history_events WHERE owner_user_id = $1", owner
+    )
+    # A corpus minimum behind the sentinel (a client's absurd `created_at`) would put
+    # the first target before the first `from` and plan nothing at all; clamping keeps
+    # the plan alive, and `DRAIN_BEGINNING`'s own docstring names the rows it cannot
+    # reach.
+    target = first_event if first_event is not None else datetime.now(UTC)
+    if target <= DRAIN_BEGINNING:
+        target = DRAIN_BEGINNING + timedelta(microseconds=1)
+    async with get_pool().acquire() as conn, conn.transaction():
+        await agent_service.cut_drain_windows(
+            conn,
+            agent_id,
+            part_hours=settings.CURATOR_DRAIN_PART_HOURS,
+            target=target,
+            max_open=2 * settings.CURATOR_DRAIN_MAX_CONCURRENT_TURNS,
+        )
+
+
+async def _write_part_report_page(owner: UUID, part_id: str, report: str) -> None:
+    """Write the part's report to its one page — a server write, never the model's.
+
+    The page's name is derived from the `part_id` in code (never chosen by the model,
+    never `create_page_unique`, whose whole job is minting the twin this rule
+    forbids), inside the curator owner's own Memory folder named in code. Destination
+    and writer are 1:1 — one part, one page — so no two concurrent parts can name the
+    same page even mid-fan-out. A re-run of the part updates the page it already made
+    rather than duplicating it; a resumed part APPENDS, so a window earned over two
+    dispatches keeps both dispatches' knowledge on the one page its compose read
+    expects.
+
+    The write runs inside a `page_actor` scope declaring `PageActor.system` — named
+    `curator-drain-part`, with the part id carried in the page NAME — because
+    `_log_page_edit` calls `current_actor()` and raises on a missing actor, and a NULL
+    `session_id` is exactly what `PageActor.system` constructs: the operator's probe
+    of `page_edits.agent_name` finds these writes, and the
+    `session_id like 'agent-curate-%'` probe does not, which is the claim Step 7
+    repairs in `docs/page-provenance.md` rather than one this card leaves silently
+    false.
+    """
+    from ..database import get_pool
+    from ..services import files_tree_service
+    from ..services.page_actor import PageActor, page_actor
+
+    page_name = _part_report_name(part_id)
+    body = f"# Drain report {part_id}\n\n{report}\n"
+    async with page_actor(PageActor.system("curator-drain-part")):
+        folder = await files_tree_service.get_or_create_memory_folder(owner, owner)
+        existing = await get_pool().fetchrow(
+            "SELECT id, content_markdown, content_hash FROM pages "
+            "WHERE owner_user_id = $1 AND folder_id = $2 AND name = $3 AND deleted_at IS NULL",
+            owner,
+            folder["id"],
+            page_name,
+        )
+        if existing is None:
+            await files_tree_service.create_page(
+                owner, page_name, owner, folder_id=folder["id"], content=body
+            )
+        else:
+            await files_tree_service.update_page(
+                existing["id"],
+                owner,
+                owner,
+                content=f"{existing['content_markdown']}\n\n{body}"
+                if existing["content_markdown"]
+                else body,
+                expected_content_hash=existing["content_hash"],
+                edit_op="drain-part-report",
+            )
 
 
 async def _skip_busy_curator(agent_id: UUID, *, metered: bool) -> None:

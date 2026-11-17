@@ -17,7 +17,14 @@ from fastapi import HTTPException
 from ..config import settings
 from ..database import get_pool
 from . import agent_auth
-from .curation_service import Position, position_ahead, position_of
+from .curation_service import (
+    Position,
+    drain_derived_through,
+    drain_parts_of,
+    position_ahead,
+    position_of,
+    slot_instant,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -1104,16 +1111,29 @@ class CuratorDrainConflict(Exception):
     """The drain position moved between the pair a pass read and the pair it earned.
 
     The sibling of `CuratorWatermarkConflict` for the other position a curator owns: a
-    history drain's resumable pair. Refusing the write is the whole point — the run that
+    history drain's resumable position. Refusing the write is the whole point — the run that
     loses the race would otherwise curate a slice a run that already committed it has
-    read, and the drain would report progress it did not make."""
+    read, and the drain would report progress it did not make.
 
-    def __init__(self, agent_id: UUID, read_at: datetime | None, stored_at: datetime | None):
+    A planned drain names the part whose slot moved: the agent's column can stand
+    anywhere among several slots' instants, so a message that stopped at the agent would
+    make an operator hunt through the jsonb for the slot that refused them.
+    """
+
+    def __init__(
+        self,
+        agent_id: UUID,
+        read_at: datetime | None,
+        stored_at: datetime | None,
+        part_id: str | None = None,
+    ):
         self.agent_id = agent_id
         self.read_at = read_at
         self.stored_at = stored_at
+        self.part_id = part_id
+        subject = f"agent {agent_id}" if part_id is None else f"agent {agent_id} part {part_id}"
         super().__init__(
-            f"curator drain conflict for agent {agent_id}: the pass read drain position "
+            f"curator drain conflict for {subject}: the pass read drain position "
             f"{read_at} but the stored drain position is now {stored_at}; the drain moved "
             "under the pass, so its advance was refused"
         )
@@ -1126,6 +1146,8 @@ async def advance_drain(
     read_cursor: dict,
     through: datetime,
     cursor: dict,
+    *,
+    part_id: str | None = None,
 ) -> None:
     """Move a history drain to where one committed pass read it — never the watermark.
 
@@ -1144,27 +1166,325 @@ async def advance_drain(
     overlapping passes each claim it. A pair that did not move is not a pass and is not
     written here; the caller's no-move rule covers that. A proposal strictly behind where
     the pair stands is not a pass either, it is a bug, and it raises.
+
+    `part_id` names the slot a planned drain is being advanced under, and its default —
+    "the drain's implicit single part" — is the shape every unplanned caller uses. The
+    fence then reads and writes ONE slot: two parts of one drain commit in the same
+    seconds and touch different slots of one jsonb, so neither can refuse the other.
+    The readable form of that is a row lock plus read-modify-write, not a `jsonb_set`
+    with an aggregate subselect — under `FOR UPDATE` the readable form is already atomic,
+    and a min over `jsonb_each` in SQL is exactly the cleverness this repo refuses.
+    The same statement that moves the slot recomputes the DERIVED column: `drain_through`
+    is written as the oldest un-composed slot's `from` here and nowhere else while a
+    plan lives.
+
+    A planned row refuses the default arm loudly, naming the agent: an un-parted pass
+    (the scoped lane, whose lane never plans) advancing a planned row would move one
+    slot's facts while the derived instant stands at another slot's edge. An unplanned
+    row refuses a named part for the mirror reason: a slot the cursor does not carry
+    has no pair to fence on.
     """
-    if read_at is not None and through < read_at:
-        raise ValueError(
-            f"curator {agent_id} drain would move from {read_at} back to {through}: a drain "
-            "commits where its pass stopped reading, never behind it"
-        )
-    moved = await conn.execute(
-        "UPDATE agents SET drain_through = $2::timestamptz, drain_cursor = $3::jsonb"
-        " WHERE id = $1 AND drain_through IS NOT DISTINCT FROM $4::timestamptz"
-        " AND drain_cursor = $5::jsonb",
-        agent_id,
-        through,
-        cursor or {},
-        read_at,
-        read_cursor or {},
+    row = await conn.fetchrow(
+        "SELECT drain_through, drain_cursor FROM agents WHERE id = $1 FOR UPDATE", agent_id
     )
-    if moved != "UPDATE 1":
-        current = await conn.fetchrow(
-            "SELECT drain_through, drain_cursor FROM agents WHERE id = $1", agent_id
+    if row is None:
+        raise CuratorDrainConflict(agent_id, read_at, None, part_id=part_id)
+    stored_at = row["drain_through"]
+    stored_cursor = row["drain_cursor"] or {}
+    planned = "plan" in stored_cursor or "parts" in stored_cursor
+    if planned and part_id is None:
+        raise RuntimeError(
+            f"curator {agent_id} carries a planned drain: only a named part advances it. "
+            "An un-parted pass would commit one slot's facts under an instant derived "
+            "from another's, and the scoped lane never plans — that is the personal lane's job."
         )
-        raise CuratorDrainConflict(agent_id, read_at, current["drain_through"] if current else None)
+    if part_id is not None and not planned:
+        raise RuntimeError(
+            f"curator {agent_id} carries no planned drain: part {part_id} names a slot "
+            "the row does not carry, and there is no pair under it to fence on"
+        )
+    if planned:
+        drain_parts_of({"id": agent_id, "drain_through": stored_at, "drain_cursor": stored_cursor})
+        parts = dict(stored_cursor["parts"])
+        slot = parts.get(part_id)
+        if slot is None:
+            raise CuratorDrainConflict(agent_id, read_at, stored_at, part_id=part_id)
+        slot_at = slot_instant(slot, "through") or slot_instant(slot, "from")
+        if slot_at != read_at or (slot.get("cursor") or {}) != (read_cursor or {}):
+            raise CuratorDrainConflict(agent_id, read_at, slot_at, part_id=part_id)
+        if through < slot_at:
+            raise ValueError(
+                f"curator {agent_id} drain part {part_id} would move from {slot_at} back "
+                f"to {through}: a drain commits where its pass stopped reading, never "
+                "behind it"
+            )
+        parts[part_id] = {**slot, "through": through.isoformat(), "cursor": cursor or {}}
+        new_cursor = {**stored_cursor, "parts": parts}
+        derived = drain_derived_through(new_cursor)
+    else:
+        if read_at is not None and through < read_at:
+            raise ValueError(
+                f"curator {agent_id} drain would move from {read_at} back to {through}: a "
+                "drain commits where its pass stopped reading, never behind it"
+            )
+        if stored_at != read_at or stored_cursor != (read_cursor or {}):
+            raise CuratorDrainConflict(agent_id, read_at, stored_at)
+        new_cursor = cursor or {}
+        derived = through
+    moved = await conn.execute(
+        "UPDATE agents SET drain_through = $2::timestamptz, drain_cursor = $3::jsonb WHERE id = $1",
+        agent_id,
+        derived,
+        new_cursor,
+    )
+    assert moved == "UPDATE 1", f"advance_drain matched no row for agent {agent_id}"
+
+
+async def compose_drain(
+    conn,
+    agent_id: UUID,
+    part_ids: list[str],
+    read_at: datetime | None,
+    read_cursor: dict,
+) -> tuple[datetime, dict]:
+    """Retire the slots whose reports a compose pass has folded into the wiki, in that
+    pass's own transaction, and return the pair the row now carries.
+
+    Pruning and derivation are one statement because the column is a derivation: a
+    slot removed without recomputing it leaves `drain_through` naming an instant the
+    parts map no longer contains, and every reader of that column would price the drain
+    from a window that no longer exists. The row is fenced on the pair the compose pass
+    read — the same fence `advance_drain` and `finish_drain` use — so a pass that
+    composed a stale view of the map refuses itself.
+
+    Pruning the LAST slot leaves the plan with an empty parts map and the column at the
+    newest composed edge: the fully-composed state that retirement consults before it
+    hands the covered past to the watermark. That interval is why the empty map is a
+    shape the readers must name rather than a shape they raise on.
+    """
+    row = await conn.fetchrow(
+        "SELECT drain_through, drain_cursor FROM agents WHERE id = $1 FOR UPDATE", agent_id
+    )
+    if row is None:
+        raise CuratorDrainConflict(agent_id, read_at, None)
+    stored_cursor = row["drain_cursor"] or {}
+    parts = stored_cursor.get("parts")
+    if not isinstance(parts, dict):
+        raise RuntimeError(
+            f"curator {agent_id} carries no parts map to compose: compose_drain prunes "
+            "planned slots and nothing else"
+        )
+    if row["drain_through"] != read_at or stored_cursor != (read_cursor or {}):
+        raise CuratorDrainConflict(agent_id, read_at, row["drain_through"])
+    drain_parts_of(
+        {"id": agent_id, "drain_through": row["drain_through"], "drain_cursor": stored_cursor}
+    )
+    edges = []
+    for part_id in part_ids:
+        slot = parts.get(part_id)
+        if slot is None:
+            raise CuratorDrainConflict(agent_id, read_at, row["drain_through"], part_id=part_id)
+        edge = slot_instant(slot, "through")
+        if edge is None:
+            raise CuratorDrainConflict(agent_id, read_at, row["drain_through"], part_id=part_id)
+        edges.append(edge)
+    remaining = {k: v for k, v in parts.items() if k not in part_ids}
+    new_cursor = {**stored_cursor, "parts": remaining}
+    derived = drain_derived_through(new_cursor) or max(edges)
+    await conn.execute(
+        "UPDATE agents SET drain_through = $2::timestamptz, drain_cursor = $3::jsonb WHERE id = $1",
+        agent_id,
+        derived,
+        new_cursor,
+    )
+    return derived, new_cursor
+
+
+async def cut_drain_windows(
+    conn,
+    agent_id: UUID,
+    *,
+    part_hours: int,
+    target: datetime,
+    max_open: int,
+) -> list[str]:
+    """Cut every window the planning gate allows and stage them onto the row, under
+    the row lock, returning the part ids newly cut (ordered oldest first).
+
+    The cut and the write live in one transaction because they are one fact: a
+    coordinator that cut windows in memory and dispatched from that memory would be
+    dispatching part ids no row ever carried, and a pass that claimed against the row
+    would refuse work the queue believes exists. `drain_pass_budget`'s per-row rule
+    is the template: the row is the single source, so the cut re-runs against the
+    locked row's own cursor rather than against whatever the caller had read.
+
+    `max_open` is the gate the Design freezes — the coordinator passes 2 x the
+    endpoint bound, so claims exist only where a worker could soon run them. When the
+    gate is already full the answer is the empty list, not an error: a full plan is a
+    normal mid-drain state, and the next completion cuts again.
+
+    The derived column moves with the write exactly as every other writer of the
+    jsonb does it — recomputed from the new slot set, never carried from the old one.
+    The first cut of a seeded drain is the one moment that column gains a value: the
+    oldest slot's `from` is the `DRAIN_BEGINNING` sentinel, which reads to every
+    reader as 'nothing is unfolded yet' — the truth for a fresh backfill.
+    """
+    from .curation_service import cut_drain_part, drain_derived_through
+
+    row = await conn.fetchrow(
+        "SELECT drain_through, drain_cursor FROM agents WHERE id = $1 FOR UPDATE", agent_id
+    )
+    if row is None:
+        raise RuntimeError(f"cut_drain_windows: curator {agent_id} does not exist")
+    cursor = row["drain_cursor"] or {}
+    standing = row["drain_through"]
+    known: list[str] = list((cursor.get("parts") or {}).keys())
+    cut_cursor = cursor
+    while True:
+        nxt = cut_drain_part(
+            cut_cursor, standing, part_hours=part_hours, target=target, max_open=max_open
+        )
+        if nxt is None:
+            break
+        cut_cursor = nxt
+    new_ids = [part_id for part_id in cut_cursor.get("parts", {}) if part_id not in known]
+    if not new_ids:
+        return []
+    await conn.execute(
+        "UPDATE agents SET drain_through = $2::timestamptz, drain_cursor = $3::jsonb WHERE id = $1",
+        agent_id,
+        drain_derived_through(cut_cursor),
+        cut_cursor,
+    )
+    return sorted(new_ids)
+
+
+async def claim_drain_part(
+    conn,
+    agent_id: UUID,
+    part_id: str,
+    *,
+    now: datetime,
+    claim_seconds: int,
+) -> bool:
+    """Claim one open slot for one dispatch, under the row lock, and answer whether
+    the claim was taken.
+
+    A slot whose `claim_expires_at` still lies in the future is held by a dispatch
+    that may still be running, and a second part-run onto the same window would
+    spend a second paid turn on the same slice — the claim refuses, and the
+    coordinator moves on to another slot rather than waiting. A slot whose claim has
+    aged out is exactly the dead worker's case: its Redis lane key frees by TTL, the
+    sweep cannot reach a part key, and this deadline is what makes the slot
+    reclaimable — after it, never before it.
+
+    The answer is a bool, not an exception: a held slot is a normal evening for a
+    fan-out, and the refuse-and-continue is the coordinator's loop, not a fault.
+    A missing slot (never cut, or composed away) and a `done` slot (its report is
+    written; re-running would spend a turn to rewrite it) claim nothing for the same
+    reason the slot is not there to run.
+
+    `claim_seconds` is the caller's horizon — the same number family as the lane
+    TTL, so Postgres and Redis hold one honest bound on how long a dead dispatch can
+    keep a slot from being resumed.
+    """
+    row = await conn.fetchrow("SELECT drain_cursor FROM agents WHERE id = $1 FOR UPDATE", agent_id)
+    if row is None:
+        return False
+    stored_cursor = row["drain_cursor"] or {}
+    parts = stored_cursor.get("parts")
+    if not isinstance(parts, dict):
+        return False
+    slot = parts.get(part_id)
+    if not isinstance(slot, dict) or slot.get("state") != "open":
+        return False
+    expires_at = slot.get("claim_expires_at")
+    if expires_at is not None:
+        deadline = datetime.fromisoformat(expires_at) if isinstance(expires_at, str) else expires_at
+        if deadline > now:
+            return False
+    parts[part_id] = {
+        **slot,
+        "claim_expires_at": (now + timedelta(seconds=claim_seconds)).isoformat(),
+    }
+    await conn.execute(
+        "UPDATE agents SET drain_cursor = $2::jsonb WHERE id = $1",
+        agent_id,
+        {**stored_cursor, "parts": parts},
+    )
+    return True
+
+
+async def release_drain_part_claim(
+    conn,
+    agent_id: UUID,
+    part_id: str,
+) -> None:
+    """Give back a claim this dispatch took and will not use, under the row lock.
+
+    A refusal that spends nothing — the endpoint's gauge is full, the lane cannot dial —
+    owns nothing, and a claim left standing would keep its slot out of the next dispatch
+    for the whole horizon it was stamped with: one busy moment at the endpoint would cost
+    the drain a stall of `claim_seconds` per refused part. Clearing the claim is what
+    makes `guard=endpoint_pressure` a retry rather than a postponement. A slot that is
+    gone or already `done` keeps whatever it holds: there is no claim of ours there to
+    hand back, and a `done` slot's state is not this call's to touch.
+    """
+    row = await conn.fetchrow("SELECT drain_cursor FROM agents WHERE id = $1 FOR UPDATE", agent_id)
+    if row is None:
+        return
+    stored_cursor = row["drain_cursor"] or {}
+    parts = stored_cursor.get("parts")
+    if not isinstance(parts, dict):
+        return
+    slot = parts.get(part_id)
+    if not isinstance(slot, dict) or slot.get("state") != "open":
+        return
+    parts[part_id] = {**slot, "claim_expires_at": None}
+    await conn.execute(
+        "UPDATE agents SET drain_cursor = $2::jsonb WHERE id = $1",
+        agent_id,
+        {**stored_cursor, "parts": parts},
+    )
+
+
+async def mark_drain_part_done(
+    conn,
+    agent_id: UUID,
+    part_id: str,
+) -> bool:
+    """Stamp one open slot `done` under the row lock, and answer whether it was open.
+
+    `done` states one fact: the part's report page is written, so the slot's text is
+    an input to the compose pass rather than a turn still owed. The caller writes the
+    report BEFORE marking, and only a fully-earned window (`through` at the slot's
+    `to`) may call — a half-read window is the resumed pass's business, not this
+    stamp's. The claim expires on its own; `done` must not leave a live claim that a
+    re-claim could race, so the stamp clears it.
+
+    The derived column does not move: the set of slot boundaries is unchanged, and a
+    `done` slot still holds its `from` — the wiki has not absorbed its knowledge yet,
+    which is the compose pass's job, not this stamp's. An absent or already-`done`
+    slot answers False without writing: the second completion of a part is a replay,
+    and a replay that finds its work standing must not rewrite it.
+    """
+    row = await conn.fetchrow("SELECT drain_cursor FROM agents WHERE id = $1 FOR UPDATE", agent_id)
+    if row is None:
+        return False
+    stored_cursor = row["drain_cursor"] or {}
+    parts = stored_cursor.get("parts")
+    if not isinstance(parts, dict):
+        return False
+    slot = parts.get(part_id)
+    if not isinstance(slot, dict) or slot.get("state") != "open":
+        return False
+    parts[part_id] = {**slot, "state": "done", "claim_expires_at": None}
+    await conn.execute(
+        "UPDATE agents SET drain_cursor = $2::jsonb WHERE id = $1",
+        agent_id,
+        {**stored_cursor, "parts": parts},
+    )
+    return True
 
 
 async def finish_drain(

@@ -40,13 +40,14 @@ select count(*) from page_edits where session_id like 'agent-curate-%';
 `agent-curate-` is the prefix every curator run mints its session under — the
 personal lane, the workspace-scoped lane, and a two-phase run's `-digest` session
 all share it (see `scheduled_session_prefix` and `scoped_curation_service.run`),
-so this probe misses no curator write.
+so this probe misses no curator write that ran as a session — the one curator write
+that does not is named in the list below.
 
 What the probe cannot see is a writer with no session:
 
 - a person (`agent_name IS NULL`, `session_id IS NULL`);
-- a server lane — the clip worker, the demo seed, a discover import — which names
-  itself but has no run session to name;
+- a server lane — the clip worker, the demo seed, a discover import, or the drain part
+  writing its own report page — which names itself but has no run session to name;
 - a scheduled agent that is **not** a curator, whose sessions start `agent-sched-`
   and which is correctly excluded from a curator count but is still a machine.
 
@@ -90,6 +91,7 @@ A lane installs its actor at the outermost edge that has no request behind it:
 | Discover import over the admin route (X-Admin-Token, no `get_current_user`) | `backend/routers/admin.py` | `GitHub skill import` |
 | Scoped curator | `backend/services/scoped_curation_service.py` | `Scoped curator` + its run session |
 | Shared-wiki privacy cleanup | `backend/services/shared_wiki_cleanup.py` | `Privacy cleanup` |
+| Drain part's report page | `backend/tasks/agent_schedules.py` (`_write_part_report_page`) | `curator-drain-part` |
 
 Declare it at that edge and **not** inside a service an HTTP route also reaches.
 `clip_service`, `shared_skill_service`, `github_skill_import` and `batch_service`

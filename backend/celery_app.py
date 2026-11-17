@@ -93,6 +93,9 @@ celery.conf.update(
         "backend.exports.gslides.export_to_google_slides": {"queue": "heavy"},
         "backend.tasks.agent_schedules.run_scheduled_agent": {"queue": "heavy"},
         "backend.tasks.agent_schedules.run_curator_now": {"queue": "heavy"},
+        # Parts are curator runs of one window each; they belong on the same lane
+        # their parent drain runs on (STAS-461).
+        "backend.tasks.agent_schedules.run_curator_part": {"queue": "heavy"},
         "backend.tasks.viz.precompute": {"queue": "heavy"},
     },
     task_acks_late=True,

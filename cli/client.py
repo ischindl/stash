@@ -477,11 +477,14 @@ class StashClient:
         wiki: str | None = None,
         folder: str | None = None,
         since_event: str | None = None,
+        until: str | None = None,
     ) -> dict:
-        """The curator's incremental feed. `wiki`, `folder`, and `since_event` are
-        sent only when named, so a caller that does not use them keeps the exact
+        """The curator's incremental feed. `wiki`, `folder`, `since_event`, and `until`
+        are sent only when named, so a caller that does not use them keeps the exact
         request it sends today. `since_event` is the event half of the read
-        position — useless without `since`, which the server refuses."""
+        position — useless without `since`, which the server refuses. `until` closes
+        the read window at its upper edge — equally refused without `since`, because a
+        closed top with no bottom is not a window."""
         params = {
             k: v
             for k, v in {
@@ -489,6 +492,7 @@ class StashClient:
                 "since_event": since_event,
                 "wiki": wiki,
                 "folder": folder,
+                "until": until,
             }.items()
             if v
         }

@@ -1338,12 +1338,20 @@ async def test_full_history_backfill_cannot_regress_an_advanced_watermark(
     position it computes sits BELOW the stored watermark. The successful run
     keeps the advanced cursor — 'the full history' is a re-read, not a reset."""
     from backend.services import curation_service
+    from backend.tasks import agent_schedules
     from backend.tasks.agent_schedules import _run_curator_now
     from backend.tasks.session_titles import generate_session_title
 
     # sprite_exec sets the test Anthropic key, which arms the title dispatch —
     # no broker here (same neutralization conftest applies to the first-day tick).
     monkeypatch.setattr(generate_session_title, "delay", lambda *a, **k: None)
+    # STAS-461 moved this scenario's shape: a full-history run no longer reads the
+    # whole corpus in one serial pass — it plans the drain and HANDS THE PARTS OFF,
+    # and the hand-off is a broker dispatch the suite stubs the same way the
+    # catch-up chain's is stubbed (test_agent_schedule_alerts). What this test has
+    # always owned — a backfill never regresses an advanced watermark — is asserted
+    # unchanged, plus the new face of the same run: the drain it leaves is planned.
+    monkeypatch.setattr(agent_schedules.run_curator_part, "apply_async", lambda *a, **k: None)
     key, uid = await _register(client)
     curator = await agent_service.get_or_create_curator(uid)
     cid = UUID(curator["id"])
@@ -1360,10 +1368,14 @@ async def test_full_history_backfill_cannot_regress_an_advanced_watermark(
     await _run_curator_now(cid, full_history=True, metered=False)
 
     row = await _db_pool.fetchrow(
-        "SELECT curated_through, last_run_outcome FROM agents WHERE id = $1", cid
+        "SELECT curated_through, last_run_outcome, drain_cursor FROM agents WHERE id = $1",
+        cid,
     )
     assert row["last_run_outcome"] == "ran"
     assert row["curated_through"] == stored
+    assert "plan" in (row["drain_cursor"] or {}), (
+        "the backfill dispatch planned nothing: its history was left un-drained in silence"
+    )
 
 
 @pytest.mark.asyncio

@@ -124,6 +124,44 @@ everything before it is captured in git history (`git log`), not here.
 
 ### Changed
 
+- A curator's history backfill now runs as several parts at once instead of one long
+  pull, and the parts are folded back into the wiki in the order the history happened.
+  The old shape was one position and one run: a drain held a lock over the whole agent,
+  so a second worker picking up another slice of the same backlog printed "is busy;
+  skipping" and left — measured on the founder copy, where a shard died at that line
+  while the same local endpoint had been shown serving three turns at once for a
+  near-identical per-turn latency (4,8 tok/s at one turn, 13,5 tok/s at three). What was
+  actually scarce was the box, and the lock hid it. Now a slice — a *part* — is a subject
+  of its own: parts of one curator hold their own locks and run together, each carrying
+  its own resumable position inside the drain's existing cursor (no new column, no
+  migration), and the drain's headline instant became a derived value: the start of the
+  oldest slice whose knowledge the wiki has not absorbed yet. Every reader of a drain —
+  the feed a curator reads, the backlog figure it is quoted, the gate that decides whether
+  there is work, the prompt's own window sentence, and `stash changes`, which gained
+  `--until` — carries one closed bound and excludes the same rows, so the seam between two
+  adjacent slices belongs to the earlier one and no row is read twice or dropped.
+  What a part learns is written by the server to a report page named for that part, and a
+  part's own model turn never touches a shared wiki page; the shared pages are written by a
+  compose pass that is an ordinary curator run, holds the whole-agent lock, and folds only
+  the oldest contiguous run of finished reports. Two slices that both speak about one page
+  therefore reach one writer that has read both claims rather than two writers overwriting
+  each other, which is what makes the result of a fan-out deterministic instead of a race
+  shaped by whichever worker finished first. `CURATOR_DRAIN_MAX_CONCURRENT_TURNS` (default
+  3) is the one bound on live drain turns at a single endpoint — counting the compose pass
+  beside the parts — and `CURATOR_DRAIN_PART_HOURS` (default 24) sets how wide a slice is,
+  which is a granularity choice and not a measurement. Slices never drift off that
+  granularity: a slice is opened only once its end has already passed, so the drain's seams
+  stay a whole number of those hours from the instant it was seeded and the head waits for
+  its seam instead of opening a window of the leftover minutes — a clamp to the live clock
+  is what the proof against a copy of the production database caught killing a run two
+  minutes after its first slice finished. A part refused by a full endpoint
+  prints `guard=endpoint_pressure`, spends no turn and no credit, and gives its slot back
+  immediately so the next dispatch can take it. Honest arithmetic rather than a constant:
+  the founder's measured backlog of 4 191 130 events over 549 421 829 characters is about
+  140M tokens, roughly 32 days of wall at an optimistic 50 tok/s aggregate — this trades
+  months for days, not for hours. `docs/running-stash.md` carries both settings with the
+  measurement they came from and names the sample round that was contaminated.
+
 - The line this build is cut from now contains the upstream product in full. Upstream
   shipped about a hundred releases since the September split and our trunk had drifted
   away from all of them, so everything upstream owns — the curator, the wiki, the evals,

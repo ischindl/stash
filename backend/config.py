@@ -382,6 +382,34 @@ class Settings:
         "LOCAL_STASH_API_URL", f"http://localhost:{os.getenv('PORT', '3456')}"
     )
     AGENT_TURN_TIMEOUT_SECONDS: int = int(os.getenv("AGENT_TURN_TIMEOUT_SECONDS", "600"))
+    # How many of ONE curator's drain parts may hold a model turn at once, enforced
+    # per endpoint identity rather than per process (STAS-461). Three is measured, not
+    # guessed: on the founder box's 2026-11-15 rounds, N=3 served 13,5 tok/s with
+    # walls of 107,3 / 108,7 / 113,5 s against 107,6 s alone — the largest fan-out
+    # whose latency cost measured as nil. The N=6 round printed 52,8 tok/s, but every
+    # wall there fell to 35-58 s, which says that box was freer while it ran: the
+    # round is CONTAMINATED and cannot license a default of 6. The gauge counts the
+    # live members of one Redis sorted set (`drain-turns:<endpoint identity>`), each
+    # member scoring the epoch its claim ages out at, so the TTL scales with N by
+    # construction (it is `REAP_STRIKE_AGE_SECONDS`, the same number the lane TTL and
+    # the slot's `claim_expires_at` carry) and a full gauge declines a part with
+    # `guard=endpoint_pressure` before any turn or credit is spent. Honest limit: the
+    # bound counts drain part turns and compose turns on that endpoint, not every
+    # turn the platform spends there, and `_MAX_CONCURRENT_SCOPES = 4` is a separate
+    # pressure on the same box that this knob does not touch.
+    CURATOR_DRAIN_MAX_CONCURRENT_TURNS: int = int(
+        os.getenv("CURATOR_DRAIN_MAX_CONCURRENT_TURNS", "3")
+    )
+    # The GRANULARITY of one drain part, in hours — not a measurement of anything, and
+    # not a per-part ETA: it is how wide a window of history one report summarises,
+    # chosen so a part is several dispatches wide rather than one (24 on a corpus
+    # whose densest day still takes 2-3 dispatches). The cost an operator choosing it
+    # needs in seconds-of-wall, not turns: the founder backlog of 549 421 829
+    # characters is about 140M tokens, and at an optimistic 50 tok/s aggregate that is
+    # about 32 days of wall clock — serial, closer to the 162 days the measured single
+    # rate implies. Fan-out is what turns that into days, not hours; a finer
+    # granularity buys more parts to run at once and more report pages to compose.
+    CURATOR_DRAIN_PART_HOURS: int = int(os.getenv("CURATOR_DRAIN_PART_HOURS", "24"))
 
 
 settings = Settings()

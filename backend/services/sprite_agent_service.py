@@ -518,8 +518,8 @@ def _turn_lock(session_id: str, ttl_seconds: int) -> _TurnLock:
     return _TurnLock(f"agent-turn:{session_id}", ttl_seconds)
 
 
-def agent_run_lock(agent_id: UUID | str, ttl_seconds: int) -> _TurnLock:
-    """One run per agent, keyed by agent id — the lock that actually keeps two
+def agent_run_lock(agent_id: UUID | str, ttl_seconds: int, part_id: str | None = None) -> _TurnLock:
+    """One run per subject, keyed by agent id — the lock that actually keeps two
     runs of the same curator from overlapping.
 
     Overlapping runs are what discarded finished curation: each run computes
@@ -529,13 +529,25 @@ def agent_run_lock(agent_id: UUID | str, ttl_seconds: int) -> _TurnLock:
     the overlap from happening at all — it also stops a second paid harness
     turn from stacking onto work already in flight.
 
+    `part_id` makes the subject one PART of a planned drain: the key gains the
+    suffix `part:<part_id>` and nothing else changes, so two parts of one curator
+    hold their lanes at once while every un-parted subject — the incremental run,
+    the compose pass, every test that names `agent-run:<agent_id>` — keeps the
+    exact key it names today. That is the whole composition safety: the compose
+    pass takes the UN-partitioned key, which no part ever touches, so it is the
+    only writer of shared wiki pages at any instant while parts run around it.
+
     `ttl_seconds` outlives the harness wall-clock limit so a run is never
     unlocked while still executing; a worker killed mid-run releases it on TTL
-    instead of wedging the agent forever."""
-    return _TurnLock(f"agent-run:{agent_id}", ttl_seconds)
+    instead of wedging the agent forever. The sweep cannot help a part — it
+    deletes the agent-wide key only — so a dead part frees its lane by this TTL
+    and by its slot's `claim_expires_at`, never by a sweep.
+    """
+    subject = f"agent-run:{agent_id}" if part_id is None else f"agent-run:{agent_id}:part:{part_id}"
+    return _TurnLock(subject, ttl_seconds)
 
 
-async def drop_agent_run_lock(agent_id: UUID) -> None:
+async def drop_agent_run_lock(agent_id: UUID, part_id: str | None = None) -> None:
     """Delete a run lock that no live holder is left to release.
 
     `_TurnLock.release` returns a lock only to its owner, and only the coroutine
@@ -545,8 +557,16 @@ async def drop_agent_run_lock(agent_id: UUID) -> None:
     flight" for another 6600 s after nothing had been running for hours. Both
     callers (the escape guard in `tasks.agent_schedules` and the stranded-run
     sweep) reach this only once the lane itself is resolved as a failure, so
-    there is no run left that could own the key."""
-    await _get_redis().delete(f"agent-run:{agent_id}")
+    there is no run left that could own the key.
+
+    `part_id` names which subject the escaped body held: a part's guard drops
+    the part's key and nothing else — reaching past it to the agent-wide key
+    would unlock a compose pass or an incremental run that is still executing.
+    The sweep passes no part, which is the Design's "the sweep cannot help a
+    part" made structural.
+    """
+    subject = f"agent-run:{agent_id}" if part_id is None else f"agent-run:{agent_id}:part:{part_id}"
+    await _get_redis().delete(subject)
 
 
 def _system_prompt(owner_name: str, persona: str | None) -> str:
@@ -614,7 +634,7 @@ def _feed_window(agent: dict) -> tuple[str | None, str | None]:
 
 
 async def build_scheduled_turn(
-    agent: dict, run_stamp: str, extracts: str | None = None
+    agent: dict, run_stamp: str, extracts: str | None = None, until: str | None = None
 ) -> tuple[str, str]:
     """(session_id, message) for one run of a scheduled agent.
 
@@ -625,7 +645,13 @@ async def build_scheduled_turn(
 
     `extracts` is the digest report of a two-phase curator run: the wiki
     prompt then works from the report instead of telling the model to read
-    the raw feed itself."""
+    the raw feed itself.
+
+    `until` is a read window's closing edge (a drain part's `to`) reaching the
+    prompt as an explicit argument — not as another mutation of the agent dict:
+    the position fields already carry the drain pair by the time the dispatcher
+    gets here, and the upper edge is the dispatcher's own fact, so it travels on
+    the call, named, all the way into the words and the command."""
     from . import files_tree_service, prompts, scoped_curation_service
 
     user_id = UUID(str(agent["user_id"]))
@@ -666,13 +692,18 @@ async def build_scheduled_turn(
                 since,
                 extracts,
                 since_event,
+                until,
             )
         memory = await files_tree_service.get_or_create_memory_folder(user_id, user_id)
-        return session_id, prompts.render_curator_prompt(memory["id"], since, extracts, since_event)
+        return session_id, prompts.render_curator_prompt(
+            memory["id"], since, extracts, since_event, until
+        )
     return session_id, agent["schedule_prompt"]
 
 
-async def build_digest_turn(agent: dict, run_stamp: str) -> tuple[str, str]:
+async def build_digest_turn(
+    agent: dict, run_stamp: str, until: str | None = None
+) -> tuple[str, str]:
     """Phase one of a two-phase curator run: (session_id, digest prompt).
 
     The digest model's whole job is to read the delta the curator is about to
@@ -691,8 +722,10 @@ async def build_digest_turn(agent: dict, run_stamp: str) -> tuple[str, str]:
     session_id = f"{scheduled_session_prefix(agent)}{run_stamp}{DIGEST_SESSION_SUFFIX}"
     since, since_event = _feed_window(agent)
     folder_id = str(agent["curator_folder_id"]) if agent.get("curator_folder_id") else None
-    changes_cmd = prompts.curator_changes_cmd(since, folder_id, since_event)
-    return session_id, prompts.render_digest_prompt(changes_cmd, prompts.curator_window(since))
+    changes_cmd = prompts.curator_changes_cmd(since, folder_id, since_event, until)
+    return session_id, prompts.render_digest_prompt(
+        changes_cmd, prompts.curator_window(since, until)
+    )
 
 
 RUN_CLOSE_NOTE = "Session ended. The scheduled run ended."
@@ -750,6 +783,8 @@ async def run_scheduled(
     workspace=_WORKSPACE_UNSET,
     scoped_lock_held: bool = False,
     draining: bool = False,
+    until: str | None = None,
+    reports: str | None = None,
 ) -> str:
     """Run a scheduled agent headless — one turn into a fresh per-run session —
     and return the result text.
@@ -772,16 +807,138 @@ async def run_scheduled(
     Whatever the shape of the run — scoped, two-phase, plain sprite, a success, a
     timeout, or a raise — this function is also where the run's sessions close, for
     the reason stated in `_close_run_sessions`.
+
+    `reports` is a drain compose pass's work set: the part reports, already read and
+    already in the server's hand. A run given them has no delta to read, so it spends no
+    digest phase and writes the wiki straight from the report — which is what keeps a
+    compose pass from growing a second writer path with its own rules.
     """
     owner_user_id = UUID(str(agent["user_id"]))
     try:
         return await _run_scheduled_turn(
-            agent, run_stamp, read_position, workspace, scoped_lock_held, draining
+            agent,
+            run_stamp,
+            read_position,
+            workspace,
+            scoped_lock_held,
+            draining,
+            until,
+            reports,
         )
     finally:
         await _close_run_sessions(
             owner_user_id, agent["name"], scheduled_session_ids(agent, run_stamp)
         )
+
+
+def _wall_deadline(
+    wall: int, in_flight: dict[str, str | None]
+) -> tuple[asyncio.Task, dict[str, bool]]:
+    """Arm the cooperative half of a run wall, handing back its task and its flag.
+
+    At `wall` this sets the in-flight session's stop flag — the same path a user's
+    Stop takes — so `_stoppable` reaps the in-flight pull and closes the generator in
+    order, killing the harness subprocess on the box. The caller owns the rescue (a
+    `wait_for` at `wall + _WALL_RESCUE_GRACE_SECONDS`) and must cancel the task. The
+    flag says whether the wall fired, which is how a caller tells its own cut from a
+    user's Stop when both come back as the same stopped note.
+    """
+    cut = {"deadline": False}
+
+    async def _fire() -> None:
+        await asyncio.sleep(wall)
+        cut["deadline"] = True
+        active = in_flight["session_id"]
+        if active is not None:
+            await request_stop(active)
+
+    return asyncio.create_task(_fire()), cut
+
+
+async def run_digest_phase(
+    agent: dict,
+    run_stamp: str,
+    owner_name: str,
+    until: str | None,
+    in_flight: dict[str, str | None],
+) -> str:
+    """One digest model turn, shared by the two-phase personal run and a drain
+    part's body verbatim (STAS-461): a part's whole model turn IS the digest
+    phase over its own window, so the two callers must not drift into two
+    prompts, two credential rules, or two empty-report fates.
+
+    `until` is the part's closed upper edge; the un-parted two-phase run passes
+    the window's own edge. `in_flight` is the wall's live-session slot: the session
+    is published for the turn's duration and cleared in a `finally`, so whichever
+    wall the caller runs can name the session it has to stop.
+
+    A stopped turn comes back as STOPPED_NOTE rather than raising, because the wall
+    that set the flag is the one that knows what a cut costs — the personal run
+    commits nothing, a part leaves its slot open. An empty report raises: a phase
+    that returns nothing has read nothing, and its slot must stay open for the next
+    pass rather than be composed as if it had spoken."""
+    user_id = UUID(str(agent["user_id"]))
+    digest_session, digest_prompt = await build_digest_turn(agent, run_stamp, until)
+    in_flight["session_id"] = digest_session
+    try:
+        extracts = await run_chat(
+            user_id,
+            owner_name,
+            user_id,
+            digest_session,
+            digest_prompt,
+            model_provider=agent["digest_provider"],
+            model_id=agent.get("digest_model_id"),
+            # The row's pin names the LOCAL box; a digest configured on a key
+            # provider has no box to pin, and a pin would (rightly) fail loud
+            # as a provider mismatch. Only a local digest inherits the box.
+            credential_id=(
+                agent.get("credential_id") if agent["digest_provider"] == "local" else None
+            ),
+            persona=agent["system_prompt"],
+            agent_name=agent["name"],
+        )
+    finally:
+        in_flight["session_id"] = None
+    if extracts == STOPPED_NOTE:
+        return extracts
+    if not extracts.strip():
+        raise RuntimeError("digest phase returned no extracts")
+    return extracts
+
+
+async def run_digest_turn_under_wall(
+    agent: dict, run_stamp: str, owner_name: str, until: str | None, wall: int
+) -> str:
+    """One digest turn bounded by `wall` on the pattern STAS-456 set for the personal
+    run: the cooperative flag is the exit that normally wins and the `wait_for` at
+    `wall + grace` is only the rescue for a harness that ignores the flag.
+
+    A drain part's whole run IS this one turn, so the part's wall is this turn's wall
+    (the personal run cannot use this shape — its one wall spans digest *and* wiki
+    write, which is what STAS-456 exists to guarantee). Either way a cut raises
+    `RunCeilingExceeded`: a turn that never finished reading has nothing an
+    `advance_drain` may lawfully commit."""
+    in_flight: dict[str, str | None] = {"session_id": None}
+    deadline, _cut = _wall_deadline(wall, in_flight)
+    try:
+        report = await asyncio.wait_for(
+            run_digest_phase(agent, run_stamp, owner_name, until, in_flight),
+            timeout=wall + _WALL_RESCUE_GRACE_SECONDS,
+        )
+    except TimeoutError as exc:
+        raise RunCeilingExceeded(
+            f"Digest turn exceeded its wall of {wall}s and left the window unread"
+        ) from exc
+    finally:
+        deadline.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await deadline
+    if report == STOPPED_NOTE:
+        raise RunCeilingExceeded(
+            f"Digest turn was stopped before finishing the window it was reading ({wall}s wall)"
+        )
+    return report
 
 
 async def _run_scheduled_turn(
@@ -791,12 +948,26 @@ async def _run_scheduled_turn(
     workspace=_WORKSPACE_UNSET,
     scoped_lock_held: bool = False,
     draining: bool = False,
+    until: str | None = None,
+    reports: str | None = None,
 ) -> str:
     """The dispatch itself; `run_scheduled` is what closes what this leaves behind.
 
     `draining` says the run reads a history drain's position rather than the incremental
     feed, which is the dispatcher's fact to know and this lane's fact to pass: a drain
-    whose pair is freshly seeded holds no position yet, so nothing in the row says it."""
+    whose pair is freshly seeded holds no position yet, so nothing in the row says it.
+
+    `until` is a closed read window's upper edge, personal-lane only: it reaches the
+    digest and wiki prompt builders as an argument. The scoped lane never receives one —
+    planning windows is the personal lane's job and the scoped path is unchanged here.
+
+    The cut-run cause reads the drain pair through `_ceiling_exceeded`, which imports
+    `curation_service` itself, so this body no longer needs that import.
+
+    `reports` is a compose pass's assembled part reports: with them in hand the run has
+    no delta to read, so no digest phase is spent and the writer works straight from the
+    report — one writer turn of one shape, whether its report came from a digest model or
+    from the parts of a fanned-out drain."""
     from . import scoped_curation_service, user_service
 
     user_id = UUID(str(agent["user_id"]))
@@ -832,7 +1003,8 @@ async def _run_scheduled_turn(
         return ""
     owner_name = user["display_name"] or user["name"]
 
-    # A non-curator sprite turn keeps today's behaviour: no wall of its own.
+    # A non-curator sprite turn keeps today's behaviour: no wall of its own. A sprite
+    # has no drain window either, so it has no closing edge to be told about.
     if not agent["is_curator"]:
         session_id, message = await build_scheduled_turn(agent, run_stamp, None)
         return await _scheduled_chat_turn(agent, user, owner_name, session_id, message)
@@ -857,55 +1029,27 @@ async def _run_scheduled_turn(
     # neither dispatcher can commit a feed nobody finished reading.
     wall = agent_service.run_wall_seconds(agent)
     in_flight: dict[str, str | None] = {"session_id": None}
-    cut = {"deadline": False}
-
-    async def _cooperative_deadline() -> None:
-        await asyncio.sleep(wall)
-        cut["deadline"] = True
-        active = in_flight["session_id"]
-        if active is not None:
-            await request_stop(active)
+    deadline, cut = _wall_deadline(wall, in_flight)
 
     async def _curator_turn() -> str:
-        extracts = None
-        if agent.get("digest_provider") is not None:
-            digest_session, digest_prompt = await build_digest_turn(agent, run_stamp)
-            in_flight["session_id"] = digest_session
-            try:
-                extracts = await run_chat(
-                    user_id,
-                    owner_name,
-                    user_id,
-                    digest_session,
-                    digest_prompt,
-                    model_provider=agent["digest_provider"],
-                    model_id=agent.get("digest_model_id"),
-                    # The row's pin names the LOCAL box; a digest configured on a key
-                    # provider has no box to pin, and a pin would (rightly) fail loud
-                    # as a provider mismatch. Only a local digest inherits the box.
-                    credential_id=(
-                        agent.get("credential_id") if agent["digest_provider"] == "local" else None
-                    ),
-                    persona=agent["system_prompt"],
-                    agent_name=agent["name"],
-                )
-            finally:
-                in_flight["session_id"] = None
+        # A compose pass arrives with its work set already read; a run that has to read
+        # it spends the digest phase first. Either way the wiki writer below is one call
+        # of one shape, so the two paths cannot drift into two writers.
+        extracts = reports
+        if extracts is None and agent.get("digest_provider") is not None:
+            extracts = await run_digest_phase(agent, run_stamp, owner_name, until, in_flight)
             if extracts == STOPPED_NOTE:
                 # The deadline cut the digest; there are no extracts to write a wiki
                 # from, and the wall was already spent - do not start the write phase.
                 return STOPPED_NOTE
-            if not extracts.strip():
-                raise RuntimeError("digest phase returned no extracts")
 
-        session_id, message = await build_scheduled_turn(agent, run_stamp, extracts)
+        session_id, message = await build_scheduled_turn(agent, run_stamp, extracts, until)
         in_flight["session_id"] = session_id
         try:
             return await _scheduled_chat_turn(agent, user, owner_name, session_id, message)
         finally:
             in_flight["session_id"] = None
 
-    deadline = asyncio.create_task(_cooperative_deadline())
     try:
         result = await asyncio.wait_for(_curator_turn(), timeout=wall + _WALL_RESCUE_GRACE_SECONDS)
     except TimeoutError as exc:

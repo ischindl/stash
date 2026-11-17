@@ -339,7 +339,7 @@ def test_the_run_guard_threads_the_metering_answer_to_the_escape_guard(
     """
     seen: list[bool] = []
 
-    def fake_guard_resolution(agent_uuid, exc, *, metered):
+    def fake_guard_resolution(agent_uuid, exc, *, metered, part_id=None):
         seen.append(metered)
 
     async def never_runs():

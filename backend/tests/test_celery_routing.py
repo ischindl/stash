@@ -9,7 +9,7 @@ from backend.celery_app import celery
 from backend.exports.pdf import export_pdf
 from backend.exports.pptx import export_pptx
 from backend.integrations.google.exporters.slides import export_to_google_slides
-from backend.tasks.agent_schedules import run_curator_now, run_scheduled_agent
+from backend.tasks.agent_schedules import run_curator_now, run_curator_part, run_scheduled_agent
 from backend.tasks.clips import process_url_imports
 from backend.tasks.drive_extraction import extract_drive_document
 from backend.tasks.extraction import extract_file_text
@@ -25,6 +25,7 @@ HEAVY_TASKS = {
     export_to_google_slides.name,
     run_scheduled_agent.name,
     run_curator_now.name,
+    run_curator_part.name,
     precompute.name,
 }
 

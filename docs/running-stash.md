@@ -175,13 +175,45 @@ Before starting:
   number to dial is a CEILING, which is the reserve higher than the wall it becomes: the 1,024-character
   floor costs 334.3 s of wall and the commit wants 30 s of its own, so the wall must reach 364.3 s and
   the ceiling about 394 s at the shipped price. A curator's own number
-  bounds both its run and the lock that
+  bounds both its run and — for any run that is not a drain part — the lock that
   keeps a second run of that curator from starting while the first is still
   going, so the two can never disagree: a lock keyed shorter than the wall would
-  expire mid-run and hand the next dispatch a half-finished run. Saving a ceiling
+  expire mid-run and hand the next dispatch a half-finished run. A drain part
+  narrows that lock rather than shortening it: the part holds a key of its own
+  (`agent-run:<id>:part:<part_id>`) at the same TTL, so several parts of one
+  curator run together while an un-parted run still excludes all of them, and what
+  bounds how many are live is the endpoint setting below, not this ceiling. Saving a ceiling
   at or above the worker's own task ceiling is refused where it is written — the
   worker would kill such a run before it could record the failure or refund the
   curator credit it had already spent.
+- `CURATOR_DRAIN_MAX_CONCURRENT_TURNS` (default 3) is the drain fan-out's one bound: how many of
+  one curator's drain turns may be live at ONE endpoint at once — part turns and the compose pass
+  together — counted in a Redis claim set keyed by that endpoint, or by the harness's name when the
+  platform funds it, so a second worker pointed at the same box cannot widen it. The value is a
+  measurement: three rounds on one local endpoint (`model=qwen`, 512 max tokens,
+  `thinking_token_budget=2048`) on 2026-11-15 gave 4,8 tok/s aggregate at N=1 with a per-turn wall
+  of 107,6 s, and 13,5 tok/s at N=3 with walls of 107,3 / 108,7 / 113,5 s — the latency of one turn
+  all but unchanged. The N=6 round of the same session read 52,8 tok/s with walls of 35 to 58 s, and
+  it ran on a freer box: it is named here as contaminated, not as an argument for 6. A part the full
+  gauge refuses spends no turn and no credit, prints `guard=endpoint_pressure` carrying the gauge
+  size and the limit, and hands its slot claim straight back, so the next dispatch takes it the
+  moment room frees. What the bound does not do is widen a part's allowance: each part is handed the
+  same grant an un-parted run is — the wall less the commit's own 30 s reserve, per turn, neither
+  divided nor reused — so a fan-out spends more of the month's turns, never a larger slice per turn.
+  The worker pool is a second and often lower supply, reported rather than reconciled: the heavy lane
+  runs `--concurrency=2` per replica, so parts can stand ready while the pool works two.
+- `CURATOR_DRAIN_PART_HOURS` (default 24) is the other knob and it is a granularity, not a
+  measurement: how wide a window one part reads, so a smaller number means more parts and more
+  compose work rather than a faster endpoint. Windows also never drift off that granularity: a
+  window is opened only once its close has been reached, so every seam stays `from + part_hours`
+  from the instant the drain was seeded, and the head of a plan waits for its seam rather than
+  opening a window of the leftover minutes. A clamped window is what the live proof caught killing
+  a run: the next pass opens from that mid-second seam and part ids name seconds, so it reaches
+  for an id the neighbouring slot already spent. Neither knob makes a big backfill quick, and the
+  arithmetic is worth stating instead of smoothing: the owner backlog measured from 2026-09-02 to
+  2026-11-15 is 4 191 130 events across 549 421 829 characters, about 140M tokens, which at an
+  optimistic 50 tok/s aggregate is roughly 32 days of wall. The fan-out trades 162 days for days,
+  not for minutes.
 - Operational alerts stay off unless you finish them: set both `ALERT_SLACK_*`
   variables in `.env` and install the Stash Slack bot into that workspace, so
   the team has a `slack_bot_installs` row and its bot is in the alert channel.
@@ -195,9 +227,14 @@ Before starting:
   it ends. A personal run that commits no pass (a cut, or a turn stopped before it
   finished) still leaves only those two lines as evidence it happened; a personal run that
   commits a drain pass also writes a `curator pass=` line (see below), so a drain that is
-  making progress is now visible on the log and not only in the row. A pass that spends no turn names the guard
+  making progress is now visible on the log and not only in the row. Drain parts speak on lines of
+  their own instead — `drain part=<id> agent=<id> committed_through=... characters=... wall=...s` for
+  a part that committed, with `drain coordinator` and `drain compose` naming the cut and the fold —
+  and a part run prints neither `turn started` nor `turn finished`, because those two lines are the
+  un-parted run's bracket and a part must not be counted inside it. A pass that spends no turn names the guard
   that refused it with a `guard=` token (`curator_off`, `not_pro`, `no_pending_input`,
-  `catchup_ceiling`), and a catch-up chain that stops mid-backlog names the condition
+  `catchup_ceiling`, and for a drain part `endpoint_pressure` beside `claim_held`,
+  `lane_lock_held`, `needs_auth`, `user_gone` and `slot_absent_or_done`), and a catch-up chain that stops mid-backlog names the condition
   that ended it (`outcome_not_ran`, `no_progress`) — the cost decision is the one guard
   that answers in both places, on the line that also carries `metered=`, `is_pro=` and
   the verdict. Which lane a pass runs on is never a guard: what a chained pass costs is

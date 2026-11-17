@@ -4144,6 +4144,13 @@ def changes(
         help="Event uuid to resume from inside --since: the event the last read stopped on, "
         "when an instant held more events than one pass carried. Requires --since.",
     ),
+    until: str = typer.Option(
+        None,
+        "--until",
+        help="ISO timestamp closing the read window: read only what happened at or before "
+        "it, the reading of one part of a history drain. Requires --since — a closed top "
+        "with no bottom is not a window; the server refuses the pair without it.",
+    ),
     wiki: WikiScope | None = typer.Option(
         None,
         "--wiki",
@@ -4162,11 +4169,15 @@ def changes(
     """What changed since a timestamp — history, pages, files, saves, sources.
     Feeds the Memory curator's incremental pass."""
     with _client() as c:
+        # A window has two edges or neither, so the closing one is named only when the
+        # caller has one: a read with no bound sends the request it sends today.
+        window = {"until": until} if until else {}
         data = c.get_changes(
             since or None,
             wiki.value if wiki else None,
             folder or None,
             str(since_event) if since_event else None,
+            **window,
         )
     if _use_json(as_json):
         output_json(data)

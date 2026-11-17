@@ -737,3 +737,127 @@ async def test_a_mid_tie_lane_schedules_its_run_with_the_pair(
     _, prompt = await sprite_agent_service.build_scheduled_turn(agent, "2026-01-02T03-04")
     assert f"--since {stopped.at.isoformat()}" in prompt
     assert f"--since-event {stopped.event_id}" in prompt
+
+
+# ---------------------------------------------------------------------------
+# The closed window: a drain part reads to its `until` and no further
+# ---------------------------------------------------------------------------
+
+SEAM = BASE + timedelta(minutes=20)
+
+
+def _turns_across_the_seam() -> list[dict]:
+    """Four events ten minutes apart: two strictly before the seam, one sitting
+    exactly on it, one past it. The row on the seam is the whole argument for
+    which closing operator a windowed read uses."""
+    return [_turn("conv-window", f"w{i}", BASE + timedelta(minutes=10 * i)) for i in range(4)]
+
+
+@pytest.mark.asyncio
+async def test_a_windowed_gate_backlog_and_feed_exclude_the_same_rows(client: AsyncClient, pool):
+    """One window, three surfaces, one bound. The feed, the backlog, and the
+    gate all close at `until` — and the row sitting exactly ON the seam is
+    admitted: the closing operator is `<=`, so the row at a window's edge
+    belongs to the reader that can see it, which is what lets adjacent parts
+    tile with no row read twice and none lost."""
+    key, uid = await _register(client)
+    await _push_events(client, key, _turns_across_the_seam())
+
+    feed = await curation_service.changes_since(uid, uid, Position(OLD), INTERNAL, None, SEAM)
+    assert [h["content"] for h in feed["history"]] == ["w0", "w1", "w2"]
+    assert await curation_service.curator_event_backlog(
+        uid, INTERNAL, Position(OLD), None, SEAM
+    ) == {"distinct_events": 3, "raw_rows": 3, "distinct_sessions": 1}
+    assert await curation_service.has_changes_since(uid, uid, Position(OLD), INTERNAL, None, SEAM)
+
+    # A window closed before the first event is empty on all three surfaces:
+    # rows past the closing edge neither fire the gate nor count nor display.
+    closed_before = BASE - timedelta(minutes=5)
+    feed = await curation_service.changes_since(
+        uid, uid, Position(OLD), INTERNAL, None, closed_before
+    )
+    assert feed["counts"]["history"] == 0
+    assert await curation_service.curator_event_backlog(
+        uid, INTERNAL, Position(OLD), None, closed_before
+    ) == {"distinct_events": 0, "raw_rows": 0, "distinct_sessions": 0}
+    assert not await curation_service.has_changes_since(
+        uid, uid, Position(OLD), INTERNAL, None, closed_before
+    )
+
+
+@pytest.mark.asyncio
+async def test_an_unbounded_reader_is_still_served_the_open_ended_feed(client: AsyncClient, pool):
+    """`until=None` is not a value that happens to work: it is the absence of
+    the bound, and every non-drain caller — the owner browsing their feed, the
+    nightly gate — rides that arm. A bound far past every row is the same read
+    as no bound, and both are the pre-window feed."""
+    key, uid = await _register(client)
+    await _push_events(client, key, _turns_across_the_seam())
+
+    unbounded = await curation_service.curator_event_backlog(uid, INTERNAL, Position(OLD))
+    past_everything = await curation_service.curator_event_backlog(
+        uid, INTERNAL, Position(OLD), None, datetime.now(UTC) + timedelta(days=1)
+    )
+    assert (
+        unbounded
+        == past_everything
+        == {
+            "distinct_events": 4,
+            "raw_rows": 4,
+            "distinct_sessions": 1,
+        }
+    )
+
+    feed = await curation_service.changes_since(uid, uid, Position(OLD), wiki=INTERNAL)
+    assert [h["content"] for h in feed["history"]] == ["w0", "w1", "w2", "w3"]
+    assert await curation_service.has_changes_since(uid, uid, Position(OLD), wiki=INTERNAL)
+
+
+def test_the_window_travels_the_prompt_chain_as_words_and_a_flag():
+    """The window reaches the model twice and must say one thing both times: the
+    prose names both edges ("between A and B", never "since A" alone — a part
+    told only its lower edge believes it may read to now), and the command
+    carries `--until` beside the position flags. A top with no bottom is refused
+    at every render entry that already refuses an event half with no instant,
+    never rendered as a command whose bound the model silently drops."""
+    from backend.services import prompts
+
+    a, b = BASE.isoformat(), LATER.isoformat()
+    assert prompts.curator_window(a, b) == f"the changes between {a} and {b}"
+    assert prompts.curator_window(a) == f"the changes since {a}"
+    assert prompts.curator_changes_cmd(a, None, None, b) == (
+        f"stash changes --since {a} --until {b} --json"
+    )
+    # The boot arm and the no-window arm keep their exact pre-window shape.
+    assert prompts.curator_window(None) == (
+        "the full history (this is the first run — bootstrap the wiki)"
+    )
+    assert prompts.curator_changes_cmd(a) == f"stash changes --since {a} --json"
+
+    with pytest.raises(ValueError, match="since"):
+        prompts.curator_changes_cmd(None, None, None, b)
+    with pytest.raises(ValueError, match="since"):
+        prompts.curator_window(None, b)
+
+
+@pytest.mark.asyncio
+async def test_a_windowed_run_is_dispatched_with_its_window_in_the_prompt(
+    client: AsyncClient, pool
+):
+    """The window's last leg: the dispatcher overrode the lower edge on the row
+    before the builder ran, and the upper edge travels on the call — into the
+    words and into the command, so the model cannot read past the boundary its
+    report will be filed under."""
+    from backend.services import agent_service, sprite_agent_service
+
+    key, uid = await _register(client)
+    curator = await agent_service.get_or_create_curator(uid)
+    await _push_events(client, key, _turns_across_the_seam())
+    await pool.execute("UPDATE agents SET curated_through=$2 WHERE id=$1", curator["id"], BASE)
+    agent = await agent_service.get_curator_by_id(UUID(curator["id"]))
+
+    _, prompt = await sprite_agent_service.build_scheduled_turn(
+        agent, "2026-01-02T03-04", None, SEAM.isoformat()
+    )
+    assert f"--until {SEAM.isoformat()}" in prompt
+    assert f"between {BASE.isoformat()} and {SEAM.isoformat()}" in prompt
