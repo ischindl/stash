@@ -55,6 +55,43 @@ A bare `git push` on `main` targets **upstream**: `.git/config` maps
 `branch.main.remote = origin` with `rebase = true`, while several task branches map to
 `fork`. Always name the remote and the refspec.
 
+## Prove the artifact, not the card
+
+A release is proven by counting paths inside the two files a user can actually download, not by
+what a card's merge state asserts. Read the version PyPI itself reports, then fetch that release
+**twice**: `pip download` saves only the wheel unless you ask for the other one, so the sdist
+needs its own run with `--no-binary :all:`. Count the payload you meant to ship, and count a
+second agent tree beside it as a control — zero for one agent beside a nonzero for another says
+that agent's payload is missing, while zero beside zero says no assets ship at all, and those two
+need different fixes. Every count below reads a listing file that a successful listing renamed
+into place, and `ls -l` names both downloaded artifacts before anything is counted — a `0`
+printed from a pipeline whose `tar` or `zipfile` died reading its file looks exactly like a
+measurement and is not one.
+
+```bash
+V="$(python3 -c "import json,urllib.request as u; print(json.load(u.urlopen('https://pypi.org/pypi/stashai/json', timeout=30))['info']['version'])")"
+C=/tmp/census
+mkdir -p "$C"
+python3 -m pip download "stashai==$V" --no-deps --no-cache-dir -d "$C"
+python3 -m pip download "stashai==$V" --no-deps --no-cache-dir --no-binary :all: -d "$C"
+ls -l "$C/stashai-$V-py3-none-any.whl" "$C/stashai-$V.tar.gz"
+python3 -m zipfile -l "$C/stashai-$V-py3-none-any.whl" > "$C/wheel.part" && mv "$C/wheel.part" "$C/wheel.txt"
+tar -tzf "$C/stashai-$V.tar.gz" > "$C/sdist.part" && mv "$C/sdist.part" "$C/sdist.txt"
+grep -c "stashai/plugin/assets/pi/" "$C/wheel.txt" "$C/sdist.txt"
+grep -c "stashai/plugin/assets/claude/" "$C/wheel.txt" "$C/sdist.txt"
+```
+
+Two rules, and only two:
+
+- **A release is proven by a path count inside the downloaded wheel and sdist.** A build of
+  your own tree proves only your tree, `tar` lists directory members as well so an sdist can
+  out-count a wheel that carries the same payload, and a number printed after a listing command
+  failed to open its file is not a count — the `ls -l` line and the rename-into-place behind each
+  listing are what make that failure loud instead of silent.
+- **`mergeConfirmed` or `mergeDetails.commitSha` is never delivery evidence.** STAS-478 closed
+  with `mergeConfirmed` true on a commit belonging to another card, while the published wheel
+  carried zero paths of the payload that card claimed had shipped.
+
 ## The founder stack
 
 `docker-compose.founder.yml` is the fourth `-f` overlay and the only record of what our
