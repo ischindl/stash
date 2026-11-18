@@ -96,6 +96,13 @@ services:
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       REDIS_URL: redis://redis:6379/0
+      # The address a curator's own harness is handed as STASH_URL by
+      # sprite_service.local_agent_env. In a worker container `localhost` is that
+      # worker, which serves no API, so the personal lane read its feed, spent a
+      # turn and wrote nothing. Literal, not `${...}`: a defaulted value is the
+      # silent fallback this file must not carry. Same line on the other two
+      # celery lanes below.
+      LOCAL_STASH_API_URL: http://backend:3456
     volumes:
       - backend_secrets:/app/.secrets
     command: ["celery", "-A", "backend.celery_app", "worker", "--loglevel=info", "--concurrency=4", "-Q", "default"]
@@ -118,6 +125,7 @@ services:
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       REDIS_URL: redis://redis:6379/0
+      LOCAL_STASH_API_URL: http://backend:3456
     volumes:
       - backend_secrets:/app/.secrets
     command: ["celery", "-A", "backend.celery_app", "worker", "--loglevel=info", "--concurrency=2", "-Q", "heavy"]
@@ -136,6 +144,7 @@ services:
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       REDIS_URL: redis://redis:6379/0
+      LOCAL_STASH_API_URL: http://backend:3456
     volumes:
       - backend_secrets:/app/.secrets
     command: ["celery", "-A", "backend.celery_app", "worker", "--loglevel=info", "--concurrency=2", "-Q", "sync"]
