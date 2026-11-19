@@ -315,7 +315,9 @@ describe("CuratorsSection model picker", () => {
     const atlas = await rowNamed("Project Atlas");
 
     expect(optionValues((await picker("Model", workspace))!)[0]).toBe(
-      "Default (oldest connected endpoint)",
+      // A scoped lane answers on one provider per run, and a deployment's key is
+      // that provider when it has one, so the default has to say both halves.
+      "Default (the backend’s key, or its oldest connected endpoint)",
     );
     expect(optionValues((await picker("Model", atlas))!)[0]).toBe("Inherit the default curator");
   });
@@ -495,7 +497,11 @@ describe("CuratorsSection blocked state", () => {
 
     expect(within(row).getByText("No model connected")).toBeDefined();
     // The badge alone is not actionable: the row has to name both remedies.
-    expect(within(row).getByText(/ANTHROPIC_API_KEY/).textContent).toMatch(/Cloud agent model/);
+    const remedy = within(row).getByText(/ANTHROPIC_API_KEY/).textContent ?? "";
+    expect(remedy).toMatch(/Cloud agent model/);
+    // Half of those remedies are a box, not a key: a stack with no cloud key is
+    // the stack that curates on the endpoint its own console connects.
+    expect(remedy).toMatch(/local model endpoint/i);
     // A blocked curator's next tick is another skip, so the date is not its state.
     expect(within(row).queryByText(/Next run/)).toBeNull();
   });

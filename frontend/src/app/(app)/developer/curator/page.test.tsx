@@ -88,6 +88,9 @@ describe("Curator page blocked state", () => {
 
     const banner = await screen.findByText(/no model connected/i);
     expect(banner.textContent).toMatch(/ANTHROPIC_API_KEY/);
+    // A key is only half the answer: this deployment may be the one that has no
+    // cloud key by design, and its remedy is the endpoint its own console connects.
+    expect(banner.textContent).toMatch(/local model endpoint/i);
   });
 
   it("says nothing once a run has resolved", async () => {

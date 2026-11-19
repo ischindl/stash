@@ -229,11 +229,46 @@ def _retry_size_error(name: str, arguments: dict) -> dict | None:
     return None
 
 
-def require_configured() -> None:
-    if not settings.ANTHROPIC_API_KEY:
+async def require_route(user_id: UUID, agent: dict | None = None) -> llm.Route:
+    """The one provider this run completes on, answered by configuration alone.
+
+    The backend's own key is the hosted product's provider and is never
+    second-guessed by a box that happens to be connected too. A stack with no key
+    is precisely the self-hosted machine that must curate on its own endpoint, so
+    it takes the local endpoint the console stored. An agent row may say WHICH
+    box (`credential_id`) and may override its model id, but never a base URL or
+    a key — those stay whatever the connect stored. Nothing here tries one
+    provider and then the other: a run that silently changed providers would also
+    silently change whose servers hold the customers' transcripts, which is the
+    one thing this path exists to control.
+
+    The box is probed before the run is accepted, because a curator dispatched
+    onto a powered-off endpoint would spend its lane's one attempt to report a
+    connection error. A stack with neither provider is a refusal naming both
+    remedies.
+    """
+    if settings.ANTHROPIC_API_KEY:
+        return llm.anthropic_route()
+    credential_id = agent.get("credential_id") if agent else None
+    if credential_id is not None:
+        doc = await agent_auth.local_endpoint_for_id(user_id, UUID(str(credential_id)))
+    else:
+        doc = await agent_auth.local_credential(user_id)
+    if doc is None:
         raise agent_auth.ProviderNotConfigured(
-            "Scoped curation requires the backend ANTHROPIC_API_KEY"
+            "Scoped curation requires the backend ANTHROPIC_API_KEY "
+            "or a connected local model endpoint"
         )
+    probe = await agent_auth.probe_local_endpoint(doc["base_url"], doc["api_key"])
+    if not probe["ok"]:
+        raise agent_auth.ProviderNotConfigured(
+            f"Local model endpoint {doc['base_url']} is not answering: {probe['error_detail']}"
+        )
+    # The row may name a different model to ask this box for; naming none leaves
+    # the credential's own model in charge. A row can never name the address or
+    # the secret, only which model on the stored address answers.
+    model = (agent.get("model_id") if agent else None) or doc["model"]
+    return llm.local_route(doc["base_url"], model, doc["api_key"])
 
 
 async def workspace_for_agent(agent: dict) -> dict | None:
@@ -247,7 +282,7 @@ async def workspace_for_agent(agent: dict) -> dict | None:
     workspace's scope account owns it. Activation gives that account an External
     wiki, so deciding by owner would sweep the project lanes into the path their
     rows can never run on: a scoped run has no credential of its own to name, so
-    it takes the provider the backend's configuration names.
+    it takes the provider the backend's configuration names (see `require_route`).
     """
     if not agent["is_curator"]:
         return None
@@ -279,10 +314,12 @@ async def require_run_auth(agent: dict, *, workspace=_UNSET) -> bool:
     second time to learn the answer would be a second source of truth, so the
     answer travels on the one call that proves the lane runnable.
 
-    A scoped workspace run is metered: `require_configured` means the backend's
-    own key pays for it, which is a real platform cost whatever the customer has
-    connected. Every other lane is metered exactly when the credential this run
-    dials is not the customer's own endpoint — the answer
+    A scoped workspace run is metered exactly when the provider answering is the
+    backend's own key: the answer `require_route` resolved and `llm`'s route says
+    on `costs_platform_tokens`. A scoped run on an endpoint the customer connected
+    spends their tokens, so it spends none of the platform's allowance. Every
+    other lane is metered exactly when the credential this run dials is not the
+    customer's own endpoint — the answer
     `agent_auth.costs_platform_tokens` reads off the `RunAuth` that `resolve`
     returned. The arguments passed to `resolve` here stay as they are (no
     `model_id`, no `credential_id`): a curator whose row carries a stale pin runs
@@ -292,8 +329,8 @@ async def require_run_auth(agent: dict, *, workspace=_UNSET) -> bool:
     if workspace is _UNSET:
         workspace = await workspace_for_agent(agent)
     if workspace is not None:
-        require_configured()
-        return True
+        route = await require_route(UUID(str(agent["user_id"])), agent)
+        return route.costs_platform_tokens
     auth = await agent_auth.resolve(UUID(str(agent["user_id"])), agent["model_provider"])
     return agent_auth.costs_platform_tokens(auth)
 
@@ -713,8 +750,22 @@ async def load_scope(
     return scope
 
 
-async def run_scope(scope: CurationScope, instructions: str | None) -> str:
-    require_configured()
+# The two words an answer cut short arrives with. A backend-keyed turn is cut by
+# Anthropic and says `max_tokens`; a turn cut by the customer's own endpoint keeps
+# its provider's word, which `llm` passes through untouched rather than renaming.
+# A truncated answer is never executed, so whichever word it carries, the scope
+# asks for one small write instead of running the partial tool calls.
+_TRUNCATED = ("max_tokens", "length")
+
+
+async def run_scope(scope: CurationScope, instructions: str | None, route: llm.Route) -> str:
+    """One scoped tool loop, completing on the run's one provider.
+
+    The route arrives from `run` and there is no way to ask for one here: which
+    provider answers is a fact about the whole run, and a scope that resolved its
+    own could put one customer's transcripts on a different provider than the run
+    that was authorised to read them.
+    """
     inputs = [
         {
             "id": key,
@@ -747,24 +798,24 @@ async def run_scope(scope: CurationScope, instructions: str | None) -> str:
             await scope.check(conn)
         started = time.monotonic()
         logger.info("curator scope=%s turn=%s model_start", scope.destination, turn + 1)
-        response = await llm._get_client().messages.create(
-            model=llm._model_for(llm.ModelTier.QUALITY),
-            max_tokens=4096,
+        answer = await route.complete(
+            tier=llm.ModelTier.QUALITY,
             system=system,
             messages=messages,
             tools=_retry_tools() if truncated_responses else _TOOLS,
+            max_tokens=4096,
         )
         logger.info(
             "curator scope=%s turn=%s model_end elapsed=%.1fs stop=%s",
             scope.destination,
             turn + 1,
             time.monotonic() - started,
-            response.stop_reason,
+            answer.stop_reason,
         )
-        if response.stop_reason == "end_turn":
+        if answer.stop_reason == "end_turn":
             async with get_pool().acquire() as conn:
                 await scope.check(conn)
-            summary = "\n".join(b.text for b in response.content if b.type == "text")
+            summary = answer.text
             if not summary.strip():
                 if empty_completions:
                     raise ValueError("Curator returned no completion summary after continuation")
@@ -787,22 +838,21 @@ async def run_scope(scope: CurationScope, instructions: str | None) -> str:
                 )
                 continue
             return summary
-        if response.stop_reason == "max_tokens" and truncated_responses == 0:
+        if answer.stop_reason in _TRUNCATED and truncated_responses == 0:
             # Never execute or replay a partial tool payload. Give the model
             # one chance to produce a smaller, complete write instead of
             # wasting the entire batch on a single oversized response.
             truncated_responses += 1
             attempted = [
                 {
-                    "tool": block.name,
+                    "tool": call.name,
                     **{
-                        key: str(block.input[key])[:200]
+                        key: str(call.input[key])[:200]
                         for key in ("page_id", "title")
-                        if key in block.input
+                        if key in call.input
                     },
                 }
-                for block in response.content
-                if block.type == "tool_use" and isinstance(block.input, dict)
+                for call in answer.tool_calls
             ]
             messages.append(
                 {
@@ -817,28 +867,23 @@ async def run_scope(scope: CurationScope, instructions: str | None) -> str:
                 }
             )
             continue
-        if response.stop_reason != "tool_use":
-            raise RuntimeError(f"Curator stopped before completing: {response.stop_reason}")
-        messages.append(
-            {"role": "assistant", "content": [b.model_dump() for b in response.content]}
-        )
+        if answer.stop_reason != "tool_use":
+            raise RuntimeError(f"Curator stopped before completing: {answer.stop_reason}")
+        messages.append({"role": "assistant", "content": answer.blocks})
         results = []
-        for block in response.content:
-            if block.type == "tool_use":
-                logger.info(
-                    "curator scope=%s turn=%s tool=%s", scope.destination, turn + 1, block.name
-                )
-                result = _retry_size_error(block.name, block.input) if truncated_responses else None
-                if result is None:
-                    result = await scope.tool(block.name, block.input)
-                results.append(
-                    {
-                        "type": "tool_result",
-                        "tool_use_id": block.id,
-                        "content": json.dumps(result),
-                        "is_error": "error" in result,
-                    }
-                )
+        for call in answer.tool_calls:
+            logger.info("curator scope=%s turn=%s tool=%s", scope.destination, turn + 1, call.name)
+            result = _retry_size_error(call.name, call.input) if truncated_responses else None
+            if result is None:
+                result = await scope.tool(call.name, call.input)
+            results.append(
+                {
+                    "type": "tool_result",
+                    "tool_use_id": call.id,
+                    "content": json.dumps(result),
+                    "is_error": "error" in result,
+                }
+            )
         messages.append({"role": "user", "content": results})
     raise RuntimeError("Curator exhausted its tool turns before completing")
 
@@ -995,10 +1040,14 @@ async def run(
     `full_history` backfill, whose dispatcher zeroes that position, still reads with no
     watermark while writing against the pair it must not throw away.
     """
-    require_configured()
     from . import agent_service
 
     owner = workspace["scope_user_id"]
+    # One provider for the whole run, resolved before the first pass: every scope
+    # of every pass completes on it, so one run never puts one customer's
+    # transcripts on a different provider than the one its dispatch authorised.
+    # The probe behind a local route is one knock per run, not per scope.
+    route = await require_route(owner, agent)
     # The wall wraps the whole run and every scope reads a slice of the same batch, so
     # the budget is derived once from the run's own wall and no scope multiplies it.
     # The row's ceiling left this path with STAS-458: it reaches the budget only
@@ -1078,7 +1127,7 @@ async def run(
 
         async def curate(scope: CurationScope) -> str:
             async with concurrency:
-                summary = await run_scope(scope, agent["system_prompt"])
+                summary = await run_scope(scope, agent["system_prompt"], route)
                 return f"{scope.purpose} wiki {scope.destination}:\n{summary}"
 
         # A failed scope cancels and joins its siblings before releasing the run lock.

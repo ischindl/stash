@@ -20,6 +20,17 @@ from .test_developer_platform import _developer, _event, _mint_workspace_key, _p
 from .test_permissions import _auth
 
 
+def hosted_route() -> curation.llm.Route:
+    """The provider the faked `_get_client` in this file answers for.
+
+    A scoped run resolves its provider once — up in `run()`, before it fans out —
+    and hands that route to each of its scopes, so a test driving one scope
+    directly has to say which provider it is speaking to. Every `_get_client`
+    fake here is the Anthropic client, and this is the route that client serves.
+    """
+    return curation.llm.anthropic_route()
+
+
 @pytest_asyncio.fixture
 async def dataset(client, pool, monkeypatch):
     async def approve(**kwargs):
@@ -308,7 +319,7 @@ async def test_separate_model_contexts_and_no_sprite_execution(
     calls = []
     all_started = asyncio.Event()
 
-    async def fake_run(scope, instructions):
+    async def fake_run(scope, instructions, route):
         calls.append((scope.purpose, json.dumps(scope.documents)))
         if len(calls) == 3:
             all_started.set()
@@ -354,7 +365,7 @@ async def test_internal_developer_curator_cannot_read_customer_inputs(
 
     calls = []
 
-    async def fake_run(scope, instructions):
+    async def fake_run(scope, instructions, route):
         calls.append(scope)
         assert "SECRET_TRANSCRIPT" not in json.dumps(scope.documents)
         assert "ALLOWED_TRANSCRIPT" not in json.dumps(scope.documents)
@@ -405,7 +416,7 @@ async def test_optout_during_model_request_blocks_publication(
         lambda: SimpleNamespace(messages=SimpleNamespace(create=create)),
     )
     with pytest.raises(PermissionError, match="permissions changed"):
-        await curation.run_scope(shared, None)
+        await curation.run_scope(shared, None, hosted_route())
     assert (
         await pool.fetchval("SELECT count(*) FROM pages WHERE name='Leaked after revocation'") == 0
     )
@@ -451,8 +462,8 @@ async def test_native_model_loop_uses_fresh_messages_and_restricted_tools(
         "_get_client",
         lambda: SimpleNamespace(messages=SimpleNamespace(create=create)),
     )
-    await curation.run_scope(private, None)
-    await curation.run_scope(shared, None)
+    await curation.run_scope(private, None, hosted_route())
+    await curation.run_scope(shared, None, hosted_route())
     assert "SECRET_TRANSCRIPT" in json.dumps(requests[1]["messages"])
     assert "SECRET_TRANSCRIPT" not in json.dumps(requests[2])
     assert len(requests[2]["messages"]) == 1
@@ -490,7 +501,7 @@ async def test_denied_lookup_is_an_explicit_tool_error_without_protected_content
         "_get_client",
         lambda: SimpleNamespace(messages=SimpleNamespace(create=create)),
     )
-    await curation.run_scope(shared, None)
+    await curation.run_scope(shared, None, hosted_route())
     result = requests[1]["messages"][-1]["content"][0]
     assert result["is_error"] and "unavailable" in result["content"]
     assert "SECRET_TRANSCRIPT" not in json.dumps(requests)
@@ -546,7 +557,7 @@ async def test_model_corrects_malformed_page_id_without_aborting_scope(
         "_get_client",
         lambda: SimpleNamespace(messages=SimpleNamespace(create=create)),
     )
-    assert await curation.run_scope(shared, None) == "Done."
+    assert await curation.run_scope(shared, None, hosted_route()) == "Done."
     assert calls == 3
     assert await pool.fetchval("SELECT count(*) FROM page_edits") == 1
     assert (
@@ -624,7 +635,7 @@ async def test_repeated_invalid_arguments_still_exhaust_the_turn_limit(
         lambda: SimpleNamespace(messages=SimpleNamespace(create=create)),
     )
     with pytest.raises(RuntimeError, match="exhausted its tool turns"):
-        await curation.run_scope(await scope(dataset, "shared"), None)
+        await curation.run_scope(await scope(dataset, "shared"), None, hosted_route())
     assert calls == 2
 
 
@@ -678,7 +689,10 @@ async def test_empty_completion_continues_without_replaying_saved_write(
         "_get_client",
         lambda: SimpleNamespace(messages=SimpleNamespace(create=create)),
     )
-    assert await curation.run_scope(await scope(dataset, "shared"), None) == "Updated wiki."
+    assert (
+        await curation.run_scope(await scope(dataset, "shared"), None, hosted_route())
+        == "Updated wiki."
+    )
     assert calls == 3
     assert await pool.fetchval("SELECT count(*) FROM page_edits") == 1
 
@@ -701,7 +715,7 @@ async def test_empty_completion_retry_is_bounded(dataset, monkeypatch, sprite_ex
     )
     error = RuntimeError if turn_limit == 1 else ValueError
     with pytest.raises(error, match="exhausted its tool turns|no completion summary"):
-        await curation.run_scope(await scope(dataset, "shared"), None)
+        await curation.run_scope(await scope(dataset, "shared"), None, hosted_route())
     assert calls == min(turn_limit, 2)
 
 
@@ -722,7 +736,7 @@ async def test_empty_completion_does_not_retry_after_optout(dataset, monkeypatch
         lambda: SimpleNamespace(messages=SimpleNamespace(create=create)),
     )
     with pytest.raises(PermissionError, match="permissions changed"):
-        await curation.run_scope(shared, None)
+        await curation.run_scope(shared, None, hosted_route())
     assert calls == 1
 
 
@@ -751,7 +765,7 @@ async def test_truncated_response_cannot_execute_partial_page_writes(
         lambda: SimpleNamespace(messages=SimpleNamespace(create=create)),
     )
     with pytest.raises(RuntimeError, match="max_tokens"):
-        await curation.run_scope(await scope(dataset, "shared"), None)
+        await curation.run_scope(await scope(dataset, "shared"), None, hosted_route())
     assert await pool.fetchval("SELECT count(*) FROM pages WHERE name='Partial page'") == 0
 
 
@@ -792,7 +806,7 @@ async def test_failed_shared_run_does_not_report_success_or_advance_watermark(
     private_cancelled = set()
     all_private_started = asyncio.Event()
 
-    async def fail_shared(scope, instructions):
+    async def fail_shared(scope, instructions, route):
         if scope.purpose == "shared":
             await asyncio.wait_for(all_private_started.wait(), timeout=1)
             raise PermissionError("Publication denied")
@@ -1011,7 +1025,7 @@ async def test_a_scoped_run_never_writes_a_stop_flag_only_a_chat_lane_reads(
     def stop_keys() -> list[str]:
         return [k for k in sprite_exec.redis.data if k.startswith("agent-turn-stop:")]
 
-    async def completes(scope, instructions):
+    async def completes(scope, instructions, route):
         return "Wiki updated."
 
     monkeypatch.setattr(curation, "run_scope", completes)
@@ -1169,7 +1183,7 @@ async def test_a_wall_just_above_the_refusal_starts_a_pass_at_the_loader(
     """
     from backend.services import agent_service, scoped_curation_inputs, sprite_agent_service
 
-    async def completes(scope, instructions):
+    async def completes(scope, instructions, route):
         return "Slice read."
 
     monkeypatch.setattr(curation, "run_scope", completes)
@@ -1247,7 +1261,7 @@ async def test_the_run_hands_the_loader_its_wall_sized_slice_not_its_ceiling(
     """
     from backend.services import agent_service, scoped_curation_inputs, sprite_agent_service
 
-    async def completes(scope, instructions):
+    async def completes(scope, instructions, route):
         return "Slice read."
 
     monkeypatch.setattr(curation, "run_scope", completes)
@@ -1369,7 +1383,7 @@ async def test_successful_scoped_batches_queue_and_drain_without_skipping_privat
     monkeypatch.setattr(curation_service, "_MAX_EVENTS", 2)
     seen = []
 
-    async def fake_run(scope, instructions):
+    async def fake_run(scope, instructions, route):
         text = json.dumps(scope.documents)
         if scope.purpose == "shared":
             assert "SECRET_TRANSCRIPT" not in text
@@ -1447,7 +1461,7 @@ async def test_truncated_write_is_discarded_before_one_complete_retry(
         "_get_client",
         lambda: SimpleNamespace(messages=SimpleNamespace(create=create)),
     )
-    assert await curation.run_scope(await scope(dataset, "shared"), None) == "Done."
+    assert await curation.run_scope(await scope(dataset, "shared"), None, hosted_route()) == "Done."
     assert await pool.fetchval("SELECT count(*) FROM pages WHERE name='Partial page'") == 0
     assert await pool.fetchval("SELECT count(*) FROM pages WHERE name='Concise page'") == 1
     assert len(requests) == 3
@@ -1631,7 +1645,7 @@ async def test_initial_prompt_identifies_delta_inputs_not_existing_wiki(
         lambda: SimpleNamespace(messages=SimpleNamespace(create=create)),
     )
     shared = await scope(dataset, "shared")
-    await curation.run_scope(shared, None)
+    await curation.run_scope(shared, None, hosted_route())
     manifest = requests[0]["messages"][0]["content"]
     assert "session:public-job" in manifest
     assert "session:private-job" not in manifest
@@ -1642,7 +1656,7 @@ async def test_initial_prompt_identifies_delta_inputs_not_existing_wiki(
         for key, doc in shared.documents.items()
         if not key.startswith(("session:", "file:", "source:"))
     }
-    assert "No new input" in await curation.run_scope(shared, None)
+    assert "No new input" in await curation.run_scope(shared, None, hosted_route())
     assert len(requests) == 1
 
 
@@ -1764,7 +1778,7 @@ async def test_model_recovers_from_readonly_write_without_changing_shared_page(
         "_get_client",
         lambda: SimpleNamespace(messages=SimpleNamespace(create=create)),
     )
-    assert await curation.run_scope(private, None) == "Updated private wiki."
+    assert await curation.run_scope(private, None, hosted_route()) == "Updated private wiki."
     assert calls == 3
     assert (
         await pool.fetchval("SELECT content_markdown FROM pages WHERE id=$1", dataset.shared)
@@ -1891,7 +1905,7 @@ async def test_session_manifest_does_not_promote_event_offsets_to_document_bound
         "_get_client",
         lambda: SimpleNamespace(messages=SimpleNamespace(create=create)),
     )
-    await curation.run_scope(private, None)
+    await curation.run_scope(private, None, hosted_route())
     manifest = json.loads(
         requests[0]["messages"][0]["content"].split("New input documents: ", 1)[1]
     )
@@ -1997,7 +2011,7 @@ async def test_cursor_is_committed_only_after_all_scopes_succeed(
     await pool.execute("UPDATE agents SET curated_through=NULL WHERE id=$1", UUID(agent["id"]))
     seen = []
 
-    async def completed(scope, instructions):
+    async def completed(scope, instructions, route):
         seen.append(scope)
         return "Curated supplied chunk."
 
@@ -2084,7 +2098,7 @@ async def test_a_ceiling_cut_keeps_its_completed_passes_and_the_next_run_resumes
     hold = asyncio.Event()
     read_offsets: list[int] = []
 
-    async def read_one_slice_then_hold(scope, instructions):
+    async def read_one_slice_then_hold(scope, instructions, route):
         document = scope.documents.get(file_key)
         if document is None:
             return "Nothing of mine in this slice."
@@ -2118,7 +2132,7 @@ async def test_a_ceiling_cut_keeps_its_completed_passes_and_the_next_run_resumes
         == 1
     )
 
-    async def report_what_is_read(scope, instructions):
+    async def report_what_is_read(scope, instructions, route):
         document = scope.documents.get(file_key)
         if document is not None:
             read_offsets.append(document["chunk"]["offset"] if "chunk" in document else 0)
@@ -2178,7 +2192,7 @@ async def test_a_run_stops_before_a_pass_it_cannot_finish_inside_its_wall(
     agent = await agent_service.get_agent_by_id(UUID(agent["id"]))
     slices_read: list[int] = []
 
-    async def read_a_slice_slowly(scope, instructions):
+    async def read_a_slice_slowly(scope, instructions, route):
         await asyncio.sleep(0.25)
         document = scope.documents.get(f"file:{dataset.private_file}")
         if document is not None:
@@ -2239,7 +2253,7 @@ async def test_one_run_drains_a_document_larger_than_its_budget_in_committed_pas
             checkpoints.append((batch.through, dict(batch.cursor)))
         return moved
 
-    async def read_slice(scope, instructions):
+    async def read_slice(scope, instructions, route):
         return "Slice read."
 
     monkeypatch.setattr(curation, "_checkpoint_pass", record_checkpoint)
@@ -2324,7 +2338,7 @@ async def test_a_scoped_run_whose_position_moved_underneath_it_refuses_the_pass(
     moved_by_rival = False
     published: list = []
 
-    async def rival(scope, instructions):
+    async def rival(scope, instructions, route):
         nonlocal moved_by_rival
         if not moved_by_rival:
             moved_by_rival = True
@@ -2387,7 +2401,7 @@ async def test_a_pass_that_owed_input_and_moved_nothing_fails_instead_of_re_read
             handed_back.append(await real_load(*args, **kwargs))
         return handed_back[0]
 
-    async def read_slice(scope, instructions):
+    async def read_slice(scope, instructions, route):
         return "Slice read."
 
     monkeypatch.setattr(scoped_curation_inputs, "load_batch", loader_that_cannot_advance)
@@ -2442,7 +2456,7 @@ async def test_a_ceiling_cut_hands_its_unfinished_backlog_to_the_next_catchup_pa
     first_slice = asyncio.Event()
     hold = asyncio.Event()
 
-    async def read_one_slice_then_hold(scope, instructions):
+    async def read_one_slice_then_hold(scope, instructions, route):
         if f"file:{dataset.private_file}" not in scope.documents:
             return "Nothing of mine in this slice."
         if not first_slice.is_set():
@@ -2507,7 +2521,7 @@ async def test_a_ceiling_cut_that_completed_no_pass_starts_no_chain(
     )
     hold = asyncio.Event()
 
-    async def hold_the_first_slice(scope, instructions):
+    async def hold_the_first_slice(scope, instructions, route):
         if f"file:{dataset.private_file}" in scope.documents:
             await hold.wait()
         return "Never reached: the ceiling cuts this pass off."
@@ -2548,7 +2562,7 @@ async def test_a_full_history_scoped_backfill_reads_from_before_its_watermark(
     await pool.execute("UPDATE agents SET curated_through=NULL WHERE id=$1", UUID(agent["id"]))
     read: list[str] = []
 
-    async def record_read(scope, instructions):
+    async def record_read(scope, instructions, route):
         read.extend(scope.documents)
         return "Slice read."
 
@@ -2772,7 +2786,7 @@ async def test_truncated_full_replacement_retries_as_small_edit(
         "_get_client",
         lambda: SimpleNamespace(messages=SimpleNamespace(create=create)),
     )
-    await curation.run_scope(await scope(dataset, "shared"), None)
+    await curation.run_scope(await scope(dataset, "shared"), None, hosted_route())
     assert str(dataset.shared) in requests[1]["messages"][-1]["content"]
     assert "X" * 5000 not in json.dumps(requests[1])
     assert (
@@ -2824,7 +2838,7 @@ async def test_two_history_drain_dispatches_resume_one_position_rather_than_rere
     second_read = asyncio.Event()
     hold = asyncio.Event()
 
-    async def read_one_slice_then_stall(scope, instructions):
+    async def read_one_slice_then_stall(scope, instructions, route):
         document = scope.documents.get(file_key)
         if document is None:
             return "Nothing of mine in this slice."
@@ -2857,7 +2871,7 @@ async def test_two_history_drain_dispatches_resume_one_position_rather_than_rere
     # every offset in it belongs to THIS dispatch — nothing has to be sliced away.
     reported = []
 
-    async def report_what_is_read(scope, instructions):
+    async def report_what_is_read(scope, instructions, route):
         document = scope.documents.get(file_key)
         if document is not None:
             offset = document["chunk"]["offset"] if "chunk" in document else 0
@@ -2930,7 +2944,7 @@ async def test_every_committed_pass_of_a_drain_moves_the_drain_position_and_no_m
 
     monkeypatch.setattr(agent_service, "advance_drain", record_advance)
 
-    async def read_slice(scope, instructions):
+    async def read_slice(scope, instructions, route):
         return "Slice read."
 
     monkeypatch.setattr(curation, "run_scope", read_slice)

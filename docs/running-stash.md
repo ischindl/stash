@@ -100,9 +100,18 @@ Before starting:
   you intend to use, following `.env.example`.
 - Give the curators a model to run on, or they never run: set
   `ANTHROPIC_API_KEY` here, or connect a local model endpoint in Settings after
-  your first login. With neither, every scheduled curator skips every tick — the
-  backend logs `no runnable model` at WARNING and each curator row reads
-  `No model connected` until a model exists.
+  your first login. Either one is enough for every curator lane, and the two
+  scoped lanes are no exception — the workspace curator, which reads this
+  workspace's own memory, and the shared-wiki curator, which reads material mixed
+  from every end user and is therefore never handed to a shell-equipped worker.
+  With no key set, both resolve the endpoint you connected and complete on it,
+  exactly as the project curators do, and they spend none of the monthly allowance
+  doing it: what the platform does not pay for is not metered. A key that IS set is
+  the provider instead, and a connected endpoint is then never consulted, so a run
+  never changes provider halfway through and with it the machine that holds your
+  customers' material. With neither, every scheduled curator skips
+  every tick — the backend logs `no runnable model` at WARNING and each curator
+  row reads `No model connected` until a model exists.
 - A local model endpoint asks how large that server's context window is, and stores it
   with the box. Nothing infers the size from a model name and nothing scrapes it off the
   endpoint: the number is the operator's to state, because it is a fact about the other

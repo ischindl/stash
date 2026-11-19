@@ -247,8 +247,8 @@ function CuratorRow({
           </div>
           {noModel && (
             <p className="mt-0.5 text-[12.5px] text-error">
-              Every scheduled run is skipping: connect a model under “Cloud agent model” above, or
-              set ANTHROPIC_API_KEY on the backend.
+              Every scheduled run is skipping: connect a local model endpoint under “Cloud agent
+              model” above, or set ANTHROPIC_API_KEY on the backend.
             </p>
           )}
           {creditsSpent && (
@@ -283,7 +283,10 @@ function CuratorRow({
           inheritLabel={
             isFolderCurator
               ? "Inherit the default curator"
-              : "Default (oldest connected endpoint)"
+              : // A scoped lane answers on exactly one provider per run, and the backend's
+                // own key is that provider whenever the deployment has one: naming only the
+                // oldest endpoint here would promise a box that the next run never dials.
+                "Default (the backend’s key, or its oldest connected endpoint)"
           }
           onChange={chooseModel}
         />

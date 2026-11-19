@@ -307,6 +307,24 @@ everything before it is captured in git history (`git log`), not here.
 
 ### Fixed
 
+- The workspace and shared-wiki curators run again on a server with no cloud key. Merging
+  the local-endpoint provider into `main` silently undid it for the two curator lanes that
+  were its reason for existing: the question those lanes ask was answered by a second
+  function, and that one only ever asked "is `ANTHROPIC_API_KEY` set?" — no endpoint, no
+  probe, no pin. So on a stack that runs on its own box the Memory curator and the External
+  wiki curator went back to skipping every hour with *"Scoped curation requires the backend
+  ANTHROPIC_API_KEY"*, while the same box served the shell harness and the summariser
+  without complaint, and Settings blamed a key the operator has no intention of setting.
+  There is now one resolver for these curators. A backend key still runs them on Anthropic
+  and never so much as dials the box; with no key the run takes the stored endpoint its row
+  pins, or the oldest one stored, overriding the model id and nothing else — the address and
+  its key stay with the credential — and the box is probed once per run, before the run is
+  accepted, so an endpoint that is switched off is refused with its own error rather than
+  burning the lane's month. What the platform pays for still decides what it rations: a run
+  answered by the operator's own box spends none of the free monthly curator allowance, a run
+  answered by the platform's key spends it as before. A stack with neither provider still
+  skips, and still says which two things would fix it.
+
 - Pi finally receives the guidance it was never given. `stash connect pi` wrote the Stash
   block to `~/.pi/AGENTS.md`, while pi reads exactly one global context file,
   `<agentDir>/AGENTS.md` (`$PI_CODING_AGENT_DIR`, else `~/.pi/agent`) — one directory

@@ -11,9 +11,11 @@ Single source of truth for the provider a backend-side completion runs on.
 Two providers answer, and a run picks one of them once: :func:`anthropic_route`
 for a backend that has its own key, :func:`local_route` for a stack that runs on
 an operator's own OpenAI-compatible box. Which one is configuration, never a
-retry. Which one a call takes is its caller's decision; scoped curation gates on
-configuration alone (scoped_curation_service.require_configured) and therefore
-always answers on the backend's own key.
+retry. Which one a call takes is its caller's decision; scoped curation resolves
+it once per run (`scoped_curation_service.require_route`): the backend's key
+answers for the hosted product, and a stack with no key curates on the endpoint
+its console stored. A route also says who pays for it, which is the question a
+curator's metering answer reads.
 """
 
 from __future__ import annotations
@@ -134,7 +136,16 @@ class Turn:
 
 
 class Route(Protocol):
-    """One provider's completion, called repeatedly by the caller's own loop."""
+    """One provider's completion, called repeatedly by the caller's own loop.
+
+    ``costs_platform_tokens`` travels on the route because who pays is a property
+    of the provider, not of the caller: a completion the platform funds is one
+    that may spend a customer's curator allowance, and a completion on the
+    customer's own box is not. See :func:`agent_auth.costs_platform_tokens`,
+    which answers the same question for a harness turn.
+    """
+
+    costs_platform_tokens: bool
 
     async def complete(
         self,
@@ -157,6 +168,8 @@ def local_route(base_url: str, model: str, api_key: str | None) -> Route:
 
 class _AnthropicRoute:
     """The hosted provider: the backend's own key, exactly as before this layer."""
+
+    costs_platform_tokens = True
 
     async def complete(
         self,
@@ -209,7 +222,12 @@ class _LocalRoute:
 
     `tier` is Anthropic's quality/FAST vocabulary and has no meaning here — a
     local endpoint has exactly the one model id its credential stores.
+
+    The tokens are the operator's own, so a run here costs the platform the turn
+    machinery and nothing it bills for: `costs_platform_tokens` is False.
     """
+
+    costs_platform_tokens = False
 
     def __init__(self, base_url: str, model: str, api_key: str | None) -> None:
         self.base_url = base_url
