@@ -25,32 +25,44 @@
 # nothing builds: docker-compose.dogfood.yml declares it as a required interpolation
 # with no default, and compose resolves it for every command, `config` and `up`
 # included. Set it to the same commit's pi overlay, e.g.
-#   BASE_IMAGE=stash-backend:main-8dd09c7b-pi docker compose -p stash ... config --quiet
+#   BASE_IMAGE=stash-backend:main-0518fdeb-pi docker compose -p stash ... config --quiet
 #
-# PINNED 2026-11-17 UTC to `8dd09c7b`. Both hexes name that one commit, built from a tree
-# detached at exactly it by the runbook. The founder database was converged onto trunk's
-# migration chain in the operator-authorized window of 2026-11-16 (STAS-441) and reads
-# `0275`, which is this tree's single head, so this pin's boot migrates nothing. A pin is
-# a claim about the stack: `docker inspect` on the five started containers,
+# PINNED 2026-11-20 UTC to `0518fdeb`. Both hexes name that one commit, built from a tree
+# detached at exactly it by the runbook. This commit is trunk's tip and brings the two
+# curator fixes the 0518fdeb line never had: the celery lanes now hand the curator the
+# backend service address instead of its own container (STAS-475 AC1), and scoped curators
+# run on the connected local endpoint at a context window a person gave that box instead
+# of the 128k/8192 pair every local model was handed (STAS-486).
+#
+# The founder database was converged onto trunk's migration chain in the
+# operator-authorized window of 2026-11-16 (STAS-441) and reads `0275`, which is this
+# tree's single head and the same head the previous pin's images carry: `git diff` between
+# the two commits names no file under `backend/migrations/`, so this boot has no revision
+# to run. That was measured rather than assumed, on a copy restored from a `pg_dump -Fc` of
+# the founder's own 20 GB database: the candidate booted with `/health` ok, zero
+# `Running upgrade` lines, zero `error|traceback|exception` lines, and every row count of
+# `agents`, `pages`, `page_edits` and `history_events` identical before and after the boot.
+#
+# A pin is a claim about the stack: `docker inspect` on the five started containers,
 # `X-Stash-Cli-Latest` and `/login` are the readings that measure it, and the rehearsal,
 # the value census, the rollback dump and the rollback truth are recorded in
 # docs/trunk-publish-and-deploy.md beside the claim.
 
 services:
   backend:
-    image: stash-backend:main-8dd09c7b-pi
+    image: stash-backend:main-0518fdeb-pi
 
   worker:
-    image: stash-backend:main-8dd09c7b-pi
+    image: stash-backend:main-0518fdeb-pi
 
   heavy-worker:
-    image: stash-backend:main-8dd09c7b-pi
+    image: stash-backend:main-0518fdeb-pi
 
   sync-worker:
-    image: stash-backend:main-8dd09c7b-pi
+    image: stash-backend:main-0518fdeb-pi
 
   beat:
-    image: stash-backend:main-8dd09c7b-pi
+    image: stash-backend:main-0518fdeb-pi
 
   frontend:
-    image: stash-frontend:main-8dd09c7b
+    image: stash-frontend:main-0518fdeb
