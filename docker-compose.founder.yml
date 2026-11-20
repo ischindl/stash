@@ -27,21 +27,31 @@
 # included. Set it to the same commit's pi overlay, e.g.
 #   BASE_IMAGE=stash-backend:main-0518fdeb-pi docker compose -p stash ... config --quiet
 #
-# PINNED 2026-11-20 UTC to `0518fdeb`. Both hexes name that one commit, built from a tree
-# detached at exactly it by the runbook. This commit is trunk's tip and brings the two
-# curator fixes the 0518fdeb line never had: the celery lanes now hand the curator the
-# backend service address instead of its own container (STAS-475 AC1), and scoped curators
-# run on the connected local endpoint at a context window a person gave that box instead
-# of the 128k/8192 pair every local model was handed (STAS-486).
+# PINNED 2026-11-20 UTC to `0518fdeb`, trunk's tip, built from a tree detached at exactly
+# it by the runbook. Both hexes name that one commit. It carries the two curator fixes the
+# previous pin never had: the celery lanes now hand the curator the backend service address
+# instead of the worker's own container (STAS-475 AC1, 96b94c614), and scoped curators run
+# on the connected local endpoint at a context window a person gave that box instead of the
+# 128k/8192 pair every local model was handed until now (STAS-486, 0518fdebb).
 #
 # The founder database was converged onto trunk's migration chain in the
 # operator-authorized window of 2026-11-16 (STAS-441) and reads `0275`, which is this
-# tree's single head and the same head the previous pin's images carry: `git diff` between
-# the two commits names no file under `backend/migrations/`, so this boot has no revision
-# to run. That was measured rather than assumed, on a copy restored from a `pg_dump -Fc` of
-# the founder's own 20 GB database: the candidate booted with `/health` ok, zero
-# `Running upgrade` lines, zero `error|traceback|exception` lines, and every row count of
-# `agents`, `pages`, `page_edits` and `history_events` identical before and after the boot.
+# tree's single head and the head the previous pin's images already carry: `git diff`
+# between `8dd09c7b` and `0518fdeb` names no file under `backend/migrations/`, so this boot
+# had no revision to run. Measured, not assumed, on a copy restored from a `pg_dump -Fc` of
+# the founder's own 20 GB database (dump 4566 MB rc 0, 1017 TOC entries, restore rc 0): the
+# candidate booted with `/health` ok, zero `Running upgrade` lines, zero
+# `error|traceback|exception` lines, `alembic_version` still `0275`, 144 base tables, and
+# `agents` 33 / `pages` 206 / `page_edits` 6655 / `history_events` 4955763 /
+# `user_agent_credentials` 2 identical before and after the boot. The dump, the restored
+# copy, the proof redis and the candidate container all sit outside this repo under
+# /data2/ceo-deploy-0518fdeb.
+#
+# Post-cutover readings taken at the pin: all five containers on `main-0518fdeb(-pi)`,
+# `X-Stash-Cli-Latest: 0.1.491` equal to `pyproject.toml` at the commit, `/login` 200, zero
+# error lines across backend/worker/heavy-worker/beat, `LOCAL_STASH_API_URL`
+# `http://backend:3456` on worker and heavy-worker, and `/health` answering from inside the
+# worker over that address - the call that was connection-refused on the previous pin.
 #
 # A pin is a claim about the stack: `docker inspect` on the five started containers,
 # `X-Stash-Cli-Latest` and `/login` are the readings that measure it, and the rehearsal,
