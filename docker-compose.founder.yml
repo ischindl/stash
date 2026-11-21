@@ -29,33 +29,38 @@
 # nothing builds: docker-compose.dogfood.yml declares it as a required interpolation
 # with no default, and compose resolves it for every command, `config` and `up`
 # included. Set it to the same commit's pi overlay, e.g.
-#   BASE_IMAGE=stash-backend:main-0518fdeb-pi docker compose -p stash ... config --quiet
+#   BASE_IMAGE=stash-backend:main-4585c2d2-pi docker compose -p stash ... config --quiet
 #
-# PINNED 2026-11-20 UTC to `0518fdeb`, trunk's tip, built from a tree detached at exactly
-# it by the runbook. Both hexes name that one commit. It carries the two curator fixes the
-# previous pin never had: the celery lanes now hand the curator the backend service address
-# instead of the worker's own container (STAS-475 AC1, 96b94c614), and scoped curators run
-# on the connected local endpoint at a context window a person gave that box instead of the
-# 128k/8192 pair every local model was handed until now (STAS-486, 0518fdebb).
+# PINNED 2026-11-21 UTC to `4585c2d2`, trunk's tip, built from a tree detached at exactly
+# it by the runbook. Both hexes name that one commit. It carries the curator pass throughput
+# fix the previous pin never had (STAS-490): a batch is filled to a batch floor instead of
+# being cut at the old 1024-char grant, a pass is priced by measured seconds-per-character
+# per route class rather than a shipped constant, one pass is capped at 8192 input characters,
+# and the catch-up cadence is a declared number instead of a hardcoded 8 - here 96.
 #
 # The founder database was converged onto trunk's migration chain in the
-# operator-authorized window of 2026-11-16 (STAS-441) and reads `0275`, which is this
-# tree's single head and the head the previous pin's images already carry: `git diff`
-# between `8dd09c7b` and `0518fdeb` names no file under `backend/migrations/`, so this boot
-# had no revision to run. Measured, not assumed, on a copy restored from a `pg_dump -Fc` of
-# the founder's own 20 GB database (dump 4566 MB rc 0, 1017 TOC entries, restore rc 0): the
-# candidate booted with `/health` ok, zero `Running upgrade` lines, zero
-# `error|traceback|exception` lines, `alembic_version` still `0275`, 144 base tables, and
-# `agents` 33 / `pages` 206 / `page_edits` 6655 / `history_events` 4955763 /
-# `user_agent_credentials` 2 identical before and after the boot. The dump, the restored
-# copy, the proof redis and the candidate container all sit outside this repo under
-# /data2/ceo-deploy-0518fdeb.
+# operator-authorized window of 2026-11-16 (STAS-441) and read `0275`, so this boot does have
+# one revision to run. Measured, not assumed, on a copy restored from a `pg_dump -Fc` of the
+# founder's own 20 GB database (dump 4 797 889 649 bytes rc 0, 1028 TOC entries, restore
+# `-j 4` rc 0): the candidate booted with `Running upgrade 0275 -> 0276`, `/health` ok,
+# `X-Stash-Cli-Latest: 0.1.491`, zero `error|traceback|exception` lines, and the copy at
+# `0276` with 145 base tables - the one new table being `curator_pass_samples` (5 columns,
+# 0 rows, no writer in a proof container). Content inventories came from two goldens built
+# from empty by this same image at `0275` (2696 rows) and at `0276` (2708 rows): goldens@0275
+# minus the copy named exactly one object, and the copy minus goldens@0276 named nothing.
+# The one object is `idx_history_events_embedding`, and it is absent because this restore
+# dropped it from its TOC list on purpose - its hnsw build over 4 968 445 rows had run 45
+# minutes with the other three workers idle, and the runbook already names that index as one
+# nothing above the stamp recreates. Row counts read on the copy after the boot: `agents` 33 /
+# `pages` 206 / `page_edits` 6669 / `history_events` 4 968 445 / `user_agent_credentials` 2.
+# The rollback was rehearsed on that same copy before the founder saw anything: `downgrade
+# 0275` ran and dropped the new table, `upgrade head` returned it to `0276`. The dump, the
+# restored copy, the two goldens, the proof redis and the candidate container all sit outside
+# this repo under /data2/ceo-deploy-4585c2d2.
 #
-# Post-cutover readings taken at the pin: all five containers on `main-0518fdeb(-pi)`,
-# `X-Stash-Cli-Latest: 0.1.491` equal to `pyproject.toml` at the commit, `/login` 200, zero
-# error lines across backend/worker/heavy-worker/beat, `LOCAL_STASH_API_URL`
-# `http://backend:3456` on worker and heavy-worker, and `/health` answering from inside the
-# worker over that address - the call that was connection-refused on the previous pin.
+# Post-cutover readings taken at the pin are recorded in the commit that moves
+# `refs/heads/deploy/main` to this hex, and the readings that measure the claim are
+# `docker inspect` on the five started containers, `X-Stash-Cli-Latest`, and `/login`.
 #
 # A pin is a claim about the stack: `docker inspect` on the five started containers,
 # `X-Stash-Cli-Latest` and `/login` are the readings that measure it, and the rehearsal,
@@ -64,10 +69,10 @@
 
 services:
   backend:
-    image: stash-backend:main-0518fdeb-pi
+    image: stash-backend:main-4585c2d2-pi
 
   worker:
-    image: stash-backend:main-0518fdeb-pi
+    image: stash-backend:main-4585c2d2-pi
     # Curator catch-up passes one lane may chain per day, at STAS-490's measured rate:
     # 96 chained passes of a 570 s wall is about a 63% duty cycle of this box's own
     # inference, competing with the operator's chat turns. The code default is 8, and
@@ -76,19 +81,19 @@ services:
       CURATOR_CATCHUP_PASSES: "96"
 
   heavy-worker:
-    image: stash-backend:main-0518fdeb-pi
+    image: stash-backend:main-4585c2d2-pi
     # The same cadence the worker chain runs under; the beat and the lanes that execute
     # the chain must read one number, not two.
     environment:
       CURATOR_CATCHUP_PASSES: "96"
 
   sync-worker:
-    image: stash-backend:main-0518fdeb-pi
+    image: stash-backend:main-4585c2d2-pi
 
   beat:
-    image: stash-backend:main-0518fdeb-pi
+    image: stash-backend:main-4585c2d2-pi
     environment:
       CURATOR_CATCHUP_PASSES: "96"
 
   frontend:
-    image: stash-frontend:main-0518fdeb
+    image: stash-frontend:main-4585c2d2
