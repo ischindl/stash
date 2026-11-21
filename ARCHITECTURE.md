@@ -49,6 +49,9 @@ S3-backed binary, vs. an in-app-editable page, vs. a folder).
   membership derived from verified email domain). Content routes select the
   scope via the `X-Stash-Scope` header — including the plugin's session,
   event, transcript, and artifact writes — and non-members are hard-403'd.
+  This header is the sanctioned tenancy boundary for machine callers as well;
+  a folder or session filter is a narrowing convenience and never the boundary
+  (`docs/scope-contract-for-integrators.md`).
 
 Object-level privacy tables and page-link graph tables are intentionally not part
 of the current architecture. Privacy is mediated by Skills.

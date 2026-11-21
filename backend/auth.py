@@ -322,15 +322,30 @@ async def get_current_user(
 
 async def get_scope(
     current_user: dict = Depends(get_current_user),
-    x_stash_scope: str | None = Header(default=None),
+    x_stash_scope: str | None = Header(
+        default=None,
+        description=(
+            "Workspace scope to act under: the workspace's scope_user_id (a UUID). "
+            "Absent means the caller's personal scope - never another tenant's. "
+            "A non-UUID is a 400; a workspace the caller is not a member of is a hard 403. "
+            "Sanctioned tenancy boundary for machine/API-key integrators; a key minted "
+            "on a workspace's scope user authenticates as that scope and needs no header. "
+            "See docs/scope-contract-for-integrators.md."
+        ),
+    ),
 ) -> UUID:
     """The effective content scope for this request.
 
-    The frontend's scope switcher sends `X-Stash-Scope: <scope_user_id>` when
-    the user is working in a workspace; content routes own/list/create under
-    that scope instead of the caller's personal one. Absent header → personal
+    Sanctioned tenancy boundary for every caller, machine or human: send
+    `X-Stash-Scope: <scope_user_id>` to own/list/create content under a
+    workspace instead of the caller's personal scope. Absent header → personal
     scope. A header naming a workspace the caller isn't a member of is a hard
-    403 — never a silent fallback to personal.
+    403 — never a silent fallback to personal. Machine callers (product
+    backends, the CLI/plugin/MCP stack) are the intended users; the frontend's
+    scope switcher is one client of this header, not its owner. A key minted on
+    a workspace's scope user authenticates as that scope and needs no header.
+    The integrator contract - provisioning, membership, error codes - lives in
+    docs/scope-contract-for-integrators.md.
     """
     if x_stash_scope is None:
         return current_user["id"]

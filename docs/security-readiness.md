@@ -62,7 +62,7 @@ Operational evidence collection lives in [security-operations.md](security-opera
 - Email delivery failures must not log provider response bodies, recipient addresses, subjects, tokens, or customer text.
 - Integration token encryption must fail closed on missing or invalid managed keyrings and support rotation through the Fernet keyring.
 - MCP server header/env secrets must be stored Fernet-encrypted with the integrations keyring, returned decrypted only to their owner over authenticated API, and never rendered in the web UI (key names only).
-- Scope-selected writes (`X-Stash-Scope`) must hard-403 non-members and hard-400 non-UUID values — never silently fall back to the personal scope.
+- Scope-selected writes (`X-Stash-Scope`) must hard-403 non-members and hard-400 non-UUID values — never silently fall back to the personal scope. Workspace scope is the only sanctioned tenancy boundary; folder or session query filters are a narrowing convenience and must never carry isolation (`docs/scope-contract-for-integrators.md`).
 - Integration disconnect must delete Stash's local encrypted credentials even when provider token revocation or decryption fails.
 - Disconnect and hard-delete paths must purge copied documents, stored files, and generated artifacts.
 - Permanent delete paths must delete a storage object only when no surviving file or session artifact still references its storage key.
