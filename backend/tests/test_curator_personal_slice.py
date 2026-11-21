@@ -228,3 +228,121 @@ async def test_a_wall_that_cannot_buy_the_smallest_part_runs_as_it_always_did(
     refusals = [r.message for r in caplog.records if "no priced part" in r.message]
     assert len(refusals) == 2
     assert "smallest pass needs" in refusals[0]
+
+
+async def _tick_once(client, _db_pool, monkeypatch, turn):
+    """Run the beat's own tick over four events with a wall that pays for two of them.
+
+    Shared by the two calibration tests, which differ ONLY in what the turn does at the
+    end: finish, or get cut. Everything else about the pass must be identical, or the
+    two rows would not be comparable.
+    """
+    from backend.services import curator_calibration, sprite_agent_service
+    from backend.tasks import agent_schedules
+    from backend.tasks.agent_schedules import _run_due, _run_scheduled_agent, run_scheduled_agent
+
+    owner = await _owner(client)
+    curator = await agent_service.get_or_create_curator(owner)
+    curator_id = UUID(curator["id"])
+    stamps = await _feed(_db_pool, owner, [1000] * 4)
+    await _db_pool.execute(
+        "UPDATE agents SET schedule_cron = '* * * * *',"
+        " last_run_at = now() - interval '5 minutes', curated_through = $2 WHERE id = $1",
+        curator_id,
+        stamps[0] - timedelta(minutes=1),
+    )
+
+    async def priced(_key):
+        return 0.10, "test"
+
+    seen: list[dict] = []
+
+    async def fake_turn(*_args, **kwargs):
+        seen.append(kwargs)
+        return await turn(kwargs)
+
+    async def no_catchup(*_args, **_kwargs):
+        return None
+
+    dispatched: list[tuple] = []
+
+    monkeypatch.setattr(curator_calibration, "price", priced)
+    monkeypatch.setattr(agent_service, "run_wall_seconds", lambda *_a: 570)
+    monkeypatch.setattr(sprite_agent_service, "run_scheduled", fake_turn)
+    monkeypatch.setattr(agent_schedules, "_dispatch_curator_catchup", no_catchup)
+    monkeypatch.setattr(run_scheduled_agent, "delay", lambda *a, **_k: dispatched.append(a))
+
+    assert await _run_due() == 1
+    await _run_scheduled_agent(dispatched[0][0], dispatched[0][1])
+    key = curator_calibration.key_from_configuration(
+        await agent_service.get_agent_by_id(curator_id)
+    )
+    return curator_id, key, seen, stamps
+
+
+async def _samples(pool, key):
+    return await pool.fetch(
+        "SELECT characters, seconds FROM curator_pass_samples WHERE calibration_key = $1"
+        " ORDER BY id",
+        key,
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_committed_personal_pass_teaches_the_price_it_paid(
+    client, _db_pool, sprite_exec, monkeypatch
+):
+    """A finished personal pass files its OWN characters, so the next grant is measured.
+
+    Before this the call existed only on the scoped lane, `curator_pass_samples` held
+    zero rows on the founder stack, and `personal_budget_of` answered from the seed for
+    every personal run ever run - a price no pass could correct. The row must carry what
+    the pass read (2 000), never the grant it was cut from (2 700): a meter that files
+    the grant would teach the route that 2 700 characters cost what 2 000 of them did.
+    """
+    from backend.services.curator_calibration import price as read_price
+
+    async def finish(_kwargs):
+        return "curated"
+
+    _curator_id, key, _seen, _stamps = await _tick_once(client, _db_pool, monkeypatch, finish)
+
+    rows = await _samples(_db_pool, key)
+    assert len(rows) == 1
+    assert rows[0]["characters"] == 2000
+    assert rows[0]["seconds"] > 0
+    rate, source = await read_price(key)
+    assert source == "measured", "the pass taught the route, and a later grant reads it"
+    assert rate == rows[0]["seconds"] / 2000
+
+
+@pytest.mark.asyncio
+async def test_a_personal_pass_the_wall_cuts_teaches_a_lower_bound_on_the_grant(
+    client, _db_pool, sprite_exec, monkeypatch
+):
+    """A run the wall cut committed nothing but still knows its grant, and files it.
+
+    The cut is this lane's dominant outcome — the founder's lane ended on its ceiling on
+    nearly every night of the past three weeks — so a sample written only on success
+    would teach the price from the lane's rarest pass and hand the next tick the same
+    grant that just died. The row carries the GRANT (2 700) over the wall spent, which
+    can only ever shrink a later grant, never inflate one.
+    """
+    from backend.services import sprite_agent_service
+
+    async def cut(_kwargs):
+        raise sprite_agent_service.RunCeilingExceeded("Digest turn exceeded its wall of 570s")
+
+    curator_id, key, _seen, _stamps = await _tick_once(client, _db_pool, monkeypatch, cut)
+
+    rows = await _samples(_db_pool, key)
+    assert len(rows) == 1
+    assert rows[0]["characters"] == 2700, "the grant it was handed, not what it managed to read"
+    row = await _db_pool.fetchrow(
+        "SELECT curated_through, last_run_outcome FROM agents WHERE id = $1", curator_id
+    )
+    assert row["last_run_outcome"] == "failed"
+    assert row["curated_through"] == _stamps[0] - timedelta(minutes=1), "a cut run commits nothing"
+    assert len(rows) == await _db_pool.fetchval(
+        "SELECT count(*) FROM curator_pass_samples WHERE calibration_key = $1", key
+    ), "a cut run teaches once, and only on the grant"

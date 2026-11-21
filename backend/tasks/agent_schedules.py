@@ -10,6 +10,7 @@ minutes and must not hold a default-queue slot. The agent's own turn lock
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from collections.abc import Coroutine
@@ -334,6 +335,48 @@ async def _run_turn(agent, stamp, workspace, read, draining: bool = False, windo
     )
 
 
+async def _sample_personal_pass(agent, window, wall: float, *, on_grant: bool = False) -> None:
+    """File what one personal pass cost, so the next grant is priced rather than seeded.
+
+    The personal lane had no `curator_calibration.observe` call anywhere, and only the
+    scoped lane did, so `curator_pass_samples` held zero rows and `personal_budget_of`
+    answered from `SEED_SECONDS_PER_CHARACTER` for every personal run ever run — the
+    founder lane's 4 750-character grant on 2026-11-21 was that seed, over a pass that
+    spent 778 s on 1 735 characters. A grant that is never read back is not a price.
+
+    The two shapes of unfinished differ, and so do the characters they may file:
+
+    * a pass that committed files its OWN characters, the same number
+      `_log_personal_pass` prints, so the meter line and the row cannot disagree;
+    * a pass the wall cut committed nothing and knows only what it was handed, so it
+      files the GRANT over the wall it spent. `wall / grant` is never cheaper than the
+      truth on such a run, and `price` takes the most expensive sample in its window,
+      so a bound can only shrink the next grant, never inflate it.
+
+    A personal pass's seconds are the whole run — digest and wiki writer together —
+    because the writer is what the read exists to feed. On the founder lane that share
+    is what this row will teach: 45 s of digest against ~730 s of writer over 1 735
+    characters is 0,45 s per character, four times the seed, and the lane's grants will
+    fall to roughly a quarter. That is the honest reading of what a character on this
+    lane costs, not a rounding of the seed.
+    """
+    from ..services import curator_calibration
+
+    characters = window.budget if on_grant else window.characters
+    if characters <= 0:
+        logger.warning(
+            "agent schedule: personal curator %s spent %.1fs on a grant of %s characters "
+            "and left the calibration untaught",
+            agent["id"],
+            wall,
+            characters,
+        )
+        return
+    await curator_calibration.observe(
+        curator_calibration.key_from_configuration(agent), characters, wall
+    )
+
+
 def _log_personal_pass(agent_id, through, window) -> None:
     """The one line that says what a personal pass actually read and where it left off.
 
@@ -560,11 +603,13 @@ async def _run_curator_locked(
         full_history,
         metered,
     )
+    # Started before the `try`, because the failure branch below prices the run too and
+    # must not reach for a name a raise could have left unbound.
+    started = time.monotonic()
     try:
         # Seconds-resolution stamp so a manual run never shares a session with
         # the beat's minute-stamped run.
         stamp = now.strftime("%Y%m%d%H%M%S")
-        started = time.monotonic()
         await _run_turn(agent, stamp, workspace, read, draining, window)
         if workspace is None:
             # The boundary is computed from the position the run ACTUALLY read from,
@@ -598,18 +643,30 @@ async def _run_curator_locked(
                 if window is not None:
                     _log_personal_pass(agent_id, through, window)
         await agent_service.mark_run_succeeded(agent_id)
+        wall = time.monotonic() - started
         logger.info(
             "agent schedule: curator %s turn finished lane=%s wall=%.1fs",
             agent_id,
             lane,
-            time.monotonic() - started,
+            wall,
         )
+        # Filed last, after the watermark and the outcome row are durable: a sample write
+        # that failed must not strand a pass whose pages are already written.
+        if window is not None:
+            await _sample_personal_pass(agent, window, wall)
     except Exception as e:
         if workspace is not None and isinstance(e, sprite_agent_service.TurnInProgress):
             await _skip_busy_curator(agent_id, metered=metered)
             return
         await agent_service.mark_run_failed(agent_id, str(e), metered=metered)
         if isinstance(e, sprite_agent_service.RunCeilingExceeded):
+            if window is not None:
+                # Shielded, because this branch re-raises: an awaited write on a task the
+                # wall is abandoning would never reach the pool, and the cut is exactly
+                # the outcome whose price has to reach the next grant.
+                await asyncio.shield(
+                    _sample_personal_pass(agent, window, time.monotonic() - started, on_grant=True)
+                )
             # The run's own ceiling ended it, not a broken curator. On the scoped lane
             # each pass it finished is checkpointed and durable, so the unread tail goes
             # to the next catch-up pass while the chain has bound left. On the personal
@@ -1807,6 +1864,9 @@ async def _run_scheduled_locked(agent, stamp, workspace, metered: bool = True):
     # its first checkpoint, and reports `failed` nightly while the watermark holds.
     personal_turn = agent["is_curator"] and workspace is None and drain is None
     window = await curation_service.personal_window(agent, now) if personal_turn else None
+    # Named before the `try`: the failure branch below prices the run too, and a raise
+    # could leave a name it reaches for unbound.
+    turn_started = time.monotonic()
     try:
         await _run_turn(agent, stamp, workspace, read, drain is not None, window)
         if agent["is_curator"] and workspace is None:
@@ -1844,12 +1904,25 @@ async def _run_scheduled_locked(agent, stamp, workspace, metered: bool = True):
                 if window is not None:
                     _log_personal_pass(agent_id, through, window)
         await agent_service.mark_run_succeeded(agent_id)
+        # Filed after the watermark and the outcome row are durable, never before: a
+        # sample write that failed must not strand a pass whose pages are already written.
+        if window is not None:
+            await _sample_personal_pass(agent, window, time.monotonic() - turn_started)
     except Exception as e:
         if workspace is not None and isinstance(e, sprite_agent_service.TurnInProgress):
             await _skip_busy_curator(agent_id, metered=metered)
             return
         logger.exception("agent schedule: run failed for agent %s", agent_id)
         await agent_service.mark_run_failed(agent_id, str(e), metered=metered)
+        if window is not None and isinstance(e, sprite_agent_service.RunCeilingExceeded):
+            # Named rather than caught by the bare `except` above: a run that died of a
+            # broken query knows nothing about the cost of a character, and filing its
+            # seconds as a price would shrink later grants for the wrong reason. A run
+            # the wall cut knows exactly one thing worth filing — the grant it was
+            # handed, which it spent the whole wall on.
+            await _sample_personal_pass(
+                agent, window, time.monotonic() - turn_started, on_grant=True
+            )
         email = await get_pool().fetchval("SELECT email FROM users WHERE id = $1", user_id)
         # Asked before the call, never caught after it: a mode that sends no
         # operational alerts makes send_alert raise, and a raise here would

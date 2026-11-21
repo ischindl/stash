@@ -322,6 +322,18 @@ everything before it is captured in git history (`git log`), not here.
 
 ### Fixed
 
+- Your personal curator now sizes its own reading from its own experience. How much a pass
+  may read is divided out of the run's wall by a measured price, and that price was written
+  back only by the developer-platform curator: a personal curator's passes recorded nothing,
+  so its slice came from a shipped constant — 0,12 seconds per character — that no run of
+  that lane had ever read back. Measured on the founder stack on 2026-11-21, one personal
+  pass spent 778 seconds and read 1 735 characters: 0,45 seconds per character, nearly four
+  times the constant it was being granted at. Its passes will now be handed roughly a quarter
+  of that reading, and the number will come from twelve of its own passes rather than from
+  another constant. A pass the wall cuts teaches as well: it files the reading allowance it
+  was handed against the wall it spent, which can only ever make the next slice smaller,
+  never larger.
+
 - Your personal wiki curator stops spending its night reading and writing nothing. A
   personal-lane run was handed its ENTIRE unread delta and one wall — 570 seconds on the
   founder stack — so the digest phase spent the whole wall reading, the ceiling fired, and
