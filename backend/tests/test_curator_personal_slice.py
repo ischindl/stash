@@ -194,3 +194,37 @@ async def test_the_nightly_tick_hands_the_turn_its_window_and_books_it(
     meters = [r.message for r in caplog.records if "characters=" in r.message]
     assert len(meters) == 1
     assert "characters=2000" in meters[0] and "budget=2700" in meters[0]
+
+
+@pytest.mark.asyncio
+async def test_a_wall_that_cannot_buy_the_smallest_part_runs_as_it_always_did(
+    client, _db_pool, monkeypatch, caplog
+):
+    """Pricing does not invent a part a wall cannot pay, and does not crash on one either.
+
+    The tiny-wall lane's problem is its ceiling, and its honest report is the cut the wall
+    already raises — not a `ValueError` from the pricing helper, and not a slice the run
+    cannot finish. The refusal is said out loud, because a lane that can never catch up is
+    the thing an operator has to be able to find.
+    """
+    import logging
+
+    from backend.services import curator_calibration
+
+    owner = await _owner(client)
+    curator = await agent_service.get_or_create_curator(owner)
+    row = await agent_service.get_agent_by_id(UUID(curator["id"]))
+
+    async def priced(_key):
+        return 0.32646, "shipped-constant"
+
+    monkeypatch.setattr(curator_calibration, "price", priced)
+    monkeypatch.setattr(agent_service, "run_wall_seconds", lambda *_a: 20)
+
+    with caplog.at_level(logging.INFO, logger="backend.services.curation_service"):
+        assert await curation_service.personal_budget_of(row) is None
+        assert await curation_service.personal_window(row, datetime.now(UTC)) is None
+
+    refusals = [r.message for r in caplog.records if "no priced part" in r.message]
+    assert len(refusals) == 2
+    assert "smallest pass needs" in refusals[0]

@@ -528,7 +528,7 @@ async def test_failed_curator_run_preserves_watermark(
     watermark = datetime.now(UTC) - timedelta(minutes=2)
     await _make_due(_db_pool, curator["id"], watermark)
 
-    async def boom(agent, stamp, read_position, draining: bool = False):
+    async def boom(agent, stamp, read_position, draining: bool = False, until: str | None = None):
         raise RuntimeError("sprite exploded")
 
     monkeypatch.setattr(sprite_agent_service, "run_scheduled", boom)
@@ -575,7 +575,7 @@ async def test_failed_run_records_error_and_refunds_credit(
     )
     await _make_due(_db_pool, curator["id"], datetime.now(UTC) - timedelta(minutes=2))
 
-    async def boom(agent, stamp, read_position, draining: bool = False):
+    async def boom(agent, stamp, read_position, draining: bool = False, until: str | None = None):
         raise RuntimeError("sprite exploded")
 
     real_run_scheduled = sprite_agent_service.run_scheduled
@@ -671,7 +671,7 @@ async def test_failed_manual_recompute_records_error(
     key, uid = await _register(client)
     curator = await agent_service.get_or_create_curator(uid)
 
-    async def boom(agent, stamp, read_position, draining: bool = False):
+    async def boom(agent, stamp, read_position, draining: bool = False, until: str | None = None):
         raise RuntimeError("harness missing")
 
     monkeypatch.setattr(sprite_agent_service, "run_scheduled", boom)
@@ -1405,7 +1405,9 @@ async def test_stale_completion_cannot_regress_an_overlapping_run(
     await _db_pool.execute("UPDATE agents SET curated_through = $2 WHERE id = $1", cid, seeded)
     advanced = datetime.now(UTC) + timedelta(minutes=10)
 
-    async def overlapping_run_finished(agent, stamp, read_position, draining: bool = False):
+    async def overlapping_run_finished(
+        agent, stamp, read_position, draining: bool = False, until: str | None = None
+    ):
         # Stands in for the other run completing mid-turn. It started from the
         # same stored position this run read, so ITS compare-and-set matches and
         # its (newer) watermark lands.
@@ -1492,7 +1494,9 @@ async def test_a_mid_run_ingest_rewind_fails_the_curator_run_loud(
     await _db_pool.execute("UPDATE agents SET curated_through = $2 WHERE id = $1", cid, position)
     meter_before = await _db_pool.fetchval("SELECT month_run_count FROM agents WHERE id = $1", cid)
 
-    async def ingest_older_history(agent, stamp, read_position, draining: bool = False):
+    async def ingest_older_history(
+        agent, stamp, read_position, draining: bool = False, until: str | None = None
+    ):
         # A late import lands mid-turn; its rewind drags the stored watermark
         # below the position this run read at start. Real ingest path.
         await _push_one(client, key, "conv-late-import", datetime.now(UTC) - timedelta(days=3))
@@ -1544,7 +1548,9 @@ async def test_the_scheduled_curator_run_fails_loud_when_the_watermark_moves(
     await _db_pool.execute("UPDATE agents SET curated_through = $2 WHERE id = $1", cid, seeded)
     advanced = datetime.now(UTC) + timedelta(minutes=10)
 
-    async def overlapping_writer(agent, stamp, read_position, draining: bool = False):
+    async def overlapping_writer(
+        agent, stamp, read_position, draining: bool = False, until: str | None = None
+    ):
         # The other run advanced the watermark mid-turn; its own CAS matches
         # (it started from the same stored position), so its write lands.
         await agent_service.mark_curated(cid, Position(seeded), Position(advanced))
@@ -1593,7 +1599,9 @@ async def test_double_dispatch_on_one_agent_runs_single_flight(
     turn_released = asyncio.Event()
     turns: list[str] = []
 
-    async def turn_holds_the_agent(agent, stamp, read_position, draining: bool = False):
+    async def turn_holds_the_agent(
+        agent, stamp, read_position, draining: bool = False, until: str | None = None
+    ):
         turns.append(stamp)
         turn_started.set()
         await turn_released.wait()
@@ -1673,7 +1681,9 @@ async def test_a_requeued_beat_dispatch_never_resolves_the_run_in_flight_outcome
     turn_released = asyncio.Event()
     turns: list[str] = []
 
-    async def turn_holds_the_agent(agent, stamp, read_position, draining: bool = False):
+    async def turn_holds_the_agent(
+        agent, stamp, read_position, draining: bool = False, until: str | None = None
+    ):
         turns.append(stamp)
         turn_started.set()
         await turn_released.wait()

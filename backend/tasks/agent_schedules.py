@@ -334,7 +334,7 @@ async def _run_turn(agent, stamp, workspace, read, draining: bool = False, windo
     )
 
 
-def _log_personal_pass(agent_id, through, characters: int, budget: int) -> None:
+def _log_personal_pass(agent_id, through, window) -> None:
     """The one line that says what a personal pass actually read and where it left off.
 
     The personal lane's body writes no INFO record of its own, so until now a run that
@@ -347,8 +347,8 @@ def _log_personal_pass(agent_id, through, characters: int, budget: int) -> None:
         "agent schedule: personal curator %s committed through=%s characters=%s budget=%s",
         agent_id,
         through.at,
-        characters,
-        budget,
+        window.characters,
+        window.budget,
     )
 
 
@@ -541,22 +541,10 @@ async def _run_curator_locked(
     # read half of the same wall), cut through the instant `_budget_kept` keeps so the
     # turn and the commit cannot disagree. A draining pass keeps its part budget and its
     # open window, and the scoped lane is priced in its own loop, per batch.
-    personal_budget = (
-        None
-        if draining or workspace is not None
-        else await curation_service.personal_budget_of(agent)
-    )
     window = (
         None
-        if personal_budget is None
-        else await curation_service.read_window(
-            UUID(str(agent["user_id"])),
-            curation_service.position_of(agent),
-            agent["curator_wiki"],
-            agent.get("curator_folder_id"),
-            personal_budget,
-            now,
-        )
+        if draining or workspace is not None
+        else await curation_service.personal_window(agent, now)
     )
     await agent_service.mark_run(agent_id, metered=metered)
     # One line at each end of a turn. The personal-wiki lane's own body writes no INFO
@@ -585,6 +573,12 @@ async def _run_curator_locked(
             # clamp keeps the cursor where an earlier run left it. The completion write is
             # a compare-and-set on `read`, so an ingest rewind or an overlapping run cannot
             # be written over.
+            if draining:
+                pass_budget = await curation_service.drain_budget_of(agent)
+            elif window is not None:
+                pass_budget = window.budget
+            else:
+                pass_budget = None
             through = await curation_service.complete_through(
                 UUID(str(agent["user_id"])),
                 curation_service.position_of(agent),
@@ -595,17 +589,14 @@ async def _run_curator_locked(
                 # its feed was cut by; a personal pass commits through the edge its turn
                 # was shown, against the same budget, so the boundary never stands further
                 # ahead than the characters the model actually read.
-                max_event_chars=(
-                    personal_budget
-                    if personal_budget is not None
-                    else await curation_service.drain_budget_of(agent)
-                ),
+                max_event_chars=pass_budget,
             )
             if draining:
                 await _commit_personal_drain(agent, read, drain, through)
             else:
                 await agent_service.mark_curated(agent_id, read, through)
-                _log_personal_pass(agent_id, through, window.characters, personal_budget)
+                if window is not None:
+                    _log_personal_pass(agent_id, through, window)
         await agent_service.mark_run_succeeded(agent_id)
         logger.info(
             "agent schedule: curator %s turn finished lane=%s wall=%.1fs",
@@ -1815,19 +1806,7 @@ async def _run_scheduled_locked(agent, stamp, workspace, metered: bool = True):
     # without it this path keeps reading the whole unread delta, hits its wall before
     # its first checkpoint, and reports `failed` nightly while the watermark holds.
     personal_turn = agent["is_curator"] and workspace is None and drain is None
-    personal_budget = await curation_service.personal_budget_of(agent) if personal_turn else None
-    window = (
-        None
-        if personal_budget is None
-        else await curation_service.read_window(
-            user_id,
-            curation_service.position_of(agent),
-            agent["curator_wiki"],
-            agent.get("curator_folder_id"),
-            personal_budget,
-            now,
-        )
-    )
+    window = await curation_service.personal_window(agent, now) if personal_turn else None
     try:
         await _run_turn(agent, stamp, workspace, read, drain is not None, window)
         if agent["is_curator"] and workspace is None:
@@ -1839,6 +1818,12 @@ async def _run_scheduled_locked(agent, stamp, workspace, metered: bool = True):
             # and alert, instead of dying as a bare task error. The completion
             # write is a compare-and-set on the position this run read, so an
             # ingest rewind or an overlapping run cannot be written over.
+            if drain is not None:
+                pass_budget = await curation_service.drain_budget_of(agent)
+            elif window is not None:
+                pass_budget = window.budget
+            else:
+                pass_budget = None
             through = await curation_service.complete_through(
                 user_id,
                 curation_service.position_of(agent),
@@ -1850,17 +1835,14 @@ async def _run_scheduled_locked(agent, stamp, workspace, metered: bool = True):
                 # was handed and the drain would claim characters nobody showed the model.
                 # The personal tick commits through the edge its turn was shown, against
                 # the budget that edge was cut by.
-                max_event_chars=(
-                    personal_budget
-                    if personal_budget is not None
-                    else await curation_service.drain_budget_of(agent)
-                ),
+                max_event_chars=pass_budget,
             )
             if drain is not None:
                 await _commit_personal_drain(agent, read, drain, through)
             elif personal_turn:
                 await agent_service.mark_curated(agent_id, read, through)
-                _log_personal_pass(agent_id, through, window.characters, personal_budget)
+                if window is not None:
+                    _log_personal_pass(agent_id, through, window)
         await agent_service.mark_run_succeeded(agent_id)
     except Exception as e:
         if workspace is not None and isinstance(e, sprite_agent_service.TurnInProgress):

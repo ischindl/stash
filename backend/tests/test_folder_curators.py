@@ -1139,7 +1139,14 @@ async def test_the_two_scoped_lanes_stay_scoped_and_gated_on_a_provider(
 
     runs: list[tuple[str, str, str]] = []
 
-    async def scoped_run(agent, scoped_workspace, run_stamp, read_position, draining: bool = False):
+    async def scoped_run(
+        agent,
+        scoped_workspace,
+        run_stamp,
+        read_position,
+        draining: bool = False,
+        until: str | None = None,
+    ):
         runs.append((str(agent["id"]), str(scoped_workspace["id"]), run_stamp))
         return "CURATED"
 

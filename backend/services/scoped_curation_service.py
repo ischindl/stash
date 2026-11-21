@@ -64,7 +64,7 @@ def _smallest_pass_seconds(seconds_per_character: float, floor_chars: int | None
     """The wall-seconds of the cheapest slice `input_budget` would ever hand out.
 
     This is the PRICE of that slice at a given rate -- the number a refusal quotes, never
-    the wall a run needs, which is `_minimum_wall_seconds` below. It is read at call time
+    the wall a run needs, which is `minimum_wall_seconds` below. It is read at call time
     from the rate passed in, so a test that prices a route cheaply moves it. The slice is
     the loader's minimum batch unless a caller names its own: a personal wiki lane reads
     events, not loader batches, and its floor is stated at the call site.
@@ -75,7 +75,7 @@ def _smallest_pass_seconds(seconds_per_character: float, floor_chars: int | None
     return minimum * seconds_per_character
 
 
-def _minimum_wall_seconds(seconds_per_character: float, floor_chars: int | None = None) -> float:
+def minimum_wall_seconds(seconds_per_character: float, floor_chars: int | None = None) -> float:
     """The smallest run wall `input_budget` will answer at all.
 
     A pass has to leave room to checkpoint itself, so buying the cheapest slice is not
@@ -127,7 +127,7 @@ def input_budget(
     reserve = agent_service.RUN_COMMIT_RESERVE_SECONDS
     minimum = scoped_curation_inputs.MINIMUM_BATCH_CHARS if floor_chars is None else floor_chars
     bound = _smallest_pass_seconds(seconds_per_character, floor_chars)
-    gate = _minimum_wall_seconds(seconds_per_character, floor_chars)
+    gate = minimum_wall_seconds(seconds_per_character, floor_chars)
     if wall_seconds <= gate:
         raise ValueError(
             f"a curator run wall of {wall_seconds}s cannot buy the cheapest pass: the "

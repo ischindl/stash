@@ -323,7 +323,14 @@ async def test_scoped_workspace_run_closes_the_session_its_lane_minted(monkeypat
     async def workspace_for_agent(_agent):
         return {"id": str(uuid4())}
 
-    async def scoped_run(run_agent, _workspace, run_stamp, _read_position, draining: bool = False):
+    async def scoped_run(
+        run_agent,
+        _workspace,
+        run_stamp,
+        _read_position,
+        draining: bool = False,
+        until: str | None = None,
+    ):
         # The lane's own spelling of the id, from scoped_curation_service.run.
         assert scheduled_session_ids(agent, run_stamp) == (
             f"{curation_service.CURATOR_SESSION_ID_PREFIX}{run_agent['id']}-{run_stamp}",

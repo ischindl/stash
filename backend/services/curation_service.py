@@ -31,12 +31,15 @@ zero precisely when the feed comes back empty.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from ..database import get_pool
 from . import files_tree_service, source_service
+
+logger = logging.getLogger(__name__)
 
 # Caps so a single delta stays bounded (a long-idle account's first delta, a
 # high-volume account's busy day). The unit is a distinct event, not a row: a
@@ -514,39 +517,63 @@ PERSONAL_WRITE_RESERVE_SECONDS = 270
 PERSONAL_MINIMUM_GROUP_CHARS = 384
 
 
-async def personal_budget_of(agent: dict) -> int:
+async def personal_budget_of(agent: dict) -> int | None:
     """The input characters one personal-lane digest may carry, out of the wall its write
-    phase has not already spent.
+    phase has not already spent, or None when no part this wall could buy exists.
 
     Same priced rate as `drain_budget_of` and the same `input_budget`, on a wall reduced by
     the write phase's measured share: the drain hands its parts to a loop that checkpoints
     after each one, while a personal run gets no second turn, so what it may be shown is
     bounded by the wall that is left when the wiki writer is paid.
 
-    A wall too small to pay the full measured share still gets a grant: the write phase
-    takes half of it rather than the whole remainder, because a lane whose every night ends
-    at the ceiling is the lane that exists today, and a lane that raises on its own cheap
-    wall cures nothing. The founder lanes this prices (570s walls) pay the reserve in full.
+    Two ways a wall is too small answer differently, and both are loud:
+
+    * Too small to pay the FULL measured write share still gets a grant: the writer takes
+      half the wall rather than the whole remainder, because a lane whose every night ends
+      at the ceiling is the lane that exists today and a lane that raises on its own cheap
+      wall cures nothing. The founder lanes this prices (570s walls) pay it in full.
+    * Too small to buy even the smallest part plus its commit answers None. That wall is
+      not a pricing problem but a ceiling problem, and the run that reads its whole feed,
+      hits the wall, and reports the cut is the honest report STAS-456 built; the answer
+      is a higher ceiling, which is an operator lever, not a grant this function may invent.
     """
     from . import agent_service, curator_calibration, scoped_curation_service
 
-    rate, _source = await curator_calibration.price(
+    rate, source = await curator_calibration.price(
         curator_calibration.key_from_configuration(agent)
     )
     wall = agent_service.run_wall_seconds(agent)
     write_share = min(PERSONAL_WRITE_RESERVE_SECONDS, wall / 2)
+    available = wall - write_share
+    gate = scoped_curation_service.minimum_wall_seconds(rate, PERSONAL_MINIMUM_GROUP_CHARS)
+    if available <= gate:
+        logger.info(
+            "curation: personal curator %s has no priced part: its %ss wall minus the "
+            "%ss write share leaves %.1fs and the smallest pass needs %.1fs at the priced "
+            "%.5fs per character (%s); the run reads its whole feed and reports its own cut",
+            agent.get("id"),
+            wall,
+            round(write_share),
+            available,
+            gate,
+            rate,
+            source,
+        )
+        return None
     return scoped_curation_service.input_budget(
-        wall - write_share, rate, floor_chars=PERSONAL_MINIMUM_GROUP_CHARS
+        available, rate, floor_chars=PERSONAL_MINIMUM_GROUP_CHARS
     )
 
 
 @dataclass(frozen=True, slots=True)
 class PersonalWindow:
-    """The read one personal pass is handed: the instant it closes at, and the characters
-    of the events inside it."""
+    """The read one personal pass is handed: the instant it closes at, the characters of
+    the events inside it, and the budget that edge was cut by (the meter prints the first
+    two as the work done and the third as what the wall could pay)."""
 
     until: datetime
     characters: int
+    budget: int
 
 
 async def read_window(
@@ -573,10 +600,35 @@ async def read_window(
     )
     kept = _budget_kept(events, max_event_chars)
     if kept is None:
-        return PersonalWindow(now, sum(len(event["content"] or "") for event in events))
+        return PersonalWindow(
+            now, sum(len(event["content"] or "") for event in events), max_event_chars
+        )
     batch = events[:kept]
     return PersonalWindow(
-        batch[-1]["created_at"], sum(len(event["content"] or "") for event in batch)
+        batch[-1]["created_at"],
+        sum(len(event["content"] or "") for event in batch),
+        max_event_chars,
+    )
+
+
+async def personal_window(agent: dict, now: datetime) -> PersonalWindow | None:
+    """The read this personal row's own wall pays for, from the row as stored.
+
+    Both paths that reach a founder lane ask this one question — the dispatcher's and the
+    beat's own tick — and an answer of None means the row's wall buys no part, so the run
+    keeps the shape it has always had (see `personal_budget_of`).
+    """
+    owner_user_id = UUID(str(agent["user_id"]))
+    budget = await personal_budget_of(agent)
+    if budget is None:
+        return None
+    return await read_window(
+        owner_user_id,
+        position_of(agent),
+        agent["curator_wiki"],
+        agent.get("curator_folder_id"),
+        budget,
+        now,
     )
 
 

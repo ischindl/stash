@@ -1071,7 +1071,7 @@ def test_a_wall_at_the_cheapest_pass_is_refused_naming_the_bound():
     would be granted already costs that whole wall, which is the zero-drain symptom
     inside the fixed code. STAS-468 widened what a wall has to pay for: the pass price
     is not the whole bill, because the pass must also leave time to commit itself, so
-    the threshold is `_minimum_wall_seconds()` - read here, never restated - and the
+    the threshold is `minimum_wall_seconds()` - read here, never restated - and the
     message names the commit's reserve and the wall that buys both next to the numbers
     an operator already got, because this refusal reaches them as a failed curator run.
     """
@@ -1079,7 +1079,7 @@ def test_a_wall_at_the_cheapest_pass_is_refused_naming_the_bound():
 
     rate = curation.curator_calibration.seed_for("anthropic:external")
     bound = curation._smallest_pass_seconds(rate)
-    gate = curation._minimum_wall_seconds(rate)
+    gate = curation.minimum_wall_seconds(rate)
     reserve = agent_service.RUN_COMMIT_RESERVE_SECONDS
     with pytest.raises(ValueError, match="cannot buy the cheapest pass") as refused:
         curation.input_budget(bound, rate)
@@ -1108,7 +1108,7 @@ def test_every_granted_wall_affords_the_slice_it_grants():
     570.0 of a 600 s wall, all three values exactly representable. So the headroom
     assert stays NON-STRICT: written as `>` it reddens for the right answer. Before the
     commit was priced the law was `wall mod T`, whose minimum is 0.0 - which is the
-    defect. Threshold and grant are both read from `_minimum_wall_seconds()`, so neither
+    defect. Threshold and grant are both read from `minimum_wall_seconds()`, so neither
     can drift from the other, and the exact gate is deliberately NOT a sample: gate is
     `F + R`, and `(F + R) - R` need not return `F` under IEEE rounding, so the exact
     boundary is a knife-edge of representation rather than a semantic case; `gate +/-
@@ -1124,7 +1124,7 @@ def test_every_granted_wall_affords_the_slice_it_grants():
     rate = curation.curator_calibration.seed_for("anthropic:external")
     minimum = curation.scoped_curation_inputs.MINIMUM_BATCH_CHARS
     reserve = agent_service.RUN_COMMIT_RESERVE_SECONDS
-    gate = curation._minimum_wall_seconds(rate)
+    gate = curation.minimum_wall_seconds(rate)
     witnesses = (335, 340, 355, 364, 475, 570, 571, 950, 1140)
     walls = (
         [gate * half for half in (0.5, 1.001, 2.0)]
@@ -1180,7 +1180,7 @@ async def test_a_wall_just_above_the_refusal_starts_a_pass_at_the_loader(
     `load_batch` at least once, so a granted run never declines its own first pass.
 
     The CEILING is dialed here, and the assertion is about the wall it resolves to -
-    one second over `_minimum_wall_seconds()`, the number the guard refuses at. Ceiling
+    one second over `minimum_wall_seconds()`, the number the guard refuses at. Ceiling
     and wall are different numbers because `run_wall_seconds` subtracts the commit's own
     reserve from the ceiling before `input_budget` ever sees it, and this test runs with
     that reserve in force - a wall the shipped gate refuses is exactly what a real row
@@ -1208,7 +1208,7 @@ async def test_a_wall_just_above_the_refusal_starts_a_pass_at_the_loader(
         "UPDATE agents SET turn_timeout_seconds=$2 WHERE id=$1",
         UUID(agent["id"]),
         int(
-            curation._minimum_wall_seconds(
+            curation.minimum_wall_seconds(
                 curation.curator_calibration.seed_for("anthropic:external")
             )
         )
