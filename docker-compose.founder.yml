@@ -58,8 +58,9 @@
 # restored copy, the two goldens, the proof redis and the candidate container all sit outside
 # this repo under /data2/ceo-deploy-4585c2d2.
 #
-# Post-cutover readings taken at the pin are recorded in the commit that moves
-# `refs/heads/deploy/main` to this hex, and the readings that measure the claim are
+# Post-cutover readings taken at the pin are carried by the commit that wrote these two hexes,
+# `cadaa0f69` - `refs/heads/deploy/main` itself was moved by a message-carrying `update-ref`,
+# which leaves a reflog row and no commit body. The readings that measure the claim are
 # `docker inspect` on the five started containers, `X-Stash-Cli-Latest`, and `/login`.
 #
 # A pin is a claim about the stack: `docker inspect` on the five started containers,
