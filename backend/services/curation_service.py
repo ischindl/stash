@@ -494,6 +494,92 @@ async def drain_budget_of(agent: dict) -> int:
     return scoped_curation_service.input_budget(agent_service.run_wall_seconds(agent), rate)
 
 
+# What the wiki-writing phase of a personal run takes off the wall before the digest
+# phase is priced. A personal run is two model turns inside ONE wall (the digest reads,
+# the curator writes), while the priced character is a digest-phase character, so a grant
+# taken out of the whole wall is a grant the write phase cannot survive: the run would hit
+# its ceiling with the feed read and nothing committed, which is the failure this pricing
+# exists to end. The number is the measured worst of the four `saneca` runs on the founder
+# stack between 2026-11-18 and 2026-11-21 (176s, 196s, 199s, 268s of write-phase session
+# time), so the reserve is taken at the expensive end rather than at the mean.
+PERSONAL_WRITE_RESERVE_SECONDS = 270
+
+# The floor `personal_budget_of` prices against, in place of the scoped loader's
+# `MINIMUM_BATCH_CHARS`: that floor is a fact about how the loader batches documents, and
+# a personal lane reads event groups instead. Measured on the founder stack's unread feed
+# (2026-11-21, 4,396,654 events ahead of one lane's watermark): a same-instant group is
+# 17 characters at the median and 384 at the 90th percentile. The floor only decides when
+# a wall is hopeless enough to raise rather than grant, so it sits at the busy end of that
+# range: a wall that cannot carry a busy instant plus its commit curates nothing anyway.
+PERSONAL_MINIMUM_GROUP_CHARS = 384
+
+
+async def personal_budget_of(agent: dict) -> int:
+    """The input characters one personal-lane digest may carry, out of the wall its write
+    phase has not already spent.
+
+    Same priced rate as `drain_budget_of` and the same `input_budget`, on a wall reduced by
+    the write phase's measured share: the drain hands its parts to a loop that checkpoints
+    after each one, while a personal run gets no second turn, so what it may be shown is
+    bounded by the wall that is left when the wiki writer is paid.
+
+    A wall too small to pay the full measured share still gets a grant: the write phase
+    takes half of it rather than the whole remainder, because a lane whose every night ends
+    at the ceiling is the lane that exists today, and a lane that raises on its own cheap
+    wall cures nothing. The founder lanes this prices (570s walls) pay the reserve in full.
+    """
+    from . import agent_service, curator_calibration, scoped_curation_service
+
+    rate, _source = await curator_calibration.price(
+        curator_calibration.key_from_configuration(agent)
+    )
+    wall = agent_service.run_wall_seconds(agent)
+    write_share = min(PERSONAL_WRITE_RESERVE_SECONDS, wall / 2)
+    return scoped_curation_service.input_budget(
+        wall - write_share, rate, floor_chars=PERSONAL_MINIMUM_GROUP_CHARS
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class PersonalWindow:
+    """The read one personal pass is handed: the instant it closes at, and the characters
+    of the events inside it."""
+
+    until: datetime
+    characters: int
+
+
+async def read_window(
+    owner_user_id: UUID,
+    position: Position,
+    wiki: str,
+    folder_id: UUID | None,
+    max_event_chars: int,
+    now: datetime,
+) -> PersonalWindow:
+    """The newest read a personal pass can be handed that its own wall pays for.
+
+    One priced part per run, cut by `_budget_kept` over the rows `complete_through` will
+    commit through, so the last event the model is shown is the last event the run may
+    record: the edge is that event's own instant, and `until_bound` closes a read with
+    `<=`, so the whole timestamp group at the seam goes to this pass and the next pass'
+    strict lower bound cannot hand it twice.
+
+    A feed that fits inside the budget answers `now` — the unchanged shape of a run that
+    reads its whole unread delta and commits through the tick.
+    """
+    events, _has_more = await _feed_events(
+        owner_user_id, position, now, _MAX_EVENTS, wiki, folder_id
+    )
+    kept = _budget_kept(events, max_event_chars)
+    if kept is None:
+        return PersonalWindow(now, sum(len(event["content"] or "") for event in events))
+    batch = events[:kept]
+    return PersonalWindow(
+        batch[-1]["created_at"], sum(len(event["content"] or "") for event in batch)
+    )
+
+
 def drain_frontier(cursor: dict, standing: datetime | None) -> datetime:
     """Where the next window would open: the newest `to` among the slots, or the row's
     column when no slot stands (and the beginning when neither names an instant).

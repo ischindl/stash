@@ -322,6 +322,22 @@ everything before it is captured in git history (`git log`), not here.
 
 ### Fixed
 
+- Your personal wiki curator stops spending its night reading and writing nothing. A
+  personal-lane run was handed its ENTIRE unread delta and one wall — 570 seconds on the
+  founder stack — so the digest phase spent the whole wall reading, the ceiling fired, and
+  the run committed nothing, while its own wiki writer had already edited pages from that
+  partial read. The visible result was a wiki that drifted and a curator that reported
+  `failed` every night for months on end without its reading position ever moving (one
+  founder lane had not advanced since 2026-09-01, with 4,396,654 events behind it), and the
+  same characters were re-read the next night. A personal pass is now one *priced* part:
+  the characters its wall can carry once the wiki-writing turn is paid for first (270s —
+  the worst of four measured runs), cut at the last instant that budget reaches, handed to
+  the model as the end of its window, and committed through exactly that instant. A lane
+  whose unread delta already fits is untouched: it still reads whole and commits through the
+  tick. Each pass now also says what it did — `characters=` and `budget=` in the beat's own
+  log — which this lane has never printed, and `RunCeilingExceeded` no longer promises that
+  a cut personal run left anything durable, because on this lane it leaves nothing.
+
 - The workspace and shared-wiki curators run again on a server with no cloud key. Merging
   the local-endpoint provider into `main` silently undid it for the two curator lanes that
   were its reason for existing: the question those lanes ask was answered by a second

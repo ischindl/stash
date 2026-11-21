@@ -346,10 +346,11 @@ class TurnInProgress(RuntimeError):
 class RunCeilingExceeded(RuntimeError):
     """A curator run outlived the wall its own ceiling allows (`run_wall_seconds`).
 
-    The dispatch that owns the run distinguishes this from any other failure: the
-    ceiling cut a run that was making progress, and everything it had completed is
-    already durable. What is left is a backlog that needs another pass, not a broken
-    run that needs a retry.
+    The dispatch that owns the run distinguishes this from any other failure, but what
+    that distinction preserves differs by lane: the scoped lane checkpoints per pass, so
+    a cut run leaves its completed passes durable and a backlog for the next one. The
+    personal lane has one turn and no mid-run checkpoint, so a cut run leaves NOTHING
+    committed - same wall, same raise, opposite amount kept.
 
     Both curator lanes raise it — the scoped lane and, since STAS-447, the personal
     lane too. It is the alternative to the worker's `SoftTimeLimitExceeded`, which

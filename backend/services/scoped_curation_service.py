@@ -60,18 +60,22 @@ _MAX_CONCURRENT_SCOPES = 4
 MAX_PASS_INPUT_CHARS = 8192
 
 
-def _smallest_pass_seconds(seconds_per_character: float) -> float:
-    """The wall-seconds of the cheapest slice this module would ever hand the loader.
+def _smallest_pass_seconds(seconds_per_character: float, floor_chars: int | None = None) -> float:
+    """The wall-seconds of the cheapest slice `input_budget` would ever hand out.
 
-    This is the PRICE of `MINIMUM_BATCH_CHARS` at a given rate -- the number a refusal
-    quotes, never the wall a run needs, which is `_minimum_wall_seconds` below. It is
-    read at call time from the rate passed in, so a test that prices a route cheaply
-    moves it.
+    This is the PRICE of that slice at a given rate -- the number a refusal quotes, never
+    the wall a run needs, which is `_minimum_wall_seconds` below. It is read at call time
+    from the rate passed in, so a test that prices a route cheaply moves it. The slice is
+    the loader's minimum batch unless a caller names its own: a personal wiki lane reads
+    events, not loader batches, and its floor is stated at the call site.
     """
-    return scoped_curation_inputs.MINIMUM_BATCH_CHARS * seconds_per_character
+    from . import scoped_curation_inputs
+
+    minimum = scoped_curation_inputs.MINIMUM_BATCH_CHARS if floor_chars is None else floor_chars
+    return minimum * seconds_per_character
 
 
-def _minimum_wall_seconds(seconds_per_character: float) -> float:
+def _minimum_wall_seconds(seconds_per_character: float, floor_chars: int | None = None) -> float:
     """The smallest run wall `input_budget` will answer at all.
 
     A pass has to leave room to checkpoint itself, so buying the cheapest slice is not
@@ -85,10 +89,14 @@ def _minimum_wall_seconds(seconds_per_character: float) -> float:
     """
     from . import agent_service
 
-    return _smallest_pass_seconds(seconds_per_character) + agent_service.RUN_COMMIT_RESERVE_SECONDS
+    return _smallest_pass_seconds(seconds_per_character, floor_chars) + (
+        agent_service.RUN_COMMIT_RESERVE_SECONDS
+    )
 
 
-def input_budget(wall_seconds: int | float, seconds_per_character: float) -> int:
+def input_budget(
+    wall_seconds: int | float, seconds_per_character: float, *, floor_chars: int | None = None
+) -> int:
     """How many input characters one pass of a curator may be handed, from its run wall.
 
     The rate is what this box costs a character right now, from
@@ -117,9 +125,9 @@ def input_budget(wall_seconds: int | float, seconds_per_character: float) -> int
     from . import agent_service
 
     reserve = agent_service.RUN_COMMIT_RESERVE_SECONDS
-    minimum = scoped_curation_inputs.MINIMUM_BATCH_CHARS
-    bound = _smallest_pass_seconds(seconds_per_character)
-    gate = _minimum_wall_seconds(seconds_per_character)
+    minimum = scoped_curation_inputs.MINIMUM_BATCH_CHARS if floor_chars is None else floor_chars
+    bound = _smallest_pass_seconds(seconds_per_character, floor_chars)
+    gate = _minimum_wall_seconds(seconds_per_character, floor_chars)
     if wall_seconds <= gate:
         raise ValueError(
             f"a curator run wall of {wall_seconds}s cannot buy the cheapest pass: the "

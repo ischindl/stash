@@ -317,13 +317,38 @@ def _run_lock(agent: dict, workspace, part_id: str | None = None):
     return sprite_agent_service.agent_run_lock(agent["id"], REAP_STRIKE_AGE_SECONDS, part_id)
 
 
-async def _run_turn(agent, stamp, workspace, read, draining: bool = False):
+async def _run_turn(agent, stamp, workspace, read, draining: bool = False, window=None):
     from ..services import sprite_agent_service
 
     if workspace is None:
-        return await sprite_agent_service.run_scheduled(agent, stamp, read, draining=draining)
+        return await sprite_agent_service.run_scheduled(
+            agent,
+            stamp,
+            read,
+            draining=draining,
+            # The personal turn reads through the edge its wall pays for, and no further.
+            until=window.until.isoformat() if window is not None else None,
+        )
     return await sprite_agent_service.run_scheduled(
         agent, stamp, read, workspace=workspace, scoped_lock_held=True, draining=draining
+    )
+
+
+def _log_personal_pass(agent_id, through, characters: int, budget: int) -> None:
+    """The one line that says what a personal pass actually read and where it left off.
+
+    The personal lane's body writes no INFO record of its own, so until now a run that
+    committed 900 characters and a run that committed none were told apart only by the
+    watermark row. `characters` is the batch's own size, never the budget it was priced
+    at: the two disagree whenever the feed ends mid-window, and a meter that printed the
+    budget would report work that was never done.
+    """
+    logger.info(
+        "agent schedule: personal curator %s committed through=%s characters=%s budget=%s",
+        agent_id,
+        through.at,
+        characters,
+        budget,
     )
 
 
@@ -511,6 +536,28 @@ async def _run_curator_locked(
             "curation_cursor": drain_cursor,
         }
     now = datetime.now(UTC)
+    # A personal pass is handed one priced part: the characters its own wall pays for
+    # once the wiki writer is paid (STAS-490 priced the fill and the rate, this is the
+    # read half of the same wall), cut through the instant `_budget_kept` keeps so the
+    # turn and the commit cannot disagree. A draining pass keeps its part budget and its
+    # open window, and the scoped lane is priced in its own loop, per batch.
+    personal_budget = (
+        None
+        if draining or workspace is not None
+        else await curation_service.personal_budget_of(agent)
+    )
+    window = (
+        None
+        if personal_budget is None
+        else await curation_service.read_window(
+            UUID(str(agent["user_id"])),
+            curation_service.position_of(agent),
+            agent["curator_wiki"],
+            agent.get("curator_folder_id"),
+            personal_budget,
+            now,
+        )
+    )
     await agent_service.mark_run(agent_id, metered=metered)
     # One line at each end of a turn. The personal-wiki lane's own body writes no INFO
     # record at all, so a run on that lane produced nothing for its whole duration and
@@ -530,7 +577,7 @@ async def _run_curator_locked(
         # the beat's minute-stamped run.
         stamp = now.strftime("%Y%m%d%H%M%S")
         started = time.monotonic()
-        await _run_turn(agent, stamp, workspace, read, draining)
+        await _run_turn(agent, stamp, workspace, read, draining, window)
         if workspace is None:
             # The boundary is computed from the position the run ACTUALLY read from,
             # which a drain moved to its own pair: a backfill counts the whole corpus as
@@ -541,20 +588,24 @@ async def _run_curator_locked(
             through = await curation_service.complete_through(
                 UUID(str(agent["user_id"])),
                 curation_service.position_of(agent),
-                now,
+                window.until if window is not None else now,
                 agent["curator_wiki"],
                 agent.get("curator_folder_id"),
                 # A drain is bounded to what its own wall can finish, by the same budget
-                # its feed was cut by; an incremental batch keeps the bound it has always
-                # had (`_MAX_EVENTS`), which reaches its wall.
+                # its feed was cut by; a personal pass commits through the edge its turn
+                # was shown, against the same budget, so the boundary never stands further
+                # ahead than the characters the model actually read.
                 max_event_chars=(
-                    await curation_service.drain_budget_of(agent) if draining else None
+                    personal_budget
+                    if personal_budget is not None
+                    else await curation_service.drain_budget_of(agent)
                 ),
             )
             if draining:
                 await _commit_personal_drain(agent, read, drain, through)
             else:
                 await agent_service.mark_curated(agent_id, read, through)
+                _log_personal_pass(agent_id, through, window.characters, personal_budget)
         await agent_service.mark_run_succeeded(agent_id)
         logger.info(
             "agent schedule: curator %s turn finished lane=%s wall=%.1fs",
@@ -568,11 +619,13 @@ async def _run_curator_locked(
             return
         await agent_service.mark_run_failed(agent_id, str(e), metered=metered)
         if isinstance(e, sprite_agent_service.RunCeilingExceeded):
-            # The run's own ceiling ended it, not a broken curator. Each pass it
-            # finished is already durable, so the backlog it did not reach goes to the
-            # next catch-up pass while that chain still has bound left - and only while
-            # the lane actually advanced, which the progress gate below answers. The
-            # failure stands: the row still reports `failed` and the task still raises.
+            # The run's own ceiling ended it, not a broken curator. On the scoped lane
+            # each pass it finished is checkpointed and durable, so the unread tail goes
+            # to the next catch-up pass while the chain has bound left. On the personal
+            # lane a cut run committed NOTHING - it has one turn and no mid-run
+            # checkpoint - so the chain's progress gate is what stops it there rather
+            # than turning a wall into a chain of paid retries. The failure stands: the
+            # row still reports `failed` and the task still raises.
             await _dispatch_curator_catchup(
                 agent,
                 now,
@@ -1757,8 +1810,26 @@ async def _run_scheduled_locked(agent, stamp, workspace, metered: bool = True):
             "curated_through_event_id": None,
             "curation_cursor": drain[1],
         }
+    # The beat's own tick into a personal wiki lane is the run that actually cures
+    # founder lanes, so it pays for the same priced part `_run_curator_locked` hands:
+    # without it this path keeps reading the whole unread delta, hits its wall before
+    # its first checkpoint, and reports `failed` nightly while the watermark holds.
+    personal_turn = agent["is_curator"] and workspace is None and drain is None
+    personal_budget = await curation_service.personal_budget_of(agent) if personal_turn else None
+    window = (
+        None
+        if personal_budget is None
+        else await curation_service.read_window(
+            user_id,
+            curation_service.position_of(agent),
+            agent["curator_wiki"],
+            agent.get("curator_folder_id"),
+            personal_budget,
+            now,
+        )
+    )
     try:
-        await _run_turn(agent, stamp, workspace, read, drain is not None)
+        await _run_turn(agent, stamp, workspace, read, drain is not None, window)
         if agent["is_curator"] and workspace is None:
             # `now` predates the run, so changes made during it stay ahead of
             # the watermark and are picked up next time. If the delta
@@ -1771,20 +1842,25 @@ async def _run_scheduled_locked(agent, stamp, workspace, metered: bool = True):
             through = await curation_service.complete_through(
                 user_id,
                 curation_service.position_of(agent),
-                now,
+                window.until if window is not None else now,
                 agent["curator_wiki"],
                 agent.get("curator_folder_id"),
                 # The beat's tick into a drain in flight is a drain pass: it is cut by the
                 # same budget, or its boundary would stand further ahead than the feed it
                 # was handed and the drain would claim characters nobody showed the model.
+                # The personal tick commits through the edge its turn was shown, against
+                # the budget that edge was cut by.
                 max_event_chars=(
-                    await curation_service.drain_budget_of(agent) if drain is not None else None
+                    personal_budget
+                    if personal_budget is not None
+                    else await curation_service.drain_budget_of(agent)
                 ),
             )
             if drain is not None:
                 await _commit_personal_drain(agent, read, drain, through)
-            else:
+            elif personal_turn:
                 await agent_service.mark_curated(agent_id, read, through)
+                _log_personal_pass(agent_id, through, window.characters, personal_budget)
         await agent_service.mark_run_succeeded(agent_id)
     except Exception as e:
         if workspace is not None and isinstance(e, sprite_agent_service.TurnInProgress):
