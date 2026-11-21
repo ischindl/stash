@@ -29,7 +29,7 @@
 # nothing builds: docker-compose.dogfood.yml declares it as a required interpolation
 # with no default, and compose resolves it for every command, `config` and `up`
 # included. Set it to the same commit's pi overlay, e.g.
-#   BASE_IMAGE=stash-backend:main-d66b943d-pi docker compose -p stash ... config --quiet
+#   BASE_IMAGE=stash-backend:main-6a77359f-pi docker compose -p stash ... config --quiet
 #
 # PINNED 2026-11-21 UTC to `d66b943d`, trunk's tip, built from a tree detached at exactly
 # it by the runbook. Both hexes name that one commit. It carries the previous pin's scoped-lane
@@ -69,10 +69,10 @@
 
 services:
   backend:
-    image: stash-backend:main-d66b943d-pi
+    image: stash-backend:main-6a77359f-pi
 
   worker:
-    image: stash-backend:main-d66b943d-pi
+    image: stash-backend:main-6a77359f-pi
     # Curator catch-up passes one lane may chain per day, at STAS-490's measured rate:
     # 96 chained passes of a 570 s wall is about a 63% duty cycle of this box's own
     # inference, competing with the operator's chat turns. The code default is 8, and
@@ -81,19 +81,19 @@ services:
       CURATOR_CATCHUP_PASSES: "96"
 
   heavy-worker:
-    image: stash-backend:main-d66b943d-pi
+    image: stash-backend:main-6a77359f-pi
     # The same cadence the worker chain runs under; the beat and the lanes that execute
     # the chain must read one number, not two.
     environment:
       CURATOR_CATCHUP_PASSES: "96"
 
   sync-worker:
-    image: stash-backend:main-d66b943d-pi
+    image: stash-backend:main-6a77359f-pi
 
   beat:
-    image: stash-backend:main-d66b943d-pi
+    image: stash-backend:main-6a77359f-pi
     environment:
       CURATOR_CATCHUP_PASSES: "96"
 
   frontend:
-    image: stash-frontend:main-d66b943d
+    image: stash-frontend:main-6a77359f
