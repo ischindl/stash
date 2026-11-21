@@ -1965,9 +1965,11 @@ async def test_only_a_reader_at_the_drains_own_position_is_sized_by_that_drain(c
     )
     row = await agent_service.get_agent_by_id(UUID(curator["id"]))
     budget = await curation_service.drain_pass_budget(uid, Position(standing_at), "internal")
-    assert budget == scoped_curation_service.input_budget(agent_service.run_wall_seconds(row)), (
-        "the feed was sized by something other than the wall this run will be wrapped in"
-    )
+    calibration = scoped_curation_service.curator_calibration
+    rate, _source = await calibration.price(calibration.key_from_configuration(row))
+    assert budget == scoped_curation_service.input_budget(
+        agent_service.run_wall_seconds(row), rate
+    ), "the feed was sized by something other than the wall this run will be wrapped in"
     # The same instant on the other wiki, and an instant one second off, are both readers
     # this drain is not.
     assert await curation_service.drain_pass_budget(uid, Position(standing_at), "external") is None
@@ -1998,13 +2000,18 @@ async def test_only_a_reader_at_the_drains_own_position_is_sized_by_that_drain(c
         uid, Position(standing_at), "internal", folder_id
     )
     folder_row = await agent_service.get_agent_by_id(UUID(folder_curator["id"]))
+    folder_rate, _folder_source = await calibration.price(
+        calibration.key_from_configuration(folder_row)
+    )
     assert sized == scoped_curation_service.input_budget(
-        agent_service.run_wall_seconds(folder_row)
+        agent_service.run_wall_seconds(folder_row), folder_rate
     ), "the folder's feed was not sized by its own curator's wall"
+    re_read_row = await agent_service.get_agent_by_id(UUID(folder_curator["id"]))
+    re_read_rate, _re_read_source = await calibration.price(
+        calibration.key_from_configuration(re_read_row)
+    )
     assert sized == scoped_curation_service.input_budget(
-        agent_service.run_wall_seconds(
-            await agent_service.get_agent_by_id(UUID(folder_curator["id"]))
-        )
+        agent_service.run_wall_seconds(re_read_row), re_read_rate
     )
 
 

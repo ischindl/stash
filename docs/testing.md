@@ -355,27 +355,32 @@ directions. Honest gap, reported rather than patched: a scoped workspace answers
 construction because the backend's key pays, so an operator running a scoped workspace on their own
 hardware cannot demonstrate the free-lane half of this rule from that workspace's row.
 
-**The input slice is sized from the run wall in model turns, and the price is measured on a real
-box, not carried over.** `input_budget` takes the wall the loop works to
+**The input slice is sized from the run wall by a price per character that is measured per route
+class, not carried over.** `input_budget` takes the wall the loop works to
 (`agent_service.run_wall_seconds` — the same number `sprite_agent_service` cuts the run at), returns
-`int((wall - R) // T) * C` floored at the loader's `MINIMUM_BATCH_CHARS`, where `R` is
+`int((wall - R) / rate)` clamped into the loader's `MINIMUM_BATCH_CHARS` floor and the
+`MAX_PASS_INPUT_CHARS` ceiling, where `R` is
 `RUN_COMMIT_RESERVE_SECONDS` — the checkpoint's own time — and `run` reads the wall once, so
 the slice one pass is handed cannot be widened without widening the wall that bounds it. STAS-468 put
 that subtraction inside the pricing rather than at a call site: a pass has to leave room to commit
-itself, and the two callers must not each hold a copy of that fact. T and C are
-shipped constants — 95.0 s per model turn, 291 characters per turn — measured on the founder's own
-vLLM box at reasoning level OFF, priced from the fewest-characters arm because it walked the
-checkpoint slowest; their provenance is written where they are defined. What prices a grant is that
-pair, 95 / 291 = 0.32646 s per character; the sample's rounded 0.326 is an average over a pass that
-died mid-flight, and an average is not a price. A wall that cannot buy the
+itself, and the two callers must not each hold a copy of that fact. `rate` is not a shipped constant:
+STAS-490 moved it into `backend/services/curator_calibration.py`, which prices a route class
+(`anthropic`/`local` × `internal`/`external`) from the passes that class actually ran and seeds it
+per class — 0.32646 s per character for the hosted route (STAS-458's sample: 95 s of model turn over
+291 characters, priced from the arm that walked its checkpoint slowest), 0.12 for a founder box whose
+completed passes measured 0.0367–0.12. A price 3–9× too slow is a batch 3–9× too small, which is how
+a founder lane sat granted at 1,455 characters per pass behind 4,669,736 unread documents; the
+provenance of each seed is written beside the seed, and an unpriced key raises rather than
+defaulting. A wall that cannot buy the
 cheapest slice `input_budget` would return *and* pay for the commit that slice exists to make —
-anything at or below `_minimum_wall_seconds()`, which is `max(T, MINIMUM_BATCH_CHARS × T / C) + R`,
-364.3 s of wall at the shipped pair — raises naming the pass price, both constants and their units,
+anything at or below `_minimum_wall_seconds(rate)`, which is `MINIMUM_BATCH_CHARS × rate + R`,
+152.9 s of wall at the 0.12 seed and 364.3 s at the hosted one — raises naming the pass price, its units,
 the reserve and the wall that buys both. Three numbers are in play and only one of them is a wall:
-334.3 s is what the loader's 1,024 characters cost, 364.3 s is the wall that pays for them plus the
-commit, and a row's *ceiling* has to reach 394.3 s to resolve to that wall. The guard is what a
-`_MODEL_TURN_SECONDS`-seeded pre-pass check also declines the first pass against: the guard's
-refuse-set is a SUPERSET of the loop's decline-set by construction (`MINIMUM_BATCH_CHARS ≥ C`), an
+334.3 s is what the loader's 1,024 characters cost at the hosted seed, 364.3 s is the wall that pays
+for them plus the commit, and a row's *ceiling* has to reach 394.3 s to resolve to that wall. The
+guard is what a `_smallest_pass_seconds(rate)`-seeded pre-pass check also declines the first pass
+against: the guard's refuse-set is a SUPERSET of the loop's decline-set by construction
+(`MINIMUM_BATCH_CHARS ≥` the batch one model turn carries), an
 inclusion the tests pin because the plan's original "same set" equality was disproved by its own
 wall-120 row. The 333-characters-per-ceiling-second era could not express any of this — its rate
 priced ~19× more than a wall could carry and no measurement could see it. Three tests keep the price
@@ -391,8 +396,32 @@ against the worker's cap and spies `load_batch`'s `max_chars` — the wall-sized
 ceiling-sized one; while the ladder `test_every_granted_wall_affords_the_slice_it_grants` from half a
 turn to 1,200 s reads its threshold from `_minimum_wall_seconds()` and asserts every refused wall sits
 below it, every granted slice costs strictly *inside* the wall that granted it, and what is left over
-is at least `R` — the headroom law `((wall - R) mod T) + R`, whose minimum over every grantable wall
-is exactly `R` at wall 600, which is why the assert is non-strict by measurement rather than by taste.
+is at least `R` — the headroom law `wall − grant × rate ≥ R`, whose minimum over the walls the shipped
+pair priced is exactly `R` at wall 600, which is why the assert is non-strict by measurement rather
+than by taste.
+
+The learned rate needs two guards the shipped pair did not, and both are pinned in
+`backend/tests/test_curator_pass_calibration.py`. A sample is `pass_seconds / characters`, and every
+pass pays a fixed 4.7–13.9 s of model turns, so a bigger grant measures a cheaper character, which
+grants more — a ratchet that runs to the pass that dies. `MAX_PASS_INPUT_CHARS` (8,192) is the rung:
+`input_budget(570, 0.0367)` answers the ceiling, not 14,713. The window is what makes the pessimistic
+price correctable in the other direction: `price` answers the maximum of the last
+`SAMPLE_WINDOW` (12) samples, so a slow pass cannot be averaged away but does age out, and the test
+that a 13th sample ends the oldest one's effect is what distinguishes a window from a latch. And a
+pass that consumed its grant and committed nothing must still be recorded: the wall's own seconds over
+the granted slice is a lower bound on the price of a character, never an optimistic one, which is why
+`run` observes it on every failure out of the pass body (`except (Exception, asyncio.CancelledError)`,
+shielded so a cancelled pass can still write) rather than only where the ceiling raises — a failure
+that leaves no sample is a price that never corrects, and the next tick recomputes the same grant and
+dies identically. The meter line a committed pass prints now carries `seconds_per_character=` (what
+the pass measured), `priced_seconds_per_character=` (what it was charged) and `price_source=`
+(`seed` or `measured`): two independent numbers, so a lane can be read from the log without a query.
+
+`CURATOR_CATCHUP_PASSES` (`backend/config.py`, default 8) is a CADENCE bound and never was the
+entitlement guard: `_chain_permitted` is what refuses a free lane's next paid pass, and the chain
+dispatches `metered=False`, so raising the cadence moves `month_run_count` not at all while still
+costing the deployment's own model calls. `test_a_free_lanes_chain_...` in
+`backend/tests/test_agent_schedule_alerts.py` is the proof the entitlement did not move.
 The ladder prints grant, price and headroom for nine witness walls, so the proof is a table in the run
 output and not a match, and — via
 `test_a_wall_just_above_the_refusal_starts_a_pass_at_the_loader`, which dials a 395 s ceiling with the

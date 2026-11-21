@@ -472,20 +472,26 @@ def _budget_kept(events: list[dict], max_event_chars: int | None) -> int | None:
     return None
 
 
-def drain_budget_of(agent: dict) -> int:
+async def drain_budget_of(agent: dict) -> int:
     """The input characters one draining pass of this curator may carry.
 
     Sized by the run's own wall, not by its ceiling: a drain exists because the backlog
     outran the wall, and a slice sized by the ceiling is a slice the wall cannot finish.
-    It reuses the scoped lane's rate constant rather than stating a second one.
+    The rate comes from the same calibration the scoped lane is granted at, answered from
+    the row's configuration rather than from a resolved route: this is called on the feed
+    read path, where knocking a model endpoint to price a slice would be a network
+    request per page.
 
     The budget is a property of the ROW's wall, which is why every part of one planned
     drain shares it: two slots standing at the same seam carry one identical budget, so
     `drain_pass_budget` counts ambiguity per row, not per instant.
     """
-    from . import agent_service, scoped_curation_service
+    from . import agent_service, curator_calibration, scoped_curation_service
 
-    return scoped_curation_service.input_budget(agent_service.run_wall_seconds(agent))
+    rate, _source = await curator_calibration.price(
+        curator_calibration.key_from_configuration(agent)
+    )
+    return scoped_curation_service.input_budget(agent_service.run_wall_seconds(agent), rate)
 
 
 def drain_frontier(cursor: dict, standing: datetime | None) -> datetime:
@@ -655,7 +661,7 @@ async def drain_pass_budget(
             f"{' folder ' + str(folder_id) if folder_id else ''} from "
             f"{position.at}: one feed request cannot be bounded by two walls"
         )
-    return drain_budget_of(standing[0]) if standing else None
+    return await drain_budget_of(standing[0]) if standing else None
 
 
 def _row_stands_at(agent: dict, at: datetime) -> bool:

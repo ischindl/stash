@@ -32,8 +32,8 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 # `test_scoped_curation.py` pins for the scoped curator.
 METER_LINE = (
     "curator pass=1 agent=probe committed_through=2026-11-14T00:00:00+00:00"
-    " characters=120 scopes=1 wall=3.0s budget=1746 turn_seconds=95.0000"
-    " seconds_per_character=0.0250 calibrated_seconds_per_character=0.3265"
+    " characters=120 scopes=1 wall=3.0s budget=1746 seconds_per_character=0.0250"
+    " priced_seconds_per_character=0.3265 price_source=seed"
 )
 # One of the lines STAS-445 added: the guard that refused a dispatch its turn.
 GUARD_LINE = (

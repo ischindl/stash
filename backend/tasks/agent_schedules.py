@@ -24,34 +24,40 @@ from ._celery_helpers import run_async
 
 logger = logging.getLogger(__name__)
 
-# Each pass keeps the existing event and time limits. Queue the next pass
-# separately so a busy developer account does not wait another day for its
-# next 500 inputs, or monopolize one worker indefinitely. This constant is the
-# FLOOR of the bound actually applied; read `curator_catchup_pass_ceiling()`,
-# never this, from any code that has to decide whether a pass may run.
-CURATOR_CATCHUP_PASSES = 8
-
 
 def curator_catchup_pass_ceiling() -> int:
     """Catch-up passes one chain may plan, and one lane may claim per 24h.
 
-    The month's curator allowance spread across the month that funds it, never
-    below the floor above. Two consequences worth saying out loud:
+    Each pass keeps the existing event and time limits, and the next pass is queued
+    separately so a busy account neither waits a day for its next inputs nor monopolises
+    one worker. How many passes that chain may plan is a deployment's number, declared
+    where the other curator knobs live (`settings.CURATOR_CATCHUP_PASSES`, default 8),
+    floored at the month's curator allowance spread across the month that funds it. At
+    the default (`FREE_CURATOR_RUNS_PER_MONTH` = 10, which floors at 10 // 31 = 0) the
+    answer is 8, so a default install is unchanged run for run.
 
-    At the code default (`FREE_CURATOR_RUNS_PER_MONTH` = 10, which floors at 10
-    // 31 = 0) the result is exactly `CURATOR_CATCHUP_PASSES`, so a default
-    install is unchanged run for run. Only a deployment that raised its own
-    allowance gets a wider cadence, and it gets it inside the allowance it
-    already declared — this never raises the entitlement.
+    This is a CADENCE bound and never was the entitlement guard. What protects the
+    allowance is `_chain_permitted`, which asks the cost of the next pass and chains only
+    when that pass spends no platform tokens or its owner genuinely has an unlimited
+    plan; the metered path is `agent_service.curator_allowance_exhausted` on
+    `month_run_count`. Two consequences of reading it this way: the chain dispatches
+    `metered=False`, so raising this number moves `month_run_count` not at all and the
+    allowance figure will never show the spend; and a free lane whose next pass would
+    spend platform tokens is still refused with `guard=not_pro`, so the raise cannot buy
+    an entitlement. What it does unlock is model calls on the deployment's own endpoint -
+    on a local box, that machine's inference time, competing with the operator's own
+    chat turns, because nothing bounds chained passes: `CURATOR_DRAIN_MAX_CONCURRENT_TURNS`
+    bounds drain parts and `_MAX_CONCURRENT_SCOPES` bounds scopes inside one pass.
 
-    This bound, not `month_run_count`, is what limits what the chain spends: the
-    chain dispatches with `metered=False`, so its runs never touch the month
-    counter the beat gates on. Raising the ceiling therefore costs real model
-    calls that the allowance figure will not show.
+    The arithmetic maximum is `86,400 / (570 + 15)`, about 147 chained passes of a 570 s
+    wall per lane per day, so a number above roughly 140 is unreachable rather than
+    ambitious. `claim_catchup(agent_id, ceiling - 1)` is the durable per-24h claim, so
+    this number is also what one lane may claim per day, and `guard=catchup_ceiling`
+    fires at it.
     """
     from ..config import settings
 
-    return max(CURATOR_CATCHUP_PASSES, settings.FREE_CURATOR_RUNS_PER_MONTH // 31)
+    return max(settings.CURATOR_CATCHUP_PASSES, settings.FREE_CURATOR_RUNS_PER_MONTH // 31)
 
 
 # A lane whose `started` is older than the longest run a task may legally take has
@@ -541,7 +547,9 @@ async def _run_curator_locked(
                 # A drain is bounded to what its own wall can finish, by the same budget
                 # its feed was cut by; an incremental batch keeps the bound it has always
                 # had (`_MAX_EVENTS`), which reaches its wall.
-                max_event_chars=(curation_service.drain_budget_of(agent) if draining else None),
+                max_event_chars=(
+                    await curation_service.drain_budget_of(agent) if draining else None
+                ),
             )
             if draining:
                 await _commit_personal_drain(agent, read, drain, through)
@@ -737,7 +745,7 @@ async def _run_drain_part(agent: dict, part_id: str, read_position, slot_to, met
                 slot_to,
                 agent["curator_wiki"],
                 agent.get("curator_folder_id"),
-                max_event_chars=curation_service.drain_budget_of(row),
+                max_event_chars=await curation_service.drain_budget_of(row),
             )
         else:
             # An empty window earns its edge without a model turn: the rows are not
@@ -1770,7 +1778,7 @@ async def _run_scheduled_locked(agent, stamp, workspace, metered: bool = True):
                 # same budget, or its boundary would stand further ahead than the feed it
                 # was handed and the drain would claim characters nobody showed the model.
                 max_event_chars=(
-                    curation_service.drain_budget_of(agent) if drain is not None else None
+                    await curation_service.drain_budget_of(agent) if drain is not None else None
                 ),
             )
             if drain is not None:

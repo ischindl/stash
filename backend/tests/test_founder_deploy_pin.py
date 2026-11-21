@@ -216,3 +216,31 @@ def test_published_self_host_files_never_mention_the_founder_pin_or_a_commit_tag
         assert not re.search(r"main-[0-9a-f]{7,}", text), (
             f"{path.name} carries a commit-built tag; the published path ships version tags only"
         )
+
+
+# The lanes that decide and run a curator's catch-up chain. The beat dispatches the
+# first pass and plans the chain; the two worker lanes execute it and re-dispatch the
+# next pass when a run its wall cut left feed unread. All three read the same setting,
+# so all three must be given the same value.
+CURATOR_CHAIN_LANES = ("worker", "heavy-worker", "beat")
+
+
+def test_the_founder_cadence_is_declared_on_the_lanes_that_run_it():
+    """STAS-490 made a curator's catch-up cadence a deployment value, so the founder
+    stack's value must be readable from the tracked file that names the pin.
+
+    The number is this box's: a chained pass on a local endpoint is this machine's
+    inference time. A published file that declared it would hand every self-hoster a
+    96-pass chain they never chose, so the assertion runs in both directions.
+    """
+    blocks = founder_blocks()
+    for lane in CURATOR_CHAIN_LANES:
+        declared = [line for line in blocks[lane] if "CURATOR_CATCHUP_PASSES" in line]
+        assert len(declared) == 1, f"{lane} declares the curator cadence {len(declared)} times"
+        assert '"96"' in declared[0], f"{lane} does not declare 96 passes: {declared[0]}"
+
+    for path in PUBLISHED_COMPOSE:
+        assert "CURATOR_CATCHUP_PASSES" not in compose_text(path), (
+            f"{path.name} declares the founder's curator cadence; self-hosters keep the "
+            "code default"
+        )

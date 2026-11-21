@@ -139,7 +139,7 @@ Before starting:
   the allowance already spent — consumes its clock slot and spends none of the
   allowance. It also sets how far a backlog may
   be chased: the catch-up ceiling is that allowance spread over the month that
-  funds it, floored at 8 passes, so raising it is what lets a large backlog drain
+  funds it, floored at `CURATOR_CATCHUP_PASSES` (8 by default), so raising it is what lets a large backlog drain
   faster. Those chase passes are not billed: the catch-up chain dispatches with
   `metered=False`, so its passes never raise the month's run count the beat and
   the credit gate look at. At the default allowance of 10 the ceiling is exactly 8
@@ -166,9 +166,18 @@ Before starting:
   On a box with no `STRIPE_SECRET_KEY` none of those three applies and none is needed:
   the allowance never refuses anything, so nothing is ever stamped `skipped_credits` and
   no curator is frozen there. What is left to steer is how far a backlog is chased per
-  day — the catch-up bound named above, which `FREE_CURATOR_RUNS_PER_MONTH` still sizes
+  day — the catch-up bound named above, which `CURATOR_CATCHUP_PASSES` declares and `FREE_CURATOR_RUNS_PER_MONTH` still floors
   even though it refuses nothing — and each curator's own run ceiling. Raising that
   bound buys real model calls on your own spend, because the chase passes are unmetered.
+- `CURATOR_CATCHUP_PASSES` (default 8) is how many catch-up passes one curator lane may chain
+  per day: the ceiling a chain plans against and what one lane may claim per 24 h. It is a
+  CADENCE bound, not an entitlement — what a pass is metered at, and the `_chain_permitted`
+  refusal of a free lane's next paid pass, are untouched by it, so raising it cannot buy an
+  allowance. What it buys is inference on your own endpoint: passes of a 570 s wall are about
+  14.3 hours of one lane's model time per 16 passes, so 96 is roughly a 63% duty cycle of that
+  box, and one lane's arithmetic ceiling is near 147 passes a day. The founder stack declares
+  96 for its three celery lanes in `docker-compose.founder.yml`, beside the pin, precisely so
+  no self-hoster inherits it; the published compose files never mention it.
 - `AGENT_TURN_TIMEOUT_SECONDS` (default 600) is the *default* run ceiling: how
   many seconds one curator run may take before it is cut off and its lane freed.
   A ceiling is a property of a curator, not of the process — Settings → Curators

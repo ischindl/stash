@@ -143,9 +143,15 @@ class Route(Protocol):
     that may spend a customer's curator allowance, and a completion on the
     customer's own box is not. See :func:`agent_auth.costs_platform_tokens`,
     which answers the same question for a harness turn.
+
+    ``route_class`` travels beside it because what a character costs is a property
+    of the box too: :mod:`curator_calibration` keys its samples by family rather
+    than by model id, so a new model id on a known family cannot become an
+    unpriced key that hard-fails a running lane.
     """
 
     costs_platform_tokens: bool
+    route_class: str
 
     async def complete(
         self,
@@ -170,6 +176,10 @@ class _AnthropicRoute:
     """The hosted provider: the backend's own key, exactly as before this layer."""
 
     costs_platform_tokens = True
+    # Which box a curator should have priced when it was sized: `curator_calibration`
+    # keys its samples by this, so a new model id on an existing family cannot make an
+    # unpriced key.
+    route_class = "anthropic"
 
     async def complete(
         self,
@@ -228,6 +238,7 @@ class _LocalRoute:
     """
 
     costs_platform_tokens = False
+    route_class = "local"
 
     def __init__(self, base_url: str, model: str, api_key: str | None) -> None:
         self.base_url = base_url

@@ -19,6 +19,49 @@ from . import curation_service
 # also the cheapest slice a budget can meaningfully hand it. `input_budget` prices it
 # in wall-seconds and refuses any wall that cannot pay for it.
 MINIMUM_BATCH_CHARS = 1024
+# The smallest slice of ONE document this loader will start. It is not the same fact as
+# the batch floor above, and applying that floor per document is what made a pass carry
+# one document: a 1,455-character grant spent its first document and could not start a
+# second with the 376 characters left, so the pass's fixed cost of 4.7-13.9 seconds of
+# model turn was amortised over a single file every time.
+#
+# 512 is bounded by the history envelope, not chosen by taste: `render_event` wraps an
+# `event` row's slice in JSON keys, and the widest `event_type`/`tool_name` the schema
+# allows (VARCHAR(64)/VARCHAR(128), 0001_initial_schema) render about 335 characters
+# with no content at all. A slice below that bound binary-searches to zero characters,
+# the offset never moves, and the cursor cannot advance.
+#
+# The law this obeys: the granted budget is an UPPER bound on a batch. Lowering the
+# fill floor can only let more documents ride one grant, never let a batch exceed it.
+MINIMUM_DOCUMENT_CHARS = 512
+
+
+def render_event(row, chunk: str, offset: int) -> str:
+    """The envelope a slice of one history event is handed to the model in.
+
+    A file or drive-document slice is handed over bare -- only history events carry
+    the envelope -- and the caller does not branch, so the kind test lives here.
+
+    Module-level rather than a closure in the fill loop so the envelope's own size is
+    testable: `MINIMUM_DOCUMENT_CHARS` is chosen against this rendering, and a bound on
+    a private closure is not a bound anyone can check.
+    """
+    if row["kind"] != "event":
+        return chunk
+    return (
+        json.dumps(
+            {
+                "event_type": row["event_type"],
+                "tool_name": row["tool_name"],
+                "content": chunk,
+                "created_at": row["stamp"].isoformat(),
+                "offset": offset,
+                "total_characters": row["characters"],
+            },
+            ensure_ascii=False,
+        )
+        + "\n"
+    )
 
 
 @dataclass
@@ -39,6 +82,15 @@ async def load_batch(
     max_chars: int,
     max_items: int | None = None,
 ) -> Batch:
+    if max_chars < MINIMUM_DOCUMENT_CHARS:
+        # Answering with an empty batch here would be read two ways, both wrong: `run`
+        # raises "raise the run ceiling" over an empty batch that carries a cursor, and
+        # `has_pending` reads no documents as a lane with nothing pending and puts it to
+        # sleep. A budget this small is a caller bug and says so.
+        raise ValueError(
+            f"a curation batch budget of {max_chars} characters cannot start a document: "
+            f"the smallest slice this loader writes is {MINIMUM_DOCUMENT_CHARS} characters"
+        )
     baseline = since.isoformat() if since else None
     state = cursor or {}
     if state.get("since") != baseline or state.get("generation") != generation:
@@ -89,7 +141,7 @@ async def load_batch(
         completed = []
         pending_stamp = None
         for index, row in enumerate(rows):
-            if index >= limit or remaining < MINIMUM_BATCH_CHARS:
+            if index >= limit or remaining < MINIMUM_DOCUMENT_CHARS:
                 pending_stamp = row["stamp"]
                 break
             offset = int(partial.get(row["key"], 0))
@@ -107,32 +159,14 @@ async def load_batch(
 
             # History envelopes count too. Binary-search the largest complete
             # JSON fragment fitting the remaining budget; never cut JSON bytes.
-            def render(chunk):
-                if row["kind"] != "event":
-                    return chunk
-                return (
-                    json.dumps(
-                        {
-                            "event_type": row["event_type"],
-                            "tool_name": row["tool_name"],
-                            "content": chunk,
-                            "created_at": row["stamp"].isoformat(),
-                            "offset": offset,
-                            "total_characters": row["characters"],
-                        },
-                        ensure_ascii=False,
-                    )
-                    + "\n"
-                )
-
             lo, hi = 0, len(text)
             while lo < hi:
                 mid = (lo + hi + 1) // 2
-                if len(render(text[:mid])) <= remaining:
+                if len(render_event(row, text[:mid], offset)) <= remaining:
                     lo = mid
                 else:
                     hi = mid - 1
-            content = render(text[:lo])
+            content = render_event(row, text[:lo], offset)
             documents.append(
                 {**dict(row), "content": content, "offset": offset, "next_offset": offset + lo}
             )

@@ -358,6 +358,13 @@ class Settings:
     # Free accounts get this many scheduled sleep-time curator runs per
     # calendar month; the enterprise plan is unlimited.
     FREE_CURATOR_RUNS_PER_MONTH: int = int(os.getenv("FREE_CURATOR_RUNS_PER_MONTH", "10"))
+    # How many catch-up passes one curator chain may plan, and one lane may claim per 24
+    # hours. A cadence bound, not an entitlement: what a run is metered at and
+    # `_chain_permitted`'s answer are untouched by it. Raising it buys model calls on
+    # this deployment's own endpoint -- on a local box, chained passes are that machine's
+    # inference time, competing with its operator's own chat turns. The arithmetic
+    # ceiling of one lane is about 147 passes a day at a 570 s wall.
+    CURATOR_CATCHUP_PASSES: int = int(os.getenv("CURATOR_CATCHUP_PASSES", "8"))
     # Where enterprise-intent signups are sent as sales leads.
     SALES_NOTIFY_EMAIL: str = os.getenv("SALES_NOTIFY_EMAIL", "henry@ferganalabs.com")
 

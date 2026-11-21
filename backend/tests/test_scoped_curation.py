@@ -31,6 +31,17 @@ def hosted_route() -> curation.llm.Route:
     return curation.llm.anthropic_route()
 
 
+def _priced(rate: float):
+    """A `curator_calibration.price` seam: whatever this run is granted, it is granted
+    at `rate` wall-seconds per input character, answered from the seed side.
+    """
+
+    async def price(_key):
+        return rate, "seed"
+
+    return price
+
+
 @pytest_asyncio.fixture
 async def dataset(client, pool, monkeypatch):
     async def approve(**kwargs):
@@ -859,8 +870,7 @@ async def test_scoped_run_timeout_preserves_progress_and_releases_lock(
     # guard's smallest-pass bound at 0.0256 s - under this wall - and grant
     # int(0.05 // 0.015625) x 625 = 1,875 characters, a fillable row. The wall, the
     # outcome and every assertion below stay exactly as they were.
-    monkeypatch.setattr(curation, "_MODEL_TURN_SECONDS", 0.015625)
-    monkeypatch.setattr(curation, "_INPUT_CHARS_PER_MODEL_TURN", 625)
+    monkeypatch.setattr(curation.curator_calibration, "price", _priced(0.015625 / 625))
     agent = await agent_service.get_or_create_curator(dataset.owner, wiki="external")
     before = await pool.fetchval(
         "SELECT curated_through FROM agents WHERE id=$1", UUID(agent["id"])
@@ -910,8 +920,7 @@ async def test_each_curator_ceiling_sets_its_own_wall_and_its_own_fence(
     # guard's bound at 0.0256 s under both walls and grant 40,000 and 80,000
     # characters, so both lanes reach run_scope; which wall
     # gives out first is still the assertion.
-    monkeypatch.setattr(curation, "_MODEL_TURN_SECONDS", 0.015625)
-    monkeypatch.setattr(curation, "_INPUT_CHARS_PER_MODEL_TURN", 625)
+    monkeypatch.setattr(curation.curator_calibration, "price", _priced(0.015625 / 625))
     # 1 s and 2 s rather than a realistic 900 s and 1200 s: this test waits both
     # walls out, and which one gives out first is the assertion.
     pair = {}
@@ -960,8 +969,7 @@ async def test_a_run_that_takes_its_own_fence_uses_the_same_ceiling(
     # A 1 s wall is two orders below the shipped turn price: patch the calibration
     # (2^-6 s turns at 625 characters each) so the granted 40,000-character slice
     # reaches run_scope, where the wall is what this test waits for.
-    monkeypatch.setattr(curation, "_MODEL_TURN_SECONDS", 0.015625)
-    monkeypatch.setattr(curation, "_INPUT_CHARS_PER_MODEL_TURN", 625)
+    monkeypatch.setattr(curation.curator_calibration, "price", _priced(0.015625 / 625))
     curator = await agent_service.get_or_create_curator(dataset.owner, wiki="external")
     await pool.execute(
         "UPDATE agents SET turn_timeout_seconds=$2 WHERE id=$1",
@@ -998,8 +1006,7 @@ async def test_an_unset_ceiling_fences_the_run_with_the_setting_it_read(
     # As in `test_scoped_run_timeout_preserves_progress_and_releases_lock`: the patched
     # wall is far too short to buy an input row at the shipped turn price, so this
     # run's calibration moves with it (bound 0.0256 s, granted 1,875 characters).
-    monkeypatch.setattr(curation, "_MODEL_TURN_SECONDS", 0.015625)
-    monkeypatch.setattr(curation, "_INPUT_CHARS_PER_MODEL_TURN", 625)
+    monkeypatch.setattr(curation.curator_calibration, "price", _priced(0.015625 / 625))
     agent = await agent_service.get_or_create_curator(dataset.owner, wiki="external")
     with pytest.raises(RuntimeError, match="run time limit"):
         await _run_curator_now(UUID(agent["id"]), metered=False)
@@ -1044,8 +1051,7 @@ async def test_a_scoped_run_never_writes_a_stop_flag_only_a_chat_lane_reads(
     # The second half sets a 1 s ceiling, two orders below the shipped turn price:
     # patch the calibration so its granted 40,000-character slice still holds a row
     # and the wall is what ends the run.
-    monkeypatch.setattr(curation, "_MODEL_TURN_SECONDS", 0.015625)
-    monkeypatch.setattr(curation, "_INPUT_CHARS_PER_MODEL_TURN", 625)
+    monkeypatch.setattr(curation.curator_calibration, "price", _priced(0.015625 / 625))
     await pool.execute(
         "UPDATE agents SET turn_timeout_seconds=$2 WHERE id=$1", UUID(str(agent["id"])), 1
     )
@@ -1071,15 +1077,15 @@ def test_a_wall_at_the_cheapest_pass_is_refused_naming_the_bound():
     """
     from backend.services import agent_service
 
-    bound = curation._smallest_pass_seconds()
-    gate = curation._minimum_wall_seconds()
+    rate = curation.curator_calibration.seed_for("anthropic:external")
+    bound = curation._smallest_pass_seconds(rate)
+    gate = curation._minimum_wall_seconds(rate)
     reserve = agent_service.RUN_COMMIT_RESERVE_SECONDS
     with pytest.raises(ValueError, match="cannot buy the cheapest pass") as refused:
-        curation.input_budget(bound)
+        curation.input_budget(bound, rate)
     message = str(refused.value)
     assert f"{bound:.1f} wall-seconds" in message
-    assert f"{curation._MODEL_TURN_SECONDS}s" in message
-    assert f"{curation._INPUT_CHARS_PER_MODEL_TURN}-character" in message
+    assert f"{rate:.5f}s per character" in message
     assert "1024 characters" in message
     assert f"{reserve}s" in message
     assert f"{gate:.1f}s" in message
@@ -1115,28 +1121,26 @@ def test_every_granted_wall_affords_the_slice_it_grants():
     """
     from backend.services import agent_service
 
-    turn = curation._MODEL_TURN_SECONDS
-    per_turn = curation._INPUT_CHARS_PER_MODEL_TURN
+    rate = curation.curator_calibration.seed_for("anthropic:external")
     minimum = curation.scoped_curation_inputs.MINIMUM_BATCH_CHARS
     reserve = agent_service.RUN_COMMIT_RESERVE_SECONDS
-    gate = curation._minimum_wall_seconds()
+    gate = curation._minimum_wall_seconds(rate)
     witnesses = (335, 340, 355, 364, 475, 570, 571, 950, 1140)
     walls = (
-        [turn * half for half in (0.5, 1.0, 2.0)]
+        [gate * half for half in (0.5, 1.001, 2.0)]
         + [gate - 0.1, gate + 0.1]
         + list(witnesses)
         + list(range(350, 1201, 50))
     )
     for wall in walls:
         try:
-            granted = curation.input_budget(wall)
+            granted = curation.input_budget(wall, rate)
         except ValueError:
             assert wall < gate, f"wall {wall}s refused although the gate is {gate:.1f}s"
             continue
         assert wall >= gate, f"wall {wall}s granted although it does not reach {gate:.1f}s"
-        assert wall > turn
         assert granted >= minimum
-        cost = granted * turn / per_turn
+        cost = granted * rate
         assert cost < wall, (
             f"wall {wall}s was granted {granted} characters, whose calibrated cost "
             f"{cost:.1f}s is not inside the wall that granted it"
@@ -1148,16 +1152,20 @@ def test_every_granted_wall_affords_the_slice_it_grants():
     # The proof is a printed table, not a match: what each witness wall is granted, what
     # that costs at the priced measure, and what headroom is left for its commit.
     print()
-    print(f"witness walls at T={turn}s / C={per_turn} / commit reserve R={reserve}s")
+    print(f"witness walls at {rate} s per character / commit reserve R={reserve}s")
     for wall in witnesses:
         try:
-            granted = curation.input_budget(wall)
+            granted = curation.input_budget(wall, rate)
         except ValueError:
             print(f"  wall {wall:4d}  REFUSED - buys neither the cheapest pass nor a commit")
             continue
-        cost = granted * turn / per_turn
+        cost = granted * rate
         headroom = wall - cost
-        deciding = "floor" if granted == minimum else "turns"
+        deciding = (
+            "floor"
+            if granted == minimum
+            else ("ceiling" if granted == curation.MAX_PASS_INPUT_CHARS else "rate")
+        )
         print(
             f"  wall {wall:4d}  grant={granted:5d} ({deciding:5s})  cost={cost:7.1f}  "
             f"headroom={headroom:6.1f}"
@@ -1199,7 +1207,13 @@ async def test_a_wall_just_above_the_refusal_starts_a_pass_at_the_loader(
     await pool.execute(
         "UPDATE agents SET turn_timeout_seconds=$2 WHERE id=$1",
         UUID(agent["id"]),
-        int(curation._minimum_wall_seconds()) + 1 + agent_service.RUN_COMMIT_RESERVE_SECONDS,
+        int(
+            curation._minimum_wall_seconds(
+                curation.curator_calibration.seed_for("anthropic:external")
+            )
+        )
+        + 1
+        + agent_service.RUN_COMMIT_RESERVE_SECONDS,
     )
     agent = await agent_service.get_agent_by_id(UUID(agent["id"]))
     summary = await sprite_agent_service.run_scheduled(
@@ -1229,7 +1243,8 @@ def test_the_granted_budget_fits_the_wall_measured_in_the_sample_its_own_rate():
     sit comfortably unread, which is the whole point of keeping the literal here.
 
     What this literal is NOT: a headroom gate. Its rate - 0.12506 s per character - is
-    2.61 times more generous than the measure that prices a grant (95 / 291 = 0.32646),
+    more generous than the seed an unmeasured route is granted at (0.12 per
+    character for a founder's own box under its `local:internal` seed),
     so a slice can satisfy the assert above and still leave the pass no time to commit -
     which is precisely what it did at the 570 s wall. The headroom judge is the second
     assert below, written on the priced measure; this literal stays an empirical
@@ -1237,9 +1252,10 @@ def test_the_granted_budget_fits_the_wall_measured_in_the_sample_its_own_rate():
     """
     from backend.services import agent_service
 
-    granted = curation.input_budget(570)
+    rate = curation.curator_calibration.seed_for("anthropic:external")
+    granted = curation.input_budget(570, rate)
     assert granted * MEASURED_SECONDS_PER_CHARACTER <= 570
-    priced = granted * curation._MODEL_TURN_SECONDS / curation._INPUT_CHARS_PER_MODEL_TURN
+    priced = granted * rate
     assert priced <= 570 - agent_service.RUN_COMMIT_RESERVE_SECONDS, (
         f"the 570 s wall was granted {granted} characters costing {priced:.1f}s, leaving "
         f"{570 - priced:.1f}s of a {agent_service.RUN_COMMIT_RESERVE_SECONDS}s commit"
@@ -1286,7 +1302,11 @@ async def test_the_run_hands_the_loader_its_wall_sized_slice_not_its_ceiling(
         agent, "wall-not-ceiling", curation_service.position_of(agent)
     )
     assert calls, "the scoped run never reached the loader"
-    expected = curation.input_budget(agent_service.run_wall_seconds(agent))
+    key = curation.curator_calibration.key_for(hosted_route(), agent)
+    expected = curation.input_budget(
+        agent_service.run_wall_seconds(agent),
+        curation.curator_calibration.seed_for(key),
+    )
     assert all(chars == expected for chars in calls), (
         f"the loader was handed {sorted(set(calls))}; the wall sizes {expected}"
     )
@@ -2006,7 +2026,7 @@ async def test_cursor_is_committed_only_after_all_scopes_succeed(
     await pool.execute(
         "UPDATE files SET extracted_text=$2 WHERE id=$1", dataset.private_file, "X" * 10000
     )
-    monkeypatch.setattr(curation, "input_budget", lambda ceiling: 2048)
+    monkeypatch.setattr(curation, "input_budget", lambda wall, rate: 2048)
     agent = await agent_service.get_or_create_curator(dataset.owner, wiki="external")
     await pool.execute("UPDATE agents SET curated_through=NULL WHERE id=$1", UUID(agent["id"]))
     seen = []
@@ -2083,10 +2103,10 @@ async def test_a_ceiling_cut_keeps_its_completed_passes_and_the_next_run_resumes
     await pool.execute(
         "UPDATE files SET extracted_text=$2 WHERE id=$1", dataset.private_file, "X" * 10000
     )
-    monkeypatch.setattr(curation, "input_budget", lambda ceiling: 2048)
+    monkeypatch.setattr(curation, "input_budget", lambda wall, rate: 2048)
     # The loop seeds its pre-pass check with the shipped turn price; a 1 s wall needs
     # that seed moved with it (the budget itself never runs - the lambda answers).
-    monkeypatch.setattr(curation, "_MODEL_TURN_SECONDS", 0.015625)
+    monkeypatch.setattr(curation.curator_calibration, "price", _priced(0.015625 / 1024))
     agent = await agent_service.get_or_create_curator(dataset.owner, wiki="external")
     await pool.execute(
         "UPDATE agents SET curated_through=NULL, turn_timeout_seconds=$2 WHERE id=$1",
@@ -2176,10 +2196,10 @@ async def test_a_run_stops_before_a_pass_it_cannot_finish_inside_its_wall(
     await pool.execute(
         "UPDATE files SET extracted_text=$2 WHERE id=$1", dataset.private_file, "V" * 20000
     )
-    monkeypatch.setattr(curation, "input_budget", lambda ceiling: 2048)
+    monkeypatch.setattr(curation, "input_budget", lambda wall, rate: 2048)
     # The loop's seed must stay far below the 0.25 s pass this test measures, so the
     # declined pass stays a measured one and never the seed.
-    monkeypatch.setattr(curation, "_MODEL_TURN_SECONDS", 0.015625)
+    monkeypatch.setattr(curation.curator_calibration, "price", _priced(0.015625 / 1024))
     agent = await agent_service.get_or_create_curator(dataset.owner, wiki="external")
     # A drain in flight, standing two days behind the document it is about to read: the
     # backlog is several slices wide, so the feed cannot empty inside this wall.
@@ -2243,7 +2263,7 @@ async def test_one_run_drains_a_document_larger_than_its_budget_in_committed_pas
     await pool.execute(
         "UPDATE files SET extracted_text=$2 WHERE id=$1", dataset.private_file, "Z" * 6000
     )
-    monkeypatch.setattr(curation, "input_budget", lambda ceiling: 2048)
+    monkeypatch.setattr(curation, "input_budget", lambda wall, rate: 2048)
     checkpoints: list[tuple[datetime, dict]] = []
     real_checkpoint = curation._checkpoint_pass
 
@@ -2284,21 +2304,24 @@ async def test_one_run_drains_a_document_larger_than_its_budget_in_committed_pas
         "scopes",
         "wall",
         "budget",
-        "turn_seconds",
         "seconds_per_character",
-        "calibrated_seconds_per_character",
+        "priced_seconds_per_character",
+        "price_source",
     }
     assert int(first_pass["characters"]) > 0
     # A fake test pass is near-instant, so its measured price may legitimately round
     # to zero at four decimals; what must hold is that the field parses.
     assert float(first_pass["seconds_per_character"]) >= 0
-    # The line prints both prices at four decimals, so the promise is that the printed
-    # calibration is the shipped pair at the precision the line carries - a stricter
-    # tolerance would assert digits the meter never prints. It still reddens on a
-    # different pair: 95/512 prints 0.1855, not 0.3265.
-    assert float(first_pass["turn_seconds"]) == curation._MODEL_TURN_SECONDS
-    assert float(first_pass["calibrated_seconds_per_character"]) == round(
-        curation._MODEL_TURN_SECONDS / curation._INPUT_CHARS_PER_MODEL_TURN, 4
+    # The two price numbers on the line are independent facts: what the pass was charged
+    # per character, and what its characters actually cost. The charged number must be
+    # the price this run was granted at, printed at the four decimals the line carries -
+    # a stricter tolerance would assert digits the meter never prints.
+    assert first_pass["price_source"] == "seed"
+    assert float(first_pass["priced_seconds_per_character"]) == round(
+        curation.curator_calibration.seed_for(
+            curation.curator_calibration.key_from_configuration(agent)
+        ),
+        4,
     )
 
     mid_pairs = checkpoints[:-1]
@@ -2329,7 +2352,7 @@ async def test_a_scoped_run_whose_position_moved_underneath_it_refuses_the_pass(
     await pool.execute(
         "UPDATE files SET extracted_text=$2 WHERE id=$1", dataset.private_file, "Z" * 6000
     )
-    monkeypatch.setattr(curation, "input_budget", lambda ceiling: 2048)
+    monkeypatch.setattr(curation, "input_budget", lambda wall, rate: 2048)
     agent = await agent_service.get_or_create_curator(dataset.owner, wiki="external")
     await pool.execute("UPDATE agents SET curated_through=NULL WHERE id=$1", UUID(agent["id"]))
     agent = await agent_service.get_agent_by_id(UUID(agent["id"]))
@@ -2389,7 +2412,7 @@ async def test_a_pass_that_owed_input_and_moved_nothing_fails_instead_of_re_read
     await pool.execute(
         "UPDATE files SET extracted_text=$2 WHERE id=$1", dataset.private_file, "Z" * 6000
     )
-    monkeypatch.setattr(curation, "input_budget", lambda ceiling: 2048)
+    monkeypatch.setattr(curation, "input_budget", lambda wall, rate: 2048)
     real_load = scoped_curation_inputs.load_batch
     handed_back: list = []
     loads = 0
@@ -2438,10 +2461,10 @@ async def test_a_ceiling_cut_hands_its_unfinished_backlog_to_the_next_catchup_pa
     await pool.execute(
         "UPDATE files SET extracted_text=$2 WHERE id=$1", dataset.private_file, "X" * 10000
     )
-    monkeypatch.setattr(curation, "input_budget", lambda ceiling: 2048)
+    monkeypatch.setattr(curation, "input_budget", lambda wall, rate: 2048)
     # The loop seeds its pre-pass check with the shipped turn price; a 1 s wall needs
     # that seed moved with it (the budget itself never runs - the lambda answers).
-    monkeypatch.setattr(curation, "_MODEL_TURN_SECONDS", 0.015625)
+    monkeypatch.setattr(curation.curator_calibration, "price", _priced(0.015625 / 1024))
 
     async def entitled(_):
         return True
@@ -2504,10 +2527,10 @@ async def test_a_ceiling_cut_that_completed_no_pass_starts_no_chain(
     await pool.execute(
         "UPDATE files SET extracted_text=$2 WHERE id=$1", dataset.private_file, "X" * 10000
     )
-    monkeypatch.setattr(curation, "input_budget", lambda ceiling: 2048)
+    monkeypatch.setattr(curation, "input_budget", lambda wall, rate: 2048)
     # The loop seeds its pre-pass check with the shipped turn price; a 1 s wall needs
     # that seed moved with it (the budget itself never runs - the lambda answers).
-    monkeypatch.setattr(curation, "_MODEL_TURN_SECONDS", 0.015625)
+    monkeypatch.setattr(curation.curator_calibration, "price", _priced(0.015625 / 1024))
 
     async def entitled(_):
         return True
@@ -2557,7 +2580,7 @@ async def test_a_full_history_scoped_backfill_reads_from_before_its_watermark(
     from backend.services import agent_service, sprite_agent_service
     from backend.tasks import agent_schedules
 
-    monkeypatch.setattr(curation, "input_budget", lambda ceiling: 2048)
+    monkeypatch.setattr(curation, "input_budget", lambda wall, rate: 2048)
     agent = await agent_service.get_or_create_curator(dataset.owner, wiki="external")
     await pool.execute("UPDATE agents SET curated_through=NULL WHERE id=$1", UUID(agent["id"]))
     read: list[str] = []
@@ -2821,10 +2844,10 @@ async def test_two_history_drain_dispatches_resume_one_position_rather_than_rere
     await pool.execute(
         "UPDATE files SET extracted_text=$2 WHERE id=$1", dataset.private_file, "Q" * 6000
     )
-    monkeypatch.setattr(curation, "input_budget", lambda ceiling: 2048)
+    monkeypatch.setattr(curation, "input_budget", lambda wall, rate: 2048)
     # The loop seeds its pre-pass check with the shipped turn price; a 1 s wall needs
     # that seed moved with it (the budget itself never runs - the lambda answers).
-    monkeypatch.setattr(curation, "_MODEL_TURN_SECONDS", 0.015625)
+    monkeypatch.setattr(curation.curator_calibration, "price", _priced(0.015625 / 1024))
     agent = await agent_service.get_or_create_curator(dataset.owner, wiki="external")
     # A curator whose incremental position is AHEAD of the backlog it is about to drain:
     # the whole corpus sits behind the watermark, which is the shape that made the old
@@ -2920,7 +2943,7 @@ async def test_every_committed_pass_of_a_drain_moves_the_drain_position_and_no_m
     await pool.execute(
         "UPDATE files SET extracted_text=$2 WHERE id=$1", dataset.private_file, "Z" * 6000
     )
-    monkeypatch.setattr(curation, "input_budget", lambda ceiling: 2048)
+    monkeypatch.setattr(curation, "input_budget", lambda wall, rate: 2048)
     agent = await agent_service.get_or_create_curator(dataset.owner, wiki="external")
     # A drain already in flight, standing where the watermark stands: everything the feed
     # holds sits ahead of it, so this run finishes the drain and its hand-off has somewhere
@@ -2976,4 +2999,65 @@ async def test_every_committed_pass_of_a_drain_moves_the_drain_position_and_no_m
     assert (done["drain_through"], done["drain_cursor"]) == (None, {})
     assert done["curated_through"] > watermark_before, (
         "the finished drain cleared its pair and handed nothing to the watermark"
+    )
+
+
+@pytest.mark.asyncio
+async def test_siblings_sharing_one_instant_ride_one_batch(dataset, pool):
+    """The batch floor is the floor of a BATCH, not of one document.
+
+    Six files written by one upload share an instant and carry ~900 characters each. A
+    4,500-character grant had room for five of them and took exactly one, because the
+    fill loop asked the batch floor of every document it considered: with 3,600 of the
+    budget spent, the 900 characters left could not start a file, and the pass paid its
+    4.7-13.9 seconds of model turn for a single document. The floor now guards the
+    slice, so a pass carries what its budget affords and the fixed cost is amortised.
+    """
+    stamp = datetime.now(UTC).replace(microsecond=500_000)
+    written = []
+    for index in range(6):
+        written.append(
+            await pool.fetchval(
+                "INSERT INTO files (owner_user_id,end_user_id,name,content_type,size_bytes,"
+                "storage_key,uploaded_by,extracted_text,extraction_status,created_at) "
+                "VALUES ($1,NULL,$2,'text/plain',900,'fill-batch-test',$1,$3,'done',$4) "
+                "RETURNING id",
+                dataset.owner,
+                unique_name(f"sibling-{index}"),
+                "x" * 900,
+                stamp,
+            )
+        )
+
+    batch = await curation.scoped_curation_inputs.load_batch(
+        dataset.owner,
+        None,
+        stamp,
+        internal=True,
+        generation=dataset.workspace["curation_generation"],
+        max_chars=4_500,
+    )
+
+    assert len(batch.documents) == 5, (
+        f"a 4,500-character grant carried {len(batch.documents)} of six 900-character "
+        "siblings; the batch floor may not be asked of one document"
+    )
+    assert batch.through == stamp - timedelta(microseconds=1), (
+        "the batch committed through the instant it only partly read"
+    )
+    assert not batch.cursor["partial"], "a file the batch never started cannot be half-read"
+    assert len(batch.cursor["done"]) == 5
+
+    resumed = await curation.scoped_curation_inputs.load_batch(
+        dataset.owner,
+        datetime.fromisoformat(batch.cursor["since"]),
+        stamp,
+        internal=True,
+        generation=dataset.workspace["curation_generation"],
+        cursor=batch.cursor,
+        max_chars=4_500,
+    )
+    carried = {doc["id"] for doc in batch.documents}
+    assert [doc["id"] for doc in resumed.documents] == list(set(written) - carried), (
+        "the resumed batch re-read a sibling the first one already carried"
     )

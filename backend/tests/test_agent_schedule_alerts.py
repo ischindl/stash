@@ -971,7 +971,22 @@ def test_the_catchup_ceiling_is_the_floor_at_default_settings():
     """The bug being closed lives only in deployments that raise their own
     allowance, so the regression that must be impossible is a default install
     drifting by even one run."""
-    assert agent_schedules.curator_catchup_pass_ceiling() == agent_schedules.CURATOR_CATCHUP_PASSES
+    assert agent_schedules.curator_catchup_pass_ceiling() == settings.CURATOR_CATCHUP_PASSES
+
+
+def test_a_declared_cadence_is_the_deployments_own_number(monkeypatch):
+    """The bound became a deployment setting, so both terms of it must answer.
+
+    A stack that declares 96 gets 96, the month's allowance still wins over a declared
+    cadence once it is wide enough to, and neither of those touches what a run is metered
+    at -- `test_a_free_lanes_chain_refuses...` next to this one is what proves the
+    entitlement itself never moved.
+    """
+    monkeypatch.setattr(settings, "CURATOR_CATCHUP_PASSES", 96)
+    monkeypatch.setattr(settings, "FREE_CURATOR_RUNS_PER_MONTH", 10)
+    assert agent_schedules.curator_catchup_pass_ceiling() == 96
+    monkeypatch.setattr(settings, "FREE_CURATOR_RUNS_PER_MONTH", 3411)
+    assert agent_schedules.curator_catchup_pass_ceiling() == 3411 // 31
 
 
 @pytest.mark.asyncio
@@ -1007,7 +1022,7 @@ async def test_catchup_bound_a_lane_claims_tracks_the_allowance_not_the_constant
     await agent_schedules._run_curator_locked(
         agent, {"id": uuid.uuid4()}, False, False, None, True, True
     )
-    assert claim.await_args.args[1] == agent_schedules.CURATOR_CATCHUP_PASSES - 1
+    assert claim.await_args.args[1] == settings.CURATOR_CATCHUP_PASSES - 1
 
     monkeypatch.setattr(settings, "FREE_CURATOR_RUNS_PER_MONTH", 310)
     assert agent_schedules.curator_catchup_pass_ceiling() == 10

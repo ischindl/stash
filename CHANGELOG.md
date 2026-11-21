@@ -124,6 +124,21 @@ everything before it is captured in git history (`git log`), not here.
 
 ### Changed
 
+- A curator's pass now carries what its wall can actually pay for. How much input one
+  pass reads was priced from one constant pair measured once, on one box, in September;
+  nothing read a later measurement back. On the founder's own machine the log line
+  quoting that price reported 0,04-0,12 seconds per character while the constant said
+  0,33, so each pass was granted 1 455 characters where its wall afforded 4 500, and a
+  fill rule asked the whole batch's minimum of every document it considered — so a pass
+  that could have carried five files carried one, and paid its fixed model-turn cost for
+  it. 40 such passes in a day moved 7,8 seconds of feed position. A pass now prices
+  itself from the passes that route actually ran, and its own measured cost is recorded
+  even when the pass dies before it can commit — the failure that taught nothing was how
+  the wrong price survived. A self-hoster can also say how many catch-up passes a lane
+  may chain per day (`CURATOR_CATCHUP_PASSES`, default 8): on your own model box those
+  hours are your inference, and the number was not adjustable before. What a pass is
+  *allowed* to spend is unchanged — this is throughput, not a new entitlement.
+
 - A curator's history backfill now runs as several parts at once instead of one long
   pull, and the parts are folded back into the wiki in the order the history happened.
   The old shape was one position and one run: a drain held a lock over the whole agent,

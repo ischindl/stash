@@ -2,8 +2,12 @@
 #
 # Self-hosters never use this file. It is the fourth `-f` overlay, after
 # docker-compose.prod.yml, docker-compose.local.yml and docker-compose.dogfood.yml,
-# and it does exactly one thing: it retags every lane to a locally built image whose
-# tag carries the commit it was built from. Before this file existed that knowledge
+# and it retags every lane to a locally built image whose tag carries the commit it was
+# built from. It carries one other thing, declared here rather than in the published
+# files because it is a fact about THIS box and nobody else's: the curator catch-up
+# cadence on the celery lanes. A self-hoster must not inherit a 96-pass chain, and the
+# alternative -- the value in an untracked env file on this host -- is the knowledge
+# loss this file's header exists to prevent. Before this file existed that knowledge
 # lived in untracked root files in one checkout, so no other worktree could see what
 # the founder stack was running and no test could read it.
 #
@@ -64,15 +68,27 @@ services:
 
   worker:
     image: stash-backend:main-0518fdeb-pi
+    # Curator catch-up passes one lane may chain per day, at STAS-490's measured rate:
+    # 96 chained passes of a 570 s wall is about a 63% duty cycle of this box's own
+    # inference, competing with the operator's chat turns. The code default is 8, and
+    # `docker-compose.prod.yml` never declares it, so the number is this stack's alone.
+    environment:
+      CURATOR_CATCHUP_PASSES: "96"
 
   heavy-worker:
     image: stash-backend:main-0518fdeb-pi
+    # The same cadence the worker chain runs under; the beat and the lanes that execute
+    # the chain must read one number, not two.
+    environment:
+      CURATOR_CATCHUP_PASSES: "96"
 
   sync-worker:
     image: stash-backend:main-0518fdeb-pi
 
   beat:
     image: stash-backend:main-0518fdeb-pi
+    environment:
+      CURATOR_CATCHUP_PASSES: "96"
 
   frontend:
     image: stash-frontend:main-0518fdeb

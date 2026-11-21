@@ -414,9 +414,11 @@ async def test_two_slots_standing_at_one_seam_are_one_wall_not_two(client: Async
         uid, Position(at=OLD + timedelta(hours=24)), INTERNAL
     )
     row = await agent_service.get_agent_by_id(agent_id)
-    assert budget == scoped_curation_service.input_budget(agent_service.run_wall_seconds(row)), (
-        "the seam was answered by something other than the row's own wall"
-    )
+    calibration = scoped_curation_service.curator_calibration
+    rate, _source = await calibration.price(calibration.key_from_configuration(row))
+    assert budget == scoped_curation_service.input_budget(
+        agent_service.run_wall_seconds(row), rate
+    ), "the seam was answered by something other than the row's own wall"
     # An instant between seams still answers nothing this drain is not.
     assert (
         await curation_service.drain_pass_budget(
