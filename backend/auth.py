@@ -10,7 +10,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from .database import get_pool
 from .services.page_actor import (
-    AGENT_NAME_HEADER,
+    AGENT_ID_HEADER,
     AGENT_SESSION_HEADER,
     PageActor,
     install,
@@ -247,45 +247,82 @@ def _set_request_via(request: Request, user: dict | None) -> None:
 async def _set_page_actor(request: Request, user: dict | None) -> None:
     """Resolve who this request's page writes are credited to.
 
-    No agent headers → a human, which is exactly what `agent_name IS NULL` means
-    (docs/page-provenance.md). One header alone → a broken injection, refused:
-    a half claim could credit a write to a run nobody can name. Both → the pair
-    must name a run this owner actually had, checked by one indexed
-    `history_events` lookup (`idx_history_events_agent_session`).
+    Two headers ride in: `X-Stash-Agent-Session` (the run's session id) and
+    `X-Stash-Agent-Id` (the `agents` row's uuid). Neither header -> a human,
+    which is exactly what `agent_name IS NULL` means (docs/page-provenance.md).
+    One header alone -> a broken injection, refused: a half claim could credit a
+    write to a run nobody can name. Both -> two lookups prove the pair against
+    this account: one primary-key `agents` lookup (`SELECT name FROM agents
+    WHERE id = $1 AND user_id = $2`) resolves the display name the CLI cannot
+    carry, then `history_events` must hold a run under that resolved name and
+    the claimed session for this owner (served by `idx_history_events_agent_session`).
+    The id, never the name, is on the wire because a header value must be
+    ASCII-encodable and a display name need not be.
 
     The claim is provenance, never permission: page authorization stays entirely
     in `_check_content_access` and the owner-scoped `WHERE` clauses, so the worst
     a liar achieves is a wrong provenance row inside their own scope. The 400s
-    name the failing check and both header names, so a field 400 in the field
-    reads as its own cause instead of a mystery — including the day a history
-    pruning job starts turning legitimate claims into refusals."""
+    name the failing check and the header names, so a field 400 in the field
+    reads as its own cause instead of a mystery. The likeliest legitimate
+    refusals are both on the resolved name: renaming an agent mid-run moves it
+    out from under that run's own history rows (one run, until its next turn),
+    and a history prune removes the row the proof needs. A stale CLI is not one
+    of them - a CLI from the name-pair era trips its own half-pair guard and
+    exits before sending anything, so only a harness dispatched before this
+    server reached production arrives as a session header without an id
+    (docs/page-provenance.md names both failure modes and the upgrade leg)."""
     session_id = request.headers.get(AGENT_SESSION_HEADER)
-    agent_name = request.headers.get(AGENT_NAME_HEADER)
-    if not session_id and not agent_name:
+    agent_id = request.headers.get(AGENT_ID_HEADER)
+    if not session_id and not agent_id:
         install(PageActor.human())
         return
     if user is None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=(
-                f"{AGENT_SESSION_HEADER}/{AGENT_NAME_HEADER} claim an agent run, but "
+                f"{AGENT_SESSION_HEADER}/{AGENT_ID_HEADER} claim an agent run, but "
                 "this request carries no credential to name the account that ran it"
             ),
         )
-    if bool(session_id) != bool(agent_name):
-        missing = AGENT_SESSION_HEADER if not session_id else AGENT_NAME_HEADER
+    if bool(session_id) != bool(agent_id):
+        missing = AGENT_SESSION_HEADER if not session_id else AGENT_ID_HEADER
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=(
                 f"{missing} is missing: page attribution arrives as a pair "
-                f"({AGENT_SESSION_HEADER} + {AGENT_NAME_HEADER}), and a half pair "
-                "cannot name the run a page write belongs to"
+                f"({AGENT_SESSION_HEADER} + {AGENT_ID_HEADER}), and a half pair "
+                "cannot name the run a page write belongs to. A CLI older than this "
+                "pair sends the name header instead of the id; upgrade `stash` on "
+                "that box."
+            ),
+        )
+    try:
+        claimed_id = UUID(agent_id)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"{AGENT_ID_HEADER} must be an agent uuid, got {agent_id!r} - the "
+                "server injects a uuid into STASH_AGENT_ID, so any other value is a "
+                "fabricated or stale claim"
+            ),
+        )
+    resolved_name = await get_pool().fetchval(
+        "SELECT name FROM agents WHERE id = $1 AND user_id = $2", claimed_id, user["id"]
+    )
+    if resolved_name is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"page attribution claim names no agent of this account: agents has "
+                f"no row for id={agent_id!r} carried by {AGENT_ID_HEADER} - the id "
+                "must name an `agents` row owned by the account behind the credential"
             ),
         )
     run_exists = await get_pool().fetchval(
         "SELECT 1 FROM history_events "
         "WHERE agent_name = $1 AND session_id = $2 AND owner_user_id = $3 LIMIT 1",
-        agent_name,
+        resolved_name,
         session_id,
         user["id"],
     )
@@ -294,13 +331,14 @@ async def _set_page_actor(request: Request, user: dict | None) -> None:
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=(
                 f"page attribution claim names no run of this account: history_events "
-                f"has no row for agent_name={agent_name!r}, "
-                f"session_id={session_id!r}, owner_user_id={user['id']} — a "
+                f"has no row for agent_name={resolved_name!r}, "
+                f"session_id={session_id!r}, owner_user_id={user['id']} - a "
                 f"{AGENT_SESSION_HEADER} must be a session this account's history "
-                f"already holds, and {AGENT_NAME_HEADER} its agent's name"
+                f"already holds, under the name its {AGENT_ID_HEADER} resolves to. "
+                "A rename mid-run turns one in-flight run into exactly this 400."
             ),
         )
-    install(PageActor.agent(agent_name, session_id))
+    install(PageActor.agent(resolved_name, session_id))
 
 
 async def get_current_user(

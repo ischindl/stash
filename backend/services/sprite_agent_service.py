@@ -38,7 +38,7 @@ from . import (
 )
 from . import harness as harness_mod
 from .curation_service import CURATOR_SESSION_ID_PREFIX, Position
-from .page_actor import AGENT_NAME_ENV, AGENT_SESSION_ENV, PageActor
+from .page_actor import AGENT_ID_ENV, AGENT_SESSION_ENV
 
 logger = logging.getLogger(__name__)
 
@@ -575,18 +575,25 @@ def _system_prompt(owner_name: str, persona: str | None) -> str:
     return f"{base}\n\n{persona}" if persona else base
 
 
-def _attribution_env(agent_name: str, session_id: str) -> dict[str, str]:
+def _attribution_env(agent_id: UUID | str, session_id: str) -> dict[str, str]:
     """The two entries that let the harness's `stash` CLI name the run it runs in.
 
     The CLI echoes them back as the two headers `backend/auth.py` resolves into a
-    page-write actor, so a page the harness writes is credited to this run and
-    not to the owner whose key the turn carries. Validation is `PageActor.agent`'s:
-    an empty name or session would be a bug at this call site, so it raises here
-    instead of sending a claim the server refuses. `sprite_service._LOCAL_ENV_BLOCKED`
-    filters the inherited environment, not this dict, so both names reach the
-    child unchanged."""
-    actor = PageActor.agent(agent_name, session_id)
-    return {AGENT_NAME_ENV: actor.agent_name, AGENT_SESSION_ENV: actor.session_id}
+    page-write actor: the session id names the run, and the agent id names the
+    `agents` row whose display name the server then reads out of the database --
+    the name itself never crosses the wire, because a header value must be
+    ASCII-encodable and a display name (an em dash, a Slovak diacritic) is not.
+    An unusable id or an empty session is a bug at this call site, so it raises
+    here instead of sending a claim the server refuses.
+    `sprite_service._LOCAL_ENV_BLOCKED` filters the inherited environment, not
+    this dict, so both names reach the child unchanged."""
+    try:
+        canonical_id = str(UUID(str(agent_id)))
+    except ValueError as exc:
+        raise ValueError(f"_attribution_env: agent id {agent_id!r} is not a uuid") from exc
+    if not session_id:
+        raise ValueError("_attribution_env: session_id must be a non-empty string")
+    return {AGENT_ID_ENV: canonical_id, AGENT_SESSION_ENV: session_id}
 
 
 def scheduled_session_prefix(agent: dict) -> str:
@@ -898,6 +905,7 @@ async def run_digest_phase(
             ),
             persona=agent["system_prompt"],
             agent_name=agent["name"],
+            agent_id=agent["id"],
         )
     finally:
         in_flight["session_id"] = None
@@ -1121,6 +1129,7 @@ async def _scheduled_chat_turn(
         credential_id=agent.get("credential_id"),
         persona=agent["system_prompt"],
         agent_name=agent["name"],
+        agent_id=agent["id"],
     )
 
 
@@ -1141,6 +1150,7 @@ async def _pump_turn(
     auth: agent_auth.RunAuth,
     persona: str | None,
     agent_name: str,
+    agent_id: UUID | None = None,
 ) -> None:
     """One chat turn, decoupled from its viewer.
 
@@ -1170,7 +1180,7 @@ async def _pump_turn(
             error: str | None = None
             # Same identity as the non-streaming lane: both build their harness
             # environment out of `auth.env`, so this is the one place it is set.
-            auth.env.update(_attribution_env(agent_name, session_id))
+            auth.env.update(_attribution_env(agent_id, session_id))
             turn = _turn_events(
                 auth,
                 sprite,
@@ -1235,6 +1245,7 @@ async def stream_chat(
     auth: agent_auth.RunAuth,
     persona: str | None = None,
     agent_name: str = AGENT_NAME,
+    agent_id: UUID | None = None,
 ) -> AsyncIterator[str]:
     """Multi-turn agent chat over a stored session, streamed as SSE.
 
@@ -1258,6 +1269,7 @@ async def stream_chat(
             auth,
             persona,
             agent_name,
+            agent_id,
         )
     )
     _detached_turns.add(turn)
@@ -1297,12 +1309,15 @@ async def run_chat(
     credential_id: UUID | None = None,
     persona: str | None = None,
     agent_name: str = AGENT_NAME,
+    agent_id: UUID | None = None,
 ) -> str:
     """Non-streaming turn for Slack/Telegram/scheduled: returns the final answer.
     `channel` ('slack'|'telegram') selects the bound agent's model + persona;
     a scheduled run passes model_provider/persona directly. Either way the
     agent row's own model_id and credential pin decide the box and model — the
     same values reach every turn of the run, never just the first.
+    `agent_id` names the `agents` row whose id the harness CLI carries back for
+    page attribution; every lane must name one, by channel or directly.
     Raises NeedsAuth for an unconnected free account so the channel can prompt."""
     if channel:
         agent = await agent_service.channel_agent(user_id, channel)
@@ -1311,6 +1326,13 @@ async def run_chat(
         credential_id = agent["credential_id"]
         persona = agent["system_prompt"]
         agent_name = agent["name"]
+        agent_id = agent["id"]
+    if agent_id is None:
+        raise ValueError(
+            "run_chat: this lane named no agent row (no channel, no agent_id), so "
+            f"its turn in session {session_id!r} cannot inject an attribution pair; "
+            "pass agent_id from the resolved agents row"
+        )
     try:
         auth = await agent_auth.resolve(
             user_id, model_provider, model_id=model_id, credential_id=credential_id
@@ -1328,7 +1350,7 @@ async def run_chat(
     auth.env.update(await sprite_service.local_agent_env(user_id))
     # The run's own identity travels with it, so a page the harness's CLI writes
     # is credited to this session rather than to the owner whose key it carries.
-    auth.env.update(_attribution_env(agent_name, session_id))
+    auth.env.update(_attribution_env(agent_id, session_id))
     async with _turn_lock(session_id, settings.AGENT_TURN_TIMEOUT_SECONDS):
         history = await _load_history(owner_user_id, session_id, user_id)
         await memory_service.push_event(

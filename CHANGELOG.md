@@ -322,6 +322,21 @@ everything before it is captured in git history (`git log`), not here.
 
 ### Fixed
 
+- An agent with a non-ASCII name can finally write attributed pages at all. An
+  agent whose display name carries a character outside ASCII — an em dash, a
+  Slovak diacritic — could not make a single page write in its own name: the run
+  identity the CLI carried back to the server included the display name, and HTTP
+  headers are ASCII, so the request died in the CLI's own encoder before it ever
+  left the machine. The channel now carries the agent's id instead of its name
+  (`STASH_AGENT_ID` in the harness, `X-Stash-Agent-Id` on the wire — an id that is
+  ASCII by construction), and the server looks the name up in its own database. Your
+  wiki credit still names the agent exactly, byte for byte — em dashes and diacritics
+  included — because the name is read from the agent row, not claimed on the network;
+  the display name never travels on the wire any more. A machine still running the
+  older `stash` is loud rather than wrong: its commands there report that the run
+  identity is only half present instead of writing anything, and the CLI's own
+  version check names an outdated install as the cause.
+
 - Your personal curator now sizes its own reading from its own experience. How much a pass
   may read is divided out of the run's wall by a measured price, and that price was written
   back only by the developer-platform curator: a personal curator's passes recorded nothing,

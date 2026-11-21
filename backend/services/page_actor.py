@@ -34,15 +34,19 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 
-# The wire names. The server reads them case-insensitively (Starlette headers);
-# `cli/client.py` sends the same spelling. One spelling, both sides.
+# The wire names: the run's session id plus the `agents` row's id. Both values
+# are ASCII by construction, which is why the id and not the display name
+# travels: a header value must survive the ASCII wire, a name need not. The
+# server reads them case-insensitively (Starlette headers); `cli/client.py`
+# repeats this spelling because it ships standalone. One spelling, both sides.
 AGENT_SESSION_HEADER = "X-Stash-Agent-Session"
-AGENT_NAME_HEADER = "X-Stash-Agent-Name"
+AGENT_ID_HEADER = "X-Stash-Agent-Id"
 
 # The environment names `sprite_agent_service` injects into a run's harness so
-# the `stash` CLI inside it can carry the pair back on every request.
+# the `stash` CLI inside it can carry the pair (session id + agent id) back on
+# every request.
 AGENT_SESSION_ENV = "STASH_AGENT_SESSION"
-AGENT_NAME_ENV = "STASH_AGENT_NAME"
+AGENT_ID_ENV = "STASH_AGENT_ID"
 
 
 def _name(value: str, label: str) -> str:

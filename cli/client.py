@@ -41,7 +41,10 @@ REQUEST_TIMEOUT_SECONDS = 30
 # and echoed back as request headers, so a page this CLI writes is credited to
 # that run rather than to the owner of the key it carries. The spellings are the
 # ones in `backend/services/page_actor.py`; the CLI ships standalone, so they are
-# repeated here instead of imported.
+# repeated here instead of imported. The pair carries the run's session id and
+# the agent's id, never its display name: a header value must be ASCII-encodable
+# on the wire, and a display name (an em dash, a Slovak diacritic) is not -
+# naming the agent is the server's job, done by resolving the id in `agents`.
 # Per-request wall time and response size on stderr, for any `stash` command.
 # The listing defect this instrument was built for is invisible in the command's
 # own exit: a 30 s route and a 300 ms route both look like "it took a while".
@@ -49,9 +52,9 @@ REQUEST_TIMEOUT_SECONDS = 30
 TIMING_ENV = "STASH_TIMING"
 
 AGENT_SESSION_ENV = "STASH_AGENT_SESSION"
-AGENT_NAME_ENV = "STASH_AGENT_NAME"
+AGENT_ID_ENV = "STASH_AGENT_ID"
 AGENT_SESSION_HEADER = "X-Stash-Agent-Session"
-AGENT_NAME_HEADER = "X-Stash-Agent-Name"
+AGENT_ID_HEADER = "X-Stash-Agent-Id"
 
 
 def split_source_tokens(value: str) -> list[str] | None:
@@ -74,7 +77,7 @@ class StashClient:
         # The run this CLI is invoked inside, when a server-dispatched agent turn
         # injected it. Both halves arrive together, or neither is sent.
         self._agent_session = os.environ.get(AGENT_SESSION_ENV, "")
-        self._agent_name = os.environ.get(AGENT_NAME_ENV, "")
+        self._agent_id = os.environ.get(AGENT_ID_ENV, "")
         self._http = httpx.Client(base_url=self._base_url, timeout=REQUEST_TIMEOUT_SECONDS)
         self._time_requests = os.environ.get(TIMING_ENV) == "1"
 
@@ -144,15 +147,15 @@ class StashClient:
         )
 
     def _headers(self) -> dict[str, str]:
-        if bool(self._agent_session) != bool(self._agent_name):
+        if bool(self._agent_session) != bool(self._agent_id):
             # StashError, not RuntimeError: the exit-boundary contract in
             # cli/main.py re-raises anything it does not classify, so an
             # unexpected exception prints a traceback at an agent that has a
             # perfectly fixable environment to go fix.
             raise StashError(
                 ATTRIBUTION_ERROR_STATUS,
-                f"{AGENT_SESSION_ENV} and {AGENT_NAME_ENV} must be set together: "
-                f"got session={self._agent_session!r}, agent={self._agent_name!r}. "
+                f"{AGENT_SESSION_ENV} and {AGENT_ID_ENV} must be set together: "
+                f"got session={self._agent_session!r}, agent_id={self._agent_id!r}. "
                 "The server injects the pair (sprite_agent_service); a half pair "
                 "would credit a page write to a run the server cannot name.",
             )
@@ -167,7 +170,7 @@ class StashClient:
             headers["X-Stash-Via"] = "scan"
         if self._agent_session:
             headers[AGENT_SESSION_HEADER] = self._agent_session
-            headers[AGENT_NAME_HEADER] = self._agent_name
+            headers[AGENT_ID_HEADER] = self._agent_id
         return headers
 
     def _request(self, method: str, path: str, **kwargs) -> httpx.Response:

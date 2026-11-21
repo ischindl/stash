@@ -109,27 +109,49 @@ pass and a human click became indistinguishable after the fact.
 ## The header pair, and what it is not
 
 A run's identity reaches the server through two headers, `X-Stash-Agent-Session`
-and `X-Stash-Agent-Name`, sent by the CLI that runs inside the harness:
+and `X-Stash-Agent-Id`, sent by the CLI that runs inside the harness:
 
 ```
-sprite_agent_service injects STASH_AGENT_SESSION + STASH_AGENT_NAME into the
+sprite_agent_service injects STASH_AGENT_SESSION + STASH_AGENT_ID into the
 harness environment  ->  cli/client.py sends the pair  ->  backend/auth.py resolves it
 ```
 
-`backend/auth.py` resolves the pair where the credential is resolved, and:
+Both values are ASCII by construction — a session id is minted server-side from
+ASCII parts, and the agent half is a uuid string. The agent half is an id and not
+the display name because a header field value must be encodable on the wire, and
+a display name is not: an agent named with an em dash or a Slovak diacritic used
+to crash in the CLI's own httpx encoder (`UnicodeEncodeError`, `'ascii' codec`)
+before a single byte left the machine, so such an agent could not make one
+attributed call at all. The name is what the provenance columns want, so the
+server reads it out of the `agents` row itself — the name reaches `page_edits` byte-exact
+without ever travelling.
+
+`backend/auth.py` resolves the pair where the credential is resolved — one
+primary-key read of `agents` scoped to the calling account, then one run proof on
+`history_events` keyed by the name that read returned — and:
 
 - no pair — the request is a human;
+- a credential-less request claiming a pair — 400: nothing names the account
+  that ran it;
 - one header alone — 400. A half pair is a broken injection, and a write credited
-  to a session no name can explain is worse than a refused request. The 400 names
+  to a session no id can explain is worse than a refused request. The 400 names
   the missing header and the present one;
+- an id that is not a uuid — 400 naming `X-Stash-Agent-Id` and quoting the value:
+  the injector guarantees a uuid, so anything else is fabricated or stale;
+- an id naming no `agents` row of this account — 400 naming the `agents` table
+  and the id the caller supplied (never whose account the lookup keyed on);
 - a pair that names no `(agent_name, session_id, owner_user_id)` row in
   `history_events` — 400, with the failing check, the table, and both values in
-  the message. The check is one indexed lookup (`idx_history_events_agent_session`).
+  the message. That check is one indexed lookup (`idx_history_events_agent_session`).
 
-The 400s are self-diagnosing on purpose. The most likely way this check starts
-refusing a legitimate claim is a history-pruning job that deletes the
-`history_events` rows a run's proof lived in, and a field 400 nobody can read is
-how that would announce itself.
+The 400s are self-diagnosing on purpose. The likeliest ways a legitimate claim
+starts getting refused: the agent was renamed while its run was in flight (the
+proof keys on the name as the `agents` row holds it now, while the run's
+`history_events` rows carry the name as of dispatch — one run, until its next
+turn), and the day a history-pruning job starts deleting the `history_events`
+rows a run's proof lived in. A field 400 nobody can read is how those would
+announce themselves. A stale CLI is deliberately not on this list: it never gets
+this far, which is the next section's subject.
 
 **The claim is provenance, never permission.** Page authorization stays entirely
 in `_check_content_access` and the owner-scoped `WHERE` clauses, unchanged. The
@@ -137,16 +159,43 @@ claim is owner-scoped, so the worst a liar achieves is a wrong provenance row
 inside their own scope — and in practice a pair stolen from another account is
 refused outright, because it names no run of theirs.
 
-**An installed CLI older than this change records the human verdict.** The CLI
-ships standalone (`stashai` on PyPI) and a provisioned box installs it once:
-`backend/services/sprite_service.py` runs `command -v stash > /dev/null || pip
-install --user stashai`, so a box that already has a `stash` keeps the one it has.
-Such a CLI sends no pair, and no pair is the human answer, not an error — its
-writes land as `agent_name IS NULL`. So a run whose box carries an older CLI looks
-exactly like a person in this table, and the way to tell is that the row's page has
-a `history_events` run behind it and no writer: check the run's existence, then
-check the CLI version on that box. This is why the release is two legs and not one
-(see `docs/trunk-publish-and-deploy.md` for the publishing procedure).
+**An installed CLI older than this pair fails by generation.** The CLI ships
+standalone (`stashai` on PyPI) and a provisioned box installs it once:
+`backend/services/sprite_service.py` runs
+`command -v stash > /dev/null || python3 -m pip install --user --break-system-packages stashai`,
+so a box that already has a `stash` keeps the one it has. The package's own
+self-upgrade hook runs only under `uv` — `stashai/plugin/session_upload.py`
+returns immediately when `shutil.which("uv")` is empty — so a pip-provisioned box
+keeps the build it was handed until a human upgrades it. Which stale generation
+reaches which failure follows from where its environment comes from:
+
+- A CLI older than the *pair itself* (older than STAS-459) reads neither
+  variable, so it sends nothing. No pair is the human answer, not an error: its
+  writes land as `agent_name IS NULL` and look exactly like a person in this
+  table. The way to tell is that the page has a `history_events` run behind it
+  and no writer.
+- A CLI from the **name-pair era** — the generation that sent the pair's second
+  half as the agent's display name, before STAS-498 moved it to the agent id —
+  fails before the network. The deployed server injects `STASH_AGENT_SESSION` +
+  `STASH_AGENT_ID`; that CLI reads the session half, looks for the name half that
+  is no longer injected, finds it absent, and its own half-pair guard in
+  `cli/client.py` raises on the first call of the turn, reads included. It exits
+  `EXIT_INTERNAL_ERROR` (2) with a message naming the two variables its own build
+  expects side by side, and no request is ever sent — the lane makes zero
+  attributed calls rather than one refused call.
+- The server's half-pair 400 naming `X-Stash-Agent-Id` is the narrower case: a
+  harness dispatched *before* the server deploy still holds the old environment,
+  so its CLI sends `X-Stash-Agent-Session` plus a name header the server no
+  longer reads, and the request arrives as a session without an id. It ends with
+  that in-flight run.
+
+The cure is the same in each case and it lives on the box: upgrade `stash`.
+`X-Stash-Cli-Latest` on every response is the field instrument that names the
+lag — the CLI compares its own version to it and prints the difference. Hence the
+release is two legs in a fixed order: publish `stashai` to PyPI, converge the CLI
+on every box that keeps one, and only then deploy the server. Deploying the
+server first puts not-yet-upgraded boxes into the second bullet (see
+`docs/trunk-publish-and-deploy.md` for the publishing procedure).
 
 ## Tests
 
@@ -155,7 +204,13 @@ check the CLI version on that box. This is why the release is two legs and not o
 - `backend/tests/test_page_write_actors.py` — every lane above proved at its own
   edge, with a guard that a lane declaring nothing writes nothing.
 - `backend/tests/test_agent_attribution.py` — the header pair through the real
-  auth dependency, the refusals, and the environment a harness child is exec'd
-  with (key provider and a pinned self-hosted box alike).
-- `cli/tests/test_agent_attribution_headers.py` — the CLI half, plus a drift guard
-  on the four names, which are spelled independently at each end.
+  auth dependency, every refusal (no credential, half pair, non-uuid id, id
+  naming no agent of this account, pair naming no run) each with its own message,
+  a U+2014-named agent credited byte-exact while every wire value stays ASCII,
+  and the environment a harness child is exec'd with (key provider and a pinned
+  self-hosted box alike), asserting the id is injected and the old name variable
+  is gone.
+- `cli/tests/test_agent_attribution_headers.py` — the CLI half, a drift guard on
+  the four names (which are spelled independently at each end) plus the negative
+  guard that neither removed spelling reappears, and an encoder-level test that a
+  display name cannot cross the wire while an id can.

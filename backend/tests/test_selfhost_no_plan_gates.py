@@ -417,5 +417,11 @@ async def test_the_failure_a_scheduled_lane_records_names_the_setting(
     monkeypatch.setattr(settings, "OPENROUTER_API_KEY", None)
     _, uid = await _register(client)
 
+    # run_chat refuses a lane that names no agent row before it touches
+    # credentials, so this test supplies the real default-agent id and the
+    # OPENROUTER_API_KEY refusal from `agent_auth.resolve` stays the failure.
+    default_agent = await agent_service.get_or_create_default(uid)
     with pytest.raises(RuntimeError, match="OPENROUTER_API_KEY"):
-        await sprite_agent_service.run_chat(uid, "Owner", uid, f"sess-{uuid.uuid4()}", "hi")
+        await sprite_agent_service.run_chat(
+            uid, "Owner", uid, f"sess-{uuid.uuid4()}", "hi", agent_id=default_agent["id"]
+        )

@@ -780,6 +780,7 @@ def part_env(monkeypatch):
         credential_id=None,
         persona=None,
         agent_name=None,
+        agent_id=None,
     ):
         digest_calls.append((session_id, message))
         return "extracts: the window's distilled report"
@@ -1139,6 +1140,7 @@ async def test_reports_fold_in_part_order_whatever_order_the_parts_finished_in(
         credential_id=None,
         persona=None,
         agent_name=None,
+        agent_id=None,
     ):
         part_env.digest_calls.append((session_id, message))
         closing = re.search(r"--until (\S+)", message)
@@ -1430,6 +1432,7 @@ async def test_two_reports_about_one_page_reach_one_writer_carrying_both_claims(
         credential_id=None,
         persona=None,
         agent_name=None,
+        agent_id=None,
     ):
         part_env.digest_calls.append((session_id, message))
         claims = re.findall(r"the window ending (\S+) spoke here", message)
