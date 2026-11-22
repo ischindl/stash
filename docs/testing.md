@@ -60,20 +60,23 @@ a verdict names; for the wall a whole-suite run has to be given before it names 
 ### Running tests
 
 ```bash
-# Ensure the test database exists (standalone pgvector container on 5432)
+# Ensure the test database exists (standalone pgvector container on 5432).
+# Name a database of your own: every other worktree on this machine truncates the shared one.
 docker start stash-pg 2>/dev/null || docker run -d --name stash-pg -p 5432:5432 \
   -e POSTGRES_USER=stash -e POSTGRES_PASSWORD=stash -e POSTGRES_DB=stash \
   pgvector/pgvector:pg16
-psql postgresql://stash:stash@localhost:5432/postgres -c "CREATE DATABASE stash_test"
+psql postgresql://stash:stash@localhost:5432/postgres -c "CREATE DATABASE stasNNN_test"
 
-# Run migrations and tests
-DATABASE_URL=postgresql://stash:stash@localhost:5432/stash_test \
+# Migrations are their own step: run this once against that database, before any test run,
+# and never as part of the test invocation.
+DATABASE_URL=postgresql://stash:stash@localhost:5432/stasNNN_test \
   python -m alembic upgrade head
-
-DATABASE_URL=postgresql://stash:stash@localhost:5432/stash_test \
-TEST_DATABASE_URL=postgresql://stash:stash@localhost:5432/stash_test \
-  python -m pytest backend/tests/ -v
 ```
+
+Testing itself has no command here on purpose: a `backend/tests` run is longer than the tool call that
+would wait for it, and a call that waits hands back no counts. Use the body under
+[The whole suite outlives a default tool call](#the-whole-suite-outlives-a-default-tool-call) - it is the
+only form of that run this document permits, and it names the budget the run needs.
 
 ### The whole suite outlives a default tool call
 
@@ -140,8 +143,13 @@ back with no `passed`/`skipped` line and therefore satisfies no acceptance crite
 result, and repeating it is not progress. `fn_run_verification` is the other sanctioned form, and it is for
 a command that fits inside one call: a package, a file, a `-k` slice. The slowest `fn_run_verification` row
 this project's `.fusion/tasks/STAS-*/agent-log.jsonl` ever returned is 1 677 894 ms on an `executor` row,
-so a suite of this length sits at the edge of what that surface has handed back, and this card's own 700 s
-probe through it returned no row at all. A whole-suite run therefore goes through the detached form above,
+so a suite of this length sits at the edge of what that surface has handed back. One whole-suite attempt
+through it is on the record unanswered: card 492 announced `Now the full suite (AC (h) requires it)` at
+`2026-11-22T12:24:43.173Z` in `.fusion/tasks/STAS-492/agent-log.jsonl` and issued the call one row later
+at `12:24:43.653Z`, and neither a `tool_result` row nor a `tool_error` row ever answered it - the next row
+is a `status` row at `13:25:57.909Z`, when a fresh run began. The `sleep 700` probe above is not that
+evidence: it was a `bash` call, issued at `2026-11-22T17:33:48.021Z` on card 505.
+A whole-suite run therefore goes through the detached form above,
 not through a call. Skipped tests are named, never folded into a pass claim, and a coverage-floor failure is
 reported as itself beside the counts, not merged into them.
 
