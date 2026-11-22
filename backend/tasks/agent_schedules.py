@@ -346,27 +346,38 @@ async def _run_turn(agent, stamp, workspace, read, draining: bool = False, windo
 async def _sample_personal_pass(agent, window, wall: float, *, on_grant: bool = False) -> None:
     """File what one personal pass cost, so the next grant is priced rather than seeded.
 
-    The personal lane had no `curator_calibration.observe` call anywhere, and only the
-    scoped lane did, so `curator_pass_samples` held zero rows and `personal_budget_of`
-    answered from `SEED_SECONDS_PER_CHARACTER` for every personal run ever run — the
-    founder lane's 4 750-character grant on 2026-11-21 was that seed, over a pass that
-    spent 778 s on 1 735 characters. A grant that is never read back is not a price.
+    The personal lane had no calibration sample at all, and only the scoped lane filed
+    one, so `curator_pass_samples` held zero rows and `personal_budget_of` answered from
+    `SEED_SECONDS_PER_CHARACTER` for every personal run ever run — the founder lane's
+    4 750-character grant on 2026-11-21 was that seed, over a pass that spent 778 s on
+    1 735 characters. A grant that is never read back is not a price.
 
     The two shapes of unfinished differ, and so do the characters they may file:
 
     * a pass that committed files its OWN characters, the same number
       `_log_personal_pass` prints, so the meter line and the row cannot disagree;
     * a pass the wall cut committed nothing and knows only what it was handed, so it
-      files the GRANT over the wall it spent. `wall / grant` is never cheaper than the
-      truth on such a run, and `price` takes the most expensive sample in its window,
-      so a bound can only shrink the next grant, never inflate it.
+      files the GRANT over the wall it spent. Such a pass read AT MOST its grant in
+      those seconds, so `seconds / grant` is a LOWER bound on what a character cost,
+      never an upper one. Since `price` takes the most expensive sample in its window,
+      a bound can be ignored outright: it cannot raise a price and so cannot shrink a
+      grant. Its work is narrower than that — it keeps a night that ran 778 s from
+      teaching that the run cost nothing, and it is the row that prices the lane while
+      it is the only row.
 
-    A personal pass's seconds are the whole run — digest and wiki writer together —
-    because the writer is what the read exists to feed. On the founder lane that share
-    is what this row will teach: 45 s of digest against ~730 s of writer over 1 735
-    characters is 0,45 s per character, four times the seed, and the lane's grants will
-    fall to roughly a quarter. That is the honest reading of what a character on this
-    lane costs, not a rounding of the seed.
+    A personal pass's seconds are the whole turn — digest read AND wiki writer — because
+    the writer is what the read exists to feed, and one wall wraps both. The unit the row
+    therefore carries is `(digest + writer) seconds over digest characters`, while
+    `personal_budget_of` already takes `PERSONAL_WRITE_RESERVE_SECONDS` off the wall
+    BEFORE dividing by that rate: the writer's share is charged twice, and the row is
+    dearer per character than a digest-only measurement would be. Measured on the founder
+    lane: 45 s of digest against ~730 s of writer over 1 735 characters is 0,45 s per
+    character, 3,7 times the seed, and the next grant there falls from 4 750 to 1 270.
+
+    The key is `key_from_configuration(agent)` — the key the grant itself was priced at,
+    which is the scoped lane's `route_class:curator_wiki` too. One bucket, so a personal
+    row prices the scoped lane's passes as well, and `price` being a max moves both lanes
+    toward the smaller grant.
     """
     from ..services import curator_calibration
 
@@ -668,10 +679,12 @@ async def _run_curator_locked(
             return
         await agent_service.mark_run_failed(agent_id, str(e), metered=metered)
         if isinstance(e, sprite_agent_service.RunCeilingExceeded):
-            if window is not None:
+            if window is not None and not e.by_user:
                 # Shielded, because this branch re-raises: an awaited write on a task the
                 # wall is abandoning would never reach the pool, and the cut is exactly
-                # the outcome whose price has to reach the next grant.
+                # the outcome whose price has to reach the next grant. A run a human
+                # stopped files nothing — its seconds went into a feed it abandoned — but
+                # it still reports `failed` and the catch-up below still runs.
                 await asyncio.shield(
                     _sample_personal_pass(agent, window, time.monotonic() - started, on_grant=True)
                 )
@@ -844,9 +857,12 @@ async def _run_drain_part(agent: dict, part_id: str, read_position, slot_to, met
             except sprite_agent_service.RunCeilingExceeded as exc:
                 # The cut arrived as the cause the un-parted run already speaks: name
                 # the part and its fate, because the slot is what a reader must find.
+                # The cause's own attribution carries over — a part cut by the row's wall
+                # stays a wall cut, and a part whose turn a user stopped stays a stop.
                 raise sprite_agent_service.RunCeilingExceeded(
                     f"drain part {part_id} was cut inside the row's run wall of {wall}s ({exc}); "
-                    "the slot stays open at its committed position for the next dispatch"
+                    "the slot stays open at its committed position for the next dispatch",
+                    by_user=exc.by_user,
                 ) from exc
             through = await curation_service.complete_through(
                 owner,
@@ -1922,12 +1938,18 @@ async def _run_scheduled_locked(agent, stamp, workspace, metered: bool = True):
             return
         logger.exception("agent schedule: run failed for agent %s", agent_id)
         await agent_service.mark_run_failed(agent_id, str(e), metered=metered)
-        if window is not None and isinstance(e, sprite_agent_service.RunCeilingExceeded):
+        if (
+            window is not None
+            and isinstance(e, sprite_agent_service.RunCeilingExceeded)
+            and not e.by_user
+        ):
             # Named rather than caught by the bare `except` above: a run that died of a
             # broken query knows nothing about the cost of a character, and filing its
             # seconds as a price would shrink later grants for the wrong reason. A run
             # the wall cut knows exactly one thing worth filing — the grant it was
-            # handed, which it spent the whole wall on.
+            # handed, which it spent the whole wall on. A turn the operator stopped is
+            # not that run: it reports `failed` and alerts exactly as it did, and its
+            # seconds went into a feed it abandoned, so it teaches nothing.
             await _sample_personal_pass(
                 agent, window, time.monotonic() - turn_started, on_grant=True
             )

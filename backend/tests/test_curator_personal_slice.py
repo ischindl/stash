@@ -10,6 +10,7 @@ Every test here is about the agreement between the read and the commit. A change
 shortens the feed, or only moves the commit, fails one of them.
 """
 
+import asyncio
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
@@ -548,6 +549,58 @@ async def _samples(pool, key):
     )
 
 
+async def _dispatch_once(client, pool, monkeypatch, turn, sizes: list[int], catchup=None):
+    """Drive the dispatcher's own manual run over `sizes` events with a wall paying 2 700.
+
+    The sibling of `_tick_once` for `_run_curator_now`, the path a user triggers: same
+    priced route, same stubbed turn, same catch-up stub, but the other body - the one
+    whose failure branch re-raises and therefore shields its sample write. A turn that
+    returned instantly would measure zero seconds, and `observe` refuses a zero-second
+    row, so the fake sleeps.
+    """
+    from backend.services import curator_calibration, sprite_agent_service
+    from backend.tasks import agent_schedules
+
+    owner = await _owner(client)
+    curator = await agent_service.get_or_create_curator(owner)
+    curator_id = UUID(curator["id"])
+    stamps = await _feed(pool, owner, sizes)
+    # A quiet night still needs a watermark to move: the run reads from here whether or
+    # not anything sits ahead of it.
+    await pool.execute(
+        "UPDATE agents SET curated_through = $2 WHERE id = $1",
+        curator_id,
+        (stamps[0] if stamps else datetime.now(UTC) - timedelta(days=3)) - timedelta(minutes=1),
+    )
+
+    async def priced(_key):
+        return 0.10, "test"
+
+    async def sleeping_turn(*_args, **_kwargs):
+        await asyncio.sleep(0.05)
+        return await turn()
+
+    async def no_catchup(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(curator_calibration, "price", priced)
+    monkeypatch.setattr(agent_service, "run_wall_seconds", lambda *_a: 570)
+    monkeypatch.setattr(sprite_agent_service, "run_scheduled", sleeping_turn)
+    # A caller that wants to see the moment the NEXT pass would be priced passes its own
+    # stub; the ordering of the cut's sample write against that moment is a claim.
+    monkeypatch.setattr(
+        agent_schedules,
+        "_dispatch_curator_catchup",
+        no_catchup if catchup is None else catchup,
+    )
+
+    await agent_schedules._run_curator_now(curator_id, metered=False)
+    key = curator_calibration.key_from_configuration(
+        await agent_service.get_agent_by_id(curator_id)
+    )
+    return curator_id, key, stamps
+
+
 @pytest.mark.asyncio
 async def test_a_committed_personal_pass_teaches_the_price_it_paid(
     client, _db_pool, sprite_exec, monkeypatch
@@ -585,13 +638,20 @@ async def test_a_personal_pass_the_wall_cuts_teaches_a_lower_bound_on_the_grant(
     The cut is this lane's dominant outcome — the founder's lane ended on its ceiling on
     nearly every night of the past three weeks — so a sample written only on success
     would teach the price from the lane's rarest pass and hand the next tick the same
-    grant that just died. The row carries the GRANT (2 700) over the wall spent, which
-    can only ever shrink a later grant, never inflate one.
+    grant that just died. The row carries the GRANT (2 700) over the wall spent, and such
+    a pass read at most its grant in those seconds, so that ratio is a LOWER bound on what
+    a character cost: `price` answers the maximum of its window, so a bound can be ignored
+    outright and can never raise a price. What it does is stop a cut night from teaching
+    that the run cost nothing.
     """
     from backend.services import sprite_agent_service
 
     async def cut(_kwargs):
-        raise sprite_agent_service.RunCeilingExceeded("Digest turn exceeded its wall of 570s")
+        # `by_user=False`: the wall's own cut is the one outcome a filed sample is honest
+        # about, and this test is the witness that it still files.
+        raise sprite_agent_service.RunCeilingExceeded(
+            "Digest turn exceeded its wall of 570s", by_user=False
+        )
 
     curator_id, key, _seen, _stamps = await _tick_once(client, _db_pool, monkeypatch, cut)
 
@@ -684,3 +744,169 @@ async def test_every_model_phase_of_a_personal_run_reports_its_own_cost(
 
     bracket = _turn_bracket(caplog.records, str(curator_id))
     assert len(bracket) == 2, bracket
+
+
+@pytest.mark.asyncio
+async def test_a_turn_a_human_stopped_teaches_the_price_nothing(
+    client, _db_pool, sprite_exec, monkeypatch
+):
+    """A stopped turn is not a wall cut, and the loop must not price a run it never finished.
+
+    The row this gate refuses would have said: a 2 700-character grant over the five
+    seconds a human took to hit Stop is 0,0011 seconds per character, and `price` takes
+    the MAX of its window, so that one row would price the lane at a fortieth of its seed
+    and hand the next pass the 8 192-character ceiling. A stopped turn spent its seconds
+    on a feed it abandoned, so its rate measures nothing; STAS-495 owns the same class of
+    fabricated-cheap sample on the scoped lane.
+
+    The gate reads the exception's own `by_user` rather than an elapsed-time threshold:
+    which wall fired is the fact `_wall_deadline` exists to hand back, and a threshold
+    here would re-implement the wall's law inside a caller.
+    """
+    from backend.services import sprite_agent_service
+
+    async def stopped(_kwargs):
+        raise sprite_agent_service.RunCeilingExceeded(
+            "Digest turn was stopped before finishing the window it was reading (570s wall)",
+            by_user=True,
+        )
+
+    curator_id, key, _seen, stamps = await _tick_once(client, _db_pool, monkeypatch, stopped)
+
+    assert await _samples(_db_pool, key) == [], "a stop files nothing"
+    row = await _db_pool.fetchrow(
+        "SELECT curated_through, last_run_outcome FROM agents WHERE id = $1", curator_id
+    )
+    assert row["last_run_outcome"] == "failed", "refusing the sample does not soften the report"
+    assert row["curated_through"] == stamps[0] - timedelta(minutes=1)
+
+
+@pytest.mark.asyncio
+async def test_the_manual_dispatch_files_the_row_its_own_two_lines_print(
+    client, _db_pool, sprite_exec, monkeypatch, caplog
+):
+    """On the manual path one reading of the clock feeds both the log line and the row.
+
+    The dispatcher is the body that prints the committed meter AND the bracket's `wall=`,
+    so it is the one place a reader can check a row against the worker log. Both numbers
+    are parsed out of the captured records rather than restated, because the claim is that
+    they cannot disagree - a second copy of either figure in this test would prove
+    nothing. The landed calibration tests drove the beat's tick only, so this row was
+    wired without a witness.
+    """
+    import logging
+    import re
+
+    async def finish():
+        return "curated"
+
+    with caplog.at_level(logging.INFO, logger="backend.tasks.agent_schedules"):
+        _curator_id, key, _stamps = await _dispatch_once(
+            client, _db_pool, monkeypatch, finish, [1000] * 4
+        )
+
+    meters = [
+        r.message
+        for r in caplog.records
+        if "personal curator" in r.message and "characters=" in r.message
+    ]
+    brackets = [
+        r.message for r in caplog.records if "turn finished lane=personal wall=" in r.message
+    ]
+    assert len(meters) == 1 and len(brackets) == 1, "one committed pass, one bracket"
+
+    rows = await _samples(_db_pool, key)
+    assert len(rows) == 1
+    assert rows[0]["characters"] == int(re.search(r"characters=(\d+)", meters[0]).group(1)), (
+        "the row's characters ARE the meter's"
+    )
+    # The bracket line prints its wall through `%.1f`, so the printed text is the rounded
+    # twin of the row's float. Compared at the printing's own precision -- the one the two
+    # consumers share -- rather than against a half-open bound that could flake on an
+    # exact half-tenth of a second.
+    printed_wall = re.search(r"wall=([0-9.]+)s", brackets[0]).group(1)
+    assert f"{rows[0]['seconds']:.1f}" == printed_wall, "one reading, printed twice"
+
+
+@pytest.mark.asyncio
+async def test_the_manual_cut_files_its_bound_before_the_next_pass_is_priced(
+    client, _db_pool, sprite_exec, monkeypatch
+):
+    """The dispatcher's cut branch files its bound, and files it before the catch-up runs.
+
+    This is the branch that re-raises, which is why its write is shielded: an awaited
+    write on a task the wall is abandoning would never reach the pool, and a row landing
+    AFTER the catch-up dispatch has priced the next pass prices nothing. The beat's tick
+    has its own witness above; this one drives `_run_curator_now`, the other body.
+
+    The catch-up stub is the probe rather than an assertion about source order: it reads
+    the table at the exact moment the next pass's pricing begins, so the ordering is
+    measured. The characters are the GRANT, because a cut personal run committed nothing.
+    """
+    from backend.services import curator_calibration, sprite_agent_service
+
+    rows_when_priced: list[int] = []
+    run_agent: list[UUID] = []
+
+    async def cut():
+        raise sprite_agent_service.RunCeilingExceeded(
+            "Curator curation exceeded its run time limit of 570s and left the feed unread",
+            by_user=False,
+        )
+
+    async def peek(agent, *_args, **_kwargs):
+        # The stub is handed the very agent dict the run owns, which is the only way to
+        # name this run afterwards: `_owner` registers a fresh user per call, so a lookup
+        # made here would build a second curator and read its empty row.
+        run_agent.append(UUID(agent["id"]))
+        rows_when_priced.append(
+            await _db_pool.fetchval("SELECT count(*) FROM curator_pass_samples")
+        )
+
+    with pytest.raises(sprite_agent_service.RunCeilingExceeded):
+        await _dispatch_once(client, _db_pool, monkeypatch, cut, [1000], catchup=peek)
+
+    assert rows_when_priced == [1], "the bound is durable before the next pass is priced"
+
+    agent = await agent_service.get_agent_by_id(run_agent[0])
+    key = curator_calibration.key_from_configuration(agent)
+    rows = await _samples(_db_pool, key)
+    assert [r["characters"] for r in rows] == [2700], "the grant it was handed, not a read"
+    outcome = await _db_pool.fetchval(
+        "SELECT last_run_outcome FROM agents WHERE id = $1", run_agent[0]
+    )
+    assert outcome == "failed", "the cut still reports itself failed while teaching once"
+
+
+@pytest.mark.asyncio
+async def test_a_personal_pass_that_read_nothing_leaves_the_calibration_untaught(
+    client, _db_pool, sprite_exec, monkeypatch, caplog
+):
+    """A quiet night commits, prints `characters=0`, and teaches the price nothing.
+
+    `_budget_kept` answers None for an empty feed and `read_window` sums nothing, so the
+    window's characters are 0 while the run still succeeds. Without the landed guard this
+    shape raises `ValueError` out of `observe` INSIDE the run's own `try`, and a night with
+    nothing to curate would resolve `failed` and send an alert.
+
+    The reachable shape is the manual dispatch: the beat's tick refuses a curator with no
+    pending input earlier, at `_pending_input` and `mark_run_skipped("no_changes")`, so a
+    quiet night never reaches the sampler through `_tick_once` and this test does not
+    pretend it did.
+    """
+    import logging
+
+    async def finish():
+        return "curated"
+
+    with caplog.at_level(logging.INFO, logger="backend.tasks.agent_schedules"):
+        curator_id, key, _stamps = await _dispatch_once(client, _db_pool, monkeypatch, finish, [])
+
+    assert await _samples(_db_pool, key) == [], "nothing was read, so nothing was learned"
+    untaught = [r.message for r in caplog.records if "left the calibration untaught" in r.message]
+    assert len(untaught) == 1
+    row = await _db_pool.fetchrow(
+        "SELECT curated_through, last_run_outcome FROM agents WHERE id = $1", curator_id
+    )
+    assert row["last_run_outcome"] == "ran", "an untaught night is still a successful one"
+    assert row["curated_through"] is not None

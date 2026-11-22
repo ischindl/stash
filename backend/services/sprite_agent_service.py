@@ -356,7 +356,15 @@ class RunCeilingExceeded(RuntimeError):
     Both curator lanes raise it — the scoped lane and, since STAS-447, the personal
     lane too. It is the alternative to the worker's `SoftTimeLimitExceeded`, which
     arrives from outside the coroutine and resolves none of this.
+
+    `by_user` is what that dispatch branches on, because the calibration sample a cut
+    run files is honest only about a wall cut: a turn a human stopped spent its seconds
+    on a feed it abandoned, so its rate is no measurement of what a character costs.
     """
+
+    def __init__(self, *args, by_user: bool):
+        super().__init__(*args)
+        self.by_user = by_user
 
 
 async def _endpoint_reachable(sprite: sprite_service.Sprite, base_url: str) -> bool:
@@ -969,23 +977,29 @@ async def run_digest_turn_under_wall(
     `RunCeilingExceeded`: a turn that never finished reading has nothing an
     `advance_drain` may lawfully commit."""
     in_flight: dict[str, str | None] = {"session_id": None}
-    deadline, _cut = _wall_deadline(wall, in_flight)
+    deadline, cut = _wall_deadline(wall, in_flight)
     try:
         report = await asyncio.wait_for(
             run_digest_phase(agent, run_stamp, owner_name, until, in_flight),
             timeout=wall + _WALL_RESCUE_GRACE_SECONDS,
         )
     except TimeoutError as exc:
+        # The rescue fired because the cooperative flag was ignored: the wall ended this
+        # turn, and nobody else could have.
         raise RunCeilingExceeded(
-            f"Digest turn exceeded its wall of {wall}s and left the window unread"
+            f"Digest turn exceeded its wall of {wall}s and left the window unread",
+            by_user=False,
         ) from exc
     finally:
         deadline.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await deadline
     if report == STOPPED_NOTE:
+        # One codepath answers both a wall's cooperative cut and a user's Stop; the flag
+        # `_wall_deadline` exists to hand back is what tells them apart here.
         raise RunCeilingExceeded(
-            f"Digest turn was stopped before finishing the window it was reading ({wall}s wall)"
+            f"Digest turn was stopped before finishing the window it was reading ({wall}s wall)",
+            by_user=not cut["deadline"],
         )
     return report
 
@@ -1092,7 +1106,9 @@ async def _run_scheduled_turn(
                     timeout=agent_service.run_wall_seconds(agent),
                 )
             except TimeoutError as exc:
-                raise RunCeilingExceeded("Scoped curation exceeded its run time limit") from exc
+                raise RunCeilingExceeded(
+                    "Scoped curation exceeded its run time limit", by_user=False
+                ) from exc
     user = await user_service.get_user_by_id(user_id)
     if user is None:
         return ""
@@ -1168,7 +1184,7 @@ async def _run_scheduled_turn(
         result = await asyncio.wait_for(_curator_turn(), timeout=wall + _WALL_RESCUE_GRACE_SECONDS)
     except TimeoutError as exc:
         # The rescue: the turn ignored the cooperative flag, so it is cancelled here.
-        raise _ceiling_exceeded(wall, agent, draining, read_position) from exc
+        raise _ceiling_exceeded(wall, agent, draining, read_position, by_user=False) from exc
     finally:
         deadline.cancel()
         with contextlib.suppress(asyncio.CancelledError):
@@ -1186,7 +1202,7 @@ def _ceiling_exceeded(
     draining: bool,
     read_position: Position,
     *,
-    by_user: bool = False,
+    by_user: bool,
 ) -> RunCeilingExceeded:
     """Build the cause a cut personal-lane curator run leaves in `last_run_error`.
 
@@ -1215,7 +1231,9 @@ def _ceiling_exceeded(
         if by_user
         else f"Curator curation exceeded its run time limit of {wall}s"
     )
-    return RunCeilingExceeded(f"{head} and left the feed unread, reading from {unread_from}")
+    return RunCeilingExceeded(
+        f"{head} and left the feed unread, reading from {unread_from}", by_user=by_user
+    )
 
 
 async def _scheduled_chat_turn(

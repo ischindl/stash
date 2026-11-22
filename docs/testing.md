@@ -417,6 +417,30 @@ dies identically. The meter line a committed pass prints now carries `seconds_pe
 the pass measured), `priced_seconds_per_character=` (what it was charged) and `price_source=`
 (`seed` or `measured`): two independent numbers, so a lane can be read from the log without a query.
 
+Both of those moments now exist on the PERSONAL lane too (`_sample_personal_pass`,
+`backend/tasks/agent_schedules.py`), which had no sample at all until STAS-499 and therefore priced
+every founder grant off `SEED_SECONDS_PER_CHARACTER`. Read its rows by their own unit, because it is
+not the scoped lane's: one personal turn is two model phases inside one wall, so a row carries
+`(digest + writer) seconds over digest characters`, while `personal_budget_of` subtracts
+`PERSONAL_WRITE_RESERVE_SECONDS` (270) from the wall BEFORE dividing by that same rate — the writer's
+share is charged twice, and the row is systematically dearer per character than a digest-only
+measurement (the founder pass's 778,2 s over 1 735 characters is 0,4485 s/char, 3,7 times its 0,12
+seed, and the next grant there is `int(570 / 0,4485)` = 1 270 characters, not 4 750). The key is
+`key_from_configuration(agent)`, which is the scoped lane's `route_class:curator_wiki` as well: one
+bucket, so `price`'s max means a personal row prices the scoped lane's passes too, in the direction of
+the smaller grant on both. And the cut's sample is a LOWER bound, not a measurement — a run the wall
+cut read at most its grant in the seconds it spent, so `seconds / grant` cannot be dearer than the
+truth, and since `price` answers the maximum of its window a bound may simply be ignored: it can never
+raise a price. Its job is to stop a night that ran 778 s teaching that the run cost nothing. The row
+this card refuses is the dear-by-absence one: `RunCeilingExceeded` now carries `by_user`, so a turn a
+human stopped files NOTHING on either personal body — five stopped seconds over a 2 700-character
+grant would otherwise have taught 0,0011 s/char, and as the max of a window that single row would hand
+the next pass `MAX_PASS_INPUT_CHARS`. `test_a_turn_a_human_stopped_teaches_the_price_nothing`,
+`test_the_manual_dispatch_files_the_row_its_own_two_lines_print`,
+`test_the_manual_cut_files_its_bound_before_the_next_pass_is_priced` and
+`test_a_personal_pass_that_read_nothing_leaves_the_calibration_untaught` in
+`backend/tests/test_curator_personal_slice.py` are those four claims, one each.
+
 `CURATOR_CATCHUP_PASSES` (`backend/config.py`, default 8) is a CADENCE bound and never was the
 entitlement guard: `_chain_permitted` is what refuses a free lane's next paid pass, and the chain
 dispatches `metered=False`, so raising the cadence moves `month_run_count` not at all while still

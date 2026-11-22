@@ -302,9 +302,27 @@ Before starting:
   which is the line to watch while a backlog drains. The scoped line carries the granted
   `budget=`, the calibrated seconds-per-character, and what the pass's own characters
   actually cost (`seconds_per_character=`), so calibration drift reads off the worker log
-  without dialing the model. The personal line names the agent, the instant it committed
-  through, and `lane=personal`; it carries no `budget=` or `seconds_per_character=` because
-  the personal lane is not sized or counted in characters the way the scoped batch is.
+  without dialing the model. The personal lane prints three lines, and only one of
+  them is its calibration row's twin:
+
+  * `agent schedule: personal curator <id> committed through=… characters=… budget=…` is
+    the committed pass, and its `characters=` IS the characters the calibration row filed.
+    The row's seconds are the `wall=` of that same run's bracket line, `agent schedule:
+    curator <id> turn finished lane=personal wall=…` — one reading of the clock feeds both,
+    so a row can be checked against the log without a database query. Its unit is the whole
+    turn's seconds over the digest's characters, which `docs/testing.md` states in full.
+  * a pass the wall cut commits nothing, so it prints no `characters=` at all: from inside
+    its own failure branch it files the GRANT over the wall it spent, a lower bound on what
+    a character cost (shielded on the manual path, because that branch re-raises).
+  * `curator pass=1 agent=… committed_through=… lane=personal` is the DRAIN-rate line, and
+    it counts nothing by design: a drain pass is sized by `drain_budget_of`, reports only,
+    and never carried a character count. It carries no `budget=` or
+    `seconds_per_character=` because the function that prints it knows only the boundary it
+    advanced to and the lane it stands on.
+
+  A personal turn a human stopped files no row at all: `RunCeilingExceeded` now says who cut
+  the run, and the seconds of a feed somebody abandoned are not what a character costs. That
+  run still reports `failed`, still alerts, and teaches the price nothing.
 
 ```bash
 docker compose -f docker-compose.prod.yml config --quiet
