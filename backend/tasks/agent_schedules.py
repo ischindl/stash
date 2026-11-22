@@ -365,6 +365,11 @@ async def _sample_personal_pass(
       the GRANT over the seconds its own reading spent, read back out of the events that
       phase wrote (`sprite_agent_service.read_phase_seconds`).
 
+    Neither sample is ever ignored: `price` answers the most expensive row in its window and
+    seeds only while that window is empty, so a filed rate IS the price whenever it is the
+    dearest row in the window — it can sit above the seed and shrink a later grant, and only
+    a dearer measured row already in the window outprices it.
+
     The two directions differ too. A committed pass's rate is what a character cost it, and
     a cut pass's rate is a price of the READ: a digest that got through less than it was
     handed files fewer seconds per granted character than the truth, so a lane whose passes

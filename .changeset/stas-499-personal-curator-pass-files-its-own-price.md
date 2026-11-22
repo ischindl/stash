@@ -15,6 +15,11 @@ Both shapes of a personal pass now teach, in `backend/tasks/agent_schedules.py`:
   reading spent, which is a price of the read: it can raise a later grant to the 8 192
   ceiling, and it cannot shorten the writer that filled the wall.
 
+None of that makes the row ignorable: `price()` answers the maximum of its window and seeds only
+while the window is empty, so a filed bound IS the price whenever it is the dearest row in that
+window — there it can sit above the seed and shrink a later grant, and only a dearer measured row
+already in the window outprices it.
+
 The two dispatch paths are separate functions (`_run_curator_locked`, manual and
 catch-up; `_run_scheduled_locked`, the beat's nightly tick) and both are wired. The
 first version of this change touched only the manual one and its own test caught it:

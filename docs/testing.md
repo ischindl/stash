@@ -435,7 +435,11 @@ together. And the cut's sample is a price of the READ, not a lower bound: STAS-5
 reading phase's own seconds (recovered from the events that phase wrote, the run's close excluded by
 name) over the granted slice, so it CAN raise a later grant — as far as `MAX_PASS_INPUT_CHARS`
 (8 192), which is where the clamp stops it — and it cannot shorten the writer that filled the wall. A
-cut run whose reading session wrote no events files nothing and says so once. The row
+cut run whose reading session wrote no events files nothing and says so once. None of that makes a row
+ignorable: `price` answers the maximum of its window and seeds only while the window is empty, so any
+filed rate — a bound included — IS the price whenever it is the dearest row in that window, and there
+it can sit above the seed and shrink a later grant; only a dearer measured row already in the window
+outprices it. The row
 this card refuses is the dear-by-absence one: `RunCeilingExceeded` now carries `by_user`, so a turn a
 human stopped files NOTHING on either personal body — five stopped seconds over a 2 700-character
 grant would otherwise have taught 0,0011 s/char, and as the max of a window that single row would hand

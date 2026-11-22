@@ -692,6 +692,10 @@ async def test_a_personal_pass_the_wall_cuts_files_its_reading_phases_own_second
     the shipped sampler filed the wall and would measure about 0.0005 here, so this assertion
     cannot pass on a wall numerator. The grant still stands at 2 700, because the grant is the
     quantity `personal_budget_of` divides.
+
+    The filed rate is no decoration: `price` answers the maximum of its window and seeds only
+    while the window is empty, so this row IS the price whenever it is the dearest one in it,
+    and only a dearer measured row already in the window outprices it.
     """
     from backend.services import sprite_agent_service
 
