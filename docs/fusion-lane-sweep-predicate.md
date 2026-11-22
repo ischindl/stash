@@ -69,6 +69,32 @@ At the census trunk, 5 of 46 lanes were eligible under the declared substitution
   deletion is a verified bundle stored outside the repository plus an annotated `preserve/<lane>-tip`
   tag, both made before any verdict is written.
 
+## When the question is the board and not the lane: count a card's delivery, not its mentions
+
+A board-truth audit asks the mirror question of a sweep — which open cards does trunk already carry — and the
+obvious count answers it wrongly. `git log --grep=STAS-<id> refs/heads/main` matches commit **bodies**, so it
+credits a card with commits that merely name it: measured at trunk `4f865da33` on 2026-11-22, `STAS-475` scored
+3 mentions and `STAS-492` scored 1, and only one of the 475 hits was its own commit (`96b94c614`) while the 492
+hit was `4585c2d24`, STAS-490's delivery, whose body cross-references the drain order that STAS-492 asks about.
+Deploy pins are the other inflation source, because a pin body lists what the pin carries. The count that
+attributes is anchored to the subject:
+
+```
+git log --format='%s' refs/heads/main | grep -cE "^STAS-<id>([ :]|\$)"
+```
+
+Read beside `git rev-list --count refs/heads/main..<lane>` and `git diff --quiet refs/heads/main...<lane>`, the
+pair separates four states instead of one: delivered and closed; delivered and still open (close it); zero
+subject commits (the work never started, do not close it); and ahead > 0 with a subject commit present, which is
+a **partial** delivery — the card must stay open, but its stated premises are now false and its next executor
+would re-implement what trunk already holds (measured on `STAS-475`: AC1 is `96b94c614`, AC2 to AC4 are nowhere).
+
+The third row of the state list above has current occupants: `.fusion/tasks/STAS-489/`, `STAS-490/` and `STAS-491/`
+are complete directories with no live row (`fn_task_show` replies `not found`; `STAS-486`, `STAS-496` and
+`STAS-498` resolve to `done` in the same read, which is the calibration that proves the absence is real). None of
+the three has a `fusion/*` lane, so conjunct 4 has no operand and a sweep has nothing to bundle and nothing to
+delete there — the record exists so the next sweep does not have to re-derive it.
+
 ## Before any deletion, and before any count is written down
 
 Preserve first, then decide: `git bundle create <file> refs/heads/fusion/<lane>` plus an annotated tag
