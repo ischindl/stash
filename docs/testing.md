@@ -45,7 +45,9 @@ grep -E '"(typer|click)==' pyproject.toml
 Repair a drift by re-installing this tree with `uv pip install --python .venv/bin/python -e .`, never by
 editing the pin. Never install into a checkout you are not changing, and never borrow another
 checkout's `.venv` to judge a worktree: a `.venv` may legitimately hold runtime deps only, with no
-`pytest` in it - that is a missing tool, not a licence to test the wrong tree.
+`pytest` in it - that is a missing tool, not a licence to test the wrong tree. That rule says whose tree
+a verdict names; for the wall a whole-suite run has to be given before it names any verdict at all, see
+`### The whole suite outlives a default tool call`.
 
 ---
 
@@ -72,6 +74,76 @@ DATABASE_URL=postgresql://stash:stash@localhost:5432/stash_test \
 TEST_DATABASE_URL=postgresql://stash:stash@localhost:5432/stash_test \
   python -m pytest backend/tests/ -v
 ```
+
+### The whole suite outlives a default tool call
+
+A whole-suite run of `backend/tests` is the longest thing a card runs, and it is longer than anything a
+tool call here will hand back. Measured on 2026-11-22 in the lane's own interpreter (`.venv/bin/python`,
+Python 3.13.13, `sys.prefix` and `sys.executable` both resolving under the lane) at lane base `fd3ba3fc5`
+of `refs/heads/main`, against a database of its own (`stas505_test`, `vector` 0.8.6): **1593 s of wall**,
+taken from the run's own two readings (`wall_start_epoch=1795370790`, `wall_end_epoch=1795372383`), with
+pytest's own summary beside it - `2412 passed, 25 warnings in 1586.17s (0:26:26)`,
+`Required test coverage of 78% reached. Total coverage: 87.74%`, `pytest_exit=0`, no skips, no failures.
+
+Two things below that number are measured, and neither one is the size of the suite:
+
+- A `bash` call that waits for the whole suite comes back holding nothing. Two consecutive whole-suite
+  calls on one card were cut at 600174 ms and 600225 ms on 2026-11-22: 20 minutes of wall for no verdict.
+  No `bash` default timeout is named here because none is visible from this repository: the line that does
+  the cutting sits in the layer that runs the call. The observable is the one to act on - a call that
+  waits on this suite hands back no counts.
+- Saying you are willing to wait longer does not rescue the wait. This card twice ran `sleep 700` as a
+  `bash` call with its `timeout` raised well past 700 s: neither call ever wrote a `tool_result` row or a
+  `tool_error` row, and a fresh executor run began roughly 12 minutes after each was announced in the log;
+  nine of this card's twelve run-to-run gaps sit between 793 s and 1015 s. The suite itself survives - the
+  pytest child outlives its cut call and keeps writing - but the call's verdict does not, and the verdict
+  is the only thing an acceptance criterion can read.
+
+The whole suite is therefore not a call. Give it the body below, launch it detached so the death of
+whatever started it cannot take its output along, and read the file back with short calls - a short call
+is activity and survives the rotation, a long wait in silence is not:
+
+```bash
+cd "$(git rev-parse --show-toplevel)"
+echo "wall_start_epoch=$(date -u +%s)"
+TEST_DATABASE_URL=postgresql://stash:stash@localhost:5432/stasNNN_test \
+  .venv/bin/python -m pytest backend/tests -q; echo "pytest_exit=$?"
+echo "wall_end_epoch=$(date -u +%s)"
+```
+
+```bash
+mkdir -p .venv/tmp
+setsid nohup bash -c '<the body above, quoted>' > .venv/tmp/stas<id>-run.log 2>&1 &
+```
+
+`.venv/` is git-ignored, so the log cannot dirty the landing, and it still dies with the lane: delete it
+before you land and move the summary lines out first, into the task log or an artifact. Evidence kept only
+inside a worktree was lost that way on 2026-11-22, when a re-queue deleted the lane holding the only copy
+of a whole-suite log.
+
+Budget **3600 s** for the run. That is the only timeout value this document asks anyone to set, and it is
+at least double the measured wall rounded up to the next 600 s, because sibling lanes on one box share the
+CPU. The body above was run twice in one lane and the two walls agree: 1593 s at lane base `fd3ba3fc5`, and
+1547 s at `403370b03` - `2468 passed, 25 warnings in 1535.94s (0:25:35)`, coverage 85.87%, `pytest_exit=0` -
+while this box's load average moved between 7.5 and 15.3. `TEST_DATABASE_URL` alone is enough:
+`backend/tests/conftest.py` derives `DATABASE_URL` from it before it imports the app, so a value left in the
+shell by an earlier command is overwritten, never merged. Name
+a database of your own (`stas<id>_test`), never the shared `stash_test` that every other worktree on this
+machine `TRUNCATE`s - two writers on one database produce failures that belong to neither. Do not pipe the
+run through `tail` or `head`: `pytest.ini`'s `addopts` carries `--cov=backend --cov-report=term-missing
+--cov-fail-under=78`, and a pipe reports the pager's exit code instead of the suite's. The shard flags in
+`.github/workflows/test.yml` belong to CI's job and not to this gate: a card that reads a verdict runs the
+suite whole or says which part it ran.
+
+**The named dead path: `python -m pytest backend/tests` typed into a `bash` call and waited on.** It comes
+back with no `passed`/`skipped` line and therefore satisfies no acceptance criterion - a cut run is not a
+result, and repeating it is not progress. `fn_run_verification` is the other sanctioned form, and it is for
+a command that fits inside one call: a package, a file, a `-k` slice. The slowest `fn_run_verification` row
+this project's `.fusion/tasks/STAS-*/agent-log.jsonl` ever returned is 1 677 894 ms on an `executor` row,
+so a suite of this length sits at the edge of what that surface has handed back, and this card's own 700 s
+probe through it returned no row at all. A whole-suite run therefore goes through the detached form above,
+not through a call. Skipped tests are named, never folded into a pass claim, and a coverage-floor failure is
+reported as itself beside the counts, not merged into them.
 
 ### Test suites
 
