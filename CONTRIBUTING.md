@@ -100,19 +100,29 @@ docker start stash-pg 2>/dev/null || docker run -d --name stash-pg -p 5432:5432 
   -e POSTGRES_USER=stash -e POSTGRES_PASSWORD=stash -e POSTGRES_DB=stash \
   pgvector/pgvector:pg16
 
-# Create the test database if it doesn't exist
-psql postgresql://stash:stash@localhost:5432/postgres -c "CREATE DATABASE stash_test"
+# Create a database of your own. Never the shared one: every other worktree on this
+# machine truncates it, and two writers on one database produce failures that belong
+# to neither.
+psql postgresql://stash:stash@localhost:5432/postgres -c "CREATE DATABASE stasNNN_test"
 
-# Run migrations against the test DB
+# Migrations are their own step, run once against that database before any test run.
 # Note: Alembic reads DATABASE_URL, not TEST_DATABASE_URL
-DATABASE_URL=postgresql://stash:stash@localhost:5432/stash_test \
+DATABASE_URL=postgresql://stash:stash@localhost:5432/stasNNN_test \
   python -m alembic upgrade head
 
-# Run pytest (set both vars so config.py and conftest.py agree)
-DATABASE_URL=postgresql://stash:stash@localhost:5432/stash_test \
-TEST_DATABASE_URL=postgresql://stash:stash@localhost:5432/stash_test \
-  python -m pytest backend/tests/ -v
+# Fast feedback: one file, one package, or a -k slice. --no-cov because pytest.ini's
+# addopts enforces a coverage floor that a slice cannot reach.
+TEST_DATABASE_URL=postgresql://stash:stash@localhost:5432/stasNNN_test \
+  python -m pytest backend/tests/test_auth.py --no-cov
 ```
+
+`TEST_DATABASE_URL` alone is enough for pytest: `backend/tests/conftest.py` derives
+`DATABASE_URL` from it before it imports the app, which is why only the migration step
+above names it. The whole suite is the gate, and it is deliberately not a command you type
+and wait on - it runs longer than the call that would watch it and hands back no counts.
+Run it in the detached body under
+[The whole suite outlives a default tool call](docs/testing.md#the-whole-suite-outlives-a-default-tool-call),
+which names the budget the run needs, and quote the counts it writes.
 
 ### CLI
 
@@ -228,8 +238,10 @@ result, not a clean one.
 The test suite reads the same tables: `backend/tests/conftest.py` defaults
 `TEST_DATABASE_URL` to `postgresql://stash:stash@localhost:5432/stash_test`, so if
 nothing on `5432` owns a `stash_test` database, `pytest backend/tests/test_migrations.py`
-errors on connection before running anything. Create a database for the run and export
-`TEST_DATABASE_URL` at it.
+errors on connection before running anything. Create a database of your own and export
+`TEST_DATABASE_URL` at it - the shared `stash_test` is truncated by every other worktree on
+the machine. The whole-suite run itself belongs to
+[The whole suite outlives a default tool call](docs/testing.md#the-whole-suite-outlives-a-default-tool-call).
 
 ---
 

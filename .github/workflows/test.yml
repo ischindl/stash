@@ -206,6 +206,9 @@ jobs:
         shard: [1, 2, 3, 4]
 
     services:
+      # Per-job service container: created for this job and destroyed with the runner, so it
+      # cannot collide with a developer's local database of the same name.
+      # docs/testing.md forbids the shared local one, not this one.
       postgres:
         image: pgvector/pgvector:pg16
         env:

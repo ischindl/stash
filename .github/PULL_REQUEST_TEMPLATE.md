@@ -16,7 +16,9 @@
 
 <!-- How did you verify this works? Describe manual steps or point to new tests. -->
 
-- [ ] Existing tests pass (`python -m pytest backend/tests/ -v`)
+- [ ] Existing tests pass - the whole suite through
+      [docs/testing.md](docs/testing.md#the-whole-suite-outlives-a-default-tool-call)'s detached body,
+      or the bounded slice actually run (file, package, or `-k`), with its counts quoted
 - [ ] New tests added (if relevant)
 - [ ] Tested manually — describe what you checked:
 

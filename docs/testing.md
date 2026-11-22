@@ -91,16 +91,25 @@ pytest's own summary beside it - `2412 passed, 25 warnings in 1586.17s (0:26:26)
 Two things below that number are measured, and neither one is the size of the suite:
 
 - A `bash` call that waits for the whole suite comes back holding nothing. Two consecutive whole-suite
-  calls on one card were cut at 600174 ms and 600225 ms on 2026-11-22: 20 minutes of wall for no verdict.
+  calls on card 492 were cut at 600174 ms and 600225 ms on 2026-11-22, each measured from the `tool` row
+  that issued it to the `tool_result` row that closed it (`.fusion/tasks/STAS-492/agent-log.jsonl`:
+  `11:31:54.505Z` to `11:41:54.679Z`, and `12:05:51.876Z` to `12:15:52.101Z`): 20 minutes of wall for no
+  verdict.
   No `bash` default timeout is named here because none is visible from this repository: the line that does
   the cutting sits in the layer that runs the call. The observable is the one to act on - a call that
   waits on this suite hands back no counts.
-- Saying you are willing to wait longer does not rescue the wait. This card twice ran `sleep 700` as a
-  `bash` call with its `timeout` raised well past 700 s: neither call ever wrote a `tool_result` row or a
-  `tool_error` row, and a fresh executor run began roughly 12 minutes after each was announced in the log;
-  nine of this card's twelve run-to-run gaps sit between 793 s and 1015 s. The suite itself survives - the
-  pytest child outlives its cut call and keeps writing - but the call's verdict does not, and the verdict
-  is the only thing an acceptance criterion can read.
+- Saying you are willing to wait longer does not rescue the wait. Card 505 carries 5 `bash` calls on
+  2026-11-22 whose row is never answered by a `tool_result` or a `tool_error` row and is followed instead
+  by a `status` row that begins a fresh executor run (`.fusion/tasks/STAS-505/agent-log.jsonl`:
+  `15:34:43.707Z`, `15:49:18.004Z`, `16:48:09.688Z`, `17:18:49.977Z`, `17:33:48.021Z`). Exactly one of the
+  5 is announced by a `text` row naming what was asked: `2026-11-22T17:33:48.003Z` announces `sleep 700`
+  with the call's `timeout` raised past the probe's own length, and the call sits one row later at
+  `17:33:48.021Z`. None of the 5 wrote a verdict row: the `17:18:49.977Z` call is followed only by a
+  `status` row 654.819 s later and the `17:33:48.021Z` call by one 714.336 s later. Calls that name no
+  command in any row cannot be charged to the suite, so 5 counts unanswered `bash` calls and is no census
+  of whole-suite attempts. The suite itself survives - the pytest child outlives its cut call and keeps
+  writing - but the call's verdict does not, and the verdict is the only thing an acceptance criterion can
+  read.
 
 The whole suite is therefore not a call. Give it the body below, launch it detached so the death of
 whatever started it cannot take its output along, and read the file back with short calls - a short call
@@ -143,15 +152,28 @@ back with no `passed`/`skipped` line and therefore satisfies no acceptance crite
 result, and repeating it is not progress. `fn_run_verification` is the other sanctioned form, and it is for
 a command that fits inside one call: a package, a file, a `-k` slice. The slowest `fn_run_verification` row
 this project's `.fusion/tasks/STAS-*/agent-log.jsonl` ever returned is 1 677 894 ms on an `executor` row,
-so a suite of this length sits at the edge of what that surface has handed back. One whole-suite attempt
+carrying no card id or timestamp because the log reader a lane is given returns row types and timestamps
+but no duration; a suite of this length therefore sits at the edge of what that surface has handed back.
+One whole-suite attempt
 through it is on the record unanswered: card 492 announced `Now the full suite (AC (h) requires it)` at
 `2026-11-22T12:24:43.173Z` in `.fusion/tasks/STAS-492/agent-log.jsonl` and issued the call one row later
 at `12:24:43.653Z`, and neither a `tool_result` row nor a `tool_error` row ever answered it - the next row
-is a `status` row at `13:25:57.909Z`, when a fresh run began. The `sleep 700` probe above is not that
-evidence: it was a `bash` call, issued at `2026-11-22T17:33:48.021Z` on card 505.
+is a `status` row at `13:25:57.909Z`, when a fresh run began. That is one attempt the record announces as
+a whole suite, not a count of every call on that surface that went unanswered: card 505 carries 2 more
+unanswered `fn_run_verification` rows (`2026-11-22T16:13:27.847Z` and `2026-11-22T18:38:23.316Z`) and the
+log names no command for either. The `sleep 700` probe above is not that evidence: it was a `bash` call,
+and the command it issued lives in the `text` row one line before it, at `2026-11-22T17:33:48.003Z`.
 A whole-suite run therefore goes through the detached form above,
 not through a call. Skipped tests are named, never folded into a pass claim, and a coverage-floor failure is
 reported as itself beside the counts, not merged into them.
+
+Why these citations name rows and not numbers alone: a `tool` row in `.fusion/tasks/*/agent-log.jsonl`
+carries the tool name in `text` and never the command or its arguments, so a lone timestamp on a call row
+says nothing once the run that made it is gone. A duration is not an address either - the same 600174 ms
+and 600225 ms also sit on `bash` row pairs of card 448 on 2026-11-15 and of card 438 on 2026-11-14, the
+latter written by that card's `merger`. Cite the `text` row that announced the command, or the `tool` row
+and the `tool_result` row whose gap is the duration, each named by card id and timestamp; a figure no row
+carries is not citable, and this document cites none.
 
 ### Test suites
 
