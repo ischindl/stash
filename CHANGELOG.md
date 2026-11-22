@@ -322,6 +322,18 @@ everything before it is captured in git history (`git log`), not here.
 
 ### Fixed
 
+- A document you upload today is now read by your developer curator today, instead of
+  waiting behind everything it had never read. The developer-platform lane read its backlog
+  oldest-first, one budgeted batch at a time, so on an account whose unread history is deeper
+  than a month of turns can absorb, the present was permanently at the back of the queue — on
+  the founder stack that measured 4 813 383 eligible rows behind a watermark four months old,
+  on a lane that spent its whole turn budget on nine of ten recent days. The lane now works the
+  fresh window first and walks the past below it in windows of `CURATOR_DRAIN_PART_HOURS`,
+  publishing each window as it finishes it, so the position it reports always names ground it
+  actually read rather than the newest instant it had heard of. A deep backlog is still a deep
+  backlog and no order makes it short: what changed is that reading it no longer costs you the
+  documents you are adding while it drains.
+
 - An agent with a non-ASCII name can finally write attributed pages at all. An
   agent whose display name carries a character outside ASCII — an em dash, a
   Slovak diacritic — could not make a single page write in its own name: the run

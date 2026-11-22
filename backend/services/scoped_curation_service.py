@@ -13,7 +13,7 @@ import logging
 import time
 from copy import deepcopy
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Literal
 from uuid import UUID
 
@@ -937,6 +937,7 @@ async def _checkpoint_pass(
     cursor: dict,
     scope: CurationScope,
     drain: tuple[datetime, dict] | None,
+    slot: tuple[str, datetime] | None = None,
 ) -> bool:
     """Move the durable position one completed pass read up to, and say whether it moved.
 
@@ -948,13 +949,30 @@ async def _checkpoint_pass(
     before it committed, which is the same compare-and-set one step further along. A pair
     that did not move is not written and not reported as a pass.
 
-    Which pair that is depends on the work the run is doing. A history drain moves its own
-    resumable pair and never the watermark — the backlog it is reading sits behind a
-    watermark that is monotone by contract, so a drain writing the watermark would either
-    be clamped away or, before the clamp existed, drag the incremental position backwards
-    through history it had only just started reading. An incremental pass writes the
-    watermark through `advance_watermark` rather than its own UPDATE, so no forward writer
-    of that column holds a looser statement than the one primitive every other writer uses.
+    Which pair that is depends on the work the run is doing, and the choice stays three-way:
+    a named slot advances ITS slot, an unplanned pair advances the drain, and no drain
+    advances the watermark through `advance_watermark`. `drain` therefore always names the
+    pair this pass fences on — the slot's committed pair on a descending lane, the drain's
+    own pair on a legacy one — and `slot` adds only which slot that pair belongs to, plus
+    the edge its window closes at.
+
+    A history drain never touches the watermark, and that is the reason the arms are separate
+    rather than a matter of taste: the backlog it is reading sits BEHIND a watermark that is
+    monotone by contract, so a drain writing the watermark would either be clamped away or,
+    before the clamp existed, drag the incremental position backwards through history it had
+    only just started reading. An incremental pass writes the watermark through
+    `advance_watermark` rather than its own UPDATE, so no forward writer of that column holds
+    a looser statement than the one primitive every other writer uses.
+
+    That third of the choice is not decoration. `advance_drain` refuses an un-parted pass on
+    a planned row and a named part on an unplanned one, both by name, so a lane that got the
+    pairing wrong cannot quietly commit one slot's facts under an instant derived from
+    another's.
+
+    A descending pass that read its whole window also PRUNES its slot, in this same
+    transaction: on this lane the pass is the publication, so a slot that has committed its
+    last boundary is history the moment the transaction that committed it ends. The prune is
+    not a fourth arm of the choice above — it is how arm one finishes.
     """
     from . import agent_service
 
@@ -972,9 +990,14 @@ async def _checkpoint_pass(
                 batch.cursor,
             )
         else:
+            part_id, slot_to = slot if slot is not None else (None, None)
             await agent_service.advance_drain(
-                conn, agent_id, drain[0], drain[1], batch.through, batch.cursor
+                conn, agent_id, drain[0], drain[1], batch.through, batch.cursor, part_id=part_id
             )
+            if part_id is not None and batch.through == slot_to and not batch.cursor:
+                await agent_service.prune_published_part(
+                    conn, agent_id, part_id, batch.through, batch.cursor, published=batch.through
+                )
     return True
 
 
@@ -1011,6 +1034,345 @@ async def _finish_drain(
         agent["id"],
         through,
     )
+
+
+async def plan_descent(agent: dict, *, now: datetime) -> dict | None:
+    """Decide, once per run and in one place, whether this scoped lane reads downward.
+
+    This lives with the scoped lane's plan decisions rather than in
+    `scoped_curation_inputs`, which owns the FEED: it knows what an eligible row is and
+    nothing about windows. This function knows the windows and asks the feed exactly the
+    questions Design enumerates, through `has_input` and `oldest_input` so no answer can come
+    from a different UNION than the one `load_batch` reads. It asks nothing else, so it takes
+    no `workspace`: a descent is decided by the row's own feed and watermark, and the
+    workspace's `curation_generation` is a fact about RESUMING a read, which belongs to
+    `load_batch` and `has_pending` and changes no eligibility here.
+
+    The door is one question: does this lane hold input that is BOTH un-curated
+    (`stamp > curated_through`, the set the incremental read would still read) AND at or
+    below `seam - part_hours`, the first cell a descent would not cover? A healthy lane
+    answers no — its pending input is inside the newest window — and this function writes
+    nothing, so that lane's passes stay today's byte for byte, which is what AC (g) demands.
+    Asking "anything older than one window" instead would be true forever: after every
+    retirement all curated rows are still older than one window, and the door would re-arm
+    over ground the watermark already consumed.
+
+    When the door opens, the seed's instants come out of the row's own values, never out of
+    a guess. `floor` is the live watermark — the frozen edge the descent walks down to meet,
+    because descending to the corpus's oldest input would pay turns re-reading the curated
+    past and could never finish on a corpus with absurd client stamps. A lane that never ran
+    has no watermark and takes the corpus's oldest eligible instant minus one microsecond:
+    the loader reads strictly after a window's `from`, so a floor naming a real row would
+    strand that row in no window at all. `seam` is `drain_seam_target(floor, ...)`, which
+    anchors the grid ON the floor so that `seam = floor + k * part_hours` and walking down by
+    `part_hours` reaches the floor by arithmetic rather than by a clamp.
+
+    `published` is seeded at the same instant the descent starts BEHIND, never at `seam`. The
+    seam stands at the top of a cell no pass has read, and this instant is what the drain
+    column derives, what the stale-curator alert compares, and what retirement hands the
+    watermark — so a seam-shaped seed would silence the alert with a value describing nothing
+    and hand off un-read ground. The invariant this seeds to: the derived column never names
+    ground that no committed pass read.
+
+    Seed and first cells go onto the row in ONE transaction through `cut_drain_windows`,
+    which re-runs both cutters against the locked row: a plan and its first windows are one
+    fact, and a lane that carried the first without the second would be told it had work it
+    had no window to do. `now` is the caller's run boundary and becomes the head cell's
+    captured top — the read boundary of the cell that carries the bound this card exists for.
+
+    Answers the row as it now stands when this call wrote, and None when it wrote nothing,
+    which is every healthy evening. The caller rebinds its read pair and its drain from a
+    non-None answer, so no dispatch believes in the position it loaded before the seed.
+    """
+    from . import agent_service
+
+    part_hours = settings.CURATOR_DRAIN_PART_HOURS
+    agent_id = UUID(str(agent["id"]))
+    owner = UUID(str(agent["user_id"]))
+    internal = agent["curator_wiki"] == "internal"
+    max_open = 2 * settings.CURATOR_DRAIN_MAX_CONCURRENT_TURNS
+    window = timedelta(hours=part_hours)
+    cursor = agent.get("drain_cursor") or {}
+    watermark = agent.get("curated_through")
+    seed: dict | None = None
+    if not curation_service.drain_descends(cursor):
+        if curation_service.drain_is_planned(agent):
+            # A forward plan on this row is not this function's to descend: it is a drain
+            # that was born walking the other way, and its own coordinator owns its seams.
+            # Left exactly as it stands, which is today's behaviour for that row.
+            logger.warning(
+                "curator %s: scoped lane carries a forward drain plan; neither descending "
+                "nor re-cutting it, because one plan cannot walk two ways",
+                agent_id,
+            )
+            return None
+        floor = watermark
+        if floor is None:
+            oldest = await scoped_curation_inputs.oldest_input(owner, internal=internal)
+            if oldest is None:
+                return None
+            floor = oldest - timedelta(microseconds=1)
+        seam = curation_service.drain_seam_target(floor, part_hours, now)
+        if not await scoped_curation_inputs.has_input(
+            owner, internal=internal, after=watermark, top=seam - window
+        ):
+            return None
+        seed = curation_service.descending_plan(
+            part_hours=part_hours,
+            floor=floor,
+            seam=seam,
+            published=watermark if watermark is not None else floor,
+        )
+    async with get_pool().acquire() as conn, conn.transaction():
+        cut = await agent_service.cut_drain_windows(
+            conn, agent_id, part_hours=part_hours, target=now, max_open=max_open, descent=seed
+        )
+    if not cut:
+        return None
+    if seed is not None:
+        logger.info(
+            "curator %s seeded a descending drain: floor=%s seam=%s published=%s over %s "
+            "window(s); a descent reads the feed newest window first and publishes each one "
+            "when it finishes",
+            agent_id,
+            seed["floor"],
+            seed["seam"],
+            seed["published"],
+            len(cut),
+        )
+    return await agent_service.get_agent_by_id(agent_id)
+
+
+@dataclass(frozen=True, slots=True)
+class _Window:
+    """The one cell a pass reads, named by both of its edges and by the pair it fences on.
+
+    A descent has no single "current position": several windows stand on one row at once and
+    a pass is handed the newest of them. Carrying the cell as one value is what keeps the
+    three facts a pass needs from being derived three times and disagreeing — where it reads
+    from, where it may not read past, and which slot its commit belongs to.
+
+    `empty` is the loader's own answer about the cell, asked BEFORE any turn is spent, and
+    `remaining_below` is the descent's frontier at the moment this cell was resolved: the
+    pair of them are what the operator reads in the log to know how much of the backlog is
+    still owed.
+    """
+
+    part_id: str
+    from_at: datetime
+    at: datetime
+    cursor: dict
+    to: datetime
+    edge: str
+    empty: bool
+    remaining_below: datetime
+
+
+async def _next_window(
+    row: dict, *, owner: UUID, internal: bool, seam: datetime, at_or_below: datetime | None
+) -> tuple[_Window | None, dict]:
+    """The newest open cell of a descending lane, and the row as it now stands.
+
+    The row is re-read because the pass before this one changed it: a committed slot moved its
+    `through`, a published slot vanished from the map entirely, and a run that kept planning
+    from the cursor it loaded at dispatch would hand its second pass the window its first
+    pass already published.
+
+    `at_or_below` is the fairness rule of one run, and it is the SEAM rather than the plan's
+    top. The head cell's `to` is a captured `now` sitting above the seam, so a bound naming
+    the plan top would keep naming that head cell eligible, and a lane whose users are busy
+    all evening would never descend at all. Bound at the seam, the head cell stays eligible
+    until it has been worked and then falls out of the bound, while every descent cell closes
+    inside it. That is the whole starvation argument in one argument to one function: fresh
+    input cannot starve behind the backlog, and the backlog cannot starve behind fresh input.
+
+    Answers `(None, row)` when no window stands, which is the state retirement asks about.
+    """
+    from . import agent_service
+
+    fresh = await agent_service.get_agent_by_id(UUID(str(row["id"])))
+    drain = curation_service.drain_of(fresh)
+    if drain is None:
+        return None, fresh
+    plan = drain[1].get("plan") or {}
+    part_id = curation_service.newest_open_part(drain[1], at_or_below=at_or_below)
+    if part_id is None:
+        return None, fresh
+    pair = curation_service.drain_slot_position(fresh, part_id)
+    if pair is None:
+        return None, fresh
+    slot = (drain[1].get("parts") or {})[part_id]
+    from_at = curation_service.slot_instant(slot, "from")
+    return (
+        _Window(
+            part_id=part_id,
+            from_at=from_at,
+            at=pair[0].at,
+            cursor=slot.get("cursor") or {},
+            to=pair[1],
+            edge="head" if from_at >= seam else "descent",
+            empty=not await scoped_curation_inputs.has_input(
+                owner, internal=internal, after=from_at, top=pair[1]
+            ),
+            remaining_below=curation_service.slot_instant(plan, "descent_to"),
+        ),
+        fresh,
+    )
+
+
+async def _commit_empty_window(
+    agent: dict, window: _Window, read_at: datetime | None, read_cursor: dict
+) -> None:
+    """Publish a cell the loader proved holds no eligible row, with no scope and no turn.
+
+    Mirrors the personal lane's pre-spend emptiness check for the same reason: a planned
+    descent's cells can sit in a stretch of history before the first row anyone wrote, and a
+    paid model turn on a window with nothing in it is exactly the spend this card refuses.
+
+    The boundary committed is the cell's own closed `to`, and naming that edge names no
+    un-read ground precisely because `has_input` asked the loader's own UNION over the half-open
+    `(from, to]` and found nothing there. Both writes are one transaction: a slot removed
+    without its edge being committed would leave the column behind, and a boundary committed
+    into a slot that still stands would be re-read by the next pass to find it empty again.
+    """
+    from . import agent_service
+
+    agent_id = UUID(str(agent["id"]))
+    async with get_pool().acquire() as conn, conn.transaction():
+        await agent_service.advance_drain(
+            conn,
+            agent_id,
+            read_at,
+            read_cursor,
+            window.to,
+            {},
+            part_id=window.part_id,
+        )
+        await agent_service.prune_published_part(
+            conn, agent_id, window.part_id, window.to, {}, published=window.to
+        )
+
+
+async def _retire_descent_if_done(
+    row: dict,
+    *,
+    owner: UUID,
+    internal: bool,
+    until: datetime,
+    read_position: curation_service.Position,
+) -> str | None:
+    """Retire a descent that has covered its ground, or say out loud why it has not.
+
+    Called when a pass found no window to work, which is the only moment retirement is even
+    thinkable, and it is thinkable then and nowhere else: the loop's old exit read `the loader
+    handed me nothing more` as `this drain is over`, and for a descent those two sentences are
+    4.7 million rows apart. Three facts must all hold, and each has its own way of being false:
+
+    * **No window stands.** A run that worked its head cell and then descended leaves that
+      head cell open when the wall catches it mid-cell, and retiring then would clear a slot
+      whose un-read remainder no position describes.
+    * **The frontier is at or below the LOWER of the plan's floor and the LIVE watermark.** The
+      floor conjunct is arithmetic the cutter already enforces. The live conjunct is not: a
+      rewind through `memory_service._rewind_curated_through` can land the watermark under a
+      standing descent, and handing off there would jump the watermark over rows that just
+      became un-curated again. That case does not retire, it extends — see below.
+    * **The loader itself answers no eligible input BELOW the frontier**, in `(floor,
+      descent_to]` — the ground no cell of this plan has been cut for. Asked of `has_input`, the
+      same UNION the read is made of. The band matters more than the answer: reading a row does
+      not make it ineligible, so a probe aimed at the plan's whole span `(floor, top]` aims at
+      exactly the ground this descent reads and publishes, and it answers true for the rest of the
+      plan's life once any window is published — a descent that can never retire, its watermark
+      frozen behind it forever. Aimed at the un-cut band it answers false the moment the frontier
+      reaches the floor, which is the coverage fact the conjunct exists to state. It is
+      deliberately redundant with the frontier conjunct above — that one reaches the instant from
+      the plan's arithmetic, this one from the corpus — and a redundant gate that can refuse
+      loudly is cheaper than a frontier whose arithmetic drifts unseen.
+
+    Then, and only then, `finish_drain` runs as it runs today and hands the watermark
+    `plan.published`. That hand-off is safe **by construction** and not by luck: `published`
+    started at the watermark the descent started behind and moves only on a committed boundary,
+    so it sits at or ahead of the stored watermark and `advance_watermark`'s monotone clamp
+    holds — the clamp being the reason Step 4's tests read the stored `curated_through` VALUE
+    rather than the absence of an exception.
+
+    When the live watermark has fallen below the plan's floor the descent is EXTENDED instead:
+    the floor moves down to it, one line names both instants, and the answer is None so the run
+    keeps working the cells that promise just opened. Answers None only in that case; every
+    other refusal is a sentence, because a lane that stops descending for a reason nobody can
+    read is the same defect wearing a different name.
+    """
+    from . import agent_service
+
+    agent_id = UUID(str(row["id"]))
+    fresh = await agent_service.get_agent_by_id(agent_id)
+    drain = curation_service.drain_of(fresh)
+    if drain is None or not curation_service.drain_descends(drain[1]):
+        return None
+    cursor = drain[1]
+    plan = cursor["plan"]
+    floor = curation_service.slot_instant(plan, "floor")
+    descent_to = curation_service.slot_instant(plan, "descent_to")
+    published = curation_service.slot_instant(plan, "published")
+    live = fresh["curated_through"]
+    open_parts = list((cursor.get("parts") or {}).keys())
+    if open_parts:
+        return (
+            f"Scoped descent holds: {len(open_parts)} window(s) still stand, the newest at "
+            f"{max(open_parts)}, and a slot whose boundary is un-committed is ground the "
+            "hand-off cannot describe."
+        )
+    ceiling = floor if live is None else min(floor, live)
+    if descent_to > ceiling:
+        if live is not None and live < floor:
+            cut = None
+            async with get_pool().acquire() as conn, conn.transaction():
+                cut = await agent_service.cut_drain_windows(
+                    conn,
+                    agent_id,
+                    part_hours=plan["part_hours"],
+                    target=until,
+                    max_open=2 * settings.CURATOR_DRAIN_MAX_CONCURRENT_TURNS,
+                    floor=live,
+                )
+            if cut:
+                logger.info(
+                    "curator %s extends its descent: the live watermark fell to %s, below the "
+                    "floor %s it was seeded at, so the descent now covers %s window(s) more and "
+                    "nothing is handed off",
+                    agent_id,
+                    live.isoformat(),
+                    floor.isoformat(),
+                    len(cut),
+                )
+                return None
+        return (
+            f"Scoped descent holds: its frontier stands at {descent_to}, above {ceiling}, so "
+            f"ground below it is un-read and the watermark stays at {live}."
+        )
+    if await scoped_curation_inputs.has_input(
+        owner, internal=internal, after=floor, top=descent_to
+    ):
+        return (
+            f"Scoped descent holds: eligible input stands below the frontier {descent_to} and "
+            f"above the floor {floor}, which is ground no cell of this plan has been cut for."
+        )
+    async with get_pool().acquire() as conn, conn.transaction():
+        await agent_service.finish_drain(
+            conn,
+            agent_id,
+            drain[0],
+            drain[1],
+            read_position,
+            curation_service.Position(published),
+        )
+    logger.info(
+        "curator %s retired its descent: handed the watermark forward to the published edge %s "
+        "and cleared the pair; the floor it covered was %s",
+        agent_id,
+        published.isoformat(),
+        floor.isoformat(),
+    )
+    return f"Scoped descent retired at {published.isoformat()}."
 
 
 async def run(
@@ -1066,6 +1428,16 @@ async def run(
     # One boundary for the whole run: input that arrives while this run works waits for
     # the next scheduled run, exactly as it did when a run was one pass.
     until = datetime.now(UTC)
+    # Whether this lane reads its feed downward is decided here, at the top of every run,
+    # because this function is the one codepath EVERY scoped dispatch reaches: the nightly
+    # beat tick arrives through `_run_scheduled_locked` and never enters the personal lane's
+    # `_run_curator_locked`, so a seed placed there would appear when a human presses
+    # "Curate now" and never on the schedule that buys the bound. `until` is the run's own
+    # read boundary and becomes the head cell's captured top, so the fresh material this run
+    # is allowed to see is exactly the cell it works first.
+    planned = await plan_descent(agent, now=until)
+    if planned is not None:
+        agent = planned
     session = f"agent-curate-{agent['id']}-{run_stamp}"
     fence = read_position
     # The read and the write anchor are different facts and only the backfill pulls
@@ -1083,6 +1455,13 @@ async def run(
     drain = curation_service.drain_of(agent)
     if drain is None and draining:
         drain = (since, cursor)
+    # A descending lane has no single position to read from: it has an open window, and which
+    # one it works is decided at the top of each pass. `seam` is the line between the cell
+    # that carries fresh input and the backlog below it, named ONCE for the run so no later
+    # pass can be talked into a second head cell by input that arrived mid-run.
+    descending = drain is not None and curation_service.drain_descends(drain[1])
+    seam = curation_service.slot_instant(drain[1]["plan"], "seam") if descending else None
+    head_worked = False
     pass_number = 0
     # `loop_wall`, taken above from `agent_service.run_wall_seconds`, is the same wall
     # `sprite_agent_service` wraps this call in - so nothing is subtracted a second
@@ -1114,10 +1493,57 @@ async def run(
             )
         pass_number += 1
         pass_wall_started = time.monotonic()
+        window: _Window | None = None
+        if descending:
+            window, agent = await _next_window(
+                agent,
+                owner=owner,
+                internal=internal,
+                seam=seam,
+                at_or_below=seam if head_worked else None,
+            )
+            if window is None:
+                # No window to work is the only moment a descent may end, and whether it has
+                # ENDED or merely caught up with its cut row is the retirement gate's question,
+                # not this loop's.
+                outcome = await _retire_descent_if_done(
+                    agent,
+                    owner=owner,
+                    internal=internal,
+                    until=until,
+                    read_position=read_position,
+                )
+                if outcome is not None:
+                    return outcome
+                continue
+            if window.edge == "head":
+                head_worked = True
+            since, cursor = window.at, window.cursor
+            drain = (window.at, window.cursor)
+            if window.empty:
+                # Asked before any model turn is spent, exactly as the personal lane asks it:
+                # a descent walks through stretches of history that hold no rows at all, and a
+                # paid turn on an empty cell is a duplicate spend this card refuses.
+                await _commit_empty_window(agent, window, window.at, window.cursor)
+                logger.info(
+                    "curator descent pass=%s agent=%s slot=%s window=%s..%s edge=%s "
+                    "remaining_below=%s empty=1",
+                    pass_number,
+                    agent["id"],
+                    window.part_id,
+                    window.from_at.isoformat(),
+                    window.to.isoformat(),
+                    window.edge,
+                    window.remaining_below.isoformat(),
+                )
+                continue
         batch = await scoped_curation_inputs.load_batch(
             owner,
             since,
-            until,
+            # The cell's closed edge, never the run's boundary: a head cell's top was captured
+            # by the run that opened it, and reading past it would have this pass consume rows
+            # that belong to the next cell while committing them under this one's slot.
+            window.to if window is not None else until,
             internal=internal,
             generation=workspace["curation_generation"],
             cursor=cursor,
@@ -1143,7 +1569,15 @@ async def run(
                 tasks = [group.create_task(curate(scope)) for scope in scopes]
             summaries = [task.result() for task in tasks]
 
-            moved = await _checkpoint_pass(agent, batch, fence, cursor, scopes[-1], drain)
+            moved = await _checkpoint_pass(
+                agent,
+                batch,
+                fence,
+                cursor,
+                scopes[-1],
+                drain,
+                (window.part_id, window.to) if window is not None else None,
+            )
         except (Exception, asyncio.CancelledError):
             # A pass that read its slice, spent turns on it, and committed nothing still
             # knows what it was handed: this wall time over the granted slice is a lower
@@ -1181,6 +1615,23 @@ async def run(
                 rate,
                 price_source,
             )
+            if window is not None:
+                # The descent's own line, printed beside the meter rather than inside it. The
+                # `curator pass=` prefix and its field set are a contract other readers parse
+                # by position, and this card's premise is that they stay byte-identical; the
+                # cell a pass worked and the backlog still owed are new facts, so they get a
+                # line of their own instead of a widened contract.
+                logger.info(
+                    "curator descent pass=%s agent=%s slot=%s window=%s..%s edge=%s "
+                    "remaining_below=%s",
+                    pass_number,
+                    agent["id"],
+                    window.part_id,
+                    window.from_at.isoformat(),
+                    window.to.isoformat(),
+                    window.edge,
+                    window.remaining_below.isoformat(),
+                )
             fence = curation_service.Position(batch.through)
             since = batch.through
             cursor = batch.cursor
@@ -1224,6 +1675,14 @@ async def run(
                 f" {batch.cursor.get('partial')}: raise the curator's run ceiling"
             )
         if not batch.cursor:
+            if descending:
+                # An exhausted WINDOW is a window, not a finished drain. The descent still
+                # owes every cell below the one just read, and reading `not batch.cursor` as
+                # "the drain reached the end of its feed" here would retire the pair and hand
+                # the watermark ground nobody read — the one bug this card must not ship.
+                # The next iteration resolves the next newest cell, and the wall check at the
+                # top ends the run when there is no room for it.
+                continue
             # Nothing is left to read up to this run's boundary, so a drain that got here
             # has earned its hand-off. Input that arrived after `until` was never this
             # drain's backlog — the incremental watermark owns it, exactly as before.

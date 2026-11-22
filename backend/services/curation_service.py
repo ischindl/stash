@@ -174,7 +174,7 @@ def drain_of(agent: dict) -> tuple[datetime, dict] | None:
     resume point for it — so seeding one is the absence of a pair rather than a row of its
     own, and no marker can drift out of sync with the work it claimed to describe.
 
-    The cursor has three shapes and every one of them is read here, because this is where
+    The cursor has four shapes and every one of them is read here, because this is where
     the row's drain state becomes a value a caller can use:
 
     - no `plan` key: a drain seeded at `drain_through` with no window cut yet — the pair
@@ -185,6 +185,12 @@ def drain_of(agent: dict) -> tuple[datetime, dict] | None:
       them is DERIVED — the `from` of the oldest un-composed slot, written by the one
       UPDATE that commits or prunes a slot — and `drain_parts_of` refuses a row whose
       column contradicts that derivation, loudly and without repair.
+    - `plan` of the `descending` kind plus `parts`: the scoped lane's windowed descent. Its
+      column is DERIVED the same way and from a different frontier — `max(published, the
+      surviving slots' through)`, where `published` is the newest window edge this descent has
+      already committed. It is seeded at the live watermark and NOT at the seam the plan was
+      cut at: the seam is a guess at the newest end, so naming it would publish ground no
+      committed pass ever read, and retirement hands this instant to `finish_drain`.
     - anything else (a `parts` that is not a map, a `plan` whose `parts` key is absent,
       a slot missing its window): raises. An inconsistent cursor is not repaired in
       place, because repairing it in a reader would let two readers invent two histories
@@ -220,6 +226,16 @@ DRAIN_PART_ID_FORMAT = "%Y%m%dT%H%M%S"
 DRAIN_BEGINNING = datetime(1900, 1, 1, tzinfo=UTC)
 
 
+# The kind word a plan carries when its lane works the feed DOWNWARD, newest window first.
+# A plan with no `order` key is the forward plan and is read exactly as it always was.
+DRAIN_ORDER_NEWEST_FIRST = "newest_first"
+
+# The four instants a descending plan may not be without. `floor` is the lower edge the
+# descent must cover, `seam` the grid frontier it walked down from, `descent_to` the lower
+# edge of everything cut so far, and `published` the newest edge any committed pass read.
+DRAIN_DESCENT_EDGES = ("floor", "seam", "descent_to", "published")
+
+
 def part_id_of(instant: datetime) -> str:
     """The part's name: its `from` instant, UTC, to the second."""
     return instant.astimezone(UTC).strftime(DRAIN_PART_ID_FORMAT)
@@ -244,7 +260,11 @@ def drain_parts_of(agent: dict) -> dict | None:
     state, and a column that contradicts the derivation the column is supposed to
     carry. A plan whose `parts` map is empty is NOT nonsense: it is the fully-composed
     state that stands between the compose pass pruning the last slot and `finish_drain`
-    retiring the pair, and retirement must be able to ask it about the edge."""
+    retiring the pair, and retirement must be able to ask it about the edge. On the
+    `descending` kind the same empty map is the state between the prune of the last window
+    and that kind's own retirement, and a descending slot never rests in `done` — a
+    published window is pruned, because what the next run of a descent asks is where to
+    read next, not which pages are already written."""
     cursor = agent.get("drain_cursor") or {}
     plan = cursor.get("plan")
     parts = cursor.get("parts")
@@ -261,6 +281,7 @@ def drain_parts_of(agent: dict) -> dict | None:
             f"curator {agent_id} drain cursor carries a plan with no usable parts map: "
             "the plan names windows the row does not carry"
         )
+    _drain_kind_of(plan, agent_id)
     for part_id, slot in parts.items():
         if (
             not isinstance(slot, dict)
@@ -288,6 +309,106 @@ def drain_parts_of(agent: dict) -> dict | None:
     return parts
 
 
+def _drain_kind_of(plan: dict, agent_id: object) -> None:
+    """Refuse a cursor that does not name ONE kind of plan, naming the agent.
+
+    Two kinds exist and each says which it is. The forward plan is the older shape and
+    stays worded exactly as it was: it names a `target` and a `frontier` and carries no
+    `order`. A descending plan names `order: newest_first` and its four edges, and it
+    names no target, because nothing generates forward on it. What cannot be read is
+    both shapes at once (one cursor cannot tell its readers which way it walks) and a
+    descending cursor with its kind word stripped, because the four edges it still
+    carries would then be read by the forward arm as noise and the descent's published
+    edge would quietly stop being a fact anybody consulted.
+    """
+    order = plan.get("order")
+    edges = sorted(field for field in DRAIN_DESCENT_EDGES if plan.get(field) is not None)
+    forward = any(plan.get(field) is not None for field in ("target", "frontier"))
+    if order is None:
+        if edges:
+            raise ValueError(
+                f"curator {agent_id} drain plan carries the descending edges {edges} with no "
+                f"`order`: a plan walks forward or it descends, and the word that says which "
+                f"is `{DRAIN_ORDER_NEWEST_FIRST}` for the descent"
+            )
+        return
+    if order != DRAIN_ORDER_NEWEST_FIRST:
+        raise ValueError(
+            f"curator {agent_id} drain plan names order {order!r}: the only plan that orders "
+            f"its parts is the descending one, and its kind word is {DRAIN_ORDER_NEWEST_FIRST!r}"
+        )
+    if forward:
+        raise ValueError(
+            f"curator {agent_id} drain plan carries a forward target beside "
+            f"`order: {DRAIN_ORDER_NEWEST_FIRST}`: one cursor cannot name two walking "
+            "directions, because its readers would disagree about which end is next"
+        )
+    missing = [field for field in DRAIN_DESCENT_EDGES if plan.get(field) is None]
+    if missing:
+        raise ValueError(
+            f"curator {agent_id} descending drain plan names no {' and '.join(missing)}: "
+            "a descent that does not say how far down it goes cannot stop, and one that does "
+            "not say what it published would leave its column to be guessed"
+        )
+
+
+def drain_descends(cursor: dict) -> bool:
+    """Whether this cursor's plan walks DOWNWARD, newest window first.
+
+    The one predicate other modules ask, so that no caller reads `plan.get("order")` and
+    decides the lane's direction for itself. It reads the cursor it is handed and
+    validates nothing — `drain_parts_of` is the validator, and it runs on every read of
+    the row through `drain_of`, so by the time a caller asks this the kind word is either
+    legal or the row already raised.
+    """
+    plan = cursor.get("plan")
+    return isinstance(plan, dict) and plan.get("order") == DRAIN_ORDER_NEWEST_FIRST
+
+
+def descending_plan(
+    *, part_hours: int, floor: datetime, seam: datetime, published: datetime
+) -> dict:
+    """The plan shape of a descent, built once so no seeder hand-assembles its edges.
+
+    Four instants and a kind word, and each of the four answers a different question:
+
+    * `floor` — the lower edge the descent may ever cover. The live watermark for a lane
+      that has run; the corpus's oldest eligible instant minus one microsecond for one
+      that never has, because the loader reads strictly after a window's `from` and a
+      floor naming a real row would strand it. Everything at or below the floor is
+      curated by contract, which is why the floor cell is `(floor, ...]` and never
+      `[floor, ...)`.
+    * `seam` — the grid frontier the descent walks down from, `drain_seam_target(floor,
+      part_hours, now)`. Anchoring the grid on the FLOOR makes `seam = floor + k * H` for
+      a whole k, so descending by exactly `part_hours` reaches the floor by arithmetic
+      rather than by a clamp.
+    * `descent_to` — the lower edge of everything cut so far. `seam` at the seed, minus
+      exactly `part_hours` per descent cut. A frontier of CUT ground and never a claim
+      about published ground: cutting promises work, it publishes none.
+    * `published` — the newest edge any committed pass has actually read. Seeded at the
+      `curated_through` the descent starts behind (or at the floor for a lane that never
+      ran, which is one microsecond below every eligible row and so claims nothing), and
+      raised only by the primitives that commit or prune. NEVER at the seam: the seam
+      stands at the top of a cell no pass has read, and the drain column, the stale-curator
+      alert and the retirement hand-off all read this instant, so a seam-shaped seed would
+      describe a publication that never happened. The invariant the whole shape answers to
+      is that the column this field derives never names ground that no committed pass read.
+
+    `head_top`, the captured top of the newest head cell, is absent here and appears only
+    when a head cell is actually opened: it is a read boundary captured once, by the call
+    that opened that cell, and every later head geometry reads out of it rather than out
+    of the clock.
+    """
+    return {
+        "part_hours": part_hours,
+        "order": DRAIN_ORDER_NEWEST_FIRST,
+        "floor": floor.isoformat(),
+        "seam": seam.isoformat(),
+        "descent_to": seam.isoformat(),
+        "published": published.isoformat(),
+    }
+
+
 def drain_derived_through(cursor: dict) -> datetime | None:
     """The instant the drain column must carry while parts exist: the `from` of the
     OLDEST slot.
@@ -301,8 +422,24 @@ def drain_derived_through(cursor: dict) -> datetime | None:
     beginning" to every reader of `drain_of`.
 
     String-sorting the keys sorts the instants: `part_id_of` names a slot by its `from`
-    to the second, so this is a min over keys and not a scan or a cleverness."""
+    to the second, so this is a min over keys and not a scan or a cleverness.
+
+    A DESCENDING plan answers a different question and dispatches on the kind the cursor
+    itself names, because "how much has reached the wiki" means the opposite end of the
+    map on a lane that walks downward: the NEWEST edge anything published, which is
+    `plan.published` beside every surviving slot's committed `through`. It is a high-water
+    over committed boundaries only, seeded at the stored watermark the descent started
+    behind and never at the seam, and its column must never name ground that no committed
+    pass read. The forward arm below is kept line for line; `published` is what makes this
+    arm survive the pruning of the last slot, which is the moment the forward shape's own
+    aggregate runs out of rows to run over.
+    """
     parts = cursor.get("parts") or {}
+    if drain_descends(cursor):
+        published = slot_instant(cursor["plan"], "published")
+        edges = [slot_instant(slot, "through") for slot in parts.values()]
+        committed = [edge for edge in edges if edge is not None]
+        return max([published, *committed]) if committed else published
     if not parts:
         return None
     oldest = parts[min(parts)]
@@ -1029,6 +1166,247 @@ def cut_drain_part(
     }
     parts = {**parts, part_id: slot}
     return {k: v for k, v in cursor.items() if k != "partial"} | {"plan": plan, "parts": parts}
+
+
+def _head_slot_standing(cursor: dict, seam: datetime) -> bool:
+    """Whether the descent already has an open head cell. A head cell is a slot whose
+    `from` is at or above the seam; every descent cell closes AT the seam or below it, so
+    the two kinds are told apart by their own boundaries and not by a marker field."""
+    parts = cursor.get("parts") or {}
+    return any(
+        slot.get("state") == "open" and slot_instant(slot, "from") >= seam
+        for slot in parts.values()
+    )
+
+
+def _descent_open_count(cursor: dict, seam: datetime) -> int:
+    """How many DESCENT cells stand open. The head cell is not counted: the gate bounds
+    the backlog the lane is willing to promise ahead of itself, and exactly one head cell
+    exists ever. A descent cell is one that closes at or below the seam."""
+    parts = cursor.get("parts") or {}
+    return sum(
+        1
+        for slot in parts.values()
+        if slot.get("state") == "open" and slot_instant(slot, "to") <= seam
+    )
+
+
+def cut_head_cell(cursor: dict, *, part_hours: int, now: datetime) -> dict | None:
+    """The cursor with the newest cell of a descent opened on it, or None when no new
+    ground stands above what the lane already cut. Pure: a new cursor, never an edit.
+
+    THE TILING LAW, stated for both cutters because it is what makes a descent cost
+    nothing extra to read. The loader asks `stamp > from AND stamp <= to`, so a cell is
+    the half-open interval `(from, to]`: its `from` reads STRICTLY after and its `to`
+    reads UP TO AND INCLUDING. Two adjacent cells therefore share exactly one instant, and
+    the row standing on that shared instant belongs to the cell whose `to` it is. Neither
+    operator may be tidied. Changing `<=` to `<` would leave a row at a window's edge
+    shown by nobody yet claimed by the position a pass commits; changing `stamp >` to `>=`
+    would read the row at a shared instant in two windows and pay for it twice. The floor
+    cell reads `(floor, ...]` and never `[floor, ...)`, for the same reason twice over:
+    everything at or below the floor is curated by contract, and a loader that read the
+    floor's own instant would re-read the row the watermark already consumed.
+
+    The head cell is the descent's one upward-facing end: the cell `(stored_top, now]`,
+    where `stored_top` is the top the previous head cell stored and the plan's `seam` for
+    the first one. `now` is a read boundary CAPTURED ONCE and is written to the plan only
+    when a cell is actually opened, which is what answers the warning in
+    `drain_seam_target`'s own docstring about two coordinator passes fifty-six
+    microseconds apart: the second call finds a head cell standing and opens nothing, so
+    no second plan is born over one seam and no run re-reads the clock for head geometry.
+    A skipped tick therefore WIDENS the next head cell instead of leaving a window nobody
+    ever cut, and the volume limit on a widened cell is the one-run wall the bound names.
+
+    `max_open` is deliberately NOT a parameter of this cutter although it bounds the
+    other one. Exactly one head cell can ever stand, so there is no queue of head cells to
+    gate: the guard below is a bool, not a count. `cut_descent_cell` carries the gate
+    precisely because descent cells DO queue.
+
+    Refuses (answering None, which is a normal evening, not a fault) while a head cell
+    stands open, while `now` names no ground above the stored top, and while the cell's
+    `from` would fall BELOW the descent's frontier, which would overlap ground the descent
+    already promised. Standing head cell at `from == descent_to` is legal and is the seed
+    case: adjacency shares one instant, and that instant belongs to the descent cell.
+    """
+    plan = cursor.get("plan")
+    if not drain_descends(cursor):
+        raise ValueError(
+            "cut_head_cell asks a plan that does not descend: only a descent has a newest "
+            "end, and a forward plan's frontier is `cut_drain_part`'s business"
+        )
+    parts = cursor.get("parts") or {}
+    if plan.get("part_hours") != part_hours:
+        raise ValueError(
+            f"descending plan was cut at part_hours={plan.get('part_hours')} and carries "
+            f"that granularity; a caller asking for {part_hours} must await a new plan, "
+            "not shift the seams of this one"
+        )
+    seam = slot_instant(plan, "seam")
+    descent_to = slot_instant(plan, "descent_to")
+    stored_top = slot_instant(plan, "head_top") or seam
+    if _head_slot_standing(cursor, seam) or now <= stored_top or stored_top < descent_to:
+        return None
+    part_id = part_id_of(stored_top)
+    if part_id in parts:
+        raise ValueError(
+            f"cut_head_cell would cut window {part_id} over a slot the cursor already "
+            "carries: two plans cannot own one seam"
+        )
+    slot = {
+        "from": stored_top.isoformat(),
+        "to": now.isoformat(),
+        "through": None,
+        "cursor": {},
+        "state": "open",
+        "claim_expires_at": None,
+    }
+    new_plan = {**plan, "head_top": now.isoformat()}
+    return {**cursor, "plan": new_plan, "parts": {**parts, part_id: slot}}
+
+
+def cut_descent_cell(cursor: dict, *, part_hours: int, max_open: int) -> dict | None:
+    """The cursor with the next cell BELOW the descent's frontier opened on it, or None
+    when the descent has reached its floor or the planning gate is full. Pure, and
+    constant time: the frontier is one instant, so planning a 4.7-million-row backlog needs
+    no scan of it and one subtraction.
+
+    The cell is `(descent_to - part_hours, descent_to]`, which is the tiling law of
+    `cut_head_cell`'s docstring read downward: `to_{next} = from_{this}`, adjacent cells
+    share an instant exactly once, and the shared instant belongs to the older `to`. The
+    frontier then moves down by exactly `part_hours`, or to the floor for a final short
+    cell, and answers None at or below the floor — which is the descent's only stopping
+    condition, and why the lower edge is the frozen watermark rather than the corpus's
+    oldest instant (a corpus with absurd client stamps would never finish).
+
+    `max_open` bounds the DESCENT cells (the coordinator passes 2 x the endpoint bound),
+    because those are the windows the lane promises ahead of the work it can do. The head
+    cell is exempt from this count by construction: exactly one can stand, and a run works
+    it first. Neither cutter ever touches `published`: cutting promises work, it publishes
+    none.
+    """
+    plan = cursor.get("plan")
+    if not drain_descends(cursor):
+        raise ValueError(
+            "cut_descent_cell asks a plan that does not descend: a forward plan cuts from "
+            "its frontier toward its target, which is `cut_drain_part`'s law"
+        )
+    parts = cursor.get("parts") or {}
+    if plan.get("part_hours") != part_hours:
+        raise ValueError(
+            f"descending plan was cut at part_hours={plan.get('part_hours')} and carries "
+            f"that granularity; a caller asking for {part_hours} must await a new plan, "
+            "not shift the seams of this one"
+        )
+    floor = slot_instant(plan, "floor")
+    descent_to = slot_instant(plan, "descent_to")
+    seam = slot_instant(plan, "seam")
+    if descent_to <= floor or _descent_open_count(cursor, seam) >= max_open:
+        return None
+    from_at = max(descent_to - timedelta(hours=part_hours), floor)
+    part_id = part_id_of(from_at)
+    if part_id in parts:
+        raise ValueError(
+            f"cut_descent_cell would cut window {part_id} over a slot the cursor already "
+            "carries: two plans cannot own one seam"
+        )
+    slot = {
+        "from": from_at.isoformat(),
+        "to": descent_to.isoformat(),
+        "through": None,
+        "cursor": {},
+        "state": "open",
+        "claim_expires_at": None,
+    }
+    new_plan = {**plan, "descent_to": from_at.isoformat()}
+    return {**cursor, "plan": new_plan, "parts": {**parts, part_id: slot}}
+
+
+def extend_descent_floor(cursor: dict, *, floor: datetime) -> dict | None:
+    """The cursor with a descent's floor moved DOWN to a watermark the ground moved under.
+
+    `floor` is the LIVE `curated_through`, and this is asked only when it has fallen below the
+    plan's own floor — an ingest rewind re-opened rows the descent believed were curated by
+    contract. Retiring there is the silent data loss this card exists not to ship: the hand-off
+    would land the watermark ahead of rows that are un-curated again. So the descent grows.
+
+    Downward only, and a floor that has risen answers None rather than re-anchoring: a plan that
+    could pull its own floor up would delete the promise over ground it may still have to read.
+    The GRID is not re-anchored either. `seam` stays where the seed put it and cells keep
+    closing on the seams they were promised; the final cell simply runs short to the new floor,
+    which is the same rule `cut_descent_cell` already carries for the seed's floor. That is why
+    anchoring the grid on the floor at the seed costs nothing when the floor later moves.
+
+    Raises on a plan that does not descend, because a forward plan's frontier is its `target`
+    and there is no floor under it to move.
+    """
+    if not drain_descends(cursor):
+        raise ValueError(
+            "extend_descent_floor asks a plan that does not descend: a forward plan chases its "
+            "target and has no frozen floor for a rewind to fall below"
+        )
+    plan = cursor["plan"]
+    standing = slot_instant(plan, "floor")
+    if floor >= standing:
+        return None
+    return {**cursor, "plan": {**plan, "floor": floor.isoformat()}}
+
+
+def newest_open_part(cursor: dict, *, at_or_below: datetime | None = None) -> str | None:
+    """The highest `part_id` whose slot is still open, or None when nothing stands.
+
+    Part ids name their `from` instant, so the max of the keys IS the newest window and no
+    slot carries a sequence number to fall out of step with. This is the whole working
+    order of a descent: the head cell's `from` is at or above the seam and every descent
+    cell closes at or below it, so the newest id names the head cell whenever one stands
+    and the highest descent cell otherwise. Fresh input therefore cannot starve behind the
+    backlog, and once the head cell is published the rest of that run and every later run
+    descends.
+
+    `at_or_below` is the fairness rule of one run: pass the plan's top to ask for the
+    newest cell AT OR BELOW it, which is what a run does after it has already worked its
+    one head cell. The bound reads the slot's `to`, because the question is which cell
+    closes inside that edge, and it is inclusive so the cell whose `to` IS the edge stays
+    eligible: the head cell's `from` and the descent cell below it share that instant, and
+    the loader hands it to the older `to`.
+    """
+    parts = cursor.get("parts") or {}
+    open_ids = []
+    for part_id, slot in parts.items():
+        if slot.get("state") != "open":
+            continue
+        if at_or_below is not None and slot_instant(slot, "to") > at_or_below:
+            continue
+        open_ids.append(part_id)
+    return max(open_ids) if open_ids else None
+
+
+def drain_published(cursor: dict) -> datetime | None:
+    """The newest edge this descent's committed passes have actually read.
+
+    `None` says this is not a descending plan. Readers that want the ROW's live edge ask
+    `drain_through`, which this derives; readers that want to know what a pass committed
+    ask this. The two are the same number by the fence in `advance_drain` and
+    `prune_published_part`, and this function is what those fences compare against.
+    """
+    if not drain_descends(cursor):
+        return None
+    return slot_instant(cursor["plan"], "published")
+
+
+def drain_plan_top(cursor: dict) -> datetime | None:
+    """The newest instant this descent's own cells claim: the head cell's captured top,
+    or the seam while no head cell has been opened.
+
+    The pending gate and the coverage probe ask this, because the question 'is anything
+    un-curated inside the plan' ends at the top of the plan, not at the clock. For the
+    descending lane the two-sided pending predicate reaches ABOVE this (input newer than
+    the plan top is what the NEXT head cell covers); this is the edge of the ground the
+    standing plan owns.
+    """
+    if not drain_descends(cursor):
+        return None
+    plan = cursor["plan"]
+    return slot_instant(plan, "head_top") or slot_instant(plan, "seam")
 
 
 async def drain_pass_budget(

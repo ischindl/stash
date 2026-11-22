@@ -258,7 +258,43 @@ Before starting:
   arithmetic is worth stating instead of smoothing: the owner backlog measured from 2026-09-02 to
   2026-11-15 is 4 191 130 events across 549 421 829 characters, about 140M tokens, which at an
   optimistic 50 tok/s aggregate is roughly 32 days of wall. The fan-out trades 162 days for days,
-  not for minutes.
+  not for minutes. The one clamped window this lane does allow is a descent's final cell, which
+  runs short to the floor instead of re-anchoring the grid, and it cannot repeat the failure above:
+  its id names its own close and the floor beneath it is terminal, so no neighbouring slot is
+  waiting to spend that second.
+- The scoped (developer-platform) lane reads its backlog from the newest end backwards, so a
+  fresh upload is not queued behind the past. Its run works one **head cell** first — the fresh
+  ground above the seam it captured when the run opened — and then descends through cells of
+  `CURATOR_DRAIN_PART_HOURS`, publishing each window the moment it finishes it. The bound this
+  buys is one dispatch and not one night: a document falls inside the head cell of the next run
+  and is read by it, while the committed pass that follows that head is the run's next
+  successful pass — so a descent's first run may publish nothing at all and be healthy.
+  `drain_through` on such a lane is derived (`max(published, the surviving windows' through)`),
+  seeded at the live `curated_through` and never at the seam, because a seam is a guess at the
+  newest end and a watermark may only name ground a committed pass read. What a run prints per
+  committed window:
+
+  ```bash
+  curator descent pass=3 agent=<id> slot=20261114T000000 window=2026-11-14T00:00:00+00:00..2026-11-15T00:00:00+00:00 edge=descent remaining_below=2026-07-15T10:38:03.493000+00:00
+  ```
+
+  `edge=` names which end of the descent the pass worked (`head` for the fresh cell above the
+  seam, `descent` for a backlog cell), and an extra `empty=1` marks a window published without a
+  model turn because the loader's own UNION answered no row inside it.
+
+  `remaining_below=` is the one field an operator acts on: it is the oldest instant this descent
+  still owes, so the question to ask of a lane that has run for a week is how far that number has
+  fallen per run, and a lane whose `remaining_below=` does not move across two dispatches is not
+  descending — read its `guard=` token instead of its calendar. When it reaches the floor the
+  descent retires itself, hands the published edge to the watermark, and the lane is incremental
+  again with no operator step. Neither the retirement nor the nightly dispatch is decided by how
+  many rows exist: reading input publishes it without making it ineligible, so both ask only what
+  the lane still OWES — a window still open, a cell below the frontier nobody has cut, or input
+  newer than the plan's top. That is what keeps the descent from spending `FREE_CURATOR_RUNS_PER_MONTH`
+  on history it has already curated; a lane that has published everything and has no fresh input
+  takes the free `skipped_no_changes` tick, and hands its watermark over on the next run that has
+  anything to read. To watch one lane: `docker logs <heavy-worker> | grep 'curator
+  descent'`, and `grep 'curator descent' | tail -1` for what it still owes.
 - Operational alerts stay off unless you finish them: set both `ALERT_SLACK_*`
   variables in `.env` and install the Stash Slack bot into that workspace, so
   the team has a `slack_bot_installs` row and its bot is in the alert channel.
@@ -299,7 +335,10 @@ Before starting:
   All four also run with `--loglevel=info`, so an empty window in that log is neither a
   level problem nor a lost record: it means the run never reached a line worth
   printing. Both curator lanes write one `curator pass=` meter line per committed pass,
-  which is the line to watch while a backlog drains. The scoped line carries the granted
+  which is the line to watch while a backlog drains. A scoped lane that is descending prints its
+  window fields on a separate `curator descent` line beside that one (its fields are window edges
+  and a debt, not a boundary — see the descent above), and the `curator pass=` line keeps its own
+  meaning for both lanes. The scoped line carries the granted
   `budget=`, the calibrated seconds-per-character, and what the pass's own characters
   actually cost (`seconds_per_character=`), so calibration drift reads off the worker log
   without dialing the model. The personal lane prints three lines, and only one of

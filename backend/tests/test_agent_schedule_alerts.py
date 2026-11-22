@@ -1393,3 +1393,126 @@ async def test_a_curator_that_found_nothing_to_do_still_stays_quiet(client, pool
 
     assert await agent_schedules._alert_stale_curators() == 0
     assert sent == []
+
+
+async def _descending_lane(user_id: uuid.UUID, *, watermark_hours_ago: int, drain_hours_ago: int):
+    """A curator whose lane is mid-descent, at two ages the watchdog must tell apart.
+
+    The watermark is written stale in BOTH cases, because that is the state a descent leaves it
+    in for days: a descending drain commits windows into its own column and the incremental
+    position does not move until the descent retires. What differs is the age of the drain
+    column, which is the only place a running descent can be seen at all. The cursor is built by
+    `descending_plan` and the column by `drain_derived_through` rather than pasted in, so the row
+    is a row a run could have left behind.
+    """
+    from datetime import UTC
+
+    from backend.services import curation_service
+
+    agent = await _make_curator(user_id, curated_hours_ago=watermark_hours_ago, last_run_error=None)
+    now = datetime.now(UTC)
+    plan = curation_service.descending_plan(
+        part_hours=24,
+        floor=now - timedelta(days=40),
+        seam=now - timedelta(hours=25),
+        published=now - timedelta(hours=drain_hours_ago),
+    )
+    cursor = {"plan": plan, "parts": {}}
+    await get_pool().execute(
+        "UPDATE agents SET last_run_outcome='failed', drain_through=$2, drain_cursor=$3::jsonb"
+        " WHERE id=$1",
+        agent["id"],
+        curation_service.drain_derived_through(cursor),
+        cursor,
+    )
+    return agent
+
+
+@pytest.mark.asyncio
+async def test_a_descending_curator_that_moved_its_drain_forward_stays_quiet(
+    client, pool, monkeypatch
+):
+    """A descent that is working is not a stale curator, and the watermark cannot tell.
+
+    The lane's watermark has not moved for three days because a descending drain commits into
+    its OWN column and hands the watermark over only at retirement — which is the design, and the
+    shape that would page every healthy curator in the product if the watchdog asked the
+    watermark alone. Asking the further of the two positions is what lets a descent run for a
+    month without an operator being told it stopped, and a just-seeded descent cannot fake it:
+    that column starts at the watermark the lane is behind and only a committed boundary moves
+    it, so a lane with no fresh drain edge has nothing to hide behind.
+    """
+    user_id = await _register(client)
+    await _descending_lane(user_id, watermark_hours_ago=72, drain_hours_ago=1)
+    await memory_service.push_event(
+        user_id, "test", "user_message", "hello", user_id, f"sess-{uuid.uuid4()}"
+    )
+    sent = _capture_alerts(monkeypatch)
+
+    assert await agent_schedules._alert_stale_curators() == 0
+    assert sent == [], f"a descent that advanced its own column was paged: {sent}"
+
+
+@pytest.mark.asyncio
+async def test_a_descending_curator_that_stopped_moving_still_alerts(client, pool, monkeypatch):
+    """The other half: a descent that froze mid-backlog is the bug this watchdog exists for.
+
+    Both positions behind the cutoff is a lane that has read nothing and committed nothing for
+    three days, and the drain column being present must not become an excuse that silences it —
+    the widened predicate reads the FURTHER edge, so a stale lane with a pair is still stale on
+    its best number.
+    """
+    user_id = await _register(client)
+    await _descending_lane(user_id, watermark_hours_ago=72, drain_hours_ago=72)
+    await memory_service.push_event(
+        user_id, "test", "user_message", "hello", user_id, f"sess-{uuid.uuid4()}"
+    )
+    sent = _capture_alerts(monkeypatch)
+
+    assert await agent_schedules._alert_stale_curators() == 1
+    assert len(sent) == 1 and "stale" in sent[0]
+
+
+@pytest.mark.asyncio
+async def test_a_curator_that_reached_no_position_at_all_is_not_selected(client, pool, monkeypatch):
+    """The guard the widened predicate REPLACED, pinned from the other side.
+
+    STAS-492 dropped `a.curated_through IS NOT NULL` in favour of `GREATEST(curated_through,
+    drain_through) < cutoff`, and the safety of that drop is SQL's own: the greatest of two NULLs
+    is NULL, `NULL < cutoff` is NULL, and a NULL predicate selects nothing. A lane that has never
+    reached either position therefore stays out of the report exactly as it did under the explicit
+    guard — which is why no Python-side `or` stands where the guard used to be, and why
+    re-introducing one as a "just be safe" COALESCE would page every never-run curator daily.
+
+    The cursor goes back to the `{}` the column ships with: it is NOT NULL, and an empty cursor is
+    exactly "no drain in flight", so this is a curator that has never run rather than a row built
+    to trip a guard.
+    """
+    user_id = await _register(client)
+    agent = await _make_curator(user_id, curated_hours_ago=72, last_run_error=None)
+    await get_pool().execute(
+        "UPDATE agents SET curated_through = NULL, curated_through_event_id = NULL,"
+        " drain_through = NULL, drain_cursor = '{}'::jsonb, last_run_outcome = 'failed'"
+        " WHERE id = $1",
+        agent["id"],
+    )
+    await memory_service.push_event(
+        user_id, "test", "user_message", "hello", user_id, f"sess-{uuid.uuid4()}"
+    )
+    sent = _capture_alerts(monkeypatch)
+
+    assert await agent_schedules._alert_stale_curators() == 0
+    assert sent == [], f"a lane holding no position at all was paged: {sent}"
+
+    # The same row, one instant older than the cutoff, and everything about it that could have
+    # excluded it — outcome, schedule, the pending event pushed above — is unchanged. That is what
+    # makes the assertion above a measurement of the NULL rather than of an unrelated filter.
+    await get_pool().execute(
+        "UPDATE agents SET curated_through = $2 WHERE id = $1",
+        agent["id"],
+        datetime.now(UTC) - timedelta(hours=72),
+    )
+    assert await agent_schedules._alert_stale_curators() == 1, (
+        "the row was excluded by something other than its NULL positions, so the check above "
+        "proves nothing about GREATEST"
+    )

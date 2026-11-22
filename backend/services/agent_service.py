@@ -1183,6 +1183,14 @@ async def advance_drain(
     slot's facts while the derived instant stands at another slot's edge. An unplanned
     row refuses a named part for the mirror reason: a slot the cursor does not carry
     has no pair to fence on.
+
+    TWO FENCES guard a planned commit, and they answer different questions. The per-slot
+    raise below ("would move from … back") asks whether ONE pass stopped reading ahead of
+    where it committed. The column raise after the derivation asks whether the AGGREGATE
+    lowered, which no slot fence can see: a descent prunes the slot holding its maximum, so
+    the correctly-advanced part can be the reason the column fell. Neither may be dropped
+    for the other, and neither is a clamp — both raise, because a drain moving behind the
+    watermark is its job while a drain moving behind ITSELF is a bug.
     """
     row = await conn.fetchrow(
         "SELECT drain_through, drain_cursor FROM agents WHERE id = $1 FOR UPDATE", agent_id
@@ -1221,6 +1229,23 @@ async def advance_drain(
         parts[part_id] = {**slot, "through": through.isoformat(), "cursor": cursor or {}}
         new_cursor = {**stored_cursor, "parts": parts}
         derived = drain_derived_through(new_cursor)
+        # The column's own fence, standing beside the per-slot one above and answering a
+        # different question. The slot fence asks whether ONE pass committed behind where it
+        # stopped reading; this one asks whether the AGGREGATE moved backwards, which a slot
+        # fence structurally cannot see: a descending lane prunes the very slot that holds
+        # the maximum of its derivation, so a pass can satisfy "never behind it" exactly and
+        # the column it writes can still sit lower, because the winner left the set. And
+        # `drain_parts_of` validates the column for equality with the derivation, never for
+        # monotonicity, so a regressed-but-matching value validates clean and reaches every
+        # reader of it. The row is already locked and the write stays one statement.
+        # On the forward plan the derivation cannot fall, because pruning moves its own
+        # minimum forward, so a raise from that arm names a bug and never a policy.
+        if derived is not None and stored_at is not None and derived < stored_at:
+            raise ValueError(
+                f"curator {agent_id} drain column would move from {stored_at} back to "
+                f"{derived}: the column is the position every reader prices this lane from, "
+                "and no commit of a part may lower it however correctly that part advanced"
+            )
     else:
         if read_at is not None and through < read_at:
             raise ValueError(
@@ -1307,6 +1332,8 @@ async def cut_drain_windows(
     part_hours: int,
     target: datetime,
     max_open: int,
+    descent: dict | None = None,
+    floor: datetime | None = None,
 ) -> list[str]:
     """Cut every window the planning gate allows and stage them onto the row, under
     the row lock, returning the part ids newly cut (ordered oldest first).
@@ -1328,8 +1355,38 @@ async def cut_drain_windows(
     The first cut of a seeded drain is the one moment that column gains a value: the
     oldest slot's `from` is the `DRAIN_BEGINNING` sentinel, which reads to every
     reader as 'nothing is unfolded yet' — the truth for a fresh backfill.
+
+    Which cutter runs is the cursor's own decision, read through `drain_descends`. A
+    DESCENDING plan is cut by both of its cutters — the head cell above the stored top,
+    then as many descent cells as the gate allows — and for it `target` is the read
+    boundary captured for that head cell, a raw clock instant rather than a grid seam.
+    That is not the forward plan's `target` read loosely: the head cell IS the descent's
+    one non-grid edge, the edge whose job is to cover whatever arrived since the last run,
+    and a grid floor applied to it would leave the rows between the last seam and `now` in
+    no window at all. The forward arm below answers the locked row line for line.
+
+    `descent` is the plan of a descent being BORN, and it is written in the same statement
+    as its first cells for the same reason the cells are never staged in memory: a row that
+    carried a plan and no slots would be a promise of work no window exists to do, and a
+    row that carried cells with no plan would not know it was descending. Refuses loudly if
+    the locked row already carries a cursor — a second seed over a live descent would
+    replace the ground the first one promised.
+
+    `floor` is the descent's floor having MOVED: the live `curated_through`, handed here when
+    a rewind dropped it below the floor the plan seeded with. It is applied to the locked row's
+    own cursor rather than to the caller's read, and only downward, so the row decides — a caller
+    that raced another extension finds the floor already low and cuts on from there. Without
+    this the descent would stop at a floor that no longer names curated ground and then retire
+    its watermark over rows the rewind had re-opened.
     """
-    from .curation_service import cut_drain_part, drain_derived_through
+    from .curation_service import (
+        cut_descent_cell,
+        cut_drain_part,
+        cut_head_cell,
+        drain_derived_through,
+        drain_descends,
+        extend_descent_floor,
+    )
 
     row = await conn.fetchrow(
         "SELECT drain_through, drain_cursor FROM agents WHERE id = $1 FOR UPDATE", agent_id
@@ -1338,17 +1395,37 @@ async def cut_drain_windows(
         raise RuntimeError(f"cut_drain_windows: curator {agent_id} does not exist")
     cursor = row["drain_cursor"] or {}
     standing = row["drain_through"]
-    known: list[str] = list((cursor.get("parts") or {}).keys())
-    cut_cursor = cursor
-    while True:
-        nxt = cut_drain_part(
-            cut_cursor, standing, part_hours=part_hours, target=target, max_open=max_open
+    if descent is not None and cursor:
+        raise RuntimeError(
+            f"cut_drain_windows was handed a descent seed for curator {agent_id} whose row "
+            f"already carries a cursor: a second seed would replace the windows the first "
+            f"one promised, and a descent re-started over its own slots reads twice"
         )
-        if nxt is None:
-            break
-        cut_cursor = nxt
+    known: list[str] = list((cursor.get("parts") or {}).keys())
+    cut_cursor = {"plan": descent, "parts": {}} if descent is not None else cursor
+    if drain_descends(cut_cursor):
+        if floor is not None:
+            # None here means the floor the row carries is already at or below what the caller
+            # measured, which is the raced-rewind case and needs no write to be correct.
+            cut_cursor = extend_descent_floor(cut_cursor, floor=floor) or cut_cursor
+        head = cut_head_cell(cut_cursor, part_hours=part_hours, now=target)
+        if head is not None:
+            cut_cursor = head
+        while True:
+            nxt = cut_descent_cell(cut_cursor, part_hours=part_hours, max_open=max_open)
+            if nxt is None:
+                break
+            cut_cursor = nxt
+    else:
+        while True:
+            nxt = cut_drain_part(
+                cut_cursor, standing, part_hours=part_hours, target=target, max_open=max_open
+            )
+            if nxt is None:
+                break
+            cut_cursor = nxt
     new_ids = [part_id for part_id in cut_cursor.get("parts", {}) if part_id not in known]
-    if not new_ids:
+    if cut_cursor == cursor:
         return []
     await conn.execute(
         "UPDATE agents SET drain_through = $2::timestamptz, drain_cursor = $3::jsonb WHERE id = $1",
@@ -1467,6 +1544,11 @@ async def mark_drain_part_done(
     which is the compose pass's job, not this stamp's. An absent or already-`done`
     slot answers False without writing: the second completion of a part is a replay,
     and a replay that finds its work standing must not rewrite it.
+
+    The scoped lane's descent never calls this. It prunes its published windows instead of
+    resting them in `done`: a descent's frontier is a position and not a page, and a `done`
+    slot that kept its boundary would hold the derived column at an edge the descent had
+    already published past.
     """
     row = await conn.fetchrow("SELECT drain_cursor FROM agents WHERE id = $1 FOR UPDATE", agent_id)
     if row is None:
@@ -1487,6 +1569,110 @@ async def mark_drain_part_done(
     return True
 
 
+async def prune_published_part(
+    conn,
+    agent_id: UUID,
+    part_id: str,
+    read_at: datetime | None,
+    read_cursor: dict,
+    *,
+    published: datetime,
+) -> None:
+    """Remove the slot whose window a descending lane has just published, and raise the column.
+
+    `done` is not a state on this lane. On the forward plan a slot survives its pass because
+    the wiki has not absorbed its report yet, and the compose pass is what prunes it; here
+    the pass IS the publication — its pages are the ones the scoped lane writes directly —
+    so a slot that has committed its last boundary is history by the time the transaction
+    that committed it ends, and keeping it would make the map grow to the size of the corpus.
+    `mark_drain_part_done` keeps its meaning and its personal-lane caller; this is the
+    descending lane's sibling.
+
+    Fenced on the exact pair the slot carries, which is the pair the caller's pass read when
+    the caller is the empty-window path and is the pair that same transaction just advanced
+    when the caller committed a boundary first: either way, a slot that moved out from under
+    this transaction refuses by part id. An ABSENT part raises rather than answering False,
+    because pruning a slot nobody cut is a bug and not a no-op, and no caller is allowed to
+    discover it by watching a window silently disappear.
+
+    `published` is the edge THIS window published, and the plan's own published edge only
+    ever RISES, so the write stores the maximum of the two. That is not a convenience: a
+    descending lane works its cells newest-first, so the cell that finishes tenth always names
+    an edge below the one that finished first, and moving the field on such a commit would
+    lower the very value that makes removing a slot safe. This matters because a descent
+    deletes the slot holding its maximum: `drain_parts_of` validates the column for equality
+    with the derivation and never for monotonicity, so a regressed-but-matching value would
+    validate clean and reach every reader of it, and a NULL beside a live plan reads as "seeded
+    at the beginning" — the corpus paid for twice. The column's own comparison therefore runs
+    here too, in the statement that removes a slot: a fence on one writer of the column is
+    half a fence.
+    """
+    from .curation_service import (
+        drain_derived_through,
+        drain_descends,
+        drain_parts_of,
+        slot_instant,
+    )
+
+    row = await conn.fetchrow(
+        "SELECT drain_through, drain_cursor FROM agents WHERE id = $1 FOR UPDATE", agent_id
+    )
+    if row is None:
+        raise CuratorDrainConflict(agent_id, read_at, None, part_id=part_id)
+    stored_at = row["drain_through"]
+    stored_cursor = row["drain_cursor"] or {}
+    parts = stored_cursor.get("parts")
+    if not isinstance(parts, dict):
+        raise RuntimeError(
+            f"curator {agent_id} carries no parts map: prune_published_part removes a planned "
+            "slot and nothing else"
+        )
+    if part_id not in parts:
+        raise RuntimeError(
+            f"curator {agent_id} drain part {part_id} is not on the row: pruning a slot that "
+            "was never cut, or was already pruned, is a bug and not a no-op"
+        )
+    drain_parts_of({"id": agent_id, "drain_through": stored_at, "drain_cursor": stored_cursor})
+    if not drain_descends(stored_cursor):
+        raise RuntimeError(
+            f"curator {agent_id} carries a forward drain plan: a forward slot is retired by "
+            "the compose pass that folds its report into the wiki, and pruning it here would "
+            "discard a report the wiki never received"
+        )
+    slot = parts[part_id]
+    slot_at = slot_instant(slot, "through") or slot_instant(slot, "from")
+    if slot_at != read_at or (slot.get("cursor") or {}) != (read_cursor or {}):
+        raise CuratorDrainConflict(agent_id, read_at, slot_at, part_id=part_id)
+    plan = stored_cursor["plan"]
+    # Raised, never moved: the cells of a descent finish in the opposite order to the edges
+    # they name, and the tenth one published is not evidence that the first one did not happen.
+    published = max(slot_instant(plan, "published"), published)
+    new_cursor = {
+        **stored_cursor,
+        "plan": {**plan, "published": published.isoformat()},
+        "parts": {k: v for k, v in parts.items() if k != part_id},
+    }
+    derived = drain_derived_through(new_cursor)
+    if derived is None:
+        raise RuntimeError(
+            f"curator {agent_id} descending drain derives no edge after pruning {part_id}: "
+            "the published edge is what keeps this column non-NULL while its plan stands, and "
+            "a NULL here reads as a drain seeded at the beginning"
+        )
+    if stored_at is not None and derived < stored_at:
+        raise ValueError(
+            f"curator {agent_id} drain column would move from {stored_at} back to {derived}: "
+            f"pruning {part_id} removed the slot holding the column, and a published edge that "
+            "does not cover what its pass committed is a claim about a read that did not happen"
+        )
+    await conn.execute(
+        "UPDATE agents SET drain_through = $2::timestamptz, drain_cursor = $3::jsonb WHERE id = $1",
+        agent_id,
+        derived,
+        new_cursor,
+    )
+
+
 async def finish_drain(
     conn,
     agent_id: UUID,
@@ -1502,6 +1688,12 @@ async def finish_drain(
     already-curated past. Then the watermark moves forward through `advance_watermark`,
     which is monotone-safe at this instant by construction: everything the drain read sits
     behind what the drain reached.
+
+    A descending drain's retirement is that law and not an exception to it. Its published edge
+    is seeded at the live watermark and every window it publishes sits above that seed, so the
+    instant handed here is ground the descent read. The case the monotone clamp exists to refuse
+    is a hand-off proposed BEHIND the live watermark — which is exactly what seeding the edge at
+    the plan's seam would have handed over, since a seam is a guess at the newest end.
 
     The watermark write fences on `watermark_read` — the stored incremental pair its
     dispatcher loaded BEFORE the drain was seeded, not the drain pair the pass just read.

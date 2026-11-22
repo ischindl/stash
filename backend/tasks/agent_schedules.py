@@ -290,8 +290,9 @@ def _run_lock(agent: dict, workspace, part_id: str | None = None):
     if workspace is not None:
         if part_id is not None:
             raise RuntimeError(
-                f"curator {agent['id']}: the scoped lane has no parts — planning is the "
-                "personal lane's job and the scoped fence is the upstream `scoped-curator-<id>` key"
+                f"curator {agent['id']}: the scoped lane has no parts — its descent cuts windows "
+                "it reads one at a time inside one run, so a slot is a fact of the run's own cursor "
+                "and never a turn to fan out; the fence is the upstream `scoped-curator-<id>` key"
             )
         # The developer-platform lane: this key is the fence its commit re-enters
         # under `scoped_lock_held`, so the name is upstream's and stays upstream's.
@@ -2076,6 +2077,26 @@ async def _alert_stale_curators() -> int:
     exception is the monthly-allowance stop, which is a skip the row resolves
     correctly and the drain cannot survive: a lane frozen there looks healthy
     forever, so the stale watermark now reports it as allowance exhaustion.
+
+    Which edge is measured: `GREATEST(curated_through, drain_through)` — the further of the
+    lane's two positions. A descending drain commits its windows and moves its own column while
+    the incremental watermark has not moved yet, and a lane doing exactly that is the definition
+    of NOT stale, so asking the watermark alone would page every curator that ever started a
+    descent. The seed keeps this honest rather than merely quieter: a just-seeded descent's
+    column names the watermark it started BEHIND, never the seam it hopes to reach, so the alert
+    judges the lane on ground it really has, and only a committed boundary ever moves that
+    column. NULL semantics are SQL's and are not papered over here: `GREATEST` ignores NULL
+    arguments, so a curator that has never run (both NULL) yields NULL, fails the comparison, and
+    is not selected, while a lane with a watermark and no drain in flight behaves as it did.
+
+    That same `GREATEST` is SELECTed as `live_edge` and is the instant the rest of this function
+    reasons about — the cron grace and the report line both read it — because the number that
+    paged is the number a reader should see, and a line built from `curated_through` alone would
+    format a NULL for the one lane the predicate legitimately selected: the external curator's
+    watermark is zeroed by `end_user_service`'s archive-and-reset without touching its drain
+    pair, and a descent seeded on such a lane deliberately never writes that watermark. A
+    `None` in an f-string with a datetime spec raises inside this watchdog and reports no curator
+    at all, which is a watchdog deleted by its own formatting.
     """
     from ..database import get_pool
     from ..services import alert_service
@@ -2084,10 +2105,10 @@ async def _alert_stale_curators() -> int:
     cutoff = now - timedelta(hours=STALE_CURATOR_HOURS)
     rows = await get_pool().fetch(
         """
-        SELECT a.*, u.email
+        SELECT a.*, GREATEST(a.curated_through, a.drain_through) AS live_edge, u.email
         FROM agents a JOIN users u ON u.id = a.user_id
         WHERE a.is_curator AND a.run_mode = 'scheduled'
-          AND a.curated_through IS NOT NULL AND a.curated_through < $1
+          AND GREATEST(a.curated_through, a.drain_through) < $1
           AND a.last_run_outcome IN ('started', 'failed', 'ran', 'skipped_credits')
         """,
         cutoff,
@@ -2100,7 +2121,7 @@ async def _alert_stale_curators() -> int:
         # curator with an old undrained backlog still alerts after 48 hours.
         if row["last_run_outcome"] == "ran":
             try:
-                due = croniter(row["schedule_cron"], row["curated_through"]).get_next(datetime)
+                due = croniter(row["schedule_cron"], row["live_edge"]).get_next(datetime)
                 if now < due + timedelta(hours=24):
                     continue
             except (ValueError, KeyError, TypeError):
@@ -2146,7 +2167,8 @@ async def _alert_stale_curators() -> int:
             }[row["last_run_outcome"]]
             detail = (row["last_run_error"] or outcome)[:200]
         lines.append(
-            f"- {row['email']}: last curated {row['curated_through']:%Y-%m-%d %H:%M} UTC ({detail})"
+            f"- {row['email']}: live edge (watermark or drain, whichever is further) "
+            f"{row['live_edge']:%Y-%m-%d %H:%M} UTC ({detail})"
         )
     # Asked before the call, never caught after it: a mode that sends no
     # operational alerts makes send_alert raise, and a raise here would

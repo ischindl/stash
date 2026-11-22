@@ -2267,8 +2267,8 @@ async def test_one_run_drains_a_document_larger_than_its_budget_in_committed_pas
     checkpoints: list[tuple[datetime, dict]] = []
     real_checkpoint = curation._checkpoint_pass
 
-    async def record_checkpoint(agent_, batch, fence, cursor, scope, drain):
-        moved = await real_checkpoint(agent_, batch, fence, cursor, scope, drain)
+    async def record_checkpoint(agent_, batch, fence, cursor, scope, drain, slot=None):
+        moved = await real_checkpoint(agent_, batch, fence, cursor, scope, drain, slot=slot)
         if moved:
             checkpoints.append((batch.through, dict(batch.cursor)))
         return moved
@@ -2958,8 +2958,8 @@ async def test_every_committed_pass_of_a_drain_moves_the_drain_position_and_no_m
     advances: list[datetime] = []
     real_advance = agent_service.advance_drain
 
-    async def record_advance(conn, agent_id, read_at, read_cursor, through, cursor):
-        await real_advance(conn, agent_id, read_at, read_cursor, through, cursor)
+    async def record_advance(conn, agent_id, read_at, read_cursor, through, cursor, part_id=None):
+        await real_advance(conn, agent_id, read_at, read_cursor, through, cursor, part_id=part_id)
         stored = await conn.fetchrow(
             "SELECT drain_through, drain_cursor FROM agents WHERE id=$1", agent_id
         )
