@@ -63,7 +63,9 @@ async def test_the_window_ends_at_the_last_instant_the_wall_buys(client, _db_poo
     before = stamps[0] - timedelta(minutes=1)
     now = datetime.now(UTC) + timedelta(hours=1)
 
-    window = await curation_service.read_window(owner, Position(before), "internal", None, 250, now)
+    window = await curation_service.read_window(
+        owner, Position(before), "internal", None, 250, now, agent_id=owner
+    )
 
     assert window.until == stamps[1]
     assert window.characters == 200
@@ -80,7 +82,9 @@ async def test_the_commit_lands_on_the_edge_the_turn_was_shown(client, _db_pool)
     stamps = await _feed(_db_pool, owner, [100, 100, 100])
     before = stamps[0] - timedelta(minutes=1)
     now = datetime.now(UTC) + timedelta(hours=1)
-    window = await curation_service.read_window(owner, Position(before), "internal", None, 250, now)
+    window = await curation_service.read_window(
+        owner, Position(before), "internal", None, 250, now, agent_id=owner
+    )
 
     through = await curation_service.complete_through(
         owner, Position(before), window.until, "internal", None, max_event_chars=250
@@ -103,11 +107,263 @@ async def test_a_feed_the_budget_covers_is_still_read_whole(client, _db_pool):
     now = datetime.now(UTC) + timedelta(hours=1)
 
     window = await curation_service.read_window(
-        owner, Position(before), "internal", None, 10_000, now
+        owner, Position(before), "internal", None, 10_000, now, agent_id=owner
     )
 
     assert window.until == now
     assert window.characters == 200
+
+
+async def _feed_groups(pool, owner: UUID, groups: list[list[int]], start: datetime | None = None):
+    """One timestamp group per inner list: every size in it shares that group's instant.
+
+    A budget walks whole instants, so the tests that argue about a forfeit need rows that
+    TIE — `_feed` only ever makes one event per instant. Rows inside a group get distinct
+    sessions, because the feed collapses an identity of (session, type, instant, content)
+    and two identical rows at one instant would be ONE event, silently halving the group a
+    test is measuring.
+
+    Returns the feed's own rows in the feed's own order, so a test asserts on the event ids
+    the pointers are made of rather than on stamps it invented.
+    """
+    first = start or datetime.now(UTC) - timedelta(days=2)
+    for group, sizes in enumerate(groups):
+        at = first + timedelta(minutes=group)
+        for index, size in enumerate(sizes):
+            await pool.execute(
+                "INSERT INTO history_events (owner_user_id, created_by, agent_name, event_type,"
+                " content, session_id, created_at) VALUES ($1, $1, 'cli', 'user_message', $2, $3, $4)",
+                owner,
+                "x" * size,
+                f"sess-group-{group}-{index}",
+                at,
+            )
+    return await pool.fetch(
+        "SELECT id AS event_id, created_at, length(content) AS chars FROM history_events"
+        " WHERE owner_user_id = $1 AND session_id LIKE 'sess-group-%'"
+        " ORDER BY created_at, id",
+        owner,
+    )
+
+
+@pytest.mark.asyncio
+async def test_an_instant_bigger_than_the_grant_is_forfeited_and_the_pass_moves_past_it(
+    client, _db_pool, caplog
+):
+    """A front no pass can carry is written off ONCE, named, and the pass still runs.
+
+    This is the invariant STAS-497 inverted: #1272 refused to refuse an oversized first
+    group, because a drain that refused one would re-read the same characters forever. The
+    plateau cannot come back through this door — the commit stands on `kept_through`, the
+    last event actually handed, which is at a LATER instant than the forfeited one, so what
+    was skipped is behind the watermark and outside every future feed. The intake's own
+    founder numbers are the reason the inversion was needed: the largest same-instant group
+    ahead of that watermark is 390,825 characters, about 35 hours of read at the priced
+    0.326s a character, inside a read share of 270 seconds.
+
+    The budget here is 250 characters and the front instant is 600 of them, so the pass must
+    be handed the 200 characters behind it, the watermark must land on that group's last
+    event, and the 600 characters must be said out loud exactly once — `complete_through`
+    stands on the same decision over the same rows and therefore prints nothing itself.
+    """
+    import logging
+
+    owner = await _owner(client)
+    rows = await _feed_groups(_db_pool, owner, [[600], [100, 100], [100]])
+    front, first_kept, last_kept, _unread = rows[0], rows[1], rows[2], rows[3]
+    before = front["created_at"] - timedelta(minutes=1)
+    now = datetime.now(UTC) + timedelta(hours=1)
+
+    with caplog.at_level(logging.INFO, logger="backend.services.curation_service"):
+        window = await curation_service.read_window(
+            owner, Position(before), "internal", None, 250, now, agent_id=owner
+        )
+        through = await curation_service.complete_through(
+            owner, Position(before), window.until, "internal", None, max_event_chars=250
+        )
+
+    assert window.since == Position(at=front["created_at"], event_id=front["event_id"]), (
+        "the read must START behind the forfeited instant, or the model re-reads it"
+    )
+    assert window.until == first_kept["created_at"]
+    assert (window.characters, window.events, window.skipped_chars) == (200, 2, 600)
+    assert through == Position(at=last_kept["created_at"], event_id=last_kept["event_id"])
+    assert through.at > window.since.at, "the forfeited instant must end up BEHIND the watermark"
+
+    forfeits = [
+        r.getMessage() for r in caplog.records if "forfeits unread instant" in r.getMessage()
+    ]
+    assert len(forfeits) == 1, forfeits
+    assert front["created_at"].isoformat() in forfeits[0]
+    assert "600 characters" in forfeits[0]
+
+
+@pytest.mark.asyncio
+async def test_a_feed_that_can_only_lose_twice_hands_out_nothing_and_forfeits_nothing(
+    client, _db_pool, caplog
+):
+    """One forfeit per pass is the cap, and the second overflow is a refusal, not a skip.
+
+    Two oversized instants in a row is the shape that would otherwise let a nightly run write
+    off its whole backlog one group at a time. The answer is `no part`: no window, no
+    forfeited characters, and a watermark that does not move. It is a loud state and it stays
+    loud every night until a human decides whether unread material may be written off — the
+    per-pass pointer cannot express it and a stored one is a retention decision (STAS-497
+    puts that question to the operator instead of answering it in code).
+    """
+    import logging
+
+    owner = await _owner(client)
+    rows = await _feed_groups(_db_pool, owner, [[600], [600]])
+    before = rows[0]["created_at"] - timedelta(minutes=1)
+    now = datetime.now(UTC) + timedelta(hours=1)
+
+    with caplog.at_level(logging.INFO, logger="backend.services.curation_service"):
+        window = await curation_service.read_window(
+            owner, Position(before), "internal", None, 250, now, agent_id=owner
+        )
+        through = await curation_service.complete_through(
+            owner, Position(before), now, "internal", None, max_event_chars=250
+        )
+
+    assert window is None
+    assert through == Position(before), "a pass handed nothing records nothing"
+
+    lines = [r.getMessage() for r in caplog.records]
+    refusals = [m for m in lines if "no passable part" in m]
+    assert len(refusals) == 1, refusals
+    assert not [m for m in lines if "forfeits unread" in m], (
+        "a refusal forfeits nothing; the two sentences must not be interchangeable"
+    )
+
+
+@pytest.mark.asyncio
+async def test_only_the_leading_instant_is_forfeited_and_a_second_overflow_only_stops(
+    client, _db_pool, caplog
+):
+    """A skip is a rule about the FRONT of a feed, not about every group too big to carry.
+
+    The walk stops at the first instant the budget cannot buy, even though a smaller instant
+    sits behind it: skipping a SECOND oversized group would stand the commit past material
+    that was never shown, which is the silent-unread path this card exists to close. The
+    budget is 250 characters, the front instant forfeits 600 of them, one 100-character
+    instant is kept, and the next 600-character instant ends the pass - the 100 characters
+    behind it stay ahead of the watermark for a later pass to read.
+    """
+    import logging
+
+    owner = await _owner(client)
+    rows = await _feed_groups(_db_pool, owner, [[600], [100], [600], [100]])
+    front, kept, second_overflow, _unread = rows[0], rows[1], rows[2], rows[3]
+    before = front["created_at"] - timedelta(minutes=1)
+    now = datetime.now(UTC) + timedelta(hours=1)
+
+    with caplog.at_level(logging.INFO, logger="backend.services.curation_service"):
+        window = await curation_service.read_window(
+            owner, Position(before), "internal", None, 250, now, agent_id=owner
+        )
+        through = await curation_service.complete_through(
+            owner, Position(before), window.until, "internal", None, max_event_chars=250
+        )
+
+    assert (window.characters, window.events, window.skipped_chars) == (100, 1, 600), (
+        "a second oversized group must stop the walk, not be skipped"
+    )
+    assert window.since == Position(at=front["created_at"], event_id=front["event_id"])
+    assert window.until == kept["created_at"]
+    assert through == Position(at=kept["created_at"], event_id=kept["event_id"])
+    assert through.at < second_overflow["created_at"], (
+        "the commit stood past an instant the model was never handed"
+    )
+    forfeits = [
+        r.getMessage() for r in caplog.records if "forfeits unread instant" in r.getMessage()
+    ]
+    assert len(forfeits) == 1, forfeits
+
+
+@pytest.mark.asyncio
+async def test_the_prompts_a_pass_is_handed_read_from_the_window_edge_and_not_the_watermark(
+    client, _db_pool
+):
+    """A skip the prompt never names is a group the model reads again and dies on.
+
+    The pointer is worthless unless it reaches the words: `curator_changes_cmd` is the command
+    the model actually runs, in BOTH phases of a personal run, so each must open at the pass'
+    `read_from` — the forfeited instant's last row — while the ROW's `curated_through` stays
+    where it was. This is the same argument STAS-491 made about `--until`, on the other edge
+    of the window.
+    """
+    from backend.services import sprite_agent_service
+
+    owner = await _owner(client)
+    curator = await agent_service.get_or_create_curator(owner)
+    rows = await _feed_groups(_db_pool, owner, [[600], [100, 100]])
+    front = rows[0]
+    before = front["created_at"] - timedelta(minutes=1)
+    await _db_pool.execute(
+        "UPDATE agents SET curated_through = $2 WHERE id = $1", curator["id"], before
+    )
+    row = await agent_service.get_agent_by_id(UUID(curator["id"]))
+    assert curation_service.position_of(row) == Position(before)
+
+    window = await curation_service.read_window(
+        owner,
+        curation_service.position_of(row),
+        "internal",
+        None,
+        250,
+        datetime.now(UTC) + timedelta(hours=1),
+        agent_id=row["id"],
+    )
+    _session, prompt = await sprite_agent_service.build_digest_turn(
+        row, "20260101000000", until=window.until.isoformat(), since=window.since
+    )
+
+    assert f"--since {front['created_at'].isoformat()}" in prompt
+    assert f"--since-event {front['event_id']}" in prompt
+    assert f"--since {before.isoformat()}" not in prompt, (
+        "the command still ordered the row's watermark: the forfeited group comes back"
+    )
+    assert f"--until {window.until.isoformat()}" in prompt
+
+    # The writer turn runs the same command when it was handed no digest report, so the pass'
+    # opening edge has to reach it too — otherwise phase two is told to read what phase one
+    # was just written off for having read.
+    _session, writer_prompt = await sprite_agent_service.build_scheduled_turn(
+        row, "20260101000000", until=window.until.isoformat(), since=window.since
+    )
+    assert f"--since {front['created_at'].isoformat()}" in writer_prompt
+    assert f"--since-event {front['event_id']}" in writer_prompt
+    assert f"--since {before.isoformat()}" not in writer_prompt
+
+
+@pytest.mark.asyncio
+async def test_a_forfeited_front_still_leaves_the_feed_and_the_commit_on_one_event(
+    client, _db_pool
+):
+    """Read and commit still cut the same way when the cut began with a skip.
+
+    The read/commit agreement STAS-491 built is what makes a forfeit safe rather than
+    reckless, so it has to survive the new leading edge: with one budget and one set of rows,
+    the last event `/changes` shows IS the event `complete_through` stands on, and the
+    forfeiture is printed once — by the feed, before the commit, as a real pass does.
+    """
+    owner = await _owner(client)
+    rows = await _feed_groups(_db_pool, owner, [[600], [100, 100], [100]])
+    last_kept = rows[2]
+    start = Position(rows[0]["created_at"] - timedelta(minutes=1))
+
+    feed = await curation_service.changes_since(
+        owner, owner, start, "internal", max_event_chars=250
+    )
+    through = await curation_service.complete_through(
+        owner, start, rows[-1]["created_at"], "internal", max_event_chars=250
+    )
+
+    assert [event["content"] for event in feed["history"]] == ["x" * 100, "x" * 100]
+    assert feed["history_has_more"] is True
+    assert feed["history"][-1]["created_at"] == curation_service._iso(through.at)
+    assert through == Position(at=last_kept["created_at"], event_id=last_kept["event_id"])
 
 
 @pytest.mark.asyncio
@@ -189,6 +445,10 @@ async def test_the_nightly_tick_hands_the_turn_its_window_and_books_it(
         "SELECT curated_through, last_run_outcome FROM agents WHERE id = $1", curator_id
     )
     assert seen[0]["until"] == stamps[1].isoformat()
+    # The window's OPENING edge travels on the same call: no instant was forfeited here, so
+    # it names the row's watermark — and a pass that forfeited one would name its own
+    # `read_from` instead, which is the only way the skip ever reaches the model (STAS-497).
+    assert seen[0]["since"].at == stamps[0] - timedelta(minutes=1)
     assert row["curated_through"] == stamps[1]
     assert row["last_run_outcome"] == "ran"
     meters = [r.message for r in caplog.records if "characters=" in r.message]
@@ -346,3 +606,81 @@ async def test_a_personal_pass_the_wall_cuts_teaches_a_lower_bound_on_the_grant(
     assert len(rows) == await _db_pool.fetchval(
         "SELECT count(*) FROM curator_pass_samples WHERE calibration_key = $1", key
     ), "a cut run teaches once, and only on the grant"
+
+
+@pytest.mark.asyncio
+async def test_every_model_phase_of_a_personal_run_reports_its_own_cost(
+    client, _db_pool, sprite_exec, monkeypatch, caplog
+):
+    """One line per phase, naming its seconds and what it was handed, from the turn itself.
+
+    The measurement this card had to make (what does a digest cost before it reads a
+    character?) was reconstructed by hand out of `history_events` rows, and the stored
+    shape actively misleads for it: a run's `session_end` row is flushed when the WHOLE
+    turn ends, so both sessions of one run carry their last row at the same instant and a
+    span computed from them prices the digest at the entire wall. Reading the row count of
+    the phase meter line is the one grep that answers the question, so this test holds
+    that the line exists, once per phase, and carries the numbers.
+
+    `_turn_bracket`'s filter is asserted alongside: the phase lines are new neighbours of
+    the dispatcher's bracket and must not join it.
+    """
+    import logging
+    import re
+
+    from backend.services import curator_calibration
+    from backend.tasks import agent_schedules
+    from backend.tasks.agent_schedules import _run_curator_now
+    from backend.tasks.session_titles import generate_session_title
+
+    from .test_curator import _turn_bracket
+
+    owner = await _owner(client)
+    curator = await agent_service.get_or_create_curator(owner)
+    curator_id = UUID(curator["id"])
+    stamps = await _feed(_db_pool, owner, [1000] * 4)
+    await _db_pool.execute(
+        "UPDATE agents SET curated_through = $2, digest_provider = 'anthropic',"
+        " system_prompt = 'You maintain the wiki.' WHERE id = $1",
+        curator_id,
+        stamps[0] - timedelta(minutes=1),
+    )
+
+    async def priced(_key):
+        return 0.10, "test"
+
+    async def no_catchup(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(curator_calibration, "price", priced)
+    monkeypatch.setattr(agent_service, "run_wall_seconds", lambda *_a: 570)
+    monkeypatch.setattr(agent_schedules, "_dispatch_curator_catchup", no_catchup)
+    monkeypatch.setattr(generate_session_title, "delay", lambda *a, **_k: None)
+
+    with caplog.at_level(logging.INFO):
+        await _run_curator_now(curator_id, metered=False)
+
+    lines = [r.getMessage() for r in caplog.records]
+    digest = [m for m in lines if "curation phase=digest" in m]
+    write = [m for m in lines if "curation phase=write" in m]
+    assert len(digest) == 1, digest
+    assert len(write) == 1, write
+
+    # A positive cost and a non-empty prompt, per phase; the digest also names the feed
+    # characters its window handed it, which is the pair every lever argument is made from.
+    for line in (*digest, *write):
+        assert re.search(r"seconds=\d+\.\d prompt_chars=[1-9]\d* persona_chars=[1-9]\d*", line)
+    assert re.search(r"feed_chars=2000\b", digest[0]), digest[0]
+    assert re.search(r"feed_chars=[1-9]\d*\b", write[0]), write[0]
+
+    # The window decision is said where it is made: priced, and priced from one call.
+    windows = [m for m in lines if "personal window agent=" in m]
+    assert len(windows) == 1, windows
+    assert re.search(
+        r"rate=0\.10000 source=test wall=570s priced_share=300\.0s grant=2700 "
+        r"characters=2000 events=2 skipped_chars=0 since=\S+ until=",
+        windows[0],
+    ), windows[0]
+
+    bracket = _turn_bracket(caplog.records, str(curator_id))
+    assert len(bracket) == 2, bracket

@@ -204,6 +204,33 @@ Before starting:
   at or above the worker's own task ceiling is refused where it is written — the
   worker would kill such a run before it could record the failure or refund the
   curator credit it had already spent.
+- What that ceiling can buy is capped by the worker, and the cap is measured rather than derived:
+  with the shipped worker ceilings (`task_soft_time_limit=1500`, `task_time_limit=1800`) the wall
+  tops out at 1,470 s, and the highest ceiling the product will actually accept is **1,499** — a
+  ceiling of 1,500 or more is refused where it is written, because the worker would kill such a run
+  before it could record the failure or refund its credit. The measured pair on the founder's
+  personal lane is therefore ceiling 1,499 → wall **1,469 s** → grant **3,658 characters**, which
+  leaves the wiki-writing phase 1,427 s against the more than 887 s it was measured needing before
+  this card wrote anything down about it. The read phase is not what needs the room: the same lane's
+  digest phases answered in 33 to 57 s while their feeds were priced at up to 1,278 s. Nor is the
+  ceiling what makes today's feed readable at all: its leading instant is 4,000 characters, over
+  even the 3,658-character grant, which is what the skip below is for.
+- A personal pass can now be handed a window that opens *after* its watermark, and the material it
+  leaves behind is printed. When the leading timestamp group of a feed is by itself bigger than the
+  grant the pass' wall pays for — the founder lane was being handed 4,000 characters against a
+  grant of 1,784 — that one group is skipped, at most one group per pass, the feed command starts
+  just past it, and the commit stands on the last event the pass was actually shown. The forfeit is
+  a WARNING, `curation: curator <id> forfeits unread instant <iso> (<n> events, <c> characters):
+  it is over the <grant>-character budget one pass can carry, and the watermark will pass it
+  unread`, printed once per pass from the read side, so counting those lines counts lost instants;
+  a skipped instant is behind the watermark and will never be curated, which is why the line is a
+  WARNING and not a debug note. A feed whose leading instant *and* the one behind it are both over
+  the grant hands nothing and forfeits nothing, and says `has no passable part` instead — that lane
+  is stuck rather than losing history, and the remedy is the ceiling above or a retention decision,
+  not a bigger skip. What each phase cost is now one grep too: `curation phase=<phase> agent=…
+  session=… seconds=… prompt_chars=… persona_chars=… feed_chars=…` per phase, and
+  `curation: personal window agent=… key=… rate=… source=… wall=…s priced_share=…s grant=…
+  characters=… events=… until=…` once per personal pass before it reads a character.
 - `CURATOR_DRAIN_MAX_CONCURRENT_TURNS` (default 3) is the drain fan-out's one bound: how many of
   one curator's drain turns may be live at ONE endpoint at once — part turns and the compose pass
   together — counted in a Redis claim set keyed by that endpoint, or by the harness's name when the

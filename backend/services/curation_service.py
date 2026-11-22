@@ -450,29 +450,196 @@ def readout_position_of(agent: dict) -> Position:
     return position_of(agent)
 
 
-def _budget_kept(events: list[dict], max_event_chars: int | None) -> int | None:
-    """How many leading events a character budget can carry, or None when all of them fit.
+@dataclass(frozen=True, slots=True)
+class BudgetDecision:
+    """What one character budget hands a pass, named by both of its edges.
+
+    The single number this replaces answered three questions with one value, and two of
+    them got the same answer: `None` meant "everything fit" AND "the leading instant alone
+    overflowed the budget, so nothing could be refused". Because it could never answer
+    zero, a group nobody can carry was crammed into the pass - measured on the founder
+    stack on 2026-11-21, where `read_window` handed a pass a 4,000-character front against
+    a 1,784-character grant, more than the whole wall buys at the priced rate, and the run
+    died at its ceiling having committed nothing.
+
+    Every field answers exactly one question, and the three states are told apart without
+    reading the caller's own row count: `fits_whole` is a feed that fit; `no_part` is a feed
+    whose front no pass can carry; anything between is a cut, a skip, or both.
+
+    The handed rows are the slice `events[hand_from:hand_to]` — `hand_from` is past a
+    forfeited front group and zero otherwise — so a caller never re-derives where the part
+    starts from the skip fields.
+    """
+
+    total_events: int
+    kept_count: int
+    read_from: Position
+    kept_through: Position | None
+    skipped: Position | None
+    skipped_events: int
+    skipped_chars: int
+
+    @property
+    def fits_whole(self) -> bool:
+        return self.skipped is None and self.kept_count == self.total_events
+
+    @property
+    def no_part(self) -> bool:
+        return self.kept_count == 0 and self.total_events > 0
+
+    @property
+    def hand_from(self) -> int:
+        return self.skipped_events
+
+    @property
+    def hand_to(self) -> int:
+        return self.skipped_events + self.kept_count
+
+
+def _log_forfeit(who: str, budget: int, skipped: Position, events: int, chars: int) -> None:
+    """Say out loud that material is being left unread, and will never be read.
+
+    This is the only trace a forfeited instant ever gets, so it is a warning rather than an
+    info line: after it, the instant sits behind the watermark, outside every future feed,
+    and nothing else in the system will ever mention it again.
+
+    The read side of a lane says it — `read_window` for a personal pass, `changes_since` for
+    a drain pass — exactly once per pass. `complete_through` stands on the same decision over
+    the same rows and therefore repeats nothing: a second record per pass would make the
+    count of forfeitures read as two lost instants where one was lost.
+    """
+    logger.warning(
+        "curation: curator %s forfeits unread instant %s (%d events, %d characters): it is "
+        "over the %d-character budget one pass can carry, and the watermark will pass it "
+        "unread",
+        who,
+        skipped.at.isoformat() if skipped.at else None,
+        events,
+        chars,
+        budget,
+    )
+
+
+def _log_no_part(who: str, budget: int, front_at: datetime | None) -> None:
+    """Say out loud that a feed has no part this budget can carry, so nothing was forfeited.
+
+    The other loud answer beside `_log_forfeit`, and deliberately a different sentence: a
+    forfeit writes material off and moves the watermark past it, while a no-part refusal
+    moves nothing and leaves the backlog exactly where it is. Collapsing the two would make
+    a lane that is losing history indistinguishable from a lane that is stuck, and they need
+    opposite remedies (see the operator question in STAS-497).
+    """
+    logger.warning(
+        "curation: curator %s has no passable part: the leading instant %s and the one "
+        "behind it both exceed the %d-character budget, so nothing is handed out, nothing is "
+        "forfeited, and the watermark stays where it stands",
+        who,
+        front_at.isoformat() if front_at else None,
+        budget,
+    )
+
+
+def _budget_decision(
+    events: list[dict], max_event_chars: int | None, read_from: Position
+) -> BudgetDecision:
+    """How many leading events a character budget can carry, walked a whole instant at a
+    time, or what it forfeits when the front is larger than the budget.
 
     One definition, because two readers of the same feed have to cut it in the same place:
     this is what `complete_through` commits through and what `changes_since` refuses to
     show, so the last event a curator is handed is the last event its run may record. Two
-    rules keep a drain from stalling on it: a timestamp group is never split (an event is
-    shown and committed with its whole instant or not at all), and an oversized FIRST group
-    is never refused — that would make the budget smaller than the smallest pass the feed
-    can make, and the drain would read the same characters forever (#1272).
+    rules hold it in check:
+
+    * A timestamp group is never split: an event is shown and committed with its whole
+      instant or not at all (STAS-235 - a boundary inside a tie is what made a plateau).
+    * A leading group that overflows on its own is SKIPPED, once per pass, and the walk
+      continues behind it. This inverts the rule #1272 shipped, which refused to refuse an
+      oversized first group because a drain would then re-read the same characters forever.
+      The plateau that rule guarded against cannot return here, for one structural reason:
+      the commit stands on `kept_through`, the last event actually handed, which is at a
+      later instant than anything skipped - so the forfeited instant is behind the
+      watermark and cannot be re-read. `test_text_bounded_feed_eventually_covers_every_event`
+      stays green as that proof (STAS-497).
+
+    Skipping is data loss, so the damage is bounded twice: never more than one leading
+    group per pass, and if the group after the skip ALSO overflows the answer is "no part"
+    - nothing is handed out, nothing is forfeited, and the lane says so nightly until a
+    human decides whether unread material may be written off.
 
     The characters counted are each event's whole content, not the snippet the feed renders
     it as: the budget bounds the work a pass takes on, and the model reads past the snippet
     whenever an event matters.
+
+    A forfeited pointer is safe against the `_MAX_EVENTS` cap for one ordering reason: the
+    feed is ordered by `(created_at, id)`, so a SECOND group in the fetched rows proves the
+    first group arrived whole. A fetch that is only one instant long may still be missing
+    that instant's tail, and it is also the fetch with nothing behind it, which is the same
+    "no part" answer - the skip pointer that would name a truncated group is never returned.
+
+    This answers only; the read side of the lane says a forfeit out loud (`_log_forfeit`),
+    because that caller knows which lane its watermark belongs to.
     """
     if max_event_chars is None:
-        return None
+        return BudgetDecision(
+            len(events),
+            len(events),
+            read_from,
+            _position_of(events[-1]) if events else None,
+            None,
+            0,
+            0,
+        )
+
+    groups: list[tuple[datetime, list[dict]]] = []
+    for event in events:
+        if groups and groups[-1][0] == event["created_at"]:
+            groups[-1][1].append(event)
+        else:
+            groups.append((event["created_at"], [event]))
+
+    skipped: Position | None = None
+    skipped_events = 0
+    skipped_chars = 0
+    front = groups[0][1] if groups else []
+    if front and _group_chars(front) > max_event_chars:
+        skipped = _position_of(front[-1])
+        skipped_events = len(front)
+        skipped_chars = _group_chars(front)
+        # A budget that would have to lose its front AND finds nothing passable behind it
+        # refuses the whole feed rather than writing off two instants. An empty `groups[1]`
+        # is also the shape a `_MAX_EVENTS`-capped front arrives in, and its tail is unknown,
+        # so refusing is the only honest answer for that fetch too.
+        if len(groups) < 2 or _group_chars(groups[1][1]) > max_event_chars:
+            return BudgetDecision(len(events), 0, read_from, None, None, 0, 0)
+
+    kept = 0
     characters = 0
-    for kept, event in enumerate(events):
-        characters += len(event["content"] or "")
-        if characters > max_event_chars and event["created_at"] > events[0]["created_at"]:
-            return kept
-    return None
+    for _at, rows in groups[1 if skipped is not None else 0 :]:
+        group_chars = _group_chars(rows)
+        if characters + group_chars > max_event_chars:
+            break
+        characters += group_chars
+        kept += len(rows)
+
+    return BudgetDecision(
+        total_events=len(events),
+        kept_count=kept,
+        read_from=skipped if skipped is not None else read_from,
+        kept_through=_position_of(events[skipped_events + kept - 1]) if kept else None,
+        skipped=skipped,
+        skipped_events=skipped_events,
+        skipped_chars=skipped_chars,
+    )
+
+
+def _group_chars(rows: list[dict]) -> int:
+    """What one timestamp group costs the budget: every row's whole content."""
+    return sum(len(event["content"] or "") for event in rows)
+
+
+def _position_of(event: dict) -> Position:
+    """One feed row as the position that stands on it — the pair's definition, in one place."""
+    return Position(at=event["created_at"], event_id=event["event_id"])
 
 
 async def drain_budget_of(agent: dict) -> int:
@@ -517,9 +684,9 @@ PERSONAL_WRITE_RESERVE_SECONDS = 270
 PERSONAL_MINIMUM_GROUP_CHARS = 384
 
 
-async def personal_budget_of(agent: dict) -> int | None:
-    """The input characters one personal-lane digest may carry, out of the wall its write
-    phase has not already spent, or None when no part this wall could buy exists.
+async def _personal_price_of(agent: dict) -> _PersonalPrice | None:
+    """What one personal lane's wall buys, with the numbers that priced it, or None when
+    no part this wall could buy exists.
 
     Same priced rate as `drain_budget_of` and the same `input_budget`, on a wall reduced by
     the write phase's measured share: the drain hands its parts to a loop that checkpoints
@@ -531,7 +698,8 @@ async def personal_budget_of(agent: dict) -> int | None:
     * Too small to pay the FULL measured write share still gets a grant: the writer takes
       half the wall rather than the whole remainder, because a lane whose every night ends
       at the ceiling is the lane that exists today and a lane that raises on its own cheap
-      wall cures nothing. The founder lanes this prices (570s walls) pay it in full.
+      wall cures nothing. The founder lanes this prices (870s walls at tonight's dial)
+      carry the share in full only while the dial stays under 540s of wall.
     * Too small to buy even the smallest part plus its commit answers None. That wall is
       not a pricing problem but a ceiling problem, and the run that reads its whole feed,
       hits the wall, and reports the cut is the honest report STAS-456 built; the answer
@@ -539,9 +707,8 @@ async def personal_budget_of(agent: dict) -> int | None:
     """
     from . import agent_service, curator_calibration, scoped_curation_service
 
-    rate, source = await curator_calibration.price(
-        curator_calibration.key_from_configuration(agent)
-    )
+    key = curator_calibration.key_from_configuration(agent)
+    rate, source = await curator_calibration.price(key)
     wall = agent_service.run_wall_seconds(agent)
     write_share = min(PERSONAL_WRITE_RESERVE_SECONDS, wall / 2)
     available = wall - write_share
@@ -560,20 +727,65 @@ async def personal_budget_of(agent: dict) -> int | None:
             source,
         )
         return None
-    return scoped_curation_service.input_budget(
-        available, rate, floor_chars=PERSONAL_MINIMUM_GROUP_CHARS
+    return _PersonalPrice(
+        key=key,
+        rate=rate,
+        source=source,
+        wall=wall,
+        priced_share=available,
+        grant=scoped_curation_service.input_budget(
+            available, rate, floor_chars=PERSONAL_MINIMUM_GROUP_CHARS
+        ),
     )
+
+
+async def personal_budget_of(agent: dict) -> int | None:
+    """The character grant alone, for callers that price a wall without logging a window.
+
+    `personal_window` reads the full `_PersonalPrice` instead, so the key, the rate, and
+    its source reach that window decision without a second call to `price()`."""
+    price = await _personal_price_of(agent)
+    return price.grant if price is not None else None
+
+
+@dataclass(frozen=True, slots=True)
+class _PersonalPrice:
+    """A personal wall priced in one place: the key that answered, the rate it paid and
+    where that rate came from, and the grant it bought.
+
+    These four numbers are what a wall decision is argued from, and until now only the
+    refusal was ever printed — a grant that WAS granted left no trace, so the intake had
+    to reconstruct "budget 827" from session rows after the fact."""
+
+    key: str
+    rate: float
+    source: str
+    wall: int
+    priced_share: float
+    grant: int
 
 
 @dataclass(frozen=True, slots=True)
 class PersonalWindow:
-    """The read one personal pass is handed: the instant it closes at, the characters of
-    the events inside it, and the budget that edge was cut by (the meter prints the first
-    two as the work done and the third as what the wall could pay)."""
+    """The read one personal pass is handed, named by BOTH of its edges.
+
+    `since` is where the read STARTS and `until` is where the kept events end; a pass that
+    was handed an oversized instant's forfeit reads from behind it, and only the prompt that
+    receives `since` can honour that (STAS-497). Before this pair existed, `until` was the
+    only pointer a pass was handed and `--since` was always the row's watermark, so a group
+    nobody could carry was either swallowed or fatal.
+
+    `characters`, `budget` and `events` are the meter's own numbers: the characters inside
+    the window, what the wall could pay, and how many events landed between the edges.
+    `skipped_chars` is what the pass wrote off to get here — zero unless a forfeit happened.
+    """
 
     until: datetime
     characters: int
     budget: int
+    events: int
+    since: Position
+    skipped_chars: int
 
 
 async def read_window(
@@ -583,31 +795,59 @@ async def read_window(
     folder_id: UUID | None,
     max_event_chars: int,
     now: datetime,
-) -> PersonalWindow:
+    *,
+    agent_id: UUID | str,
+) -> PersonalWindow | None:
     """The newest read a personal pass can be handed that its own wall pays for.
 
-    One priced part per run, cut by `_budget_kept` over the rows `complete_through` will
-    commit through, so the last event the model is shown is the last event the run may
+    One priced part per run, cut by `_budget_decision` over the rows `complete_through`
+    will commit through, so the last event the model is shown is the last event the run may
     record: the edge is that event's own instant, and `until_bound` closes a read with
     `<=`, so the whole timestamp group at the seam goes to this pass and the next pass'
     strict lower bound cannot hand it twice.
 
+    Two pointers come back, not one number: `since` is where the read begins (the row's
+    watermark, or just past an instant too big for any pass), and `until` is where the kept
+    events end. A skip reaches the model through `since` — the feed command the digest runs
+    is built from it — because a skip the prompt never sees is a group the model re-reads
+    and the wall dies on anyway.
+
     A feed that fits inside the budget answers `now` — the unchanged shape of a run that
     reads its whole unread delta and commits through the tick.
+
+    None is this feed's refusal, and it has exactly one cause: the leading instant and the
+    one behind it are both bigger than the budget, so there is nothing to hand out and
+    nothing to write off. It is NOT the answer to "this wall buys nothing" — that refusal is
+    `_personal_price_of`'s, one call up, with its own sentence. The two are kept apart
+    because they need opposite remedies: a bigger dial versus a decision about unread
+    material (STAS-497 asks the operator the second one).
     """
     events, _has_more = await _feed_events(
         owner_user_id, position, now, _MAX_EVENTS, wiki, folder_id
     )
-    kept = _budget_kept(events, max_event_chars)
-    if kept is None:
-        return PersonalWindow(
-            now, sum(len(event["content"] or "") for event in events), max_event_chars
+    decision = _budget_decision(events, max_event_chars, position)
+    if decision.no_part:
+        _log_no_part(str(agent_id), max_event_chars, events[0]["created_at"])
+        return None
+    if decision.skipped is not None:
+        _log_forfeit(
+            str(agent_id),
+            max_event_chars,
+            decision.skipped,
+            decision.skipped_events,
+            decision.skipped_chars,
         )
-    batch = events[:kept]
+    if decision.fits_whole:
+        return PersonalWindow(now, _group_chars(events), max_event_chars, len(events), position, 0)
+    assert decision.kept_through is not None, "a part that is not the whole feed has an end"
+    batch = events[decision.hand_from : decision.hand_to]
     return PersonalWindow(
-        batch[-1]["created_at"],
-        sum(len(event["content"] or "") for event in batch),
+        decision.kept_through.at,
+        _group_chars(batch),
         max_event_chars,
+        len(batch),
+        decision.read_from,
+        decision.skipped_chars,
     )
 
 
@@ -615,21 +855,53 @@ async def personal_window(agent: dict, now: datetime) -> PersonalWindow | None:
     """The read this personal row's own wall pays for, from the row as stored.
 
     Both paths that reach a founder lane ask this one question — the dispatcher's and the
-    beat's own tick — and an answer of None means the row's wall buys no part, so the run
-    keeps the shape it has always had (see `personal_budget_of`).
+    beat's own tick. None is the shared answer for "there is no part to hand this pass", and
+    it reaches here from two different questions, each printed with its own sentence:
+    `_personal_price_of` refuses when the wall cannot buy the smallest part, and `read_window`
+    refuses when the feed's front and second instants both overflow the grant. An unpriced
+    pass then runs the shape it has always had — it reads from the row's watermark, oversized
+    front included, and its wall cuts it (see `_personal_price_of`). The no-part feed is the
+    shape this card leaves UNRESOLVED on purpose: a per-pass pointer cannot express it, a
+    stored one is a retention decision, and STAS-497 puts that question to the operator
+    rather than answering it in code.
+
+    The window decision is printed where it is made. Every number in that line is one a
+    wall decision is argued from, and none of them were recoverable after the fact: the
+    intake could name the grant only by re-running the formula from session rows.
     """
     owner_user_id = UUID(str(agent["user_id"]))
-    budget = await personal_budget_of(agent)
-    if budget is None:
+    price = await _personal_price_of(agent)
+    if price is None:
         return None
-    return await read_window(
+    window = await read_window(
         owner_user_id,
         position_of(agent),
         agent["curator_wiki"],
         agent.get("curator_folder_id"),
-        budget,
+        price.grant,
         now,
+        agent_id=agent.get("id"),
     )
+    if window is None:
+        return None
+    logger.info(
+        "curation: personal window agent=%s key=%s rate=%.5f source=%s wall=%ss "
+        "priced_share=%.1fs grant=%d characters=%d events=%d skipped_chars=%d since=%s "
+        "until=%s",
+        agent.get("id"),
+        price.key,
+        price.rate,
+        price.source,
+        price.wall,
+        price.priced_share,
+        price.grant,
+        window.characters,
+        window.events,
+        window.skipped_chars,
+        window.since.at.isoformat() if window.since.at else None,
+        window.until.isoformat(),
+    )
+    return window
 
 
 def drain_frontier(cursor: dict, standing: datetime | None) -> datetime:
@@ -1275,7 +1547,7 @@ async def changes_since(
 
     `max_event_chars` belongs to a history drain, and only to one: it cuts the event list
     to what one pass of that lane's wall can carry, by the same budget its commit cuts by
-    (see `_budget_kept`). Without it the feed is the feed it has always been, bounded by
+    (see `_budget_decision`). Without it the feed is the feed it has always been, bounded by
     `_MAX_EVENTS`, which is what an incremental batch has always reached its wall on.
 
     `wiki` scopes the events only — see `_feed_events`. Pages, files, saves, and
@@ -1303,12 +1575,23 @@ async def changes_since(
     events, history_has_more = await _feed_events(
         owner_user_id, position, until, _MAX_EVENTS, wiki, folder_id
     )
-    kept = _budget_kept(events, max_event_chars)
-    if kept is not None:
+    decision = _budget_decision(events, max_event_chars, position)
+    if decision.no_part:
+        _log_no_part(str(owner_user_id), max_event_chars, events[0]["created_at"])
+    elif decision.skipped is not None:
+        _log_forfeit(
+            str(owner_user_id),
+            max_event_chars,
+            decision.skipped,
+            decision.skipped_events,
+            decision.skipped_chars,
+        )
+    if not decision.fits_whole:
         # The cut half stays pending rather than vanishing: the drain's next dispatch
         # reads it from the position this pass commits, and `history_has_more` is how the
-        # feed says so without inventing a second account of what is left.
-        events = events[:kept]
+        # feed says so without inventing a second account of what is left. A SKIPPED front
+        # is the one part of that half that does not come back, and it is named above.
+        events = events[decision.hand_from : decision.hand_to]
         history_has_more = True
     history = [
         {
@@ -1720,19 +2003,28 @@ async def complete_through(
     the folder the scoped feed was cut by.
 
     `max_event_chars` is the same budget the feed was cut by — pass it and the two
-    agree by construction, because both cuts are `_budget_kept` over the same rows.
+    agree by construction, because both cuts are `_budget_decision` over the same rows.
     Omit it and the position is bounded by `_MAX_EVENTS` alone, which is the shape
-    every incremental run has always had."""
+    every incremental run has always had.
+
+    This one never speaks. A forfeited instant is printed by the pass' READ side —
+    `read_window` or `changes_since` — and this is the same decision over the same rows, so a
+    line here would report one lost instant as two."""
     events, has_more = await _feed_events(
         owner_user_id, position, until, _MAX_EVENTS, wiki, folder_id
     )
-    cut = _budget_kept(events, max_event_chars)
-    if cut is not None:
-        last = events[cut - 1]
-        return Position(at=last["created_at"], event_id=last["event_id"])
+    decision = _budget_decision(events, max_event_chars, position)
+    if decision.no_part:
+        # Nothing was handed to this pass, so nothing may be recorded: the position it
+        # read from is returned unchanged, and the compare-and-set that refuses a commit
+        # which does not advance is what makes that visible rather than silent.
+        return position
+    if not decision.fits_whole:
+        assert decision.kept_through is not None, "a part that is not the whole feed has an end"
+        return decision.kept_through
     if not has_more:
         return Position(at=until)
-    return Position(at=events[-1]["created_at"], event_id=events[-1]["event_id"])
+    return _position_of(events[-1])
 
 
 def _iso(dt) -> str | None:

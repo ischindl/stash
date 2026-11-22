@@ -528,7 +528,14 @@ async def test_failed_curator_run_preserves_watermark(
     watermark = datetime.now(UTC) - timedelta(minutes=2)
     await _make_due(_db_pool, curator["id"], watermark)
 
-    async def boom(agent, stamp, read_position, draining: bool = False, until: str | None = None):
+    async def boom(
+        agent,
+        stamp,
+        read_position,
+        draining: bool = False,
+        until: str | None = None,
+        **_window,
+    ):
         raise RuntimeError("sprite exploded")
 
     monkeypatch.setattr(sprite_agent_service, "run_scheduled", boom)
@@ -575,7 +582,14 @@ async def test_failed_run_records_error_and_refunds_credit(
     )
     await _make_due(_db_pool, curator["id"], datetime.now(UTC) - timedelta(minutes=2))
 
-    async def boom(agent, stamp, read_position, draining: bool = False, until: str | None = None):
+    async def boom(
+        agent,
+        stamp,
+        read_position,
+        draining: bool = False,
+        until: str | None = None,
+        **_window,
+    ):
         raise RuntimeError("sprite exploded")
 
     real_run_scheduled = sprite_agent_service.run_scheduled
@@ -671,7 +685,14 @@ async def test_failed_manual_recompute_records_error(
     key, uid = await _register(client)
     curator = await agent_service.get_or_create_curator(uid)
 
-    async def boom(agent, stamp, read_position, draining: bool = False, until: str | None = None):
+    async def boom(
+        agent,
+        stamp,
+        read_position,
+        draining: bool = False,
+        until: str | None = None,
+        **_window,
+    ):
         raise RuntimeError("harness missing")
 
     monkeypatch.setattr(sprite_agent_service, "run_scheduled", boom)
@@ -1406,7 +1427,12 @@ async def test_stale_completion_cannot_regress_an_overlapping_run(
     advanced = datetime.now(UTC) + timedelta(minutes=10)
 
     async def overlapping_run_finished(
-        agent, stamp, read_position, draining: bool = False, until: str | None = None
+        agent,
+        stamp,
+        read_position,
+        draining: bool = False,
+        until: str | None = None,
+        **_window,
     ):
         # Stands in for the other run completing mid-turn. It started from the
         # same stored position this run read, so ITS compare-and-set matches and
@@ -1495,7 +1521,12 @@ async def test_a_mid_run_ingest_rewind_fails_the_curator_run_loud(
     meter_before = await _db_pool.fetchval("SELECT month_run_count FROM agents WHERE id = $1", cid)
 
     async def ingest_older_history(
-        agent, stamp, read_position, draining: bool = False, until: str | None = None
+        agent,
+        stamp,
+        read_position,
+        draining: bool = False,
+        until: str | None = None,
+        **_window,
     ):
         # A late import lands mid-turn; its rewind drags the stored watermark
         # below the position this run read at start. Real ingest path.
@@ -1549,7 +1580,12 @@ async def test_the_scheduled_curator_run_fails_loud_when_the_watermark_moves(
     advanced = datetime.now(UTC) + timedelta(minutes=10)
 
     async def overlapping_writer(
-        agent, stamp, read_position, draining: bool = False, until: str | None = None
+        agent,
+        stamp,
+        read_position,
+        draining: bool = False,
+        until: str | None = None,
+        **_window,
     ):
         # The other run advanced the watermark mid-turn; its own CAS matches
         # (it started from the same stored position), so its write lands.
@@ -1600,7 +1636,12 @@ async def test_double_dispatch_on_one_agent_runs_single_flight(
     turns: list[str] = []
 
     async def turn_holds_the_agent(
-        agent, stamp, read_position, draining: bool = False, until: str | None = None
+        agent,
+        stamp,
+        read_position,
+        draining: bool = False,
+        until: str | None = None,
+        **_window,
     ):
         turns.append(stamp)
         turn_started.set()
@@ -1682,7 +1723,12 @@ async def test_a_requeued_beat_dispatch_never_resolves_the_run_in_flight_outcome
     turns: list[str] = []
 
     async def turn_holds_the_agent(
-        agent, stamp, read_position, draining: bool = False, until: str | None = None
+        agent,
+        stamp,
+        read_position,
+        draining: bool = False,
+        until: str | None = None,
+        **_window,
     ):
         turns.append(stamp)
         turn_started.set()
@@ -1875,12 +1921,27 @@ async def test_text_bounded_feed_eventually_covers_every_event(client, pool):
 
 
 @pytest.mark.asyncio
-async def test_text_budget_keeps_an_oversized_first_timestamp_group(client, pool):
-    """The budget stops before an overflowing group, never inside it.
+async def test_an_oversized_first_timestamp_group_is_forfeited_and_named(client, pool, caplog):
+    """INVERTED ON PURPOSE: #1272 kept an oversized first group, this card writes it off.
 
-    Events sharing one instant are all re-presented or none of them: a cut inside
-    a tie is what made the old watermark plateau, and an oversized first group must
-    not stall the run forever either (#1272)."""
+    The rule this test used to pin — "an oversized FIRST group is never refused" — existed
+    because a drain that refused its first group re-read the same characters forever (#1272).
+    STAS-497 measured why keeping that rule costs a lane: the largest same-instant group ahead
+    of one founder watermark is 390,825 characters, which is about 35 hours of read at the
+    priced 0.326s a character, against a personal read share of 270 seconds. A group nobody
+    can carry is therefore not a pass, and cramming it into one is what made that lane spend
+    566s of its 570s wall and commit nothing, night after night.
+
+    The plateau #1272 feared cannot come back through this door, and the assertion below is
+    the proof of that and not only of the skip: the watermark stands on the LAST EVENT THE
+    PASS WAS HANDED, at a later instant than the forfeited one, so the forfeited instant sits
+    behind the watermark and is never offered again. `test_text_bounded_feed_eventually_covers
+    _every_event` stays green as the same proof at the walk level.
+
+    What replaces the old guarantee is the loud record: 514 characters that will never be
+    curated are named by instant and size, because after this line no part of the system
+    remembers they existed.
+    """
     _, uid = await _register(client)
     base = datetime(2026, 1, 1, tzinfo=UTC)
     await pool.executemany(
@@ -1893,13 +1954,34 @@ async def test_text_budget_keeps_an_oversized_first_timestamp_group(client, pool
         ],
     )
     target = base + timedelta(hours=1)
-    through = await curation_service.complete_through(
-        uid, Position(base - timedelta(seconds=1)), target, wiki="internal", max_event_chars=100
+    start = Position(base - timedelta(seconds=1))
+
+    with caplog.at_level(logging.WARNING, logger="backend.services.curation_service"):
+        # A pass reads its feed before it commits, and the feed is what says the forfeit out
+        # loud; `complete_through` stands on the same decision and prints nothing itself.
+        feed = await curation_service.changes_since(
+            uid, uid, start, wiki="internal", max_event_chars=100
+        )
+        through = await curation_service.complete_through(
+            uid, start, target, wiki="internal", max_event_chars=100
+        )
+
+    assert [event["content"] for event in feed["history"]] == ["next"], (
+        "the pass was handed the group it can carry, and not the 514-character front"
     )
-    assert base <= through.at < base + timedelta(seconds=1)
+    assert feed["history_has_more"] is True
+    assert through.at == base + timedelta(seconds=1) and through.event_id is not None, (
+        "the watermark stands on the event it carried, so the forfeited instant is behind it"
+    )
+    forfeits = [
+        r.getMessage() for r in caplog.records if "forfeits unread instant" in r.getMessage()
+    ]
+    assert len(forfeits) == 1, forfeits
+    assert base.isoformat() in forfeits[0] and "514 characters" in forfeits[0]
+
     remainder = await curation_service.changes_since(uid, uid, through, wiki="internal")
-    assert [event["content"] for event in remainder["history"]] == ["next"], (
-        "the watermark split the saturated timestamp group"
+    assert remainder["history"] == [], (
+        "the forfeited instant is outside every future feed — that is the cost of the skip"
     )
     assert await curation_service.complete_through(
         uid, through, target, wiki="internal", max_event_chars=100

@@ -84,7 +84,12 @@ async def _failing_scheduled_run(
         return _runnable_cloud_auth()
 
     async def failed_turn(
-        agent, stamp, read_position, draining: bool = False, until: str | None = None
+        agent,
+        stamp,
+        read_position,
+        draining: bool = False,
+        until: str | None = None,
+        **_window,
     ):
         held_at_failure.extend(
             key for key in sprite_exec.redis.data if key.startswith("agent-run:")
@@ -349,7 +354,12 @@ async def test_run_due_failure_sends_alert(client: AsyncClient, sprite_exec, mon
         return _runnable_cloud_auth()
 
     async def fake_run_scheduled(
-        agent, stamp, read_position, draining: bool = False, until: str | None = None
+        agent,
+        stamp,
+        read_position,
+        draining: bool = False,
+        until: str | None = None,
+        **_window,
     ):
         raise RuntimeError("agent turn failed: opencode error")
 
@@ -388,7 +398,12 @@ async def test_run_bookkeeping_failure_sends_alert(client: AsyncClient, sprite_e
     agent = await _make_curator(user_id, curated_hours_ago=72, last_run_error=None)
 
     async def fake_run_scheduled(
-        agent, stamp, read_position, draining: bool = False, until: str | None = None
+        agent,
+        stamp,
+        read_position,
+        draining: bool = False,
+        until: str | None = None,
+        **_window,
     ):
         return ""
 

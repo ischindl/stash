@@ -21,6 +21,7 @@ import json
 import logging
 import re
 import secrets
+import time
 from collections.abc import AsyncIterator
 from uuid import UUID
 
@@ -619,8 +620,8 @@ def scheduled_session_ids(agent: dict, run_stamp: str) -> tuple[str, ...]:
     return (run_session,)
 
 
-def _feed_window(agent: dict) -> tuple[str | None, str | None]:
-    """The lane's read position, as the two strings a feed command carries.
+def _feed_window(agent: dict, read_from: Position | None = None) -> tuple[str | None, str | None]:
+    """The read position this pass was handed, as the two strings a feed command carries.
 
     A prompt that rendered the instant alone would hand a mid-tie lane the
     window `created_at > T`, which shows none of the tie tail it never read and
@@ -631,10 +632,16 @@ def _feed_window(agent: dict) -> tuple[str | None, str | None]:
     A run reading a history drain arrives here with that pair already in the position
     fields: the dispatcher hands a draining run its drain position in place of the
     watermark, and the drain pair has no event half, so the window is the instant alone.
+
+    `read_from` overrides the row for a pass whose budget started the read somewhere else,
+    which is what a skipped instant means: `curator_changes_cmd` is the command the model
+    actually runs, so a pass that was told to skip a group it cannot carry but whose
+    command still names the row's watermark would re-read that group and spend its wall on
+    it. The row is the fallback for every pass that was handed no window (STAS-497).
     """
     from . import curation_service
 
-    position = curation_service.position_of(agent)
+    position = read_from if read_from is not None else curation_service.position_of(agent)
     return (
         position.at.isoformat() if position.at else None,
         str(position.event_id) if position.event_id else None,
@@ -642,7 +649,11 @@ def _feed_window(agent: dict) -> tuple[str | None, str | None]:
 
 
 async def build_scheduled_turn(
-    agent: dict, run_stamp: str, extracts: str | None = None, until: str | None = None
+    agent: dict,
+    run_stamp: str,
+    extracts: str | None = None,
+    until: str | None = None,
+    since: Position | None = None,
 ) -> tuple[str, str]:
     """(session_id, message) for one run of a scheduled agent.
 
@@ -659,13 +670,18 @@ async def build_scheduled_turn(
     prompt as an explicit argument — not as another mutation of the agent dict:
     the position fields already carry the drain pair by the time the dispatcher
     gets here, and the upper edge is the dispatcher's own fact, so it travels on
-    the call, named, all the way into the words and the command."""
+    the call, named, all the way into the words and the command.
+
+    `since` is that window's OPENING edge, and it travels for the same reason: a
+    personal pass whose budget forfeited an oversized instant reads from behind it,
+    and a prompt that ordered the row's watermark would order the model to read the
+    very group the budget just wrote off."""
     from . import files_tree_service, prompts, scoped_curation_service
 
     user_id = UUID(str(agent["user_id"]))
     session_id = f"{scheduled_session_prefix(agent)}{run_stamp}"
     if agent.get("is_curator"):
-        since, since_event = _feed_window(agent)
+        since, since_event = _feed_window(agent, since)
         # A developer-platform workspace curates through the backend's scoped
         # path and never reaches a sprite here: a sprite runs with the
         # workspace's own credentials and a shell, so it can read every end
@@ -710,7 +726,10 @@ async def build_scheduled_turn(
 
 
 async def build_digest_turn(
-    agent: dict, run_stamp: str, until: str | None = None
+    agent: dict,
+    run_stamp: str,
+    until: str | None = None,
+    since: Position | None = None,
 ) -> tuple[str, str]:
     """Phase one of a two-phase curator run: (session_id, digest prompt).
 
@@ -728,7 +747,7 @@ async def build_digest_turn(
         # owner's own material.
         raise ValueError("digest runs cover the internal curators only")
     session_id = f"{scheduled_session_prefix(agent)}{run_stamp}{DIGEST_SESSION_SUFFIX}"
-    since, since_event = _feed_window(agent)
+    since, since_event = _feed_window(agent, since)
     folder_id = str(agent["curator_folder_id"]) if agent.get("curator_folder_id") else None
     changes_cmd = prompts.curator_changes_cmd(since, folder_id, since_event, until)
     return session_id, prompts.render_digest_prompt(
@@ -793,6 +812,8 @@ async def run_scheduled(
     draining: bool = False,
     until: str | None = None,
     reports: str | None = None,
+    since: Position | None = None,
+    feed_chars: int | None = None,
 ) -> str:
     """Run a scheduled agent headless — one turn into a fresh per-run session —
     and return the result text.
@@ -832,6 +853,8 @@ async def run_scheduled(
             draining,
             until,
             reports,
+            since=since,
+            feed_chars=feed_chars,
         )
     finally:
         await _close_run_sessions(
@@ -869,6 +892,9 @@ async def run_digest_phase(
     owner_name: str,
     until: str | None,
     in_flight: dict[str, str | None],
+    *,
+    since: Position | None = None,
+    feed_chars: int | None = None,
 ) -> str:
     """One digest model turn, shared by the two-phase personal run and a drain
     part's body verbatim (STAS-461): a part's whole model turn IS the digest
@@ -884,10 +910,15 @@ async def run_digest_phase(
     that set the flag is the one that knows what a cut costs — the personal run
     commits nothing, a part leaves its slot open. An empty report raises: a phase
     that returns nothing has read nothing, and its slot must stay open for the next
-    pass rather than be composed as if it had spoken."""
+    pass rather than be composed as if it had spoken.
+
+    The meter line is emitted whether the turn finished or was cut: the cut IS the
+    reading a wall decision turns on, and a phase that raised would otherwise leave no
+    record of the seconds it spent."""
     user_id = UUID(str(agent["user_id"]))
-    digest_session, digest_prompt = await build_digest_turn(agent, run_stamp, until)
+    digest_session, digest_prompt = await build_digest_turn(agent, run_stamp, until, since)
     in_flight["session_id"] = digest_session
+    started = time.monotonic()
     try:
         extracts = await run_chat(
             user_id,
@@ -909,6 +940,15 @@ async def run_digest_phase(
         )
     finally:
         in_flight["session_id"] = None
+    _log_phase(
+        "digest",
+        agent,
+        digest_session,
+        started,
+        digest_prompt,
+        agent["system_prompt"],
+        feed_chars,
+    )
     if extracts == STOPPED_NOTE:
         return extracts
     if not extracts.strip():
@@ -950,6 +990,40 @@ async def run_digest_turn_under_wall(
     return report
 
 
+def _log_phase(
+    phase: str,
+    agent: dict,
+    session_id: str,
+    started: float,
+    prompt: str,
+    persona: str | None,
+    feed_chars: int | None,
+) -> None:
+    """One line per model phase of a curator run: what it cost and what it was handed.
+
+    Priced against the intake that could not ask this question: a lane died at its wall and
+    the phase split had to be rebuilt afterwards out of `history_events` rows, whose
+    `session_end` row is flushed when the WHOLE turn ends and therefore sits at the same
+    instant in both sessions of a run. The stored rows cannot answer "what did the digest
+    cost"; this line can, and it is the reading a lever decision is made from.
+
+    Emitted from this module's logger and worded free of `curator <id> turn `, which is
+    `test_curator.py::_turn_bracket`'s record filter: the bracket counts the dispatcher's
+    two start/finish lines and must keep counting exactly those two.
+    """
+    logger.info(
+        "curation phase=%s agent=%s session=%s seconds=%.1f prompt_chars=%d "
+        "persona_chars=%d feed_chars=%s",
+        phase,
+        agent["id"],
+        session_id,
+        time.monotonic() - started,
+        len(prompt),
+        len(persona or ""),
+        feed_chars if feed_chars is not None else "none",
+    )
+
+
 async def _run_scheduled_turn(
     agent: dict,
     run_stamp: str,
@@ -959,6 +1033,8 @@ async def _run_scheduled_turn(
     draining: bool = False,
     until: str | None = None,
     reports: str | None = None,
+    since: Position | None = None,
+    feed_chars: int | None = None,
 ) -> str:
     """The dispatch itself; `run_scheduled` is what closes what this leaves behind.
 
@@ -976,7 +1052,17 @@ async def _run_scheduled_turn(
     `reports` is a compose pass's assembled part reports: with them in hand the run has
     no delta to read, so no digest phase is spent and the writer works straight from the
     report — one writer turn of one shape, whether its report came from a digest model or
-    from the parts of a fanned-out drain."""
+    from the parts of a fanned-out drain.
+
+    `feed_chars` is the characters the priced window handed this pass, for the digest
+    phase's meter line. It is None for every caller that has no window — a drain part and
+    an unpriced personal run — which is that caller's truth rather than a default.
+
+    `since` is that window's OPENING edge. It belongs beside `until` because a budget that
+    forfeited an oversized instant moved it: the read the budget handed this pass begins
+    behind the row's watermark, and a prompt naming the watermark instead would send the
+    model back for characters no commit can ever record (STAS-497).
+    """
     from . import scoped_curation_service, user_service
 
     user_id = UUID(str(agent["user_id"]))
@@ -1046,18 +1132,37 @@ async def _run_scheduled_turn(
         # of one shape, so the two paths cannot drift into two writers.
         extracts = reports
         if extracts is None and agent.get("digest_provider") is not None:
-            extracts = await run_digest_phase(agent, run_stamp, owner_name, until, in_flight)
+            extracts = await run_digest_phase(
+                agent,
+                run_stamp,
+                owner_name,
+                until,
+                in_flight,
+                since=since,
+                feed_chars=feed_chars,
+            )
             if extracts == STOPPED_NOTE:
                 # The deadline cut the digest; there are no extracts to write a wiki
                 # from, and the wall was already spent - do not start the write phase.
                 return STOPPED_NOTE
 
-        session_id, message = await build_scheduled_turn(agent, run_stamp, extracts, until)
+        session_id, message = await build_scheduled_turn(agent, run_stamp, extracts, until, since)
         in_flight["session_id"] = session_id
+        started = time.monotonic()
         try:
-            return await _scheduled_chat_turn(agent, user, owner_name, session_id, message)
+            written = await _scheduled_chat_turn(agent, user, owner_name, session_id, message)
         finally:
             in_flight["session_id"] = None
+        _log_phase(
+            "write",
+            agent,
+            session_id,
+            started,
+            message,
+            agent["system_prompt"],
+            len(extracts) if extracts is not None else None,
+        )
+        return written
 
     try:
         result = await asyncio.wait_for(_curator_turn(), timeout=wall + _WALL_RESCUE_GRACE_SECONDS)

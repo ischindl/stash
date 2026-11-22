@@ -329,6 +329,14 @@ async def _run_turn(agent, stamp, workspace, read, draining: bool = False, windo
             draining=draining,
             # The personal turn reads through the edge its wall pays for, and no further.
             until=window.until.isoformat() if window is not None else None,
+            # ... and it starts where that window STARTS, which is the row's watermark
+            # unless the budget had to skip an instant too big to carry: the prompt's feed
+            # command is built from this, so a skip the words never named is a group the
+            # model reads again and spends the wall on (STAS-497).
+            since=window.since if window is not None else None,
+            # ... and its meter line names the characters that edge was cut to, so the
+            # seconds a phase spent can be read against the work it was handed.
+            feed_chars=window.characters if window is not None else None,
         )
     return await sprite_agent_service.run_scheduled(
         agent, stamp, read, workspace=workspace, scoped_lock_held=True, draining=draining
@@ -581,7 +589,7 @@ async def _run_curator_locked(
     now = datetime.now(UTC)
     # A personal pass is handed one priced part: the characters its own wall pays for
     # once the wiki writer is paid (STAS-490 priced the fill and the rate, this is the
-    # read half of the same wall), cut through the instant `_budget_kept` keeps so the
+    # read half of the same wall), cut through the instant `_budget_decision` keeps so the
     # turn and the commit cannot disagree. A draining pass keeps its part budget and its
     # open window, and the scoped lane is priced in its own loop, per batch.
     window = (
