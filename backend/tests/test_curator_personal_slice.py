@@ -491,12 +491,46 @@ async def test_a_wall_that_cannot_buy_the_smallest_part_runs_as_it_always_did(
     assert "smallest pass needs" in refusals[0]
 
 
-async def _tick_once(client, _db_pool, monkeypatch, turn):
+async def _phase_rows(pool, agent: dict, session_id: str, at: datetime, spans) -> None:
+    """Write a reading phase's own events into `session_id`, each `spans` seconds after `at`.
+
+    A direct `INSERT` mirroring `_feed`'s statement rather than `memory_service.push_event`,
+    because the push path calls `_rewind_curated_through` and so would move the watermark
+    that the cut tests assert stands where it stood.
+
+    Safe to write at all: every session id these tests name starts with `agent-curate-`, and
+    `curator_run_exclusion_clause` refuses such sessions in SQL, so these rows cannot enter
+    the feed, change the 2 700 grant, or move the backlog count the pass was priced against.
+
+    The `agent_name` is the curator's own, because that is what every event of its run
+    carries and what the phase query filters on alongside the session id.
+    """
+    owner = UUID(str(agent["user_id"]))
+    for event_type, offset in spans:
+        await pool.execute(
+            "INSERT INTO history_events (owner_user_id, created_by, agent_name, event_type,"
+            " content, session_id, created_at) VALUES ($1, $1, $2, $3, $4, $5, $6)",
+            owner,
+            agent["name"],
+            event_type,
+            "phase row",
+            session_id,
+            at + timedelta(seconds=offset),
+        )
+
+
+async def _tick_once(client, _db_pool, monkeypatch, turn, seed=None, digest_provider=None):
     """Run the beat's own tick over four events with a wall that pays for two of them.
 
-    Shared by the two calibration tests, which differ ONLY in what the turn does at the
-    end: finish, or get cut. Everything else about the pass must be identical, or the
-    two rows would not be comparable.
+    Shared by the four calibration tests, which differ in what the pass is seeded with as
+    well as in how it ends: finish, or get cut. Everything else about the pass is identical,
+    or the rows would not be comparable.
+
+    `digest_provider` is set on the row BEFORE the tick reads it, because the two-phase shape
+    is a fact about the agent the run is dispatched with, not about the run's events. `seed`
+    is awaited inside the fake turn, before the turn's own body, and receives the agent and
+    the stamp the run was really dispatched under — the stamp is minute-resolution and
+    computed at dispatch, so a phase can only be named from there.
     """
     from backend.services import curator_calibration, sprite_agent_service
     from backend.tasks import agent_schedules
@@ -508,9 +542,11 @@ async def _tick_once(client, _db_pool, monkeypatch, turn):
     stamps = await _feed(_db_pool, owner, [1000] * 4)
     await _db_pool.execute(
         "UPDATE agents SET schedule_cron = '* * * * *',"
-        " last_run_at = now() - interval '5 minutes', curated_through = $2 WHERE id = $1",
+        " last_run_at = now() - interval '5 minutes', curated_through = $2,"
+        " digest_provider = COALESCE($3::text, digest_provider) WHERE id = $1",
         curator_id,
         stamps[0] - timedelta(minutes=1),
+        digest_provider,
     )
 
     async def priced(_key):
@@ -518,8 +554,10 @@ async def _tick_once(client, _db_pool, monkeypatch, turn):
 
     seen: list[dict] = []
 
-    async def fake_turn(*_args, **kwargs):
+    async def fake_turn(*args, **kwargs):
         seen.append(kwargs)
+        if seed is not None:
+            await seed(args[0], args[1])
         return await turn(kwargs)
 
     async def no_catchup(*_args, **_kwargs):
@@ -549,7 +587,9 @@ async def _samples(pool, key):
     )
 
 
-async def _dispatch_once(client, pool, monkeypatch, turn, sizes: list[int], catchup=None):
+async def _dispatch_once(
+    client, pool, monkeypatch, turn, sizes: list[int], catchup=None, seed=None
+):
     """Drive the dispatcher's own manual run over `sizes` events with a wall paying 2 700.
 
     The sibling of `_tick_once` for `_run_curator_now`, the path a user triggers: same
@@ -557,6 +597,10 @@ async def _dispatch_once(client, pool, monkeypatch, turn, sizes: list[int], catc
     whose failure branch re-raises and therefore shields its sample write. A turn that
     returned instantly would measure zero seconds, and `observe` refuses a zero-second
     row, so the fake sleeps.
+
+    `seed` is that sibling's hook: awaited inside the fake turn before its body, with the
+    agent and the stamp this run was really dispatched under, so a test can name the
+    reading phase a cut prices itself against.
     """
     from backend.services import curator_calibration, sprite_agent_service
     from backend.tasks import agent_schedules
@@ -576,7 +620,9 @@ async def _dispatch_once(client, pool, monkeypatch, turn, sizes: list[int], catc
     async def priced(_key):
         return 0.10, "test"
 
-    async def sleeping_turn(*_args, **_kwargs):
+    async def sleeping_turn(*args, **_kwargs):
+        if seed is not None:
+            await seed(args[0], args[1])
         await asyncio.sleep(0.05)
         return await turn()
 
@@ -630,21 +676,33 @@ async def test_a_committed_personal_pass_teaches_the_price_it_paid(
 
 
 @pytest.mark.asyncio
-async def test_a_personal_pass_the_wall_cuts_teaches_a_lower_bound_on_the_grant(
+async def test_a_personal_pass_the_wall_cuts_files_its_reading_phases_own_seconds(
     client, _db_pool, sprite_exec, monkeypatch
 ):
-    """A run the wall cut committed nothing but still knows its grant, and files it.
+    """A run the wall cut files the GRANT over its own READING seconds, not over its wall.
 
     The cut is this lane's dominant outcome — the founder's lane ended on its ceiling on
-    nearly every night of the past three weeks — so a sample written only on success
-    would teach the price from the lane's rarest pass and hand the next tick the same
-    grant that just died. The row carries the GRANT (2 700) over the wall spent, and such
-    a pass read at most its grant in those seconds, so that ratio is a LOWER bound on what
-    a character cost: `price` answers the maximum of its window, so a bound can be ignored
-    outright and can never raise a price. What it does is stop a cut night from teaching
-    that the run cost nothing.
+    nearly every night of the past three weeks — so a sample written only on success would
+    teach the price from the lane's rarest pass and hand the next tick the same grant that
+    just died.
+
+    This is the witness that separates the two numerators. The fake turn raises the ceiling
+    the instant it is entered, so the run's own elapsed wall here is milliseconds, while the
+    reading session it was writing carries 45 seconds. What the row must carry is the 45:
+    the shipped sampler filed the wall and would measure about 0.0005 here, so this assertion
+    cannot pass on a wall numerator. The grant still stands at 2 700, because the grant is the
+    quantity `personal_budget_of` divides.
     """
     from backend.services import sprite_agent_service
+
+    async def seed_read(agent, stamp):
+        await _phase_rows(
+            _db_pool,
+            agent,
+            sprite_agent_service.scheduled_session_ids(agent, stamp)[0],
+            datetime.now(UTC) - timedelta(hours=1),
+            (("user_message", 0.0), ("assistant_message", 45.0)),
+        )
 
     async def cut(_kwargs):
         # `by_user=False`: the wall's own cut is the one outcome a filed sample is honest
@@ -653,11 +711,14 @@ async def test_a_personal_pass_the_wall_cuts_teaches_a_lower_bound_on_the_grant(
             "Digest turn exceeded its wall of 570s", by_user=False
         )
 
-    curator_id, key, _seen, _stamps = await _tick_once(client, _db_pool, monkeypatch, cut)
+    curator_id, key, _seen, _stamps = await _tick_once(
+        client, _db_pool, monkeypatch, cut, seed=seed_read
+    )
 
     rows = await _samples(_db_pool, key)
     assert len(rows) == 1
     assert rows[0]["characters"] == 2700, "the grant it was handed, not what it managed to read"
+    assert rows[0]["seconds"] == 45.0, "the reading phase's own span, never the run's wall"
     row = await _db_pool.fetchrow(
         "SELECT curated_through, last_run_outcome FROM agents WHERE id = $1", curator_id
     )
@@ -841,7 +902,8 @@ async def test_the_manual_cut_files_its_bound_before_the_next_pass_is_priced(
 
     The catch-up stub is the probe rather than an assertion about source order: it reads
     the table at the exact moment the next pass's pricing begins, so the ordering is
-    measured. The characters are the GRANT, because a cut personal run committed nothing.
+    measured. The characters are the GRANT, because a cut personal run committed nothing,
+    and the reading phase is seeded because that grant is priced off its own seconds.
     """
     from backend.services import curator_calibration, sprite_agent_service
 
@@ -854,6 +916,17 @@ async def test_the_manual_cut_files_its_bound_before_the_next_pass_is_priced(
             by_user=False,
         )
 
+    async def seed_read(agent, stamp):
+        # A cut whose reading phase never spoke files nothing at all, and this test is
+        # about WHEN the row lands, so the phase has to have spoken.
+        await _phase_rows(
+            _db_pool,
+            agent,
+            sprite_agent_service.scheduled_session_ids(agent, stamp)[0],
+            datetime.now(UTC) - timedelta(hours=1),
+            (("user_message", 0.0), ("assistant_message", 45.0)),
+        )
+
     async def peek(agent, *_args, **_kwargs):
         # The stub is handed the very agent dict the run owns, which is the only way to
         # name this run afterwards: `_owner` registers a fresh user per call, so a lookup
@@ -864,7 +937,9 @@ async def test_the_manual_cut_files_its_bound_before_the_next_pass_is_priced(
         )
 
     with pytest.raises(sprite_agent_service.RunCeilingExceeded):
-        await _dispatch_once(client, _db_pool, monkeypatch, cut, [1000], catchup=peek)
+        await _dispatch_once(
+            client, _db_pool, monkeypatch, cut, [1000], catchup=peek, seed=seed_read
+        )
 
     assert rows_when_priced == [1], "the bound is durable before the next pass is priced"
 
@@ -910,3 +985,150 @@ async def test_a_personal_pass_that_read_nothing_leaves_the_calibration_untaught
     )
     assert row["last_run_outcome"] == "ran", "an untaught night is still a successful one"
     assert row["curated_through"] is not None
+
+
+@pytest.mark.asyncio
+async def test_a_two_phase_cut_run_never_prices_its_writer(
+    client, _db_pool, sprite_exec, monkeypatch
+):
+    """On a lane with a digest model, the writer's session is never the numerator.
+
+    The founder lane measured 45 s of digest against roughly 730 s of writer over 1 735 read
+    characters, and the row the shipped code filed was 930 s over a 2 911 grant — the writer's
+    cost, charged to the read. Here the reading session spans 45 s and the run session the
+    writer speaks through spans 900 s, twenty times as much, so a numerator that reached for
+    the wrong session could not hide.
+
+    The residue the row still carries is the DENOMINATOR: the digest was handed 2 700
+    characters and filed 45 s over all of them, so 0.0167 s per granted character is cheaper
+    than the lane's true 0.0259 s per character read. That is the honest cost of filing a
+    grant, and it is why an all-cut lane rises to the 8 192 clamp instead of tracking truth.
+    """
+    from backend.services import sprite_agent_service
+
+    async def seed_both_phases(agent, stamp):
+        digest_session, run_session = sprite_agent_service.scheduled_session_ids(agent, stamp)
+        assert digest_session != run_session, "a digest lane names its reading phase apart"
+        start = datetime.now(UTC) - timedelta(hours=1)
+        await _phase_rows(
+            _db_pool,
+            agent,
+            digest_session,
+            start,
+            (("user_message", 0.0), ("assistant_message", 45.0)),
+        )
+        await _phase_rows(
+            _db_pool,
+            agent,
+            run_session,
+            start,
+            (("user_message", 0.0), ("assistant_message", 900.0)),
+        )
+
+    async def cut(_kwargs):
+        raise sprite_agent_service.RunCeilingExceeded(
+            "Digest turn exceeded its wall of 570s", by_user=False
+        )
+
+    _curator_id, key, _seen, _stamps = await _tick_once(
+        client, _db_pool, monkeypatch, cut, seed=seed_both_phases, digest_provider="local"
+    )
+
+    rows = await _samples(_db_pool, key)
+    assert len(rows) == 1
+    assert rows[0]["characters"] == 2700
+    assert rows[0]["seconds"] == 45.0, "the digest's own span, never the writer's twenty times it"
+
+
+@pytest.mark.asyncio
+async def test_the_runs_own_close_is_excluded_from_the_price(
+    client, _db_pool, sprite_exec, monkeypatch
+):
+    """The close row is not the end of the reading phase, and its name is what proves it.
+
+    Measured on the founder lane: a digest whose report landed at 17:57:01 carries a session
+    `finished_at` of 18:03:19, because `_close_run_sessions` pushes the close into every
+    session the run could have written only when the WHOLE run closes — six minutes of writer
+    later. A span that read that row, or read `sessions.finished_at` or `last_event_at` which
+    it is written from, would price the read with the writer again: the exact defect this
+    measurement exists to end.
+
+    So the third row here is the close itself, 900 s after the report, named through
+    `session_service.CLOSE_EVENT_TYPE` rather than a literal. Simplify the query to the whole
+    session, or to the session's own close, and this test fails at 945.0.
+    """
+    from backend.services import session_service, sprite_agent_service
+
+    async def seed_read_with_close(agent, stamp):
+        session_id = sprite_agent_service.scheduled_session_ids(agent, stamp)[0]
+        start = datetime.now(UTC) - timedelta(hours=1)
+        await _phase_rows(
+            _db_pool,
+            agent,
+            session_id,
+            start,
+            (("user_message", 0.0), ("assistant_message", 45.0)),
+        )
+        await _phase_rows(
+            _db_pool,
+            agent,
+            session_id,
+            start,
+            ((session_service.CLOSE_EVENT_TYPE, 945.0),),
+        )
+
+    async def cut(_kwargs):
+        raise sprite_agent_service.RunCeilingExceeded(
+            "Digest turn exceeded its wall of 570s", by_user=False
+        )
+
+    _curator_id, key, _seen, _stamps = await _tick_once(
+        client, _db_pool, monkeypatch, cut, seed=seed_read_with_close
+    )
+
+    rows = await _samples(_db_pool, key)
+    assert len(rows) == 1
+    assert rows[0]["seconds"] == 45.0, "the close six minutes later is not the phase's last word"
+
+
+@pytest.mark.asyncio
+async def test_a_cut_run_with_nothing_to_price_files_nothing_and_still_reports_its_cut(
+    client, _db_pool, sprite_exec, monkeypatch, caplog
+):
+    """A missing phase span files no row and replaces no verdict — it does not rescue one.
+
+    There is no wall-shaped fallback here: `observe` refuses a non-positive seconds and
+    AGENTS.md admits no fallback of any kind, so a cut run whose reading session never spoke
+    leaves the calibration untaught and says so once. What it must NOT do is swallow the run:
+    the failure this branch is standing inside is a wall cut, and its own message is what the
+    agent row and the alert carry. A `ValueError` escaping `observe`, or a sample priced off
+    the wall, would each replace that honest report with something else.
+    """
+    import logging
+
+    from backend.services import sprite_agent_service
+
+    async def cut(_kwargs):
+        raise sprite_agent_service.RunCeilingExceeded(
+            "Digest turn exceeded its wall of 570s", by_user=False
+        )
+
+    with caplog.at_level(logging.WARNING, logger="backend.tasks.agent_schedules"):
+        curator_id, key, _seen, _stamps = await _tick_once(client, _db_pool, monkeypatch, cut)
+
+    assert await _samples(_db_pool, key) == [], "no reading events, so no sample row"
+    warnings = [
+        record.getMessage()
+        for record in caplog.records
+        if record.name == "backend.tasks.agent_schedules"
+        and "calibration untaught" in record.getMessage()
+    ]
+    assert len(warnings) == 1, warnings
+    assert "no reading-phase" in warnings[0]
+    row = await _db_pool.fetchrow(
+        "SELECT last_run_outcome, last_run_error FROM agents WHERE id = $1", curator_id
+    )
+    assert row["last_run_outcome"] == "failed"
+    assert "Digest turn exceeded its wall of 570s" in row["last_run_error"], (
+        "the ceiling's own message survives the guard, unswallowed"
+    )

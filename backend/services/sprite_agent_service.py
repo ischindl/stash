@@ -628,6 +628,45 @@ def scheduled_session_ids(agent: dict, run_stamp: str) -> tuple[str, ...]:
     return (run_session,)
 
 
+async def read_phase_seconds(agent: dict, run_stamp: str) -> float | None:
+    """Seconds the phase that consumed this run's read grant spent, from the events it wrote.
+
+    A personal pass's wall belongs to two model turns and the read grant pays for one of
+    them, so the wall is the wrong numerator for the price of a read. The phase's own span
+    is already durable: the phase's prompt is its session's first event and its report the
+    last, so no plumbing has to reach out of `run_scheduled` to know either end. The first
+    id of `scheduled_session_ids` is that phase by this module's own "in the order its
+    phases happen" contract — the digest session on a two-phase lane, and on a lane whose
+    `digest_provider` is NULL the run session, whose one turn IS the read.
+
+    The run's close is excluded by name. `_close_run_sessions` pushes the close into every
+    session the run could have written when the WHOLE run ends, so a digest whose report
+    landed at 17:57:01 carries a close at 18:03:19; a span that read that row — or read
+    `sessions.finished_at` or `last_event_at`, both written from it — would price the read
+    with the writer again, which is the defect this measurement exists to end.
+
+    A phase that never spoke has no span to price: no rows answers None and a single row
+    answers 0.0, and neither is a number this function may round into a price.
+
+    `agent_name` is in the predicate because it is what `idx_history_events_agent_session`
+    leads with, and every event of a curator's own run carries the agent's name.
+    """
+    from ..database import get_pool
+
+    row = await get_pool().fetchrow(
+        "SELECT max(created_at) - min(created_at) AS span FROM history_events"
+        " WHERE owner_user_id = $1 AND agent_name = $2 AND session_id = $3"
+        "   AND event_type <> $4",
+        UUID(str(agent["user_id"])),
+        agent["name"],
+        scheduled_session_ids(agent, run_stamp)[0],
+        session_service.CLOSE_EVENT_TYPE,
+    )
+    if row is None or row["span"] is None:
+        return None
+    return row["span"].total_seconds()
+
+
 def _feed_window(agent: dict, read_from: Position | None = None) -> tuple[str | None, str | None]:
     """The read position this pass was handed, as the two strings a feed command carries.
 

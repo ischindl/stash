@@ -413,25 +413,29 @@ the granted slice is a lower bound on the price of a character, never an optimis
 `run` observes it on every failure out of the pass body (`except (Exception, asyncio.CancelledError)`,
 shielded so a cancelled pass can still write) rather than only where the ceiling raises — a failure
 that leaves no sample is a price that never corrects, and the next tick recomputes the same grant and
-dies identically. The meter line a committed pass prints now carries `seconds_per_character=` (what
+dies identically. The personal lane's cut row carries a different numerator and must be read as a
+different quantity: it files the granted slice over the seconds its own reading phase spent, recovered
+from the events that phase wrote, because two model turns share that lane's one wall and only one of
+them is what the grant buys (STAS-500). The meter line a committed pass prints now carries `seconds_per_character=` (what
 the pass measured), `priced_seconds_per_character=` (what it was charged) and `price_source=`
 (`seed` or `measured`): two independent numbers, so a lane can be read from the log without a query.
 
 Both of those moments now exist on the PERSONAL lane too (`_sample_personal_pass`,
 `backend/tasks/agent_schedules.py`), which had no sample at all until STAS-499 and therefore priced
 every founder grant off `SEED_SECONDS_PER_CHARACTER`. Read its rows by their own unit, because it is
-not the scoped lane's: one personal turn is two model phases inside one wall, so a row carries
-`(digest + writer) seconds over digest characters`, while `personal_budget_of` subtracts
+not the scoped lane's: one personal turn is two model phases inside one wall, so a COMMITTED row
+carries `(digest + writer) seconds over digest characters`, while `personal_budget_of` subtracts
 `PERSONAL_WRITE_RESERVE_SECONDS` (270) from the wall BEFORE dividing by that same rate — the writer's
-share is charged twice, and the row is systematically dearer per character than a digest-only
+share is charged twice, and that row is systematically dearer per character than a digest-only
 measurement (the founder pass's 778,2 s over 1 735 characters is 0,4485 s/char, 3,7 times its 0,12
 seed, and the next grant there is `int(570 / 0,4485)` = 1 270 characters, not 4 750). The key is
 `key_from_configuration(agent)`, which is the scoped lane's `route_class:curator_wiki` as well: one
-bucket, so `price`'s max means a personal row prices the scoped lane's passes too, in the direction of
-the smaller grant on both. And the cut's sample is a LOWER bound, not a measurement — a run the wall
-cut read at most its grant in the seconds it spent, so `seconds / grant` cannot be dearer than the
-truth, and since `price` answers the maximum of its window a bound may simply be ignored: it can never
-raise a price. Its job is to stop a night that ran 778 s teaching that the run cost nothing. The row
+bucket, so `price`'s max means a personal row prices the scoped lane's passes too, both lanes moving
+together. And the cut's sample is a price of the READ, not a lower bound: STAS-500 gave it the
+reading phase's own seconds (recovered from the events that phase wrote, the run's close excluded by
+name) over the granted slice, so it CAN raise a later grant — as far as `MAX_PASS_INPUT_CHARS`
+(8 192), which is where the clamp stops it — and it cannot shorten the writer that filled the wall. A
+cut run whose reading session wrote no events files nothing and says so once. The row
 this card refuses is the dear-by-absence one: `RunCeilingExceeded` now carries `by_user`, so a turn a
 human stopped files NOTHING on either personal body — five stopped seconds over a 2 700-character
 grant would otherwise have taught 0,0011 s/char, and as the max of a window that single row would hand

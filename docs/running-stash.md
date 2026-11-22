@@ -312,8 +312,10 @@ Before starting:
     so a row can be checked against the log without a database query. Its unit is the whole
     turn's seconds over the digest's characters, which `docs/testing.md` states in full.
   * a pass the wall cut commits nothing, so it prints no `characters=` at all: from inside
-    its own failure branch it files the GRANT over the wall it spent, a lower bound on what
-    a character cost (shielded on the manual path, because that branch re-raises).
+    its own failure branch it files the GRANT over the seconds its own reading phase spent
+    — a price of the read, which can raise a later grant to the 8 192-character ceiling
+    and cannot shorten the writer that filled the wall (shielded on the manual path,
+    because that branch re-raises).
   * `curator pass=1 agent=… committed_through=… lane=personal` is the DRAIN-rate line, and
     it counts nothing by design: a drain pass is sized by `drain_budget_of`, reports only,
     and never carried a character count. It carries no `budget=` or

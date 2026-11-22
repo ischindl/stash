@@ -346,8 +346,9 @@ everything before it is captured in git history (`git log`), not here.
   times the constant it was being granted at. Its passes will now be handed roughly a quarter
   of that reading, and the number will come from twelve of its own passes rather than from
   another constant. A pass the wall cuts teaches as well: it files the reading allowance it
-  was handed against the wall it spent, which can only ever make the next slice smaller,
-  never larger.
+  was handed against the seconds its own reading spent, so a lane whose passes all get cut
+  sees its slice rise to the 8 192-character ceiling rather than shrink every night — and the
+  run's wall is untouched by that rise, because the reading was never what filled it.
 
 - Your personal wiki curator stops spending its night reading and writing nothing. A
   personal-lane run was handed its ENTIRE unread delta and one wall — 570 seconds on the
