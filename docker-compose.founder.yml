@@ -29,38 +29,41 @@
 # nothing builds: docker-compose.dogfood.yml declares it as a required interpolation
 # with no default, and compose resolves it for every command, `config` and `up`
 # included. Set it to the same commit's pi overlay, e.g.
-#   BASE_IMAGE=stash-backend:main-6a77359f-pi docker compose -p stash ... config --quiet
+#   BASE_IMAGE=stash-backend:main-f8bbd701-pi docker compose -p stash ... config --quiet
 #
-# PINNED 2026-11-21 UTC to `d66b943d`, trunk's tip, built from a tree detached at exactly
-# it by the runbook. Both hexes name that one commit. It carries the previous pin's scoped-lane
-# throughput work (STAS-490) and the OTHER half of the same wall (STAS-491): a personal-lane
-# run used to be handed its entire unread delta and one wall, spent the wall reading, raised
-# the ceiling and committed nothing, while its own wiki writer had already edited pages from
-# that partial read - so the wiki drifted and the watermark never moved, on every founder
-# lane, since 2026-09-01. A personal pass now reads the part its wall pays for once the wiki
-# writer is paid first, and commits through the exact instant that part ends at.
+# PINNED 2026-11-22 UTC to `f8bbd701`, trunk's tip, built from a tree detached at exactly it
+# by the runbook. Both hexes name that one commit, and the pin before it (`6a77359f`, 2026-11-21)
+# was ten commits behind trunk when this move started. What the ten carry that this founder stack
+# had never run: the curator phase meter and the budget that skips an oversized instant
+# (STAS-497), a wall-cut personal row priced off its own read-phase reading instead of the wall
+# it spent (STAS-500), a human-stopped turn refused at both personal sample gates (STAS-499), a
+# calibration bound that is never ignored (STAS-503), and a scoped backlog drained newest-window
+# first (STAS-492). The reason those five are the point of this pin is a measurement on the
+# running stack: two passes that died at the wall filed `930.0s/2607ch` and `930.1s/1597ch` -
+# 0.3567 and 0.5824 seconds per character - against committed passes on the same box at
+# `5830ch/99.1s` = 0.017, and because `price` answers the dearest row in its twelve-row window,
+# one dead pass throttled the lane's grant to ~1.6k characters while the smallest instant is
+# 4,000 (`characters=4000 budget=2732` in the worker log, `catch-up chain stopped
+# guard=no_progress`).
 #
-# Proof, on a copy of the founder's own database and never on the founder's database: the
-# dump (`pg_dump -Fc`, 4 797 889 649 bytes) restored into a pgvector container this deploy
-# owned (`-j 4`, rc 0, 144 tables, `0275`), then booted with the candidate, which ran
-# `Running upgrade 0275 -> 0276`, answered `/health` 200, served `x-stash-cli-latest: 0.1.491`,
-# and left the copy at `0276`. No new revision was expected or seen: this card adds none.
+# Proof, on a copy of the founder's own database and never on the founder's database: the dump
+# (`pg_dump -Fc`, 4 808 958 017 bytes, rc 0) restored `-j 4` into a pgvector container this
+# deploy owned (rc 0, zero warning lines, 145 tables, stamp `0276`, `history_events` 4 981 271
+# - identical to the founder's own count at the moment of the dump), then booted with the
+# candidate: `Application startup complete` in ~10s, `alembic current` = `0276 (head)` read
+# through the candidate image, zero `Running upgrade` lines, `/health` 200,
+# `x-stash-cli-latest: 0.1.492` = the version at that ref, zero error/traceback/exception lines,
+# and the copy still at `0276` with its 145 tables after the boot. No new revision was expected
+# or seen: `check_heads.py` prints `0276` on this tree and the island already sits there, so the
+# boot IS the proof.
 #
-# The measurement the card is made of was then read on THAT copy, on the founder's own
-# `Wiki curator - Fusion - saneca` lane (wall 570s, watermark 2026-09-01 08:29:33), by
-# calling the three functions a real run calls: the unpriced feed handed to a run today is
-# 500 events / 192,574 characters with more behind it, and the same call given the priced
-# window is 3 events / 12 characters ending at 08:29:33.740. The old commit of that same
-# call recorded 09:29:43.841 - one hour and the whole unread rest of an hour AHEAD of what
-# the model was shown. That gap, an hour of characters claimed and never read, every night,
-# is the bug. The new one records 08:29:33.740: the last event shown is the last event kept.
-# The dump, the restored copy, the proof redis and the candidate container sit outside this
-# repo under /data2/ceo-deploy-d66b943d, with the probe that printed those numbers.
+# The dump, the restored copy and the candidate container sit outside this repo under
+# /data2/founder-deploy-f8bbd7016 with the restore log.
 #
-# Post-cutover readings taken at the pin are carried by the commit that wrote these two hexes,
-# `cadaa0f69` - `refs/heads/deploy/main` itself was moved by a message-carrying `update-ref`,
-# which leaves a reflog row and no commit body. The readings that measure the claim are
-# `docker inspect` on the five started containers, `X-Stash-Cli-Latest`, and `/login`.
+# Post-cutover readings taken at the pin are carried by the commit that wrote these two hexes -
+# `refs/heads/deploy/main` itself is moved by an `update-ref`, which leaves a reflog row and no
+# commit body. The readings that measure the claim are `docker inspect` on the started
+# containers, `X-Stash-Cli-Latest`, and `/login`.
 #
 # A pin is a claim about the stack: `docker inspect` on the five started containers,
 # `X-Stash-Cli-Latest` and `/login` are the readings that measure it, and the rehearsal,
@@ -69,10 +72,10 @@
 
 services:
   backend:
-    image: stash-backend:main-6a77359f-pi
+    image: stash-backend:main-f8bbd701-pi
 
   worker:
-    image: stash-backend:main-6a77359f-pi
+    image: stash-backend:main-f8bbd701-pi
     # Curator catch-up passes one lane may chain per day, at STAS-490's measured rate:
     # 96 chained passes of a 570 s wall is about a 63% duty cycle of this box's own
     # inference, competing with the operator's chat turns. The code default is 8, and
@@ -81,19 +84,19 @@ services:
       CURATOR_CATCHUP_PASSES: "96"
 
   heavy-worker:
-    image: stash-backend:main-6a77359f-pi
+    image: stash-backend:main-f8bbd701-pi
     # The same cadence the worker chain runs under; the beat and the lanes that execute
     # the chain must read one number, not two.
     environment:
       CURATOR_CATCHUP_PASSES: "96"
 
   sync-worker:
-    image: stash-backend:main-6a77359f-pi
+    image: stash-backend:main-f8bbd701-pi
 
   beat:
-    image: stash-backend:main-6a77359f-pi
+    image: stash-backend:main-f8bbd701-pi
     environment:
       CURATOR_CATCHUP_PASSES: "96"
 
   frontend:
-    image: stash-frontend:main-6a77359f
+    image: stash-frontend:main-f8bbd701
